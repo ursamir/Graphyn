@@ -1,0 +1,21 @@
+[plugin]
+name             = "augmentation-pipeline"
+version          = "1.1.0"
+description      = "Orchestrated probabilistic audio augmentation: gain, pitch, stretch, reverb, noise, codec degradation, parametric EQ, audiomentations."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["audio", "augmentation", "training", "data", "codec", "eq", "audiomentations"]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+    "scipy>=1.10",
+    "soundfile>=0.12",
+]
+
+optional_dependencies = [
+    "audiomentations>=0.30",
+]

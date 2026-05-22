@@ -1,0 +1,21 @@
+[plugin]
+name             = "audio-annotator"
+version          = "1.0.0"
+description      = "Attach semantic labels and annotations to audio samples: passthrough, rule-based auto-labeling, taxonomy mapping, and weak supervision."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "annotation",
+    "labeling",
+    "taxonomy",
+    "weak-supervision",
+    "preprocessing"
+]
+
+dependencies = [
+    "numpy>=1.24",
+]

@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "edge-inference",
+    "seed": 42,
+    "description": "Edge-optimized inference pipeline",
+    "created_at": null,
+    "tags": []
+  },
+  "nodes": [
+    {
+      "id": "stream_ingest_0",
+      "node_type": "stream_ingest",
+      "config": {
+        "source": "file_stream",
+        "file_path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/yes/4fd1443e_nohash_0.wav",
+        "sample_rate": 16000,
+        "duration_s": 5.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_2",
+      "node_type": "segmenter",
+      "config": {
+        "silence_threshold_db": 40.0,
+        "mode": "silence"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "feature_frontend_3",
+      "node_type": "feature_frontend",
+      "config": {
+        "feature_type": "mfcc",
+        "n_mfcc": 40,
+        "n_fft": 512,
+        "hop_length": 160,
+        "fmax": 8000.0,
+        "fixed_length": 101,
+        "normalize": true
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "stream_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "segmenter_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_2",
+      "src_port": "output",
+      "dst_id": "feature_frontend_3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

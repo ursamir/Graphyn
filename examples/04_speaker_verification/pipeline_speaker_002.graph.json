@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "speaker_verification_pipeline_speaker_002",
+    "seed": 42,
+    "description": "Speaker verification — speaker_002 (append to shared output).",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "speaker-verification",
+      "preprocessing",
+      "export"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/04_speaker_verification/data/speaker_002",
+        "source_type": "filesystem",
+        "recursive": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_2",
+      "node_type": "segmenter",
+      "config": {
+        "mode": "silence",
+        "silence_threshold_db": 40.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_3",
+      "node_type": "audio_conditioner",
+      "config": {
+        "normalize": true,
+        "normalize_method": "rms",
+        "target_level_db": -20.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_annotator_4",
+      "node_type": "audio_annotator",
+      "config": {
+        "annotation_mode": "auto",
+        "auto_rules": [
+          {
+            "field": "duration",
+            "op": "<",
+            "value": 0.5,
+            "label": "short_utterance",
+            "confidence": 0.9
+          },
+          {
+            "field": "duration",
+            "op": ">=",
+            "value": 0.5,
+            "label": "normal_utterance",
+            "confidence": 1.0
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_5",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "examples/04_speaker_verification/output/speaker_verification",
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "version_tag": "v1",
+        "random_seed": 42,
+        "append": true
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "segmenter_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_2",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_3",
+      "src_port": "output",
+      "dst_id": "audio_annotator_4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_annotator_4",
+      "src_port": "output",
+      "dst_id": "audio_exporter_5",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

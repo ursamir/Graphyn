@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "augmentation",
+    "seed": 42,
+    "description": "",
+    "created_at": null,
+    "tags": []
+  },
+  "nodes": [
+    {
+      "id": "augmentation_pipeline_0",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "augmentations": [
+          {
+            "type": "gain",
+            "gain_db": [
+              -3.0,
+              3.0
+            ],
+            "copies_per_sample": 1
+          },
+          {
+            "type": "pitch_shift",
+            "semitones": [
+              -2.0,
+              2.0
+            ],
+            "copies_per_sample": 1
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "feature_frontend_1",
+      "node_type": "feature_frontend",
+      "config": {
+        "feature_type": "mfcc",
+        "n_mfcc": 40,
+        "n_fft": 512,
+        "hop_length": 160,
+        "fmax": 8000.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_builder_2",
+      "node_type": "dataset_builder",
+      "config": {
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "fixed_length": 101
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_versioner_3",
+      "node_type": "dataset_versioner",
+      "config": {
+        "output_dir": "/home/meritech/Desktop/newAudio3/examples/18_pipeline_composition/output",
+        "version_tag": "v1"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "augmentation_pipeline_0",
+      "src_port": "output",
+      "dst_id": "feature_frontend_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "feature_frontend_1",
+      "src_port": "output",
+      "dst_id": "dataset_builder_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "dataset_builder_2",
+      "src_port": "output",
+      "dst_id": "dataset_versioner_3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

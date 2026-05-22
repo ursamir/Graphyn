@@ -1,0 +1,25 @@
+[plugin]
+name             = "environment-simulator"
+version          = "1.0.0"
+description      = "Simulate physical acoustic environments via room impulse response convolution. Presets: room, car, office, outdoor, custom."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "simulation",
+    "reverb",
+    "rir",
+    "pyroomacoustics",
+    "augmentation"
+]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "pyroomacoustics>=0.7",
+]

@@ -1,0 +1,14 @@
+[plugin]
+name             = "stream-processor"
+version          = "1.0.0"
+description      = "Rolling window buffering for streaming audio: configurable window/hop, overlap-add reconstruction, latency monitoring, buffer health."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["audio", "streaming", "realtime", "windowing", "buffer"]
+
+dependencies = [
+    "numpy>=1.24",
+]

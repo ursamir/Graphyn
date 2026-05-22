@@ -1,0 +1,23 @@
+# Core
+numpy==1.26.4
+librosa==0.10.2.post1
+soundfile==0.12.1
+PyYAML==6.0.2
+
+# API
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Upload support
+python-multipart==0.0.20
+
+# Pydantic v2 (explicit pin — FastAPI transitive dep)
+pydantic==2.10.6
+
+# TOML parsing (tomllib is stdlib on 3.11+; tomli is the backport for 3.10)
+tomli==2.2.1
+tomli_w==1.1.0
+
+# Testing
+hypothesis==6.131.15
+pytest==8.3.5

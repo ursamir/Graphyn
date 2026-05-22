@@ -1,0 +1,27 @@
+[plugin]
+name             = "audio-generator"
+version          = "1.0.0"
+description      = "Generate audio from text prompts using Meta AudioCraft: MusicGen (music) or AudioGen (sound effects)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "generation",
+    "musicgen",
+    "audiogen",
+    "audiocraft",
+    "generative"
+]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "audiocraft>=1.0",
+    "torch>=2.0",
+    "soundfile>=0.12",
+]

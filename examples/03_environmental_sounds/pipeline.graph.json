@@ -1,0 +1,149 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "environmental_sounds_pipeline",
+    "seed": 42,
+    "description": "Environmental sound classification dataset pipeline — processes one class at a time, appending to shared output.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "environmental-sounds",
+      "preprocessing",
+      "export"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/03_environmental_sounds/data/dog",
+        "source_type": "filesystem",
+        "recursive": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 22050,
+        "mono": true
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_2",
+      "node_type": "audio_conditioner",
+      "config": {
+        "normalize": true,
+        "normalize_method": "rms",
+        "target_level_db": -20.0,
+        "target_sample_rate": 22050
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_quality_gate_3",
+      "node_type": "audio_quality_gate",
+      "config": {
+        "min_duration_s": 0.5,
+        "max_duration_s": 1.2,
+        "rejection_policy": "skip"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "augmentation_pipeline_4",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "copies_per_sample": 1,
+        "augmentations": [
+          {
+            "type": "gain",
+            "apply_prob": 1.0,
+            "gain_db": [
+              -3.0,
+              3.0
+            ]
+          },
+          {
+            "type": "pitch_shift",
+            "apply_prob": 1.0,
+            "semitones": [
+              -1.5,
+              1.5
+            ]
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_5",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "examples/03_environmental_sounds/output/environmental_sounds",
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "version_tag": "v1",
+        "random_seed": 42,
+        "append": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_2",
+      "src_port": "output",
+      "dst_id": "audio_quality_gate_3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_quality_gate_3",
+      "src_port": "output",
+      "dst_id": "augmentation_pipeline_4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "augmentation_pipeline_4",
+      "src_port": "output",
+      "dst_id": "audio_exporter_5",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

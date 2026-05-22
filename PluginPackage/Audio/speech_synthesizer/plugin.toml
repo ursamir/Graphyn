@@ -1,0 +1,29 @@
+[plugin]
+name             = "speech-synthesizer"
+version          = "1.0.0"
+description      = "Text-to-speech synthesis via Coqui TTS (neural, multilingual, voice cloning) or eSpeak NG (lightweight fallback)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "tts",
+    "synthesis",
+    "coqui",
+    "espeak",
+    "voice-cloning",
+    "generative"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+]
+
+optional_dependencies = [
+    "TTS>=0.22",
+    "torch>=2.0",
+]

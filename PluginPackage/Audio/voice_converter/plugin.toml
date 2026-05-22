@@ -1,0 +1,29 @@
+[plugin]
+name             = "voice-converter"
+version          = "1.0.0"
+description      = "Transform speaker identity or vocal style via SpeechBrain or kNN-VC. Supports timbre, accent, gender, and style conversion."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "voice-conversion",
+    "speechbrain",
+    "knnvc",
+    "timbre",
+    "generative"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+]
+
+optional_dependencies = [
+    "speechbrain>=0.5",
+    "torch>=2.0",
+    "knnvc>=0.1",
+    "soundfile>=0.12",
+]

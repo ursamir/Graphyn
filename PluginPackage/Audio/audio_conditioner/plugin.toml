@@ -1,0 +1,28 @@
+[plugin]
+name             = "audio-conditioner"
+version          = "1.1.0"
+description      = "Unified production-grade audio preprocessing frontend with LUFS normalization and dynamic range compression."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "preprocessing",
+    "conditioning",
+    "frontend",
+    "edge-ai",
+    "lufs",
+    "compression"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+    "scipy>=1.10"
+]
+
+optional_dependencies = [
+    "pyloudnorm>=0.1",
+]

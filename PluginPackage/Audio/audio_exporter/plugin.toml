@@ -1,0 +1,15 @@
+[plugin]
+name             = "audio-exporter"
+version          = "1.0.0"
+description      = "Export AudioSample objects to WAV files organised by split (train/val/test) and label."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["audio", "output", "export", "dataset"]
+
+dependencies = [
+    "numpy>=1.24",
+    "soundfile>=0.12",
+]

@@ -1,0 +1,292 @@
+# app/core/nodes/base.py
+"""Node base class for the Enhanced Node System."""
+from __future__ import annotations
+
+import inspect
+import logging
+from typing import Any, AsyncGenerator, ClassVar, Generic, TypeVar
+
+from app.core.nodes.config import NodeConfig
+from app.core.nodes.ports import InputPort, OutputPort
+from app.core.nodes.retry import RetryPolicy
+
+log = logging.getLogger(__name__)
+
+InputT = TypeVar("InputT")
+OutputT = TypeVar("OutputT")
+
+
+class Node(Generic[InputT, OutputT]):
+    """Domain-agnostic base class for all pipeline nodes.
+
+    Every node is a self-contained processing unit that declares:
+
+    - Named, typed **input ports** and **output ports** (``InputPort`` / ``OutputPort``)
+    - A Pydantic **configuration model** (inner ``Config(NodeConfig)`` class)
+    - A ``process`` method that transforms inputs into outputs
+
+    **SISO shorthand**: nodes with exactly one input port named ``"input"`` and
+    one output port named ``"output"`` may override ``process(self, data)`` instead
+    of the canonical ``process(self, inputs: dict) -> dict``.  The SISO wrapper
+    installed by ``__init_subclass__`` translates between the two conventions
+    transparently.
+
+    **Multi-port nodes**: override ``process(self, inputs: dict[str, Any]) -> dict[str, Any]``
+    directly.  ``inputs`` keys are port names; ``"multi"`` cardinality ports receive
+    a ``list`` of values.
+
+    Subclasses MUST declare::
+
+        node_type: ClassVar[str]           # or rely on auto-derived name
+        metadata:  ClassVar[NodeMetadata]
+        input_ports:  ClassVar[dict[str, InputPort]]
+        output_ports: ClassVar[dict[str, OutputPort]]
+
+        class Config(NodeConfig): ...      # inner Pydantic config model
+    """
+
+    # ── class-level declarations (overridden by subclasses) ──────────────────
+    node_type: ClassVar[str] = ""
+    input_ports: ClassVar[dict[str, InputPort]] = {}
+    output_ports: ClassVar[dict[str, OutputPort]] = {}
+    retry_policy: ClassVar[RetryPolicy | None] = None
+
+    class Config(NodeConfig):
+        """Default empty config — subclasses replace this."""
+        pass
+
+    # ── construction ─────────────────────────────────────────────────────────
+    def __init__(
+        self,
+        config: "Config | dict[str, Any] | None" = None,
+        seed: int = 0,
+        observer: Any = None,
+    ) -> None:
+        if config is None:
+            config = {}
+        if isinstance(config, dict):
+            self.config: NodeConfig = self.Config.model_validate(config)
+        elif isinstance(config, self.Config):
+            self.config = config
+        else:
+            # Accept any NodeConfig subclass (e.g. when called from tests)
+            self.config = self.Config.model_validate(config.model_dump())
+        self.seed = seed
+        self.observer = observer
+        self._run_id: str = ""  # set by pipeline executor per execution
+
+    # ── SISO wrapper installation ─────────────────────────────────────────────
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        _maybe_wrap_siso(cls)
+
+    # ── SISO convenience properties ───────────────────────────────────────────
+    @classmethod
+    def _is_siso(cls) -> bool:
+        """Return True if this node has exactly one input port 'input' and one output port 'output'."""
+        return (
+            set(cls.input_ports.keys()) == {"input"}
+            and set(cls.output_ports.keys()) == {"output"}
+        )
+
+    @property
+    def input_type(self) -> type | None:
+        """Convenience accessor for SISO nodes — returns ``input_ports["input"].data_type``.
+
+        Raises:
+            AttributeError: if this is not a SISO node.
+        """
+        if not self._is_siso():
+            raise AttributeError(
+                f"{type(self).__name__} is not a SISO node; "
+                "use input_ports directly"
+            )
+        return self.input_ports["input"].data_type
+
+    @property
+    def output_type(self) -> type | None:
+        """Convenience accessor for SISO nodes — returns ``output_ports["output"].data_type``.
+
+        Raises:
+            AttributeError: if this is not a SISO node.
+        """
+        if not self._is_siso():
+            raise AttributeError(
+                f"{type(self).__name__} is not a SISO node; "
+                "use output_ports directly"
+            )
+        return self.output_ports["output"].data_type
+
+    # ── port schema introspection ─────────────────────────────────────────────
+    @classmethod
+    def port_schemas(cls) -> dict[str, Any]:
+        """Return JSON Schema representations of all ports.
+
+        Returns::
+
+            {
+                "inputs":  {port_name: json_schema_dict | null},
+                "outputs": {port_name: json_schema_dict | null},
+            }
+        """
+        from app.core.nodes.compat import _type_to_schema
+        return {
+            "inputs": {
+                name: _type_to_schema(port.data_type)
+                for name, port in cls.input_ports.items()
+            },
+            "outputs": {
+                name: _type_to_schema(port.data_type)
+                for name, port in cls.output_ports.items()
+            },
+        }
+
+    # ── streaming detection ───────────────────────────────────────────────────
+    @classmethod
+    def _is_streaming(cls) -> bool:
+        """Return True when this class overrides process_stream."""
+        return cls.process_stream is not Node.process_stream  # type: ignore[comparison-overlap]
+
+    @property
+    def is_streaming(self) -> bool:
+        """True when this node overrides process_stream."""
+        return type(self)._is_streaming()
+
+    # ── canonical multi-port process signature ────────────────────────────────
+    def process(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        """Override in multi-port nodes.
+
+        SISO nodes override ``process(self, data)`` instead; the wrapper
+        installed by ``__init_subclass__`` translates between conventions.
+
+        Args:
+            inputs: Dict mapping port names to their input values.
+                    ``"multi"`` cardinality ports receive a ``list`` of values.
+
+        Returns:
+            Dict mapping output port names to their produced values.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement process()"
+        )
+
+    # ── streaming ─────────────────────────────────────────────────────────────
+    async def process_stream(
+        self, inputs: dict[str, Any]
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Override in streaming nodes.
+
+        Default implementation wraps ``process()`` as a single-item async generator.
+        CPU-bound work is offloaded to the default executor so the asyncio event
+        loop is not blocked while ``process()`` runs.
+        """
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, self.process, inputs)
+        yield result
+
+    # ── lifecycle hooks (no-op defaults) ─────────────────────────────────────
+    def setup(self) -> None:
+        """Called once before the first ``on_start()``.
+
+        Use for expensive one-time initialisation (e.g. loading model weights,
+        opening file handles).  NOT called by ``__init__``.
+        """
+
+    def on_start(self) -> None:
+        """Called immediately before each ``process()`` invocation."""
+        if self.observer is not None:
+            try:
+                self.observer.on_node_start(
+                    node_type=getattr(self.metadata, "node_type", type(self).__name__)
+                    if hasattr(self, "metadata") else type(self).__name__,
+                    run_id=getattr(self, "_current_run_id", ""),
+                )
+            except Exception:
+                pass  # observer failures must never crash the node
+
+    def on_end(self) -> None:
+        """Called immediately after ``process()`` returns without raising."""
+        if self.observer is not None:
+            try:
+                self.observer.on_node_end(
+                    node_type=getattr(self.metadata, "node_type", type(self).__name__)
+                    if hasattr(self, "metadata") else type(self).__name__,
+                    run_id=getattr(self, "_current_run_id", ""),
+                    duration_s=0.0,
+                    input_counts={},
+                    output_counts={},
+                )
+            except Exception:
+                pass  # observer failures must never crash the node
+
+    def on_error(self, exc: Exception) -> None:
+        """Called when ``process()`` raises, before the exception propagates."""
+        if self.observer is not None:
+            try:
+                self.observer.on_node_error(
+                    node_type=getattr(self.metadata, "node_type", type(self).__name__)
+                    if hasattr(self, "metadata") else type(self).__name__,
+                    run_id=getattr(self, "_current_run_id", ""),
+                    exc=exc,
+                )
+            except Exception:
+                pass  # observer failures must never crash the node
+
+    def teardown(self) -> None:
+        """Called once after the final ``on_end()`` or after ``on_error()`` if not retried.
+
+        Use for releasing resources (e.g. closing file handles, freeing GPU memory).
+        """
+
+
+# ── SISO wrapper helper ───────────────────────────────────────────────────────
+
+def _maybe_wrap_siso(cls: type) -> None:
+    """If ``cls`` is a SISO node that overrides ``process(self, data)``, wrap it.
+
+    Detection: the class defines ``process()`` with a second parameter that is
+    NOT named ``"inputs"`` — i.e. it uses the SISO shorthand signature.
+
+    The wrapper:
+    1. Unpacks ``inputs["input"]`` → ``data``
+    2. Calls the original ``process(self, data)``
+    3. Repacks the result as ``{"output": result}``
+
+    The original method is stored as ``process.__wrapped__`` for testing.
+    """
+    if "process" not in cls.__dict__:
+        return  # no override in this class
+
+    raw_process = cls.__dict__["process"]
+
+    # Skip if it's already a wrapped function
+    if getattr(raw_process, "__wrapped__", None) is not None:
+        return
+
+    try:
+        params = list(inspect.signature(raw_process).parameters.keys())
+    except (ValueError, TypeError):
+        return
+
+    # Multi-port signature: (self, inputs) — leave alone
+    if len(params) >= 2 and params[1] == "inputs":
+        return
+
+    # SISO signature: (self, data) or (self, samples) or (self, _) etc.
+    def _siso_process(
+        self: "Node",
+        inputs: dict[str, Any],
+    ) -> dict[str, Any]:
+        data = inputs.get("input")
+        result = raw_process(self, data)
+        # Guard: if the node was refactored to return a full multi-port dict
+        # (keys match the declared output ports), pass it through unchanged to
+        # avoid double-wrapping as {"output": {"output": ...}}.
+        if isinstance(result, dict) and set(result.keys()) == set(cls.output_ports.keys()):
+            return result
+        return {"output": result}
+
+    _siso_process.__wrapped__ = raw_process  # type: ignore[attr-defined]
+    _siso_process.__doc__ = raw_process.__doc__
+    cls.process = _siso_process  # type: ignore[method-assign]

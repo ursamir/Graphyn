@@ -1,0 +1,30 @@
+[plugin]
+name             = "alignment-node"
+version          = "1.0.0"
+description      = "Temporal alignment between audio and transcripts. Produces word/phoneme timestamps via CTC forced alignment or Montreal Forced Aligner."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "alignment",
+    "asr",
+    "ctc",
+    "mfa",
+    "timestamps",
+    "transcript",
+    "preprocessing"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+]
+
+optional_dependencies = [
+    "ctc-forced-aligner>=2.0",
+    "torch>=2.0",
+]

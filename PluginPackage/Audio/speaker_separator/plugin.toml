@@ -1,0 +1,28 @@
+[plugin]
+name             = "speaker-separator"
+version          = "1.0.0"
+description      = "Separate speakers from mixed audio via diarization (pyannote.audio) or source separation (SpeechBrain SepFormer)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "diarization",
+    "speaker",
+    "separation",
+    "pyannote",
+    "speechbrain"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+]
+
+optional_dependencies = [
+    "pyannote.audio>=3.0",
+    "speechbrain>=0.5",
+    "torch>=2.0",
+]

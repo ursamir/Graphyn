@@ -1,0 +1,19 @@
+[plugin]
+name             = "segmenter"
+version          = "1.1.0"
+description      = "Semantic audio segmentation: fixed windows, silence-based, VAD, energy-event detection, and speaker-turn placeholder."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["audio", "segmentation", "vad", "preprocessing", "event"]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+]
+
+optional_dependencies = [
+    "webrtcvad>=2.0",
+]

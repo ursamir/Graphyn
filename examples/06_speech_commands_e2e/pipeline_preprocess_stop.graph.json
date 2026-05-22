@@ -1,0 +1,167 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "speech_commands_e2e_preprocess_stop",
+    "seed": 42,
+    "description": "E2E speech commands — preprocessing phase (one command at a time, appending to shared output).",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "speech-commands",
+      "e2e",
+      "preprocessing"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/02_speech_commands/data/stop",
+        "source_type": "filesystem",
+        "recursive": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true,
+        "normalize": true,
+        "normalize_method": "peak"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_2",
+      "node_type": "segmenter",
+      "config": {
+        "mode": "silence",
+        "silence_threshold_db": 40.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_quality_gate_3",
+      "node_type": "audio_quality_gate",
+      "config": {
+        "min_snr_db": 5.0,
+        "rejection_policy": "skip"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_quality_gate_4",
+      "node_type": "audio_quality_gate",
+      "config": {
+        "min_duration_s": 0.2,
+        "max_duration_s": 1.0,
+        "rejection_policy": "skip"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "augmentation_pipeline_5",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "copies_per_sample": 2,
+        "augmentations": [
+          {
+            "type": "pitch_shift",
+            "apply_prob": 1.0,
+            "semitones": [
+              -2.0,
+              2.0
+            ]
+          },
+          {
+            "type": "time_stretch",
+            "apply_prob": 1.0,
+            "rate": [
+              0.9,
+              1.1
+            ]
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_6",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "examples/06_speech_commands_e2e/output/dataset/speech_commands",
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "version_tag": "v1",
+        "random_seed": 42,
+        "append": true
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "segmenter_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_2",
+      "src_port": "output",
+      "dst_id": "audio_quality_gate_3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_quality_gate_3",
+      "src_port": "output",
+      "dst_id": "audio_quality_gate_4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_quality_gate_4",
+      "src_port": "output",
+      "dst_id": "augmentation_pipeline_5",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "augmentation_pipeline_5",
+      "src_port": "output",
+      "dst_id": "audio_exporter_6",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

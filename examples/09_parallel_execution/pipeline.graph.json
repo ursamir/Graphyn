@@ -1,0 +1,411 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "parallel-fan-out",
+    "seed": 42,
+    "description": "Fan-out DAG: 4 independent branches",
+    "created_at": null,
+    "tags": []
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_yes",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/yes",
+        "recursive": false,
+        "source_type": "filesystem"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_yes",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_yes",
+      "node_type": "segmenter",
+      "config": {
+        "silence_threshold_db": 40.0,
+        "mode": "silence"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "augmentation_pipeline_yes",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "copies_per_sample": 1,
+        "augmentations": [
+          {
+            "type": "gain",
+            "apply_prob": 1.0,
+            "gain_db": [
+              -3.0,
+              3.0
+            ]
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_yes",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "/home/meritech/Desktop/newAudio3/examples/09_parallel_execution/output/yes",
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "version_tag": "v1",
+        "random_seed": 42,
+        "append": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_ingest_no",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/no",
+        "recursive": false,
+        "source_type": "filesystem"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_no",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_no",
+      "node_type": "segmenter",
+      "config": {
+        "silence_threshold_db": 40.0,
+        "mode": "silence"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "augmentation_pipeline_no",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "copies_per_sample": 1,
+        "augmentations": [
+          {
+            "type": "gain",
+            "apply_prob": 1.0,
+            "gain_db": [
+              -3.0,
+              3.0
+            ]
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_no",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "/home/meritech/Desktop/newAudio3/examples/09_parallel_execution/output/no",
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "version_tag": "v1",
+        "random_seed": 42,
+        "append": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_ingest_up",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/up",
+        "recursive": false,
+        "source_type": "filesystem"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_up",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_up",
+      "node_type": "segmenter",
+      "config": {
+        "silence_threshold_db": 40.0,
+        "mode": "silence"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "augmentation_pipeline_up",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "copies_per_sample": 1,
+        "augmentations": [
+          {
+            "type": "gain",
+            "apply_prob": 1.0,
+            "gain_db": [
+              -3.0,
+              3.0
+            ]
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_up",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "/home/meritech/Desktop/newAudio3/examples/09_parallel_execution/output/up",
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "version_tag": "v1",
+        "random_seed": 42,
+        "append": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_ingest_down",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/down",
+        "recursive": false,
+        "source_type": "filesystem"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_down",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_down",
+      "node_type": "segmenter",
+      "config": {
+        "silence_threshold_db": 40.0,
+        "mode": "silence"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "augmentation_pipeline_down",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "copies_per_sample": 1,
+        "augmentations": [
+          {
+            "type": "gain",
+            "apply_prob": 1.0,
+            "gain_db": [
+              -3.0,
+              3.0
+            ]
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_down",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "/home/meritech/Desktop/newAudio3/examples/09_parallel_execution/output/down",
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "version_tag": "v1",
+        "random_seed": 42,
+        "append": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_yes",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_yes",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_yes",
+      "src_port": "output",
+      "dst_id": "segmenter_yes",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_yes",
+      "src_port": "output",
+      "dst_id": "augmentation_pipeline_yes",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "augmentation_pipeline_yes",
+      "src_port": "output",
+      "dst_id": "audio_exporter_yes",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "dataset_ingest_no",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_no",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_no",
+      "src_port": "output",
+      "dst_id": "segmenter_no",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_no",
+      "src_port": "output",
+      "dst_id": "augmentation_pipeline_no",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "augmentation_pipeline_no",
+      "src_port": "output",
+      "dst_id": "audio_exporter_no",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "dataset_ingest_up",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_up",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_up",
+      "src_port": "output",
+      "dst_id": "segmenter_up",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_up",
+      "src_port": "output",
+      "dst_id": "augmentation_pipeline_up",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "augmentation_pipeline_up",
+      "src_port": "output",
+      "dst_id": "audio_exporter_up",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "dataset_ingest_down",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_down",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_down",
+      "src_port": "output",
+      "dst_id": "segmenter_down",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_down",
+      "src_port": "output",
+      "dst_id": "augmentation_pipeline_down",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "augmentation_pipeline_down",
+      "src_port": "output",
+      "dst_id": "audio_exporter_down",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

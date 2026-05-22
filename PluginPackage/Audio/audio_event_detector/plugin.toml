@@ -1,0 +1,30 @@
+[plugin]
+name             = "audio-event-detector"
+version          = "1.0.0"
+description      = "Temporal acoustic event detection with onset/offset timestamps. Built-in YAMNet (521 classes) or custom TFLite/PyTorch model."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "detection",
+    "events",
+    "yamnet",
+    "tflite",
+    "classification",
+    "realtime"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.12",
+    "tensorflow-hub>=0.14",
+    "tflite-runtime>=2.14",
+    "torch>=2.0",
+]

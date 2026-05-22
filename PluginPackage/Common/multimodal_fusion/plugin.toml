@@ -1,0 +1,27 @@
+[plugin]
+name             = "multimodal-fusion"
+version          = "1.0.0"
+description      = "Fuse audio embeddings with text, video, or sensor modalities. Strategies: concat, attention, late fusion, cross-attention."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "multimodal",
+    "fusion",
+    "embeddings",
+    "audio",
+    "text",
+    "video",
+    "clap",
+    "generative"
+]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "torch>=2.0",
+]

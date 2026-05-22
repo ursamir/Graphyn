@@ -1,0 +1,10 @@
+[plugin]
+name             = "text-stats"
+version          = "1.0.0"
+description      = "Text statistics node — counts words, chars, sentences in DataSample text fields."
+author           = "AudioBuilder Examples"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+tags             = ["text", "statistics", "nlp"]
+dependencies     = []

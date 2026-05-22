@@ -1,0 +1,18 @@
+[plugin]
+name             = "experiment-tracker"
+version          = "1.0.0"
+description      = "Log experiment parameters, metrics, and artifacts. JSON backend (default) or MLflow."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "experiment", "tracking", "mlflow", "governance"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "mlflow>=2.0",
+]

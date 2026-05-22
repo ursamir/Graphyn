@@ -1,0 +1,20 @@
+[plugin]
+name             = "trainer"
+version          = "1.0.0"
+description      = "Unified model training orchestration for Keras and PyTorch."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "training", "keras", "pytorch", "common"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.13",
+    "keras>=3.0",
+    "torch>=2.0",
+]

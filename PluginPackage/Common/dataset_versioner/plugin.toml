@@ -1,0 +1,14 @@
+[plugin]
+name             = "dataset-versioner"
+version          = "1.0.0"
+description      = "Assign a SHA256 version hash to a dataset. Writes manifest CSV and lineage JSON for reproducibility and lineage tracking."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "dataset", "versioning", "lineage", "governance"]
+
+dependencies = [
+    "numpy>=1.24",
+]

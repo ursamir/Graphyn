@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "pipeline",
+    "seed": 42,
+    "description": "",
+    "created_at": null,
+    "tags": []
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/02_speech_commands/data/yes",
+        "recursive": false,
+        "source_type": "filesystem"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_0",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_0",
+      "node_type": "segmenter",
+      "config": {
+        "silence_threshold_db": 40.0,
+        "mode": "silence"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "feature_frontend_0",
+      "node_type": "feature_frontend",
+      "config": {
+        "feature_type": "mfcc",
+        "n_mfcc": 40,
+        "n_fft": 512,
+        "hop_length": 160,
+        "fmax": 8000.0,
+        "normalize": true,
+        "fixed_length": 101
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "realtime_inference_0",
+      "node_type": "realtime_inference",
+      "config": {
+        "model_path": "examples/06_speech_commands_e2e/output/tflite/model.tflite"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_0",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_0",
+      "src_port": "output",
+      "dst_id": "segmenter_0",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_0",
+      "src_port": "output",
+      "dst_id": "feature_frontend_0",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "feature_frontend_0",
+      "src_port": "output",
+      "dst_id": "realtime_inference_0",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

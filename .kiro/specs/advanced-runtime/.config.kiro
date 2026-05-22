@@ -1,0 +1,9 @@
+{
+  "specName": "advanced-runtime",
+  "phase": 3,
+  "title": "Advanced Runtime",
+  "description": "Phase 3 — Parallel execution, async-native runtime, resumability, partial execution, conditional branching, and event-driven execution.",
+  "requirementsFile": "requirements.md",
+  "designFile": "design.md",
+  "tasksFile": "tasks.md"
+}

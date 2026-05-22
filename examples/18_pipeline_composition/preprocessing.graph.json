@@ -1,0 +1,79 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "preprocessing",
+    "seed": 42,
+    "description": "",
+    "created_at": null,
+    "tags": []
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/yes",
+        "recursive": false,
+        "source_type": "filesystem"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_2",
+      "node_type": "segmenter",
+      "config": {
+        "silence_threshold_db": 40.0,
+        "mode": "silence"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_quality_gate_3",
+      "node_type": "audio_quality_gate",
+      "config": {
+        "min_snr_db": 5.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "segmenter_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_2",
+      "src_port": "output",
+      "dst_id": "audio_quality_gate_3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

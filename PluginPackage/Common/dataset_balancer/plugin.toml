@@ -1,0 +1,14 @@
+[plugin]
+name             = "dataset-balancer"
+version          = "1.0.0"
+description      = "Balance dataset class distributions: oversample, undersample, weighted sampling, or synthetic flagging."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "dataset", "balancing", "oversampling", "undersampling"]
+
+dependencies = [
+    "numpy>=1.24",
+]

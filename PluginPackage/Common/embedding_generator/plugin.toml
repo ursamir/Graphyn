@@ -1,0 +1,33 @@
+[plugin]
+name             = "embedding-generator"
+version          = "1.0.0"
+description      = "Generate semantic audio embeddings: wav2vec2, HuBERT, CLAP, YAMNet, x-vector speaker embeddings, OpenL3."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "embeddings",
+    "wav2vec2",
+    "hubert",
+    "clap",
+    "xvector",
+    "ssl",
+    "features"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+]
+
+optional_dependencies = [
+    "transformers>=4.30",
+    "torch>=2.0",
+    "tensorflow>=2.12",
+    "tensorflow-hub>=0.14",
+    "speechbrain>=0.5",
+    "openl3>=0.4",
+]

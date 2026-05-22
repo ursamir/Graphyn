@@ -1,0 +1,23 @@
+[plugin]
+name             = "evaluator"
+version          = "1.0.0"
+description      = "Evaluate trained models with accuracy, F1, ROC/AUC, confusion matrix, and fairness metrics."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "evaluation", "metrics", "common"]
+
+dependencies = [
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.13",
+    "keras>=3.0",
+    "torch>=2.0",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+]

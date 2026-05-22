@@ -1,0 +1,14 @@
+[plugin]
+name             = "deployment-packager"
+version          = "1.0.0"
+description      = "Bundle optimized models into deployment-ready packages: mobile ZIP, MCU C header, Docker image, or edge TAR."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "deployment", "packaging", "tflite", "docker", "edge", "mcu"]
+
+dependencies = [
+    "numpy>=1.24",
+]

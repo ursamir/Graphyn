@@ -1,0 +1,20 @@
+[plugin]
+name             = "realtime-inference"
+version          = "1.1.0"
+description      = "Low-latency inference for TFLite, PyTorch, and ONNX models. Supports classification, wake word, streaming ASR, and adaptive frame-skipping."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "inference", "tflite", "pytorch", "onnx", "realtime", "common"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.13",
+    "torch>=2.0",
+    "onnxruntime>=1.16",
+]

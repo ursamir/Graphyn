@@ -1,0 +1,210 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "conditional-branching",
+    "seed": 42,
+    "description": "Conditional edge: 'len(output) > 0'",
+    "created_at": null,
+    "tags": []
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/yes",
+        "recursive": false,
+        "source_type": "filesystem"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_1",
+      "node_type": "segmenter",
+      "config": {
+        "silence_threshold_db": 40.0,
+        "mode": "silence"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_quality_gate_2",
+      "node_type": "audio_quality_gate",
+      "config": {
+        "min_snr_db": 5.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "feature_frontend_a_2b",
+      "node_type": "feature_frontend",
+      "config": {
+        "feature_type": "mfcc",
+        "n_mfcc": 40,
+        "n_fft": 512,
+        "hop_length": 160,
+        "fmax": 8000.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_builder_a_3",
+      "node_type": "dataset_builder",
+      "config": {
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "fixed_length": 101
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_versioner_a_4",
+      "node_type": "dataset_versioner",
+      "config": {
+        "output_dir": "/home/meritech/Desktop/newAudio3/examples/12_conditional_branching/output/branch_a",
+        "version_tag": "v1"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "augmentation_pipeline_5",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "augmentations": [
+          {
+            "type": "gain",
+            "gain_db": [
+              -3.0,
+              3.0
+            ],
+            "copies_per_sample": 1
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "feature_frontend_b_5b",
+      "node_type": "feature_frontend",
+      "config": {
+        "feature_type": "mfcc",
+        "n_mfcc": 40,
+        "n_fft": 512,
+        "hop_length": 160,
+        "fmax": 8000.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_builder_b_6",
+      "node_type": "dataset_builder",
+      "config": {
+        "split_ratios": {
+          "train": 0.7,
+          "val": 0.15,
+          "test": 0.15
+        },
+        "fixed_length": 101
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "dataset_versioner_b_7",
+      "node_type": "dataset_versioner",
+      "config": {
+        "output_dir": "/home/meritech/Desktop/newAudio3/examples/12_conditional_branching/output/branch_b",
+        "version_tag": "v1"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "segmenter_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_1",
+      "src_port": "output",
+      "dst_id": "audio_quality_gate_2",
+      "dst_port": "input",
+      "condition": "len(output) > 0"
+    },
+    {
+      "src_id": "audio_quality_gate_2",
+      "src_port": "output",
+      "dst_id": "feature_frontend_a_2b",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "feature_frontend_a_2b",
+      "src_port": "output",
+      "dst_id": "dataset_builder_a_3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "dataset_builder_a_3",
+      "src_port": "output",
+      "dst_id": "dataset_versioner_a_4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_1",
+      "src_port": "output",
+      "dst_id": "augmentation_pipeline_5",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "augmentation_pipeline_5",
+      "src_port": "output",
+      "dst_id": "feature_frontend_b_5b",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "feature_frontend_b_5b",
+      "src_port": "output",
+      "dst_id": "dataset_builder_b_6",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "dataset_builder_b_6",
+      "src_port": "output",
+      "dst_id": "dataset_versioner_b_7",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

@@ -1,0 +1,21 @@
+[plugin]
+name             = "edge-optimizer"
+version          = "1.0.0"
+description      = "Optimize models for edge deployment via TFLite or ONNX quantization."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = ["ml", "edge", "tflite", "onnx", "quantization", "common"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.13",
+    "onnx>=1.14",
+    "onnxruntime>=1.16",
+    "tf2onnx>=1.15",
+]

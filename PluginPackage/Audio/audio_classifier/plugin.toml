@@ -1,0 +1,30 @@
+[plugin]
+name             = "audio-classifier"
+version          = "1.0.0"
+description      = "General-purpose audio classification: built-in YAMNet (521 classes) or custom TFLite/PyTorch/ONNX model. Accepts AudioSample or FeatureArray inputs."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["nodes.py"]
+license          = "MIT"
+
+tags = [
+    "audio",
+    "classification",
+    "yamnet",
+    "tflite",
+    "pytorch",
+    "inference"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "librosa>=0.10",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.12",
+    "tensorflow-hub>=0.14",
+    "tflite-runtime>=2.14",
+    "torch>=2.0",
+    "onnxruntime>=1.16",
+]

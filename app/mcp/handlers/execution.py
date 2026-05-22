@@ -1,0 +1,90 @@
+# app/mcp/handlers/execution.py
+"""execute_pipeline tool handler.
+
+Delegates to run_pipeline_ir() (V1.md §3.1).
+Req 4.1–4.14
+"""
+from __future__ import annotations
+
+import concurrent.futures
+from typing import Any
+
+from app.core.orchestrator import run_pipeline_ir  # module-level import — patchable in tests
+
+# ── Tool schema constants ─────────────────────────────────────────────────────
+
+EXECUTE_PIPELINE_DESCRIPTION = (
+    "Execute a pipeline from a GraphIR JSON document. Returns run_id within 500ms. "
+    "Execution proceeds asynchronously in a background thread. Use inspect_run to "
+    "retrieve artifacts and logs after completion."
+)
+
+EXECUTE_PIPELINE_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "graph": {
+            "type": "object",
+            "description": "A validated GraphIR JSON document.",
+        },
+        "use_cache": {
+            "type": "boolean",
+            "description": "Whether to use PipelineCache for node outputs (default true).",
+            "default": True,
+        },
+        "streaming": {
+            "type": "boolean",
+            "description": "Whether to use streaming execution mode (default false).",
+            "default": False,
+        },
+        "_meta": {
+            "type": "object",
+            "properties": {"auth_token": {"type": "string"}},
+        },
+    },
+    "required": ["graph"],
+    "additionalProperties": False,
+}
+
+
+# ── Handler ───────────────────────────────────────────────────────────────────
+
+
+def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
+    """Execute a pipeline asynchronously (Req 4.1–4.14).
+
+    Returns run_id within 500 ms (Req 4.2).
+    Delegates to run_pipeline_ir() (V1.md §3.1).
+    """
+    from app.core.ir.loader import load_ir
+    from app.core.run_journal import RunManager
+
+    graph_dict = arguments.get("graph")
+    use_cache = arguments.get("use_cache", True)
+    streaming = arguments.get("streaming", False)
+
+    # Step 1: Validate graph (Req 4.11)
+    try:
+        graph = load_ir(graph_dict)
+    except Exception as exc:
+        return {"valid": False, "errors": [str(exc)]}
+
+    # Step 2: Allocate RunManager to get run_id immediately (Req 4.12)
+    run_manager = RunManager()
+    run_id = run_manager.run_id
+
+    # Step 3: Submit execution to background thread (Req 4.2)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    executor.submit(
+        run_pipeline_ir,
+        graph,
+        use_cache=use_cache,
+        streaming=streaming,
+        run_manager=run_manager,
+    )
+    # Release the executor immediately — threads are daemon threads and will
+    # not block process exit. shutdown(wait=False) prevents resource leaks.
+    executor.shutdown(wait=False)
+
+    # Step 4: Return run_id within 500 ms (Req 4.2)
+    return {"run_id": run_id, "status": "started"}
