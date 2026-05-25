@@ -108,3 +108,13 @@ All handlers return structured JSON. Never raw exceptions.
 | `graph_not_found` | `graph.json` missing for the given run |
 | `store_error` | `ArtifactStore` or `ProvenanceStore` raised an exception |
 | `replay_error` | Unexpected error during replay setup |
+
+## Open Issues in This Area
+
+> See `docs/MASTER_ISSUE_REGISTRY.md` for full details and fixes.
+
+| ID | Severity | Summary |
+|---|---|---|
+| NEW-7 | Medium | Per-call `ThreadPoolExecutor` leak in `execute_pipeline` and `replay_run` |
+| NEW-15 | Low | `inspect_run` sorts runs lexicographically, not chronologically |
+| NEW-16 | Low | Unnecessary extra thread layer in `execute_pipeline` handler |

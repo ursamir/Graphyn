@@ -15,11 +15,11 @@ When you modify code, update the matching steering file AND the matching `docs/`
 | `node-registry.md` | `registry.py`, `discovery.py`, `catalogue.py`, `compat.py`, `errors.py` |
 | `plugin-development.md` | `plugins/`, `app/core/plugins/**`, `PluginPackage/**` |
 | `plugin-ecosystem.md` | `app/core/plugins/**` |
-| `pipeline-execution.md` | `pipeline.py`, `validation.py`, `pipeline_cache.py`, `ir/` |
+| `pipeline-execution.md` | `orchestrator.py`, `planner.py`, `node_executor.py`, `checkpoint.py`, `executor.py`, `pipeline_cache.py`, `ir/` |
 | `api-structure.md` | `app/api/main.py` |
 | `api-endpoints.md` | `app/api/routers/**` |
 | `sdk-cli.md` | `sdk.py`, `app/cli/main.py` |
-| `backend-services.md` | `run_manager.py`, `logger.py`, `ingestion.py`, `project_manager.py` |
+| `backend-services.md` | `run_journal.py`, `run_control.py`, `logger.py`, `artifact_store.py`, `domain/**` |
 | `mcp-server.md` | `app/mcp/**` |
 | `data-models.md` | `app/models/**` |
 | `frontend-canvas.md` | `flow/`, `store/`, `utils/`, `App.tsx`, `main.tsx` |
@@ -39,9 +39,15 @@ When you modify code, update the matching steering file AND the matching `docs/`
 | `docs/DATA_FLOW_AND_WORKSPACE.md` | New data type, workspace layout change |
 | `docs/PLUGIN_GUIDE.md` | Plugin API change, new plugin in `PluginPackage/` |
 | `docs/ARCHITECTURE.md` | New interface, major structural change |
-| `docs/KNOWN_ISSUES.md` | Fix → move Active → Resolved. New issue → add to Active. |
+| `docs/KNOWN_ISSUES.md` | Fix → remove from open tables. New issue → add to correct priority tier. |
+| `docs/MASTER_ISSUE_REGISTRY.md` | Any new issue found or any issue resolved — update status and move to Resolved table. |
 
 ## Action Checklists
+
+**Fix an open issue:**
+1. Fix the code
+2. Move the issue row to the Resolved table in `docs/MASTER_ISSUE_REGISTRY.md`
+3. Remove it from the matching priority tier in `docs/KNOWN_ISSUES.md`
 
 **New plugin node:**
 1. Implement in `PluginPackage/Audio/` or `PluginPackage/Common/`
@@ -57,4 +63,4 @@ When you modify code, update the matching steering file AND the matching `docs/`
 
 **New env var:** add row to `project-overview.md` Environment Variables table
 
-**Fix a known issue:** fix code → move entry in `docs/KNOWN_ISSUES.md` from Active to Resolved
+**New issue found during work:** add to `docs/MASTER_ISSUE_REGISTRY.md` in the correct priority section and add a row to the Quick Reference table. Add to `docs/KNOWN_ISSUES.md` in the correct tier.

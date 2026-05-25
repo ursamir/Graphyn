@@ -39,6 +39,14 @@ class NodeExecutor:
       - Observer event emission
       - Streaming vs. batch execution
 
+    Observer contract
+    -----------------
+    ``Node.on_start()``, ``Node.on_end()``, and ``Node.on_error()`` in
+    ``base.py`` already call the observer internally.  This executor does NOT
+    call the observer directly — doing so would fire every event twice (BUG-1
+    fix).  The executor's only job is to call the lifecycle hooks in the right
+    order; the hooks own the observer notification.
+
     Usage::
 
         executor = NodeExecutor(node, run_id="run-abc")
@@ -78,7 +86,6 @@ class NodeExecutor:
         node = self._node
         policy: RetryPolicy | None = node.retry_policy
         max_attempts = policy.max_attempts if policy else 1
-        observer: NodeObserver | None = node.observer
         node_type = type(node).__name__
 
         last_exc: Exception | None = None
@@ -90,13 +97,13 @@ class NodeExecutor:
                     time.sleep(wait)
 
             try:
+                # on_start() calls observer.on_node_start() internally (base.py).
+                # Do NOT call observer directly here — that would fire the event twice.
+                node._current_run_id = self._run_id  # type: ignore[attr-defined]
                 node.on_start()
-                if observer:
-                    observer.on_node_start(node_type, self._run_id)
             except Exception as exc:
+                # on_error() calls observer.on_node_error() internally.
                 node.on_error(exc)
-                if observer:
-                    observer.on_node_error(node_type, self._run_id, exc)
                 last_exc = exc
                 continue
 
@@ -104,29 +111,30 @@ class NodeExecutor:
             try:
                 outputs = node.process(inputs)
             except Exception as exc:
+                # on_error() calls observer.on_node_error() internally.
                 node.on_error(exc)
-                if observer:
-                    observer.on_node_error(node_type, self._run_id, exc)
                 last_exc = exc
                 continue
 
             duration = time.perf_counter() - t0
 
+            # on_end() calls observer.on_node_end() internally.
+            # Pass duration and port counts via the node's _last_duration/_last_counts
+            # attributes so base.py can forward them to the observer with full context.
+            node._last_duration = duration  # type: ignore[attr-defined]
+            node._last_input_counts = {k: _count_port_items(v) for k, v in inputs.items()}  # type: ignore[attr-defined]
+            node._last_output_counts = {k: _count_port_items(v) for k, v in outputs.items()}  # type: ignore[attr-defined]
             node.on_end()
-            input_counts = {k: _count_port_items(v) for k, v in inputs.items()}
-            output_counts = {k: _count_port_items(v) for k, v in outputs.items()}
-            if observer:
-                observer.on_node_end(node_type, self._run_id, duration, input_counts, output_counts)
 
             if attempt > 0:
                 log.info("Node '%s' succeeded after %d attempt(s).", node_type, attempt + 1)
 
             return outputs
 
+        # All attempts exhausted.
+        # on_error() was already called inside the loop on the last failed attempt.
+        # Do NOT call it again here — that would fire the event twice (BUG-6 fix).
         assert last_exc is not None
-        node.on_error(last_exc)
-        if observer:
-            observer.on_node_error(node_type, self._run_id, last_exc)
         self.teardown()
         raise last_exc
 
@@ -135,10 +143,12 @@ class NodeExecutor:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Execute the node in streaming mode.
 
-        on_end() is called in a finally block so it fires even when the caller
-        breaks out of the async for early.
+        on_start() and on_end() (which call the observer internally) are called
+        once per stream invocation. on_end() fires in a finally block so it
+        fires even when the caller breaks out of the async for early.
         """
         node = self._node
+        node._current_run_id = self._run_id  # type: ignore[attr-defined]
         node.on_start()
         try:
             async for item in node.process_stream(inputs):

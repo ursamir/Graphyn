@@ -130,3 +130,17 @@ class MyNode(Node):
     def process(self, samples):   # SISO shorthand
         return [transform(s) for s in samples]
 ```
+
+## Open Issues in This Area
+
+> See `docs/MASTER_ISSUE_REGISTRY.md` for full details and fixes.
+
+| ID | Severity | Summary |
+|---|---|---|
+| SA-B2 | Low | SISO wrapper doesn't validate `inputs` is a dict |
+| SA-B3 | Low | `process_stream` default GIL limitation undocumented |
+| SA-B4 | Low | `__init_subclass__` wraps abstract intermediaries |
+| SA-B5 | Low | Deferred import of private `_type_to_schema` from sibling module |
+| SA-NE1 | Low | `teardown()` called when `setup()` was never called |
+| SA-NE2 | Low | `_last_duration` etc. injected as dynamic attributes on foreign object |
+| SA-NE3 | Low | Streaming nodes cannot use `RetryPolicy` |

@@ -50,7 +50,6 @@ class Node(Generic[InputT, OutputT]):
     input_ports: ClassVar[dict[str, InputPort]] = {}
     output_ports: ClassVar[dict[str, OutputPort]] = {}
     retry_policy: ClassVar[RetryPolicy | None] = None
-
     class Config(NodeConfig):
         """Default empty config — subclasses replace this."""
         pass
@@ -213,9 +212,9 @@ class Node(Generic[InputT, OutputT]):
                     node_type=getattr(self.metadata, "node_type", type(self).__name__)
                     if hasattr(self, "metadata") else type(self).__name__,
                     run_id=getattr(self, "_current_run_id", ""),
-                    duration_s=0.0,
-                    input_counts={},
-                    output_counts={},
+                    duration_s=getattr(self, "_last_duration", 0.0),
+                    input_counts=getattr(self, "_last_input_counts", {}),
+                    output_counts=getattr(self, "_last_output_counts", {}),
                 )
             except Exception:
                 pass  # observer failures must never crash the node
@@ -245,8 +244,13 @@ class Node(Generic[InputT, OutputT]):
 def _maybe_wrap_siso(cls: type) -> None:
     """If ``cls`` is a SISO node that overrides ``process(self, data)``, wrap it.
 
-    Detection: the class defines ``process()`` with a second parameter that is
-    NOT named ``"inputs"`` — i.e. it uses the SISO shorthand signature.
+    Detection order (BUG-8 fix — explicit flag takes precedence over fragile
+    parameter-name inference):
+
+    1. If the class sets ``_siso: ClassVar[bool] = True`` explicitly, wrap it.
+    2. If the class sets ``_siso: ClassVar[bool] = False`` explicitly, skip it.
+    3. Fall back to parameter-name inference: wrap if the second parameter is
+       NOT named ``"inputs"``.
 
     The wrapper:
     1. Unpacks ``inputs["input"]`` → ``data``
@@ -264,6 +268,16 @@ def _maybe_wrap_siso(cls: type) -> None:
     if getattr(raw_process, "__wrapped__", None) is not None:
         return
 
+    # Check explicit _siso flag first (avoids fragile parameter-name inference)
+    explicit_siso = cls.__dict__.get("_siso")
+    if explicit_siso is False:
+        return  # explicitly declared as multi-port — never wrap
+    if explicit_siso is True:
+        # Explicitly declared as SISO — wrap unconditionally
+        _install_siso_wrapper(cls, raw_process)
+        return
+
+    # Fall back to parameter-name inference for backward compatibility
     try:
         params = list(inspect.signature(raw_process).parameters.keys())
     except (ValueError, TypeError):
@@ -273,7 +287,12 @@ def _maybe_wrap_siso(cls: type) -> None:
     if len(params) >= 2 and params[1] == "inputs":
         return
 
-    # SISO signature: (self, data) or (self, samples) or (self, _) etc.
+    # SISO signature: (self, data) or (self, samples) etc.
+    _install_siso_wrapper(cls, raw_process)
+
+
+def _install_siso_wrapper(cls: type, raw_process) -> None:
+    """Install the SISO dict-unpacking wrapper on cls.process."""
     def _siso_process(
         self: "Node",
         inputs: dict[str, Any],

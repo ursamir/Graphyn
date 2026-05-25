@@ -148,7 +148,7 @@ def run_pipeline_stream(payload: dict = Body(...)):
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    queue: Queue = Queue()
+    queue: Queue = Queue(maxsize=512)  # bounded — prevents memory leak on slow clients
     logger = PipelineLogger(queue=queue)
 
     def _run():

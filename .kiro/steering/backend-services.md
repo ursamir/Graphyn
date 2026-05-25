@@ -1,15 +1,20 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "app/core/run_manager.py,app/core/logger.py,app/core/ingestion.py,app/core/project_manager.py,app/core/quality_checker.py,app/core/webhook.py,app/core/utils/hash.py,app/core/artifact_store.py"
+fileMatchPattern: "app/core/run_journal.py,app/core/run_control.py,app/core/run_manager.py,app/core/logger.py,app/core/artifact_store.py,app/core/provenance.py,app/core/webhook.py,app/core/utils/hash.py,app/domain/**"
 ---
 
 # Backend Services
 
-## `RunManager` (`run_manager.py`)
+## `RunJournal` / `RunManager` (`run_journal.py`, `run_control.py`, `run_manager.py`)
+
+`run_manager.py` is a re-export shim — import from it for backward compat, but the real implementations are:
+- **`run_journal.py`** — filesystem persistence for a single run
+- **`run_control.py`** — in-process active run registry
 
 ```python
+from app.core.run_manager import RunManager   # shim — works fine
 run = RunManager()   # creates workspace/runs/{run_id}/, writes initial meta.json
-run.run_id           # 8-char hex
+run.run_id           # 16-char hex
 run.base_path        # "workspace/runs/{run_id}"
 ```
 
@@ -32,13 +37,15 @@ run.base_path        # "workspace/runs/{run_id}"
 | `register_artifact(node_id, node_type, artifact_type, data, metadata=None, input_artifact_ids=None)` | Delegates to `ArtifactStore` + `ProvenanceStore`; returns `ArtifactRecord` |
 | `get_provenance_summary()` | Returns `{"run_id", "graph_hash", "artifacts", "provenance_records"}` |
 
-**Active run registry:** `register_active_run(run)`, `get_active_run(run_id)`, `deregister_active_run(run_id)` — module-level dict, process-local.
+**Active run registry** (`run_control.py`): `register_active_run(run)`, `get_active_run(run_id)`, `deregister_active_run(run_id)` — module-level dict, process-local. Returns `None` for unknown/completed/wrong-worker runs with no distinction between cases (SA-RC2). Migration path to Redis documented in module docstring (SCALE-1).
 
-`ResumeError` is imported at module top-level from `app.core.nodes.errors` (not deferred). No circular import with `pipeline.py`.
+`ResumeError` is imported at module top-level from `app.core.nodes.errors`. No circular import.
 
 `resume_state.json` schema: `{"schema_version": "1.0", "run_id": "...", "completed_nodes": [...], "graph_hash": "..."}`.
 
 All timestamps: `datetime.now(timezone.utc).isoformat()`. Never use `datetime.utcnow()`.
+
+> ⚠️ **Open issues in this area:** SA-RJ1 (`_write_meta` not atomic), SA-RJ2 (`_meta_lock` inconsistently applied), BUG-4 (`find_latest_checkpoint` O(N) scan), SA-RJ3 (timezone sort), SA-RJ4 (silent no-op), SA-RJ5 (`register_artifact` never passes `name`). See `docs/MASTER_ISSUE_REGISTRY.md`.
 
 ## `PipelineLogger` (`logger.py`)
 
@@ -77,10 +84,11 @@ Downloads run in background daemon threads. Always use `job.append_progress(even
 
 ## Other Services
 
-- `ProjectManager` — full project lifecycle under `workspace/datasets/output/{project}/`
-- `QualityChecker` — runs checks against `contract.json`, writes `quality_report.json`
-- `WebhookService` — HTTP POST notifications; config at `workspace/webhooks.json`
-- `stable_hash()` (`utils/hash.py`) — deterministic hash across Python runs; used for node seeds, export file IDs, split group ordering
+- `ProjectManager` (`app/domain/project_manager.py`) — full project lifecycle under `workspace/datasets/output/{project}/`
+- `QualityChecker` (`app/domain/quality_checker.py`) — runs checks against `contract.json`, writes `quality_report.json`
+- `IngestionService` (`app/domain/ingestion.py`) — URL and HuggingFace dataset download jobs; job store is process-local (SCALE-2)
+- `WebhookService` (`app/core/webhook.py`) — HTTP POST notifications; config at `workspace/webhooks.json`. ⚠️ DNS rebinding SSRF gap at send time (NEW-12 — open)
+- `stable_hash()` (`app/core/utils/hash.py`) — deterministic hash across Python runs; used for node seeds, export file IDs, split group ordering
 
 ## `ArtifactStore` (`artifact_store.py`)
 
@@ -97,3 +105,5 @@ versions = store.get_versions(artifact_name)
 `SUPPORTED_ARTIFACT_TYPES`: `audio_samples`, `model_artifact`, `tflite_artifact`, `prediction_result`, `feature_array`, `generic`.
 
 `_infer_artifact_type(value)` — module-level helper that infers the correct `artifact_type` string from a node output value. Checks for `DatasetArtifact`, audio sample lists (duck-typed via `.data` + `.sample_rate`), split dicts (`train`/`val`/`test`), feature dicts, and `np.ndarray`. Falls back to `"generic"`. Import from `app.core.artifact_store` (not `pipeline.py`).
+
+> ⚠️ **Open issues:** NEW-10 (`cleanup()` leaves stale secondary index entries), SA-AS1 (artifact IDs truncated to 16 chars), SA-AS3 (confusing `OSError` on concurrent rename), SA-AS4 (`list()` slow-path skips `by_run` but not `by_name`), SA-AS5 (`_by_name_path` allows `.` and `..`). See `docs/MASTER_ISSUE_REGISTRY.md`.

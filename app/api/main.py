@@ -32,19 +32,18 @@ _logger = logging.getLogger(__name__)
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
-_API_TOKEN = api_token()
-if not _API_TOKEN:
-    _logger.warning(
-        "GRAPHYN_API_TOKEN is not set — running without authentication."
-    )
-
+# Token is intentionally NOT cached at module level.
+# Reading on every request ensures:
+#   - Token rotation takes effect immediately without a process restart.
+#   - Late injection (secrets manager, container orchestrator) works correctly.
 _bearer = HTTPBearer(auto_error=False)
 
 
 def _auth_dep(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
-    if not _API_TOKEN:
+    token = api_token()  # read on every call
+    if not token:
         return  # auth not configured — allow all
-    if credentials is None or credentials.credentials != _API_TOKEN:
+    if credentials is None or credentials.credentials != token:
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing Bearer token",
@@ -66,7 +65,9 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS", "DELETE", "PUT", "PATCH"],
-    allow_headers=["*"],
+    # Enumerate specific headers — allow_headers=["*"] is forbidden by the CORS
+    # spec when allow_credentials=True and causes browsers to reject responses.
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept"],
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────

@@ -6,9 +6,15 @@ Extracted from run_manager.py. Responsible for:
   - register_active_run / get_active_run / deregister_active_run
   - pause / resume / cancel / wait_if_paused / is_paused / is_cancelled
 
-NOTE: This registry is process-local. In a multi-worker deployment, pause/resume/
-cancel requests must be routed to the worker that owns the run. A future version
-will replace this dict with a distributed backend (e.g. Redis).
+SCALABILITY NOTE (SCALE-1):
+This registry is process-local. In a multi-worker deployment (e.g.
+``uvicorn --workers 4``), pause/resume/cancel requests must be routed to the
+worker that owns the run. Requests routed to a different worker will return
+"run not active" (HTTP 404 from the run_control router).
+
+Migration path: replace ``_ACTIVE_RUNS`` with a Redis-backed store.
+The interface (register/get/deregister) is intentionally minimal so the
+swap is a single-module change with no callers to update.
 """
 from __future__ import annotations
 

@@ -43,6 +43,11 @@ SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
 _MAX_COMPLETED_JOBS = 200
 
 # Module-level job store and its lock
+# SCALABILITY NOTE (BUG-10 / SCALE-2):
+# _jobs is process-local. In a multi-worker deployment (e.g. uvicorn --workers N),
+# a job started on worker A cannot be streamed from worker B. The SSE stream
+# endpoint will return 404 if routed to a different worker.
+# Migration path: replace _jobs with a Redis-backed store (same interface).
 _jobs: dict[str, "IngestionJob"] = {}
 _jobs_lock = threading.Lock()
 
@@ -166,12 +171,25 @@ class IngestionService:
             filename = f"{uuid.uuid4().hex[:8]}_{Path(raw_filename).name}"
             dest_path = dest_dir / filename
 
-            # Download the file
+            # Download the file with a size limit to prevent memory exhaustion (SEC-4 fix).
+            # 500 MB is a generous upper bound for a single audio file.
+            _MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
             try:
                 with httpx.Client(follow_redirects=True, timeout=60.0) as client:
-                    response = client.get(url)
-                    response.raise_for_status()
-                    dest_path.write_bytes(response.content)
+                    with client.stream("GET", url) as response:
+                        response.raise_for_status()
+                        total_bytes = 0
+                        with open(dest_path, "wb") as out_f:
+                            for chunk in response.iter_bytes(chunk_size=65536):
+                                total_bytes += len(chunk)
+                                if total_bytes > _MAX_DOWNLOAD_BYTES:
+                                    out_f.close()
+                                    dest_path.unlink(missing_ok=True)
+                                    raise ValueError(
+                                        f"Download exceeds size limit of "
+                                        f"{_MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB"
+                                    )
+                                out_f.write(chunk)
             except Exception as exc:
                 job.append_progress({
                     "type": "progress",

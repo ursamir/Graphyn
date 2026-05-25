@@ -6,8 +6,10 @@ Sends notifications in background threads using httpx.
 Never raises on notification failure.
 """
 
+import ipaddress
 import json
 import logging
+import socket
 import threading
 from typing import Any
 from urllib.parse import urlparse
@@ -20,7 +22,28 @@ from app.core.config import webhooks_path as _webhooks_path
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
+def _is_private_host(hostname: str) -> bool:
+    """Return True if hostname resolves to a private, loopback, or link-local address.
+
+    Raises ValueError if the hostname cannot be resolved.
+    Used to block SSRF attacks via webhook URLs pointing at internal services.
+    """
+    try:
+        addr_str = socket.gethostbyname(hostname)
+        ip = ipaddress.ip_address(addr_str)
+        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+    except socket.gaierror as exc:
+        raise ValueError(f"Webhook URL hostname '{hostname}' could not be resolved: {exc}") from exc
+
+
 class WebhookService:
+    """Fire-and-forget HTTP POST webhook notifications."""
+
+    def __init__(self) -> None:
+        # Initialised here so notify() always has a well-defined cache state
+        # regardless of whether save() was called first (BUG-3 fix).
+        self._config_cache: dict | None = None
+
     @property
     def CONFIG_PATH(self):
         return _webhooks_path()
@@ -29,8 +52,9 @@ class WebhookService:
         """Persist webhook configuration to workspace/webhooks.json.
 
         Raises:
-            ValueError: if ``url`` does not use http or https scheme, or has
-                        no valid host (prevents SSRF via file:// or bare paths).
+            ValueError: if ``url`` does not use http or https scheme, has no
+                        valid host, or resolves to a private/loopback/link-local
+                        IP address (SSRF prevention — SEC-3 fix).
         """
         parsed = urlparse(url)
         if parsed.scheme not in _ALLOWED_SCHEMES:
@@ -42,12 +66,31 @@ class WebhookService:
             raise ValueError(
                 f"Webhook URL must have a valid host. URL: {url!r}"
             )
+
+        # Block RFC 1918, loopback, and link-local addresses (SSRF prevention).
+        # Resolve at save() time so the check is not bypassable via DNS rebinding
+        # after the config is written.
+        hostname = parsed.hostname or ""
+        if hostname:
+            try:
+                if _is_private_host(hostname):
+                    raise ValueError(
+                        f"Webhook URL '{url}' resolves to a private or loopback address. "
+                        "Webhook targets must be publicly reachable hosts."
+                    )
+            except ValueError:
+                raise
+            except Exception as exc:
+                raise ValueError(
+                    f"Webhook URL hostname validation failed for '{url}': {exc}"
+                ) from exc
+
         self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         config = {"url": url, "events": events}
         with self.CONFIG_PATH.open("w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         # Invalidate in-memory cache so next notify() picks up the new config
-        self._config_cache: dict | None = None
+        self._config_cache = None
 
     def load(self) -> dict:
         """Read webhook configuration. Returns {} if not configured."""
@@ -69,8 +112,9 @@ class WebhookService:
         all events), sends a POST request with the payload.
         Logs a warning on failure. Never raises.
         """
-        # Use cached config to avoid a disk read on every event
-        if not hasattr(self, "_config_cache") or self._config_cache is None:
+        # Use cached config to avoid a disk read on every event.
+        # _config_cache is always initialised in __init__ so hasattr is not needed.
+        if self._config_cache is None:
             self._config_cache = self.load()
         config = self._config_cache
 
@@ -89,9 +133,7 @@ class WebhookService:
             # daemon=True: the notification thread will not block process exit.
             # This is intentional fire-and-forget behaviour — if the process
             # exits before the HTTP POST completes, the notification is silently
-            # dropped. There is no retry or delivery guarantee. Operators who
-            # need guaranteed delivery should consume the structured event queue
-            # instead of relying on webhooks for critical notifications.
+            # dropped. There is no retry or delivery guarantee.
             daemon=True,
         )
         thread.start()

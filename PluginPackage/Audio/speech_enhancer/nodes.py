@@ -148,7 +148,12 @@ class SpeechEnhancerNode(Node):
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, samples: list[AudioSample]) -> list[AudioSample]:
-        backend = getattr(self, "_resolved_backend", None) or self._resolve_backend()
+        if not hasattr(self, "_resolved_backend"):
+            raise RuntimeError(
+                "SpeechEnhancerNode.setup() must be called before process(). "
+                "The NodeExecutor calls setup() automatically — do not call process() directly."
+            )
+        backend = self._resolved_backend
         output: list[AudioSample] = []
 
         for sample in samples:

@@ -32,16 +32,18 @@ def health_check():
 class CleanupRequest(BaseModel):
     older_than_days: int = 7
     delete_cache: bool = True
+    delete_artifacts: bool = False
 
 
 @router.post("/cleanup", summary="Clean up old runs and cache")
 def cleanup(body: CleanupRequest = CleanupRequest()):
-    """Delete run directories older than older_than_days and optionally cache entries."""
+    """Delete run directories older than older_than_days, optionally cache and artifact entries."""
     from datetime import timedelta
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=body.older_than_days)
     runs_deleted = 0
     cache_deleted = 0
+    artifacts_deleted = 0
     bytes_freed = 0
 
     runs_root = _runs_dir()
@@ -51,7 +53,6 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
         for entry in runs_root.iterdir():
             if not entry.is_dir():
                 continue
-            # Check mtime of the run directory
             mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
             if mtime < cutoff:
                 for f in entry.rglob("*"):
@@ -72,10 +73,17 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
                 shutil.rmtree(entry)
                 cache_deleted += 1
 
+    if body.delete_artifacts:
+        from app.core.artifact_store import ArtifactStore
+        result = ArtifactStore().cleanup(older_than_days=body.older_than_days)
+        artifacts_deleted = result["entries_deleted"]
+        bytes_freed += result["bytes_freed"]
+
     return {
-        "deleted": runs_deleted + cache_deleted,
+        "deleted": runs_deleted + cache_deleted + artifacts_deleted,
         "runs_deleted": runs_deleted,
         "cache_entries_deleted": cache_deleted,
+        "artifacts_deleted": artifacts_deleted,
         "bytes_freed": bytes_freed,
         "older_than_days": body.older_than_days,
     }

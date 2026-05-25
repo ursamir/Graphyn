@@ -261,6 +261,9 @@ async def run_pipeline_ir_async(
                 raise
             logger.wave_end(wave_idx, wave, time.time() - wave_start_time)
 
+        # Shut down the shared thread pool now that all waves are done
+        par_exec.shutdown()
+
     # ── Sequential execution ───────────────────────────────────────────────────
     elif not event_driven:
         for idx, node_id in enumerate(graph_obj.execution_order):
@@ -373,7 +376,10 @@ async def run_pipeline_ir_async(
                 if port_name not in inputs and not port.required:
                     inputs[port_name] = None
 
-            # Cache check
+            # Cache check — call load() directly and treat None as a miss.
+            # Do NOT call cache.has() first: has() + load() is a TOCTOU race
+            # (the entry can be deleted between the two calls). load() returning
+            # None is the authoritative cache-miss signal (ARCH-9 fix).
             cache_hit = False
             cache_key: str | None = None
             if cache is not None:
@@ -382,12 +388,11 @@ async def run_pipeline_ir_async(
                 )
                 combined_input_hash = cache.input_hash(list(inputs.values()))
                 cache_key = cache.key(node_type, node_cfg_dict, combined_input_hash)
-                if cache.has(cache_key):
-                    cached_result = cache.load(cache_key)
-                    if cached_result is not None:
-                        node_outputs[node_id] = cached_result
-                        cache_hit = True
-                        logger.info(f"[{idx}] {node_type} — cache hit")
+                cached_result = cache.load(cache_key)
+                if cached_result is not None:
+                    node_outputs[node_id] = cached_result
+                    cache_hit = True
+                    logger.info(f"[{idx}] {node_type} — cache hit")
 
             if not cache_hit:
                 try:

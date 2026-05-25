@@ -50,7 +50,7 @@ IR JSON is detected by the presence of a `schema_version` field in the request b
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/v1/runs` | All runs, newest first |
+| GET | `/api/v1/runs` | All runs, newest first; `?limit=50&offset=0` |
 | GET | `/api/v1/runs/{run_id}` | Config YAML + logs |
 | GET | `/api/v1/runs/{run_id}/status` | `{"status": "...", "progress_pct": N, "current_node": "..."}` |
 | GET | `/api/v1/runs/{run_id}/checkpoints` | List checkpoint node IDs |
@@ -86,7 +86,7 @@ Control active pipeline runs. Returns HTTP 404 with `{"error": "run_not_active",
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/v1/system/health` | `{"status": "ok", "timestamp": "..."}` |
-| POST | `/api/v1/system/cleanup` | Delete runs + cache — ⚠️ ignores `older_than_days`, deletes all |
+| POST | `/api/v1/system/cleanup` | Delete runs + cache + optionally artifacts — body: `{"older_than_days": 7, "delete_cache": true, "delete_artifacts": false}` |
 | GET | `/api/v1/system/projects-registry` | All projects `?q=search&status=...` |
 | GET | `/api/v1/system/webhooks` | Current webhook config |
 | PUT | `/api/v1/system/webhooks` | Save `{"url": "...", "events": [...]}` |
@@ -174,6 +174,13 @@ data: {"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "lab
 - Run IDs: alphanumeric only
 - Upload filenames: replaced with timestamped names
 
-## Known Issues
+## Open Issues in This Area
 
-- `POST /api/v1/pipelines/run-async` in-memory status dict lost on server restart; read status from `GET /api/v1/runs/{run_id}/status` after restart
+> See `docs/MASTER_ISSUE_REGISTRY.md` for full details and fixes.
+
+| ID | Severity | Summary |
+|---|---|---|
+| NEW-9 | Medium | `run_control` router has no `run_id` validation on pause/resume/cancel |
+| NEW-8 | Medium | Static mount paths in `main.py` frozen at import time |
+| NEW-13 | Low | `_replay_executor` `max_workers=1` undocumented |
+| NEW-15 | Low | `inspect_run` MCP handler sorts runs lexicographically, not chronologically |

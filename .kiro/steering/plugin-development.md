@@ -203,3 +203,5 @@ Reference: `PluginPackage/Audio/demo.py`
 | `multimodal_fusion` | `multimodal-fusion` | Features | v1.0.0 |
 
 When adding a plugin: add a row here and update `PluginPackage/NODES.md` capability matrix.
+
+> ⚠️ **NEW-19 (open):** `plugins/text-stats/` is an orphaned installed plugin with no `PluginPackage/` source. Either add the source to `PluginPackage/Common/text_stats/` or uninstall it: `PluginManager().uninstall("text-stats")`.

@@ -110,7 +110,12 @@ class AudioClassifierNode(Node):
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, inputs: list) -> list[PredictionResult]:
-        backend = getattr(self, "_resolved_backend", None) or self._resolve_backend()
+        if not hasattr(self, "_resolved_backend"):
+            raise RuntimeError(
+                "AudioClassifierNode.setup() must be called before process(). "
+                "The NodeExecutor calls setup() automatically — do not call process() directly."
+            )
+        backend = self._resolved_backend
         results: list[PredictionResult] = []
 
         for item in inputs:

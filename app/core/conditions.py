@@ -37,11 +37,35 @@ _ALLOWED_NODE_TYPES = frozenset({
 })
 
 
+def _ast_depth(node: ast.AST) -> int:
+    """Return the maximum depth of an AST tree (iterative, avoids recursion limit)."""
+    max_depth = 0
+    stack = [(node, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > max_depth:
+            max_depth = depth
+        for child in ast.iter_child_nodes(current):
+            stack.append((child, depth + 1))
+    return max_depth
+
+
 def _validate_ast(tree: ast.AST) -> None:
     """Walk the AST and raise ConditionEvaluationError for disallowed node types.
 
+    Also enforces a maximum AST depth to prevent DoS via deeply nested
+    expressions that pass the whitelist but fail at runtime (SEC-8 fix).
+
     Req 5.3 — whitelist: comparisons, boolean ops, subscript on 'output', len() only.
     """
+    _MAX_AST_DEPTH = 12
+    depth = _ast_depth(tree)
+    if depth > _MAX_AST_DEPTH:
+        raise ConditionEvaluationError(
+            f"Condition expression is too deeply nested (depth {depth}, max {_MAX_AST_DEPTH}). "
+            "Simplify the expression."
+        )
+
     for node in ast.walk(tree):
         node_type = type(node)
         if node_type not in _ALLOWED_NODE_TYPES:

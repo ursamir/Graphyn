@@ -17,10 +17,18 @@ def _get_runs_root() -> Path:
 
 
 def _run_dir(run_id: str) -> Path:
-    """Return the run directory path, raising 404 if it doesn't exist."""
-    if not run_id.replace("-", "").isalnum():
+    """Return the run directory path, raising 400/404 as appropriate.
+
+    Validates run_id is alphanumeric (hyphens allowed) and that the resolved
+    path stays within the runs root (SEC-7 fix — consistent with _safe_child()).
+    """
+    if not run_id.replace("-", "").isalnum() or not run_id.replace("-", ""):
         raise HTTPException(status_code=400, detail="Invalid run_id")
-    path = _get_runs_root() / run_id
+    runs_root = _get_runs_root().resolve()
+    path = (runs_root / run_id).resolve()
+    # Guard against path traversal — resolved path must stay inside runs root
+    if not path.is_relative_to(runs_root):
+        raise HTTPException(status_code=400, detail="Invalid run_id")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Run not found")
     return path
@@ -29,8 +37,14 @@ def _run_dir(run_id: str) -> Path:
 # ── List runs ─────────────────────────────────────────────────────────────────
 
 @router.get("", summary="List all pipeline runs")
-def list_runs():
-    """Return a summary list of all pipeline runs, newest first."""
+def list_runs(
+    limit: int = Query(50, ge=1, le=500, description="Maximum number of runs to return"),
+    offset: int = Query(0, ge=0, description="Number of runs to skip"),
+):
+    """Return a summary list of pipeline runs, newest first, with pagination.
+
+    Use limit/offset for large run histories. Default: first 50 runs.
+    """
     runs_root = _get_runs_root()
     if not runs_root.exists():
         return []
@@ -49,7 +63,7 @@ def list_runs():
         runs.append(meta)
 
     runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-    return runs
+    return runs[offset: offset + limit]
 
 
 # ── Get run ───────────────────────────────────────────────────────────────────

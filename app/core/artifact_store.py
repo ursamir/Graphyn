@@ -178,12 +178,13 @@ class ArtifactStore:
     # ------------------------------------------------------------------
 
     def _init_workspace(self) -> None:
-        """Create artifacts/ directory, index.json, and by_run/ sub-dir if they don't exist."""
+        """Create artifacts/ directory, index.json, and by_run/ + by_name/ sub-dirs if they don't exist."""
         self.base.mkdir(parents=True, exist_ok=True)
         index_path = self.base / "index.json"
         if not index_path.exists():
             index_path.write_text("{}", encoding="utf-8")
         (self.base / "by_run").mkdir(exist_ok=True)
+        (self.base / "by_name").mkdir(exist_ok=True)
 
     # ------------------------------------------------------------------
     # Index management
@@ -244,6 +245,38 @@ class ArtifactStore:
         if artifact_id not in ids:
             ids.append(artifact_id)
         path = self._by_run_path(run_id)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(ids, indent=2), encoding="utf-8")
+        tmp.replace(path)
+
+    # ------------------------------------------------------------------
+    # Secondary index: by_name/{name}.json → [artifact_id, ...]
+    # ------------------------------------------------------------------
+
+    def _by_name_path(self, name: str) -> Path:
+        # Sanitize name for use as a filename
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)[:128]
+        return self.base / "by_name" / f"{safe}.json"
+
+    def _load_by_name(self, name: str) -> list[str]:
+        """Return list of artifact_ids for the given name. Returns [] on missing/corrupt."""
+        path = self._by_name_path(name)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+        except FileNotFoundError:
+            return []
+        except Exception as exc:
+            logger.warning("ArtifactStore: by_name/%s corrupt (%s) — treating as empty", name, exc)
+            return []
+
+    def _append_by_name(self, name: str, artifact_id: str) -> None:
+        """Append artifact_id to the by_name index (caller must hold self._lock)."""
+        (self.base / "by_name").mkdir(exist_ok=True)
+        ids = self._load_by_name(name)
+        if artifact_id not in ids:
+            ids.append(artifact_id)
+        path = self._by_name_path(name)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(ids, indent=2), encoding="utf-8")
         tmp.replace(path)
@@ -431,12 +464,24 @@ class ArtifactStore:
 
         content_hash = self._compute_content_hash(artifact_type, data)
 
+        # Serialize data BEFORE acquiring the lock so the lock is held only for
+        # the index read-modify-write, not for the (potentially slow) disk write
+        # (ARCH-6 fix — prevents parallel execution bottleneck).
+        # We use a temporary artifact_id for the directory; if deduplication
+        # finds an existing record we discard the temp directory.
+        import tempfile as _tempfile
+        tmp_artifact_id = str(uuid.uuid4()).replace("-", "")[:16]
+        tmp_artifact_dir = self.base / f"_tmp_{tmp_artifact_id}"
+        tmp_data_dir = tmp_artifact_dir / "data"
+        try:
+            self._serialize_data(artifact_type, data, tmp_data_dir)
+        except ArtifactSerializationError:
+            raise
+
         with self._lock:
             index = self._load_index()
 
-            # Deduplication: return existing record if content_hash known,
-            # but stamp it with the current run_id/node_id/node_type so the
-            # artifact is associated with this run in provenance queries.
+            # Deduplication: return existing record if content_hash known.
             if content_hash in index:
                 existing_id = index[content_hash]
                 record_path = self.base / existing_id / "record.json"
@@ -444,9 +489,11 @@ class ArtifactStore:
                     try:
                         record_data = json.loads(record_path.read_text(encoding="utf-8"))
                         existing = ArtifactRecord.model_validate(record_data)
+                        # Discard the temp directory — we don't need it.
+                        import shutil as _shutil
+                        _shutil.rmtree(str(tmp_artifact_dir), ignore_errors=True)
                         # G3-09 fix: add deduplicated artifact to the by_run index for this run
                         self._append_by_run(run_id, existing.artifact_id)
-                        # Return a copy stamped with the current run context
                         return ArtifactRecord(
                             artifact_id=existing.artifact_id,
                             content_hash=existing.content_hash,
@@ -467,13 +514,15 @@ class ArtifactStore:
                             exc,
                         )
 
-            # New artifact — use 16 hex characters (64 bits) to reduce collision risk
-            artifact_id = str(uuid.uuid4()).replace("-", "")[:16]
+            # New artifact — rename temp dir to final artifact_id dir.
+            artifact_id = tmp_artifact_id
             artifact_dir = self.base / artifact_id
-            data_dir = artifact_dir / "data"
-
-            # Serialize data first (may raise ArtifactSerializationError)
-            self._serialize_data(artifact_type, data, data_dir)
+            try:
+                tmp_artifact_dir.rename(artifact_dir)
+            except Exception as exc:
+                import shutil as _shutil
+                _shutil.rmtree(str(tmp_artifact_dir), ignore_errors=True)
+                raise ArtifactSerializationError(artifact_type, exc) from exc
 
             created_at = datetime.now(timezone.utc).isoformat()
             data_path = str(Path("artifacts") / artifact_id / "data")
@@ -503,6 +552,10 @@ class ArtifactStore:
 
             # Update secondary run_id index
             self._append_by_run(run_id, artifact_id)
+
+            # Update secondary name index (if name is set)
+            if name:
+                self._append_by_name(name, artifact_id)
 
             return record
 
@@ -588,8 +641,87 @@ class ArtifactStore:
     def get_versions(self, artifact_name: str) -> list[ArtifactRecord]:
         """Return all artifacts whose name equals artifact_name, sorted by created_at descending.
 
-        Note: this performs a full directory scan (O(N) where N = total artifacts).
-        For large artifact stores, consider maintaining a ``by_name/`` secondary
-        index similar to ``by_run/``.
+        Uses the ``by_name/`` secondary index for O(k) lookup where k = number
+        of artifacts with that name (BUG-11 fix — previously O(N) full scan).
+        Falls back to full scan if the index is missing (e.g. artifacts
+        registered before the index was introduced).
         """
+        ids = self._load_by_name(artifact_name)
+        if ids:
+            records: list[ArtifactRecord] = []
+            for artifact_id in ids:
+                record_path = self.base / artifact_id / "record.json"
+                if not record_path.exists():
+                    continue
+                try:
+                    records.append(
+                        ArtifactRecord.model_validate(
+                            json.loads(record_path.read_text(encoding="utf-8"))
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "ArtifactStore: failed to load record %s (%s) — skipping",
+                        artifact_id, exc,
+                    )
+            records.sort(key=lambda r: r.created_at, reverse=True)
+            return records
+        # Fallback: full scan for artifacts registered before by_name index existed
         return [r for r in self.list() if r.name == artifact_name]
+
+    def cleanup(self, older_than_days: int = 30) -> dict:
+        """Delete artifact directories older than older_than_days.
+
+        Removes the artifact directory, its record.json, and updates the
+        content-hash index. Returns a summary dict.
+
+        Args:
+            older_than_days: Artifacts created more than this many days ago
+                             are deleted. Default: 30 days.
+        """
+        from datetime import timedelta
+        import shutil
+
+        if not self.base.is_dir():
+            return {"entries_deleted": 0, "bytes_freed": 0}
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        entries_deleted = 0
+        bytes_freed = 0
+        hashes_to_remove: list[str] = []
+
+        for entry in list(self.base.iterdir()):
+            if not entry.is_dir() or entry.name in ("by_run",):
+                continue
+            record_path = entry / "record.json"
+            if not record_path.exists():
+                continue
+            try:
+                record_data = json.loads(record_path.read_text(encoding="utf-8"))
+                record = ArtifactRecord.model_validate(record_data)
+                from datetime import datetime as _dt
+                created = _dt.fromisoformat(record.created_at)
+                if created.tzinfo is None:
+                    from datetime import timezone as _tz
+                    created = created.replace(tzinfo=_tz.utc)
+                if created >= cutoff:
+                    continue
+                hashes_to_remove.append(record.content_hash)
+            except Exception:
+                pass
+
+            for f in entry.rglob("*"):
+                if f.is_file():
+                    bytes_freed += f.stat().st_size
+            shutil.rmtree(str(entry), ignore_errors=True)
+            entries_deleted += 1
+
+        # Update the content-hash index to remove deleted entries
+        if hashes_to_remove:
+            with self._lock:
+                index = self._load_index()
+                for h in hashes_to_remove:
+                    index.pop(h, None)
+                self._save_index(index)
+
+        return {"entries_deleted": entries_deleted, "bytes_freed": bytes_freed}

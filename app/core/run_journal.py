@@ -48,12 +48,7 @@ class RunManager:
 
     def __init__(self, base_dir: str | None = None) -> None:
         if base_dir is None:
-            import app.core.run_journal as _self_module
-            _original_default = "workspace"
-            if _self_module._WORKSPACE != _original_default:
-                base_dir = str(Path(_self_module._WORKSPACE) / "runs")
-            else:
-                base_dir = str(_project_dir() / "runs")
+            base_dir = str(_project_dir() / "runs")
 
         self.run_id = str(uuid.uuid4()).replace("-", "")[:16]
         self.base_path = os.path.join(base_dir, self.run_id)

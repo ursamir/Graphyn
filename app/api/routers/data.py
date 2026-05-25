@@ -10,17 +10,28 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from app.core.config import datasets_input_dir as _datasets_input_dir
+from app.core.config import datasets_output_dir as _datasets_output_dir
+
 router = APIRouter(prefix="/data", tags=["data"])
 
-WORKSPACE_ROOT = Path("workspace").resolve()
-INPUT_ROOT = (WORKSPACE_ROOT / "datasets" / "input").resolve()
-OUTPUT_ROOT = (WORKSPACE_ROOT / "datasets" / "output").resolve()
 SUPPORTED_AUDIO_EXTENSIONS = (".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac")
 
 
+def _input_root() -> Path:
+    """Return the input datasets directory, resolved from GRAPHYN_PROJECT_DIR."""
+    return _datasets_input_dir()
+
+
+def _output_root() -> Path:
+    """Return the output datasets directory, resolved from GRAPHYN_PROJECT_DIR."""
+    return _datasets_output_dir()
+
+
 def _safe_child(root: Path, *parts: str) -> Path:
-    path = root.joinpath(*parts).resolve()
-    if not path.is_relative_to(root):
+    resolved_root = root.resolve()
+    path = resolved_root.joinpath(*parts).resolve()
+    if not path.is_relative_to(resolved_root):
         raise HTTPException(status_code=400, detail="Path is outside workspace")
     return path
 
@@ -30,11 +41,12 @@ def _safe_child(root: Path, *parts: str) -> Path:
 @router.get("/inputs", summary="List input dataset labels")
 def list_input_datasets():
     """Return a list of input dataset labels with file counts."""
-    if not INPUT_ROOT.exists():
+    input_root = _input_root()
+    if not input_root.exists():
         return []
     labels = []
-    for label in sorted(os.listdir(INPUT_ROOT)):
-        label_path = INPUT_ROOT / label
+    for label in sorted(os.listdir(input_root)):
+        label_path = input_root / label
         if not label_path.is_dir():
             continue
         count = sum(
@@ -48,7 +60,8 @@ def list_input_datasets():
 @router.get("/inputs/{label}", summary="List files in an input dataset label")
 def get_input_dataset(label: str):
     """Return a list of audio files for a specific input label."""
-    label_path = _safe_child(INPUT_ROOT, label)
+    input_root = _input_root()
+    label_path = _safe_child(input_root, label)
     if not label_path.is_dir():
         raise HTTPException(status_code=404, detail=f"Label '{label}' not found")
 
@@ -57,7 +70,7 @@ def get_input_dataset(label: str):
         for f in filenames:
             if f.lower().endswith(SUPPORTED_AUDIO_EXTENSIONS):
                 abs_path = os.path.join(root, f)
-                rel_path = os.path.relpath(abs_path, INPUT_ROOT).replace("\\", "/")
+                rel_path = os.path.relpath(abs_path, input_root).replace("\\", "/")
                 files.append({"path": rel_path, "label": label})
     return files
 
@@ -69,7 +82,7 @@ async def upload_file(file: UploadFile = File(...)):
     if ext not in SUPPORTED_AUDIO_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Unsupported audio extension")
 
-    target_dir = INPUT_ROOT / "uploads"
+    target_dir = _input_root() / "uploads"
     target_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = datetime.now(timezone.utc).strftime("upload_%Y%m%d_%H%M%S_%f") + ext
@@ -86,11 +99,12 @@ async def upload_file(file: UploadFile = File(...)):
 @router.get("/outputs", summary="List output dataset projects")
 def list_output_datasets():
     """Return a list of output dataset projects and their versions."""
-    if not OUTPUT_ROOT.exists():
+    output_root = _output_root()
+    if not output_root.exists():
         return []
     result = []
-    for project in sorted(os.listdir(OUTPUT_ROOT)):
-        project_path = OUTPUT_ROOT / project
+    for project in sorted(os.listdir(output_root)):
+        project_path = output_root / project
         if not project_path.is_dir():
             continue
         versions = sorted(
@@ -104,7 +118,8 @@ def list_output_datasets():
 @router.get("/outputs/{project}/{version}", summary="Get an output dataset")
 def get_output_dataset(project: str, version: str):
     """Return the sample list for a specific project/version dataset."""
-    dataset_path = _safe_child(OUTPUT_ROOT, project, version)
+    output_root = _output_root()
+    dataset_path = _safe_child(output_root, project, version)
     if not dataset_path.exists():
         raise HTTPException(status_code=404, detail="Dataset not found")
 
@@ -148,7 +163,8 @@ def get_output_dataset(project: str, version: str):
 @router.get("/outputs/{project}/{version}/stats", summary="Get dataset statistics")
 def get_dataset_stats(project: str, version: str):
     """Return split counts and per-label distribution for a dataset."""
-    dataset_path = _safe_child(OUTPUT_ROOT, project, version)
+    output_root = _output_root()
+    dataset_path = _safe_child(output_root, project, version)
     if not dataset_path.exists():
         raise HTTPException(status_code=404, detail="Dataset not found")
 
@@ -185,7 +201,8 @@ def merge_datasets(body: MergeRequest):
     if not body.sources:
         raise HTTPException(status_code=422, detail="sources must not be empty")
 
-    target_dir = OUTPUT_ROOT / body.target_project / body.target_version
+    output_root = _output_root()
+    target_dir = output_root / body.target_project / body.target_version
     target_dir.mkdir(parents=True, exist_ok=True)
 
     files_copied = 0
@@ -197,7 +214,7 @@ def merge_datasets(body: MergeRequest):
         if not src_project or not src_version:
             errors.append(f"Invalid source entry: {source}")
             continue
-        src_dir = OUTPUT_ROOT / src_project / src_version
+        src_dir = output_root / src_project / src_version
         if not src_dir.exists():
             errors.append(f"Source not found: {src_project}/{src_version}")
             continue

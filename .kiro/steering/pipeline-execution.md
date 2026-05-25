@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "app/core/pipeline.py,app/core/validation.py,app/core/pipeline_cache.py,app/core/ir/**,app/core/conditions.py,app/core/events.py,app/core/executor.py"
+fileMatchPattern: "app/core/orchestrator.py,app/core/planner.py,app/core/node_executor.py,app/core/checkpoint.py,app/core/executor.py,app/core/pipeline.py,app/core/validation.py,app/core/pipeline_cache.py,app/core/ir/**,app/core/conditions.py,app/core/events.py"
 ---
 
 # Pipeline Execution
@@ -128,7 +128,32 @@ store.get(artifact_id)                 # fetch single record
 
 **Numpy serialization**: `ArtifactStore._serialize_json()` and `_compute_content_hash()` use `model_dump()` (not `mode="json"`) + a `_numpy_default` JSON encoder to handle `numpy.ndarray` fields in Pydantic models with `arbitrary_types_allowed=True`.
 
-## Known Issues
+## Pipeline Module Structure
 
-- `PipelineCache` skips `SplitNode`/`ExportNode` — they always re-execute.
-- `run-async` in-memory status lost on restart; read from `GET /api/v1/runs/{run_id}/status`.
+`pipeline.py` is a re-export shim. The real implementations are:
+
+| File | Responsibility |
+|---|---|
+| `orchestrator.py` | Main async entry point — coordinates all execution modes |
+| `planner.py` | DAG builder, topological sort, wave planner |
+| `node_executor.py` | Drives a single node through its lifecycle with retry |
+| `checkpoint.py` | Checkpoint read/write for resumable execution (audio-domain only — ARCH-3) |
+| `executor.py` | Parallel wave executor using `asyncio.gather` + `ThreadPoolExecutor` |
+
+## Open Issues in This Area
+
+> See `docs/MASTER_ISSUE_REGISTRY.md` for full details and fixes.
+
+| ID | Severity | Summary |
+|---|---|---|
+| NEW-4 | High | Parallel executor silently ignores all edge conditions |
+| NEW-5 | High | `node_stats` list mutated concurrently without a lock |
+| SA-O1 | High | `node_outputs` compound read-modify-write not GIL-safe |
+| SA-O2 | High | `deregister_active_run` not called on event-driven exception path |
+| SA-O7 | High | Resume does not validate graph hash |
+| SA-O4 | Medium | Excluded node passthrough overwrites multi-port outputs |
+| SA-C2 | Medium | Non-audio nodes silently not checkpointed |
+| NEW-6 | Medium | `input_hash` loses port identity for multi-port nodes |
+| SA-C1 | Medium | Checkpoint path traversal guard follows symlinks |
+| SA-P1 | Low | Legacy YAML parser silently drops edge `condition` field |
+| SA-P2 | Low | `_compute_waves` is O(N²) for deep linear pipelines |

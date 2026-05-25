@@ -1,5 +1,11 @@
 """
 Setup script for the graphyn-sdk package.
+
+Version pins here are kept in sync with requirements.txt.
+Use compatible-release (~=) specifiers so patch upgrades are allowed
+while major/minor versions are locked — matching the intent of the
+exact pins in requirements.txt without being overly restrictive for
+library consumers.
 """
 
 from setuptools import setup, find_packages
@@ -13,14 +19,16 @@ setup(
     packages=find_packages(exclude=["tests*", "venv*", "audiobuilder*"]),
     python_requires=">=3.10",
     install_requires=[
-        "fastapi>=0.100.0",
-        "uvicorn>=0.23.0",
-        "pyyaml>=6.0",
-        "numpy>=1.24.0",
-        "librosa>=0.10.0",
-        "soundfile>=0.12.0",
-        "scipy>=1.10.0",
+        # Pinned to match requirements.txt — update both files together.
+        "fastapi~=0.115.6",
+        "uvicorn[standard]~=0.32.1",
+        "pyyaml~=6.0.2",
+        "numpy~=1.26.4",
+        "librosa~=0.10.2",
+        "soundfile~=0.12.1",
+        "pydantic~=2.10.6",
         "httpx>=0.24.0",
+        "python-multipart~=0.0.20",
     ],
     extras_require={
         "hf": [

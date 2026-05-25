@@ -84,7 +84,7 @@ async def handle_call_tool(
     # ── Dispatch ───────────────────────────────────────────────────────────────
     handler = _TOOLS[name]["handler"]
     try:
-        result = await asyncio.get_event_loop().run_in_executor(
+        result = await asyncio.get_running_loop().run_in_executor(
             None, lambda: handler(arguments)
         )
         log.info("tool=%s outcome=success", name)

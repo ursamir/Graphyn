@@ -118,15 +118,18 @@ class PipelineCache:
             raw = json.dumps(inputs, sort_keys=True, default=str)
             return hashlib.sha256(raw.encode()).hexdigest()
 
-        # Last-resort fallback: repr() is stable within a process but NOT across
-        # restarts. Nodes that reach this path should be marked cacheable=False.
+        # Last-resort fallback: repr() is NOT stable across process restarts
+        # (object addresses change). Return an empty string so the cache key
+        # is effectively random, which forces a cache miss on every run.
+        # Nodes that reach this path should be marked cacheable=False.
+        # We log a warning so operators can identify and fix the node.
         logger.warning(
-            "PipelineCache.input_hash: falling back to repr() for type %s — "
-            "cache keys will not be stable across process restarts. "
+            "PipelineCache.input_hash: cannot compute stable hash for type %s — "
+            "returning empty hash (cache will always miss for this input). "
             "Mark this node cacheable=False to suppress this warning.",
             type(inputs).__name__,
         )
-        return hashlib.sha256(repr(inputs).encode()).hexdigest()
+        return ""
 
     def _cache_dir(self, cache_key: str) -> Path:
         return self.BASE / cache_key

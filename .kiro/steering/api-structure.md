@@ -19,6 +19,8 @@ When set: all `/api/v1/` requests require `Authorization: Bearer <token>`. When 
 
 `http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:5173`, `http://127.0.0.1:5173`
 
+Allowed headers: `Authorization`, `Content-Type`, `X-Request-ID`, `Accept`
+
 ## Active Routers
 
 | Router | Prefix | File |

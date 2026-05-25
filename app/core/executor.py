@@ -37,6 +37,22 @@ class ParallelExecutor:
 
     def __init__(self, max_workers: int | None = None) -> None:
         self._max_workers = max_workers or min(32, (os.cpu_count() or 1) + 4)
+        # Single pool shared across ALL waves in a pipeline run (SCALE-3 fix).
+        # Created lazily on first use and reused for every subsequent wave,
+        # avoiding repeated pool creation/teardown overhead for multi-wave pipelines.
+        self._pool: ThreadPoolExecutor | None = None
+
+    def _get_pool(self) -> ThreadPoolExecutor:
+        """Return the shared thread pool, creating it on first call."""
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=self._max_workers)
+        return self._pool
+
+    def shutdown(self) -> None:
+        """Shut down the shared thread pool. Call once after all waves complete."""
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
 
     async def run_wave(
         self,
@@ -78,39 +94,39 @@ class ParallelExecutor:
         """
         loop = asyncio.get_running_loop()
 
-        # One thread pool shared across all nodes in this wave (P-15 fix).
-        # Using a context manager ensures the pool is shut down cleanly even
-        # if tasks raise exceptions.
-        with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
-            tasks = [
-                asyncio.create_task(
-                    self._run_node(
-                        node_id=node_id,
-                        graph_obj=graph_obj,
-                        executors=executors,
-                        node_outputs=node_outputs,
-                        incoming=incoming,
-                        pipeline_cfg=pipeline_cfg,
-                        cache=cache,
-                        checkpoint=checkpoint,
-                        run_base_path=run_base_path,
-                        logger=logger,
-                        run_id=run_id,
-                        total_nodes=total_nodes,
-                        node_stats=node_stats,
-                        streaming=streaming,
-                        node_index_map=node_index_map or {},
-                        ir_nodes_map=ir_nodes_map or {},
-                        registry=registry,
-                        loop=loop,
-                        pool=pool,
-                        run_manager=run_manager,
-                    )
+        # Use the run-scoped shared pool (SCALE-3 fix — avoids per-wave pool
+        # creation/teardown overhead). The pool is shut down by the orchestrator
+        # after all waves complete via ParallelExecutor.shutdown().
+        pool = self._get_pool()
+        tasks = [
+            asyncio.create_task(
+                self._run_node(
+                    node_id=node_id,
+                    graph_obj=graph_obj,
+                    executors=executors,
+                    node_outputs=node_outputs,
+                    incoming=incoming,
+                    pipeline_cfg=pipeline_cfg,
+                    cache=cache,
+                    checkpoint=checkpoint,
+                    run_base_path=run_base_path,
+                    logger=logger,
+                    run_id=run_id,
+                    total_nodes=total_nodes,
+                    node_stats=node_stats,
+                    streaming=streaming,
+                    node_index_map=node_index_map or {},
+                    ir_nodes_map=ir_nodes_map or {},
+                    registry=registry,
+                    loop=loop,
+                    pool=pool,
+                    run_manager=run_manager,
                 )
-                for node_id in wave
-            ]
+            )
+            for node_id in wave
+        ]
 
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Re-raise the first exception found (Req 1.4)
         for result in results:
@@ -174,12 +190,11 @@ class ParallelExecutor:
             if port_name not in inputs and not port.required:
                 inputs[port_name] = None
 
-        # ── Cache check ────────────────────────────────────────────────────────
+        # ── Cache check — load() directly, treat None as miss (ARCH-9 fix) ──────
         cache_hit = False
         cache_key = None
 
         if cache is not None:
-            # Build a stable hash from all input values (supports all port types)
             node_cfg_dict = {}
             for spec in pipeline_cfg.nodes:
                 if spec.node_id == node_id:
@@ -187,12 +202,11 @@ class ParallelExecutor:
                     break
             combined_input_hash = cache.input_hash(list(inputs.values()))
             cache_key = cache.key(node_type, node_cfg_dict, combined_input_hash)
-            if cache.has(cache_key):
-                cached_result = cache.load(cache_key)
-                if cached_result is not None:
-                    node_outputs[node_id] = cached_result
-                    cache_hit = True
-                    logger.info(f"[{idx}] {node_type} — cache hit")
+            cached_result = cache.load(cache_key)
+            if cached_result is not None:
+                node_outputs[node_id] = cached_result
+                cache_hit = True
+                logger.info(f"[{idx}] {node_type} — cache hit")
 
         if not cache_hit:
             try:
