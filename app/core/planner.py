@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+import json
 import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -79,6 +80,9 @@ def _parse_pipeline_config(raw: dict) -> PipelineConfig:
                 src_port=e["from"][1],
                 dst_id=e["to"][0],
                 dst_port=e["to"][1],
+                # SA-P1 fix: copy condition from YAML edge so it is not silently
+                # dropped (the IR path already copies it correctly).
+                condition=e.get("condition"),
             )
             for e in raw_edges
         ]
@@ -155,7 +159,13 @@ class PipelineGraph:
 
         for i, spec in enumerate(self._config.nodes):
             node_class = node_registry.get_class(spec.node_type)
-            node_seed = stable_hash(seed, spec.node_type, i) % (2 ** 32)
+            # SA-P3 fix: include node config in the seed so two pipelines with
+            # the same seed and node types but different configs produce distinct
+            # node seeds (important for augmentation nodes with random behaviour).
+            node_seed = stable_hash(
+                seed, spec.node_type, i,
+                json.dumps(spec.config, sort_keys=True),
+            ) % (2 ** 32)
             node_config = copy.deepcopy(spec.config)
             node = node_class(config=node_config, seed=node_seed, observer=self._observer)
             self._nodes[spec.node_id] = node
@@ -210,11 +220,13 @@ class PipelineGraph:
             preds = predecessors[node_id]
             level[node_id] = max((level[p] + 1 for p in preds), default=0)
 
+        # SA-P2 fix: build waves dict in a single pass instead of iterating
+        # all nodes for each level — reduces O(N²) to O(N) for deep linear pipelines.
+        waves_dict: dict[int, list[str]] = defaultdict(list)
+        for nid in self._topo_order:
+            waves_dict[level[nid]].append(nid)
         max_level = max(level.values(), default=0)
-        return [
-            [nid for nid, lv in level.items() if lv == i]
-            for i in range(max_level + 1)
-        ]
+        return [waves_dict[i] for i in range(max_level + 1)]
 
     def get_node(self, node_id: str) -> Node:
         return self._nodes[node_id]

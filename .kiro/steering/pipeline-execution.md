@@ -43,7 +43,7 @@ result = run_pipeline_ir(graph, logger=None, use_cache=True, checkpoint=False,
     exclude_nodes=None, input_overrides=None, event_driven=False)
 
 # Async-native (Phase 3) — awaitable from existing event loops
-result = await run_pipeline_ir_async(graph, ..., event_loop=None)
+result = await run_pipeline_ir_async(graph, ...)
 ```
 
 All new parameters default to `False`/`None` — existing call sites unchanged.
@@ -142,18 +142,4 @@ store.get(artifact_id)                 # fetch single record
 
 ## Open Issues in This Area
 
-> See `docs/MASTER_ISSUE_REGISTRY.md` for full details and fixes.
-
-| ID | Severity | Summary |
-|---|---|---|
-| NEW-4 | High | Parallel executor silently ignores all edge conditions |
-| NEW-5 | High | `node_stats` list mutated concurrently without a lock |
-| SA-O1 | High | `node_outputs` compound read-modify-write not GIL-safe |
-| SA-O2 | High | `deregister_active_run` not called on event-driven exception path |
-| SA-O7 | High | Resume does not validate graph hash |
-| SA-O4 | Medium | Excluded node passthrough overwrites multi-port outputs |
-| SA-C2 | Medium | Non-audio nodes silently not checkpointed |
-| NEW-6 | Medium | `input_hash` loses port identity for multi-port nodes |
-| SA-C1 | Medium | Checkpoint path traversal guard follows symlinks |
-| SA-P1 | Low | Legacy YAML parser silently drops edge `condition` field |
-| SA-P2 | Low | `_compute_waves` is O(N²) for deep linear pipelines |
+> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.

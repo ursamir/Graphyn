@@ -244,3 +244,9 @@ def _type_to_schema(t: type | None) -> dict[str, Any] | None:
     # Fallback: use the type name as a JSON Schema title (not as "type" — that's invalid)
     type_name = getattr(t, "__name__", str(t))
     return {"type": "object", "title": type_name}
+
+
+# SA-B5 fix: public alias so callers can import type_to_schema without
+# depending on a private name. The private _type_to_schema is kept for
+# backward compatibility with any existing call sites.
+type_to_schema = _type_to_schema

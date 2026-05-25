@@ -6,10 +6,14 @@ Req 4.1–4.14
 """
 from __future__ import annotations
 
-import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.core.orchestrator import run_pipeline_ir  # module-level import — patchable in tests
+
+# NEW-7 fix: module-level shared executor — avoids creating a new ThreadPoolExecutor
+# per call (which leaks OS threads under load when shutdown(wait=False) is used).
+_PIPELINE_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
 # ── Tool schema constants ─────────────────────────────────────────────────────
 
@@ -73,18 +77,15 @@ def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
     run_manager = RunManager()
     run_id = run_manager.run_id
 
-    # Step 3: Submit execution to background thread (Req 4.2)
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    executor.submit(
+    # Step 3: Submit execution to shared background executor (NEW-7 fix — avoids
+    # per-call ThreadPoolExecutor leak; NEW-16 fix — removes redundant thread layer).
+    _PIPELINE_EXECUTOR.submit(
         run_pipeline_ir,
         graph,
         use_cache=use_cache,
         streaming=streaming,
         run_manager=run_manager,
     )
-    # Release the executor immediately — threads are daemon threads and will
-    # not block process exit. shutdown(wait=False) prevents resource leaks.
-    executor.shutdown(wait=False)
 
     # Step 4: Return run_id within 500 ms (Req 4.2)
     return {"run_id": run_id, "status": "started"}

@@ -180,12 +180,11 @@ class PipelineNode:
         self.node_type = node_type
         self.config = config or {}
         self._validate()
-        from app.core.ir.models import IRNode
-        self._ir_node = IRNode(
-            id=f"{self.node_type}_0",
-            node_type=self.node_type,
-            config=self.config,
-        )
+        # ARCH-5 fix: do NOT set self._ir_node here with a hardcoded "_0" suffix.
+        # The correct IRNode (with the actual positional index) is produced by
+        # to_ir_node(node_index) and used by Pipeline._build_ir(). Any code that
+        # accessed pn._ir_node.id directly was getting the wrong ID.
+        # _ir_node is now set lazily by _from_ir() when loading from an existing IR.
 
     def _validate(self) -> None:
         """Validate config using registry.get_class() + Config.model_validate()."""
@@ -220,8 +219,8 @@ class PipelineNode:
         )
 
     def to_dict(self) -> dict:
-        """Return legacy dict representation, derived from the backing IRNode (Req 2.2.3)."""
-        return {"type": self._ir_node.node_type, "config": dict(self._ir_node.config)}
+        """Return legacy dict representation."""
+        return {"type": self.node_type, "config": dict(self.config)}
 
 
 class Pipeline:

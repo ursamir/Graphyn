@@ -111,10 +111,4 @@ All handlers return structured JSON. Never raw exceptions.
 
 ## Open Issues in This Area
 
-> See `docs/MASTER_ISSUE_REGISTRY.md` for full details and fixes.
-
-| ID | Severity | Summary |
-|---|---|---|
-| NEW-7 | Medium | Per-call `ThreadPoolExecutor` leak in `execute_pipeline` and `replay_run` |
-| NEW-15 | Low | `inspect_run` sorts runs lexicographically, not chronologically |
-| NEW-16 | Low | Unnecessary extra thread layer in `execute_pipeline` handler |
+> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.

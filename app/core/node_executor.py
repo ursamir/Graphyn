@@ -119,8 +119,11 @@ class NodeExecutor:
             duration = time.perf_counter() - t0
 
             # on_end() calls observer.on_node_end() internally.
-            # Pass duration and port counts via the node's _last_duration/_last_counts
-            # attributes so base.py can forward them to the observer with full context.
+            # SA-NE2: pass duration and port counts via the node's _last_duration/
+            # _last_counts attributes so base.py can forward them to the observer.
+            # These are side-channel attributes on a foreign object — a known
+            # quality issue (SA-NE2). The proper fix is to add explicit parameters
+            # to on_end(duration, input_counts, output_counts) in a future refactor.
             node._last_duration = duration  # type: ignore[attr-defined]
             node._last_input_counts = {k: _count_port_items(v) for k, v in inputs.items()}  # type: ignore[attr-defined]
             node._last_output_counts = {k: _count_port_items(v) for k, v in outputs.items()}  # type: ignore[attr-defined]
@@ -135,7 +138,11 @@ class NodeExecutor:
         # on_error() was already called inside the loop on the last failed attempt.
         # Do NOT call it again here — that would fire the event twice (BUG-6 fix).
         assert last_exc is not None
-        self.teardown()
+        # SA-NE1 fix: only call teardown() if setup() was previously called.
+        # If on_start() raised on every attempt, setup() may have succeeded but
+        # teardown() should still be guarded by _setup_done.
+        if self._setup_done:
+            self.teardown()
         raise last_exc
 
     async def execute_stream(
@@ -146,6 +153,12 @@ class NodeExecutor:
         on_start() and on_end() (which call the observer internally) are called
         once per stream invocation. on_end() fires in a finally block so it
         fires even when the caller breaks out of the async for early.
+
+        SA-NE3: Streaming nodes do not use RetryPolicy. This is an intentional
+        asymmetry — wrapping an async generator in a retry loop requires
+        re-entering the generator from the start, which is not always safe for
+        stateful streaming nodes. If retry is needed, override execute_stream
+        in the node subclass and implement the retry loop there.
         """
         node = self._node
         node._current_run_id = self._run_id  # type: ignore[attr-defined]

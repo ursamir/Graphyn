@@ -25,17 +25,20 @@ import yaml
 
 from app.core.config import runs_dir as _runs_dir
 
-RUNS_DIR = str(_runs_dir())
+# NEW-18 fix: do NOT resolve RUNS_DIR at module import time.
+# GRAPHYN_PROJECT_DIR may be set after this module is imported (e.g. in tests).
+# Each function that needs the runs directory calls _runs_dir() at call time.
 
 
 def _list_runs():
     """Return a list of run metadata dicts sorted by created_at descending."""
-    if not os.path.isdir(RUNS_DIR):
+    runs_dir_path = str(_runs_dir())
+    if not os.path.isdir(runs_dir_path):
         return []
 
     runs = []
-    for run_id in os.listdir(RUNS_DIR):
-        meta_path = os.path.join(RUNS_DIR, run_id, "meta.json")
+    for run_id in os.listdir(runs_dir_path):
+        meta_path = os.path.join(runs_dir_path, run_id, "meta.json")
         if not os.path.isfile(meta_path):
             continue
         try:
@@ -51,7 +54,7 @@ def _list_runs():
 
 def _load_logs(run_id):
     """Return the log entries for a run, or None if not found."""
-    logs_path = os.path.join(RUNS_DIR, run_id, "logs.json")
+    logs_path = os.path.join(str(_runs_dir()), run_id, "logs.json")
     if not os.path.isfile(logs_path):
         return None
     with open(logs_path, "r") as f:
@@ -662,10 +665,11 @@ def cmd_runs_list(args):
 def cmd_runs_logs(args):
     """Print log entries for a specific run."""
     run_id = args.run_id
+    runs_dir_path = str(_runs_dir())
 
-    if not os.path.isdir(os.path.join(RUNS_DIR, run_id)):
-        if os.path.isdir(RUNS_DIR):
-            matches = [d for d in os.listdir(RUNS_DIR) if d.startswith(run_id)]
+    if not os.path.isdir(os.path.join(runs_dir_path, run_id)):
+        if os.path.isdir(runs_dir_path):
+            matches = [d for d in os.listdir(runs_dir_path) if d.startswith(run_id)]
             if len(matches) == 1:
                 run_id = matches[0]
             elif len(matches) > 1:
@@ -815,7 +819,6 @@ def cmd_artifacts_replay(args):
     from app.core.ir.loader import load_ir_from_file
     from app.core.run_journal import RunManager
     from app.core.orchestrator import run_pipeline_ir
-    from app.core.config import runs_dir as _runs_dir
 
     graph_path = os.path.join(str(_runs_dir()), args.run_id, "graph.json")
 

@@ -6,9 +6,14 @@ Req 6 §1, §2, §3
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.core.orchestrator import run_pipeline_ir  # module-level import — patchable in tests
+
+# NEW-7 fix: module-level shared executor — avoids creating a new ThreadPoolExecutor
+# per replay_run call (which leaks OS threads under load).
+_REPLAY_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
 # ── Tool schema constants ─────────────────────────────────────────────────────
 
@@ -150,7 +155,6 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
         }
 
     try:
-        import concurrent.futures
         from pathlib import Path
 
         from app.core.ir.loader import load_ir_from_file
@@ -177,8 +181,8 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
         graph = load_ir_from_file(str(graph_path))
         new_run_manager = RunManager()
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        executor.submit(run_pipeline_ir, graph, run_manager=new_run_manager)
+        # NEW-7 fix: use module-level shared executor instead of per-call pool.
+        _REPLAY_EXECUTOR.submit(run_pipeline_ir, graph, run_manager=new_run_manager)
 
         return {"run_id": new_run_manager.run_id, "status": "started"}
     except Exception as e:

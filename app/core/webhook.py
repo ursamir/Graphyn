@@ -143,6 +143,27 @@ class WebhookService:
         try:
             import httpx
 
+            # NEW-12 fix: re-validate the resolved IP at send time to prevent
+            # DNS rebinding attacks. The save()-time check uses the DNS record
+            # at configuration time; httpx resolves DNS fresh on every connection,
+            # so an attacker can change the DNS record after save() passes.
+            hostname = urlparse(url).hostname or ""
+            if hostname:
+                try:
+                    if _is_private_host(hostname):
+                        logger.warning(
+                            "Webhook blocked: URL '%s' resolves to a private/loopback "
+                            "address at send time (possible DNS rebinding attack).",
+                            url,
+                        )
+                        return
+                except Exception as exc:
+                    logger.warning(
+                        "Webhook send-time host validation failed for '%s': %s — skipping.",
+                        url, exc,
+                    )
+                    return
+
             body = {"event": event, "payload": payload}
             with httpx.Client(timeout=10.0) as client:
                 response = client.post(url, json=body)

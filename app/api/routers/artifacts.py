@@ -21,7 +21,9 @@ router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 # Regex for valid artifact IDs: alphanumeric, hyphens, underscores only
 _ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# Single shared executor for non-blocking replay (same pattern as run-async)
+# Single shared executor for non-blocking replay.
+# NEW-13: max_workers=1 means concurrent replay requests queue silently —
+# only one replay runs at a time. Increase if concurrent replays are needed.
 _replay_executor = ThreadPoolExecutor(max_workers=1)
 
 

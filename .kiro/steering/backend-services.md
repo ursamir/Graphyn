@@ -34,10 +34,10 @@ run.base_path        # "workspace/runs/{run_id}"
 | `wait_if_paused()` | Blocks until resumed (called between nodes) |
 | `is_paused` / `is_cancelled` | Properties |
 | `compute_graph_hash(graph_ir)` | Static method; SHA-256 of `dump_ir(graph_ir)` JSON |
-| `register_artifact(node_id, node_type, artifact_type, data, metadata=None, input_artifact_ids=None)` | Delegates to `ArtifactStore` + `ProvenanceStore`; returns `ArtifactRecord` |
+| `register_artifact(node_id, node_type, artifact_type, data, metadata=None, input_artifact_ids=None, name=None)` | Delegates to `ArtifactStore` + `ProvenanceStore`; returns `ArtifactRecord` |
 | `get_provenance_summary()` | Returns `{"run_id", "graph_hash", "artifacts", "provenance_records"}` |
 
-**Active run registry** (`run_control.py`): `register_active_run(run)`, `get_active_run(run_id)`, `deregister_active_run(run_id)` — module-level dict, process-local. Returns `None` for unknown/completed/wrong-worker runs with no distinction between cases (SA-RC2). Migration path to Redis documented in module docstring (SCALE-1).
+**Active run registry** (`run_control.py`): `register_active_run(run)`, `get_active_run(run_id)`, `deregister_active_run(run_id)` — module-level dict, process-local. Returns `None` for unknown/completed/wrong-worker runs (ambiguity documented in docstring). Migration path to Redis documented in module docstring (SCALE-1).
 
 `ResumeError` is imported at module top-level from `app.core.nodes.errors`. No circular import.
 
@@ -45,7 +45,7 @@ run.base_path        # "workspace/runs/{run_id}"
 
 All timestamps: `datetime.now(timezone.utc).isoformat()`. Never use `datetime.utcnow()`.
 
-> ⚠️ **Open issues in this area:** SA-RJ1 (`_write_meta` not atomic), SA-RJ2 (`_meta_lock` inconsistently applied), BUG-4 (`find_latest_checkpoint` O(N) scan), SA-RJ3 (timezone sort), SA-RJ4 (silent no-op), SA-RJ5 (`register_artifact` never passes `name`). See `docs/MASTER_ISSUE_REGISTRY.md`.
+> ⚠️ **Open issues in this area:** BUG-4 (`find_latest_checkpoint` O(N) scan — full index deferred). See `docs/MASTER_ISSUE_REGISTRY.md`.
 
 ## `PipelineLogger` (`logger.py`)
 
@@ -87,7 +87,7 @@ Downloads run in background daemon threads. Always use `job.append_progress(even
 - `ProjectManager` (`app/domain/project_manager.py`) — full project lifecycle under `workspace/datasets/output/{project}/`
 - `QualityChecker` (`app/domain/quality_checker.py`) — runs checks against `contract.json`, writes `quality_report.json`
 - `IngestionService` (`app/domain/ingestion.py`) — URL and HuggingFace dataset download jobs; job store is process-local (SCALE-2)
-- `WebhookService` (`app/core/webhook.py`) — HTTP POST notifications; config at `workspace/webhooks.json`. ⚠️ DNS rebinding SSRF gap at send time (NEW-12 — open)
+- `WebhookService` (`app/core/webhook.py`) — HTTP POST notifications; config at `workspace/webhooks.json`. DNS rebinding SSRF fixed: `_send()` re-validates resolved IP at send time (NEW-12).
 - `stable_hash()` (`app/core/utils/hash.py`) — deterministic hash across Python runs; used for node seeds, export file IDs, split group ordering
 
 ## `ArtifactStore` (`artifact_store.py`)
@@ -106,4 +106,4 @@ versions = store.get_versions(artifact_name)
 
 `_infer_artifact_type(value)` — module-level helper that infers the correct `artifact_type` string from a node output value. Checks for `DatasetArtifact`, audio sample lists (duck-typed via `.data` + `.sample_rate`), split dicts (`train`/`val`/`test`), feature dicts, and `np.ndarray`. Falls back to `"generic"`. Import from `app.core.artifact_store` (not `pipeline.py`).
 
-> ⚠️ **Open issues:** NEW-10 (`cleanup()` leaves stale secondary index entries), SA-AS1 (artifact IDs truncated to 16 chars), SA-AS3 (confusing `OSError` on concurrent rename), SA-AS4 (`list()` slow-path skips `by_run` but not `by_name`), SA-AS5 (`_by_name_path` allows `.` and `..`). See `docs/MASTER_ISSUE_REGISTRY.md`.
+> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.

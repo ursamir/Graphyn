@@ -256,6 +256,11 @@ class ArtifactStore:
     def _by_name_path(self, name: str) -> Path:
         # Sanitize name for use as a filename
         safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)[:128]
+        # SA-AS5 fix: prevent "." and ".." from being used as filenames, which
+        # would produce directory references instead of index files.
+        safe = safe.lstrip(".") or "_unnamed"
+        if safe in (".", "..") or not safe:
+            safe = "_unnamed"
         return self.base / "by_name" / f"{safe}.json"
 
     def _load_by_name(self, name: str) -> list[str]:
@@ -470,7 +475,10 @@ class ArtifactStore:
         # We use a temporary artifact_id for the directory; if deduplication
         # finds an existing record we discard the temp directory.
         import tempfile as _tempfile
-        tmp_artifact_id = str(uuid.uuid4()).replace("-", "")[:16]
+        # SA-AS1 fix: use the full UUID4 hex string (32 chars, 128 bits of entropy)
+        # instead of truncating to 16 chars (64 bits), which risks collisions at
+        # very high artifact throughput.
+        tmp_artifact_id = str(uuid.uuid4()).replace("-", "")
         tmp_artifact_dir = self.base / f"_tmp_{tmp_artifact_id}"
         tmp_data_dir = tmp_artifact_dir / "data"
         try:
@@ -519,7 +527,24 @@ class ArtifactStore:
             artifact_dir = self.base / artifact_id
             try:
                 tmp_artifact_dir.rename(artifact_dir)
-            except Exception as exc:
+            except OSError as exc:
+                # SA-AS3 fix: re-check the index after acquiring the lock — a
+                # concurrent register() call may have already written this hash
+                # between our pre-lock serialize and the lock acquisition.
+                # If so, return the existing record rather than raising a
+                # confusing OSError about a file that already exists.
+                index_recheck = self._load_index()
+                if content_hash in index_recheck:
+                    existing_id = index_recheck[content_hash]
+                    record_path_recheck = self.base / existing_id / "record.json"
+                    if record_path_recheck.exists():
+                        try:
+                            import shutil as _shutil
+                            _shutil.rmtree(str(tmp_artifact_dir), ignore_errors=True)
+                            record_data = json.loads(record_path_recheck.read_text(encoding="utf-8"))
+                            return ArtifactRecord.model_validate(record_data)
+                        except Exception:
+                            pass
                 import shutil as _shutil
                 _shutil.rmtree(str(tmp_artifact_dir), ignore_errors=True)
                 raise ArtifactSerializationError(artifact_type, exc) from exc
@@ -614,7 +639,9 @@ class ArtifactStore:
 
         # Slow path: full directory scan (needed for node_type / artifact_type filters)
         for entry in self.base.iterdir():
-            if not entry.is_dir() or entry.name == "by_run":
+            # SA-AS4 fix: also skip by_name/ in the slow-path scan (previously
+            # only by_run/ was skipped, wasting one os.stat call per by_name entry).
+            if not entry.is_dir() or entry.name in ("by_run", "by_name"):
                 continue
             record_path = entry / "record.json"
             if not record_path.exists():
@@ -673,7 +700,8 @@ class ArtifactStore:
         """Delete artifact directories older than older_than_days.
 
         Removes the artifact directory, its record.json, and updates the
-        content-hash index. Returns a summary dict.
+        content-hash index and all secondary indexes (by_run/, by_name/).
+        Returns a summary dict.
 
         Args:
             older_than_days: Artifacts created more than this many days ago
@@ -689,9 +717,10 @@ class ArtifactStore:
         entries_deleted = 0
         bytes_freed = 0
         hashes_to_remove: list[str] = []
+        deleted_ids: list[str] = []
 
         for entry in list(self.base.iterdir()):
-            if not entry.is_dir() or entry.name in ("by_run",):
+            if not entry.is_dir() or entry.name in ("by_run", "by_name"):
                 continue
             record_path = entry / "record.json"
             if not record_path.exists():
@@ -707,6 +736,7 @@ class ArtifactStore:
                 if created >= cutoff:
                     continue
                 hashes_to_remove.append(record.content_hash)
+                deleted_ids.append(record.artifact_id)
             except Exception:
                 pass
 
@@ -716,12 +746,46 @@ class ArtifactStore:
             shutil.rmtree(str(entry), ignore_errors=True)
             entries_deleted += 1
 
-        # Update the content-hash index to remove deleted entries
-        if hashes_to_remove:
+        if hashes_to_remove or deleted_ids:
             with self._lock:
+                # Update content-hash index
                 index = self._load_index()
                 for h in hashes_to_remove:
                     index.pop(h, None)
                 self._save_index(index)
+
+                # NEW-10 fix: remove stale entries from by_run/ and by_name/ indexes.
+                # Without this, the indexes grow unboundedly on high-artifact-turnover systems.
+                deleted_set = set(deleted_ids)
+
+                by_run_dir = self.base / "by_run"
+                if by_run_dir.is_dir():
+                    for run_index_file in by_run_dir.iterdir():
+                        if not run_index_file.is_file() or run_index_file.suffix != ".json":
+                            continue
+                        try:
+                            ids: list[str] = json.loads(run_index_file.read_text(encoding="utf-8"))
+                            cleaned = [i for i in ids if i not in deleted_set]
+                            if len(cleaned) != len(ids):
+                                tmp = run_index_file.with_suffix(".json.tmp")
+                                tmp.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
+                                tmp.replace(run_index_file)
+                        except Exception as exc:
+                            logger.warning("cleanup: failed to update by_run index %s: %s", run_index_file, exc)
+
+                by_name_dir = self.base / "by_name"
+                if by_name_dir.is_dir():
+                    for name_index_file in by_name_dir.iterdir():
+                        if not name_index_file.is_file() or name_index_file.suffix != ".json":
+                            continue
+                        try:
+                            ids = json.loads(name_index_file.read_text(encoding="utf-8"))
+                            cleaned = [i for i in ids if i not in deleted_set]
+                            if len(cleaned) != len(ids):
+                                tmp = name_index_file.with_suffix(".json.tmp")
+                                tmp.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
+                                tmp.replace(name_index_file)
+                        except Exception as exc:
+                            logger.warning("cleanup: failed to update by_name index %s: %s", name_index_file, exc)
 
         return {"entries_deleted": entries_deleted, "bytes_freed": bytes_freed}

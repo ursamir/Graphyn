@@ -9,6 +9,10 @@ from typing import Any, AsyncGenerator, ClassVar, Generic, TypeVar
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.ports import InputPort, OutputPort
 from app.core.nodes.retry import RetryPolicy
+# SA-B5 fix: import the public name at module level so static analysis can see
+# the dependency. The private _type_to_schema alias is kept in compat.py for
+# backward compatibility with any existing call sites.
+from app.core.nodes.compat import type_to_schema as _type_to_schema
 
 log = logging.getLogger(__name__)
 
@@ -128,7 +132,6 @@ class Node(Generic[InputT, OutputT]):
                 "outputs": {port_name: json_schema_dict | null},
             }
         """
-        from app.core.nodes.compat import _type_to_schema
         return {
             "inputs": {
                 name: _type_to_schema(port.data_type)
@@ -176,8 +179,13 @@ class Node(Generic[InputT, OutputT]):
         """Override in streaming nodes.
 
         Default implementation wraps ``process()`` as a single-item async generator.
-        CPU-bound work is offloaded to the default executor so the asyncio event
-        loop is not blocked while ``process()`` runs.
+        CPU-bound work is offloaded to the default ``ThreadPoolExecutor`` so the
+        asyncio event loop is not blocked while ``process()`` runs.
+
+        SA-B3: The default executor uses threads, not processes. Python's GIL
+        means CPU-bound ``process()`` implementations do NOT get true parallelism
+        here. If your node is CPU-bound, override ``process_stream`` and submit
+        work to a ``concurrent.futures.ProcessPoolExecutor`` instead.
         """
         import asyncio as _asyncio
         loop = _asyncio.get_running_loop()
@@ -259,6 +267,11 @@ def _maybe_wrap_siso(cls: type) -> None:
 
     The original method is stored as ``process.__wrapped__`` for testing.
     """
+    # SA-B4 fix: skip abstract intermediary classes — wrapping them incorrectly
+    # if they define process() with a non-"inputs" parameter name.
+    if inspect.isabstract(cls):
+        return
+
     if "process" not in cls.__dict__:
         return  # no override in this class
 
@@ -297,6 +310,13 @@ def _install_siso_wrapper(cls: type, raw_process) -> None:
         self: "Node",
         inputs: dict[str, Any],
     ) -> dict[str, Any]:
+        # SA-B2 fix: validate that inputs is a dict before calling .get().
+        # A non-dict raises AttributeError with a confusing message otherwise.
+        if not isinstance(inputs, dict):
+            raise TypeError(
+                f"{type(self).__name__}.process() expected a dict of port inputs, "
+                f"got {type(inputs).__name__}"
+            )
         data = inputs.get("input")
         result = raw_process(self, data)
         # Guard: if the node was refactored to return a full multi-port dict

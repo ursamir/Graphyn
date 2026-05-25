@@ -28,6 +28,7 @@ from app.core.planner import (
 )
 from app.core.node_executor import NodeExecutor
 from app.core.checkpoint import _write_checkpoint, _load_checkpoint_outputs
+from app.core.utils import collect_stream as _collect_stream
 
 log = logging.getLogger(__name__)
 
@@ -63,20 +64,6 @@ def _resolve_capability(ir_node: Any, registry: Any) -> Any:
         return IRCapabilityMetadata()
 
 
-# ── Streaming collector ────────────────────────────────────────────────────────
-
-async def _collect_stream(
-    executor: NodeExecutor,
-    inputs: dict[str, Any],
-) -> dict[str, Any]:
-    """Collect all items from a streaming node into lists."""
-    collected: dict[str, list] = {}
-    async for item in executor.execute_stream(inputs):
-        for k, v in item.items():
-            collected.setdefault(k, []).append(v)
-    return collected
-
-
 # ── Main async execution entry point ──────────────────────────────────────────
 
 async def run_pipeline_ir_async(
@@ -94,7 +81,8 @@ async def run_pipeline_ir_async(
     exclude_nodes: list[str] | None = None,
     input_overrides: dict | None = None,
     event_driven: bool = False,
-    event_loop: Any = None,
+    # SA-O3: event_loop parameter removed — it was accepted but never used.
+    # Callers that passed event_loop= will get a TypeError; update call sites.
 ) -> dict[str, Any]:
     """Execute a pipeline from a GraphIR object (async-native entry point).
 
@@ -186,6 +174,16 @@ async def run_pipeline_ir_async(
     # ── Resume ─────────────────────────────────────────────────────────────────
     if resume_run_id is not None:
         resume_state = run.load_resume_state(resume_run_id)
+        # SA-O7 fix: validate graph hash before reusing stale checkpoints.
+        # If the graph has changed since the checkpoint was written, resume
+        # would silently produce incorrect results.
+        saved_hash = resume_state.get("graph_hash", "")
+        if saved_hash and saved_hash != graph_hash:
+            raise ResumeError(
+                f"Cannot resume: graph has changed since the checkpoint was written "
+                f"(saved={saved_hash[:16]}…, current={graph_hash[:16]}…). "
+                "Start a new run or use the original graph."
+            )
         completed_nodes = set(resume_state.get("completed_nodes", []))
         from app.core.config import runs_dir as _runs_dir
         prior_run_path = os.path.join(str(_runs_dir()), resume_run_id)
@@ -253,6 +251,8 @@ async def run_pipeline_ir_async(
                     ir_nodes_map=ir_nodes_map,
                     registry=node_registry,
                     run_manager=run,
+                    edge_conditions=edge_conditions,
+                    graph=graph,
                 )
             except Exception as exc:
                 run.save_logs(logger.logs)
@@ -279,8 +279,10 @@ async def run_pipeline_ir_async(
                 for src_id, src_port, dst_port in incoming[node_id]:
                     upstream = node_outputs.get(src_id, {})
                     value = upstream.get(src_port)
+                    # SA-O4 fix: only set the actual dst_port — do NOT also set
+                    # passthrough["output"] unconditionally, which would overwrite
+                    # a previously set dst_port for multi-port excluded nodes.
                     passthrough[dst_port] = value
-                    passthrough["output"] = value
                 node_outputs[node_id] = passthrough
                 continue
 
@@ -386,7 +388,12 @@ async def run_pipeline_ir_async(
                 node_cfg_dict = next(
                     (spec.config for spec in pipeline_cfg.nodes if spec.node_id == node_id), {}
                 )
-                combined_input_hash = cache.input_hash(list(inputs.values()))
+                # NEW-6 fix: hash each port separately and combine so port
+                # identity is preserved. list(inputs.values()) loses port names
+                # and causes key collisions for multi-port nodes.
+                combined_input_hash = _hashlib.sha256(
+                    "".join(cache.input_hash(v) for v in inputs.values()).encode()
+                ).hexdigest()
                 cache_key = cache.key(node_type, node_cfg_dict, combined_input_hash)
                 cached_result = cache.load(cache_key)
                 if cached_result is not None:
@@ -579,8 +586,11 @@ async def run_pipeline_ir_async(
             except asyncio.CancelledError:
                 pass
             finally:
+                # SA-O2 fix: always deregister, even if asyncio.gather raises
+                # an unexpected exception (not just CancelledError).
                 for src in sources.values():
                     await src.close()
+                deregister_active_run(run.run_id)
 
             for exec_ in executors.values():
                 exec_.teardown()
@@ -594,7 +604,6 @@ async def run_pipeline_ir_async(
                 "trigger_count": trigger_count,
             })
             last_id = graph_obj.execution_order[-1]
-            deregister_active_run(run.run_id)
             return node_outputs.get(last_id, {})
 
     # ── Teardown and finalize ──────────────────────────────────────────────────
@@ -648,6 +657,7 @@ def run_pipeline_ir(
     exclude_nodes: list[str] | None = None,
     input_overrides: dict | None = None,
     event_driven: bool = False,
+    # SA-O3: event_loop parameter removed — it was accepted but never used.
 ) -> dict[str, Any]:
     """Execute a pipeline from a GraphIR object (synchronous entry point).
 

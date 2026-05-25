@@ -160,12 +160,12 @@ class ProvenanceStore:
 
             by_run_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
-            # Append artifact_id to by_graph_hash/{hash[:16]}.json (B-18 fix)
-            # Using the first 16 hex chars as the filename keeps paths short while
-            # still being collision-resistant for practical graph counts.
+            # NEW-11 fix: use the full graph_hash as the index filename instead
+            # of truncating to 16 chars. Truncation caused two graphs sharing
+            # the same 16-char prefix to collide into the same index file.
             if graph_hash:
                 (self.base / "by_graph_hash").mkdir(exist_ok=True)
-                by_hash_path = self.base / "by_graph_hash" / f"{graph_hash[:16]}.json"
+                by_hash_path = self.base / "by_graph_hash" / f"{graph_hash}.json"
                 if by_hash_path.exists():
                     try:
                         hash_ids: list[str] = json.loads(by_hash_path.read_text(encoding="utf-8"))
@@ -311,7 +311,8 @@ class ProvenanceStore:
             return []
 
         # Fast path: use the by_graph_hash index
-        by_hash_path = self.base / "by_graph_hash" / f"{graph_hash[:16]}.json"
+        # NEW-11 fix: use the full graph_hash as the filename (no truncation).
+        by_hash_path = self.base / "by_graph_hash" / f"{graph_hash}.json"
         if by_hash_path.exists():
             try:
                 artifact_ids: list[str] = json.loads(by_hash_path.read_text(encoding="utf-8"))
@@ -332,7 +333,7 @@ class ProvenanceStore:
                     try:
                         data = json.loads(record_path.read_text(encoding="utf-8"))
                         rec = ProvenanceRecord.model_validate(data)
-                        # Double-check full hash (index key is only 16 chars)
+                        # Full hash comparison — no truncation so no false positives.
                         if rec.graph_hash == graph_hash:
                             records.append(rec)
                     except Exception as exc:

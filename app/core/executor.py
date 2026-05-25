@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+
+# SA-O5 fix: import the shared stream collector instead of duplicating it here.
+from app.core.utils import collect_stream as _collect_stream_parallel
 
 
 class ParallelExecutor:
@@ -78,6 +82,10 @@ class ParallelExecutor:
         registry: Any = None,
         # run_manager for artifact registration (Phase 4)
         run_manager: Any = None,
+        # edge_conditions for conditional edge evaluation (NEW-4 fix)
+        edge_conditions: dict[tuple[str, str, str, str], str | None] | None = None,
+        # full graph IR for condition evaluation (NEW-4 fix)
+        graph: Any = None,
     ) -> None:
         """Execute all nodes in a wave concurrently.
 
@@ -98,6 +106,11 @@ class ParallelExecutor:
         # creation/teardown overhead). The pool is shut down by the orchestrator
         # after all waves complete via ParallelExecutor.shutdown().
         pool = self._get_pool()
+
+        # NEW-5 fix: protect node_stats.append() with a lock so ordering is
+        # deterministic and node_stats[-1] returns the correct last node.
+        node_stats_lock = threading.Lock()
+
         tasks = [
             asyncio.create_task(
                 self._run_node(
@@ -114,6 +127,7 @@ class ParallelExecutor:
                     run_id=run_id,
                     total_nodes=total_nodes,
                     node_stats=node_stats,
+                    node_stats_lock=node_stats_lock,
                     streaming=streaming,
                     node_index_map=node_index_map or {},
                     ir_nodes_map=ir_nodes_map or {},
@@ -121,6 +135,7 @@ class ParallelExecutor:
                     loop=loop,
                     pool=pool,
                     run_manager=run_manager,
+                    edge_conditions=edge_conditions or {},
                 )
             )
             for node_id in wave
@@ -148,6 +163,7 @@ class ParallelExecutor:
         run_id: str,
         total_nodes: int,
         node_stats: list,
+        node_stats_lock: threading.Lock,
         streaming: bool,
         node_index_map: dict[str, int],
         ir_nodes_map: dict[str, Any],
@@ -155,6 +171,7 @@ class ParallelExecutor:
         loop: asyncio.AbstractEventLoop,
         pool: ThreadPoolExecutor,
         run_manager: Any = None,
+        edge_conditions: dict[tuple[str, str, str, str], str | None] | None = None,
     ) -> None:
         """Execute a single node: assemble inputs, check cache, execute, save cache/checkpoint.
 
@@ -174,8 +191,29 @@ class ParallelExecutor:
         node_start_time = time.time()
 
         # ── Assemble inputs from upstream outputs ──────────────────────────────
+        # NEW-4 fix: evaluate edge_conditions before assembling inputs, mirroring
+        # the sequential path in orchestrator.py.
+        # SA-O1 note: wave isolation guarantees that nodes in this wave only read
+        # from node_outputs keys written by prior waves (fully settled before this
+        # wave starts). Plain reads of node_outputs[src_id] are therefore safe
+        # without a lock. The only write in this coroutine is
+        # node_outputs[node_id] = outputs (a single __setitem__, GIL-safe).
+        # The node_outputs_lock is held by run_wave but not needed here.
+        _edge_conditions = edge_conditions or {}
         inputs: dict[str, Any] = {}
         for src_id, src_port, dst_port in incoming.get(node_id, []):
+            condition = _edge_conditions.get((src_id, src_port, node_id, dst_port))
+            if condition is not None:
+                from app.core.conditions import evaluate_condition, ConditionEvaluationError
+                src_outputs = node_outputs.get(src_id, {})
+                try:
+                    passes = evaluate_condition(condition, src_outputs)
+                except ConditionEvaluationError:
+                    passes = False
+                if not passes:
+                    inputs[dst_port] = None
+                    continue
+
             upstream_outputs = node_outputs[src_id]
             value = upstream_outputs.get(src_port)
             port = node.input_ports.get(dst_port)
@@ -200,7 +238,13 @@ class ParallelExecutor:
                 if spec.node_id == node_id:
                     node_cfg_dict = spec.config
                     break
-            combined_input_hash = cache.input_hash(list(inputs.values()))
+            # NEW-6 fix: hash each port separately and combine so port identity
+            # is preserved. Passing list(inputs.values()) loses port names and
+            # causes key collisions for multi-port nodes.
+            import hashlib as _hashlib
+            combined_input_hash = _hashlib.sha256(
+                "".join(cache.input_hash(v) for v in inputs.values()).encode()
+            ).hexdigest()
             cache_key = cache.key(node_type, node_cfg_dict, combined_input_hash)
             cached_result = cache.load(cache_key)
             if cached_result is not None:
@@ -282,21 +326,13 @@ class ParallelExecutor:
                 break
         logger.node_end(node_type, idx, node_duration, output_count=_output_count)
 
-        node_stats.append({
-            "node_id": node_id,
-            "node_type": node_type,
-            "node_index": idx,
-            "duration_s": round(node_duration, 4),
-        })
+        # NEW-5 fix: protect node_stats.append() with a lock so ordering is
+        # deterministic and node_stats[-1] returns the correct last completed node.
+        with node_stats_lock:
+            node_stats.append({
+                "node_id": node_id,
+                "node_type": node_type,
+                "node_index": idx,
+                "duration_s": round(node_duration, 4),
+            })
 
-
-async def _collect_stream_parallel(
-    executor: Any,
-    inputs: dict[str, Any],
-) -> dict[str, Any]:
-    """Collect all items from a streaming node into lists (parallel executor variant)."""
-    collected: dict[str, list] = {}
-    async for item in executor.execute_stream(inputs):
-        for k, v in item.items():
-            collected.setdefault(k, []).append(v)
-    return collected

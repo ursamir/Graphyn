@@ -53,7 +53,23 @@ class PipelineCache:
         This setter exists for test isolation only — use ``monkeypatch`` on
         ``app.core.config.cache_dir`` in production test suites instead.
         It is not part of the public API and may be removed in a future version.
+
+        SA-PC4: PipelineCache and ArtifactStore must NOT share the same base
+        directory. If they did, clear() would delete artifact records without
+        updating ArtifactStore's index.json.
         """
+        from app.core.config import artifacts_dir as _artifacts_dir
+        try:
+            artifacts_base = _artifacts_dir().parent / "artifacts"
+            assert value.resolve() != artifacts_base.resolve(), (
+                f"PipelineCache.BASE ({value}) must not be the same directory as "
+                f"ArtifactStore.base ({artifacts_base}). "
+                "clear() would delete artifact records without updating the index."
+            )
+        except Exception as exc:
+            if isinstance(exc, AssertionError):
+                raise
+            # Config not yet initialised (e.g. in tests) — skip the check
         self._base_override = value
 
     def key(self, node_type: str, config: dict, input_hash: str) -> str:
@@ -137,11 +153,29 @@ class PipelineCache:
     def has(self, cache_key: str) -> bool:
         """Return True if a cache entry exists for key.
 
+        .. deprecated::
+            SA-PC1: This method is a TOCTOU hazard — the entry may be deleted
+            between ``has()`` and ``load()``. Always treat ``load()`` returning
+            ``None`` as a cache miss, regardless of what ``has()`` returned.
+            Prefer calling ``load()`` directly. This method will be removed in
+            a future version; use ``_has()`` internally if needed.
+
         .. warning::
             TOCTOU: the entry may be deleted between has() and load().
             Always treat load() returning None as a cache miss, regardless
             of what has() returned. Prefer calling load() directly.
         """
+        import warnings
+        warnings.warn(
+            "PipelineCache.has() is deprecated and will be removed in a future version. "
+            "Call load() directly and treat None as a cache miss.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._has(cache_key)
+
+    def _has(self, cache_key: str) -> bool:
+        """Internal: return True if a cache entry directory exists for key."""
         return self._cache_dir(cache_key).is_dir()
 
     def load(self, cache_key: str) -> Optional[Any]:
@@ -171,10 +205,29 @@ class PipelineCache:
         # ── Multi-port AudioSample format (port_<name>/ subdirectories) ─────────
         # Introduced by G2-17: each AudioSample port is stored in its own
         # subdirectory named port_<port_name>/ containing manifest.json + wavs.
-        port_dirs = [
-            d for d in cache_dir.iterdir()
-            if d.is_dir() and d.name.startswith("port_")
-        ] if cache_dir.is_dir() else []
+        # SA-PC3 fix: prefer the top-level manifest.json (written by save() since
+        # this fix) to discover port names reliably. Fall back to directory scan
+        # for cache entries written before this fix was applied.
+        top_manifest_path = cache_dir / "manifest.json"
+        if top_manifest_path.exists():
+            try:
+                with open(top_manifest_path, "r", encoding="utf-8") as f:
+                    top_manifest_data = json.load(f)
+                cached_ports = top_manifest_data.get("cached_ports")
+                if cached_ports is not None:
+                    # New format written by the SA-PC3 fix
+                    port_dirs = [cache_dir / f"port_{p}" for p in cached_ports]
+                else:
+                    # Legacy flat manifest.json (original single-port format) —
+                    # fall through to the legacy handler below.
+                    port_dirs = []
+            except Exception:
+                port_dirs = []
+        else:
+            port_dirs = [
+                d for d in cache_dir.iterdir()
+                if d.is_dir() and d.name.startswith("port_")
+            ] if cache_dir.is_dir() else []
 
         if port_dirs:
             try:
@@ -315,6 +368,13 @@ class PipelineCache:
                 manifest_path = port_dir / "manifest.json"
                 with open(manifest_path, "w", encoding="utf-8") as f:
                     json.dump(manifest, f, indent=2)
+
+            # SA-PC3 fix: write a top-level manifest.json listing all port names
+            # so load() can discover ports reliably without scanning for port_*
+            # directories (which would misread any unrelated dir starting with port_).
+            top_manifest_path = cache_dir / "manifest.json"
+            with open(top_manifest_path, "w", encoding="utf-8") as f:
+                json.dump({"cached_ports": sorted(audio_ports.keys())}, f, indent=2)
             return
 
         # ── Generic JSON format for all other output types ─────────────────────
@@ -351,7 +411,14 @@ class PipelineCache:
             json.dump(serializable, f, indent=2)
 
     def clear(self) -> dict:
-        """Delete all cache entries. Returns {entries_deleted, bytes_freed}."""
+        """Delete all cache entries. Returns {entries_deleted, bytes_freed}.
+
+        SA-PC4: PipelineCache and ArtifactStore must NOT share the same base
+        directory. If they did, clear() would delete artifact records without
+        updating ArtifactStore's index.json. This is enforced by the assertion
+        in the BASE setter and by keeping the default directories separate
+        (cache/ vs artifacts/).
+        """
         if not self.BASE.is_dir():
             return {"entries_deleted": 0, "bytes_freed": 0}
 

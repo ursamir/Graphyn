@@ -101,7 +101,7 @@ def inspect_run_handler(arguments: dict[str, Any]) -> Any:
             return {"runs": []}
 
         runs = []
-        for run_dir in sorted(_RUNS_DIR.iterdir(), reverse=True):
+        for run_dir in _RUNS_DIR.iterdir():
             if not run_dir.is_dir():
                 continue
             meta_path = run_dir / "meta.json"
@@ -126,6 +126,10 @@ def inspect_run_handler(arguments: dict[str, Any]) -> Any:
                     "duration_s": None,
                     "num_nodes": 0,
                 })
+
+        # NEW-15 fix: sort by created_at timestamp, not by directory name
+        # (which is a hex string and sorts lexicographically, not chronologically).
+        runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
         return {"runs": runs}
 
     # ── Single run inspection ──────────────────────────────────────────────────

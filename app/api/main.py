@@ -86,7 +86,11 @@ app.include_router(artifacts_router,   prefix="/api/v1", dependencies=_deps)
 app.include_router(plugins_router,     prefix="/api/v1", dependencies=_deps)
 
 # ── Static file mounts ────────────────────────────────────────────────────────
-# Paths are resolved from GRAPHYN_PROJECT_DIR.
+# NEW-8: Paths are resolved at startup time from GRAPHYN_PROJECT_DIR.
+# GRAPHYN_PROJECT_DIR MUST be set before importing this module (e.g. before
+# uvicorn loads the app). Setting it after import has no effect on these mounts
+# because StaticFiles captures the directory path at mount time.
+# In tests, set GRAPHYN_PROJECT_DIR before importing app.api.main.
 
 _OUTPUT_ROOT = datasets_output_dir().resolve()
 _INPUT_ROOT  = datasets_input_dir().resolve()

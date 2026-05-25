@@ -31,7 +31,16 @@ def register_active_run(run: "RunManager") -> None:  # type: ignore[name-defined
 
 
 def get_active_run(run_id: str) -> "RunManager | None":  # type: ignore[name-defined]
-    """Return the active RunManager for run_id, or None if not active."""
+    """Return the active RunManager for run_id, or None if not active.
+
+    SA-RC2: Returns None in all of these cases:
+      - The run never existed in this process
+      - The run has already completed and been deregistered
+      - The run is executing on a different worker (SCALE-1)
+    The caller cannot distinguish between these cases from the return value
+    alone. If precise error reporting is needed, consider typed exceptions:
+    RunNotFoundError, RunCompletedError, RunOnOtherWorkerError.
+    """
     with _ACTIVE_RUNS_LOCK:
         return _ACTIVE_RUNS.get(run_id)
 

@@ -75,13 +75,30 @@ class RunManager:
     # ── Meta persistence ───────────────────────────────────────────────────────
 
     def _write_meta(self, data: dict) -> None:
+        # SA-RJ1 fix: write to a .tmp file then os.replace() for atomic rename
+        # on POSIX — prevents corrupt meta.json if the process crashes mid-write.
+        # SA-RJ2 fix: acquire _meta_lock here so ALL callers (__init__,
+        # save_metadata, mark_failed, mark_cancelled) are automatically
+        # thread-safe without each needing to acquire the lock themselves.
         path = os.path.join(self.base_path, "meta.json")
-        with open(path, "w", encoding="utf-8") as f:
+        tmp = path + ".tmp"
+        with self._meta_lock:
+            self._write_meta_unlocked(data, path, tmp)
+
+    def _write_meta_unlocked(self, data: dict, path: str, tmp: str) -> None:
+        """Write meta.json atomically. Caller MUST hold _meta_lock."""
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp, path)  # atomic on POSIX
 
     def _write_meta_field(self, key: str, value: str) -> None:
-        """Update a single field in meta.json without overwriting others (thread-safe)."""
+        """Update a single field in meta.json without overwriting others (thread-safe).
+
+        SA-RJ2: the entire read-modify-write is performed under _meta_lock to
+        prevent a concurrent write from being lost between the read and the write.
+        """
         meta_path = os.path.join(self.base_path, "meta.json")
+        tmp = meta_path + ".tmp"
         with self._meta_lock:
             existing = {}
             if os.path.exists(meta_path):
@@ -91,7 +108,7 @@ class RunManager:
                 except Exception:
                     pass
             existing[key] = value
-            self._write_meta(existing)
+            self._write_meta_unlocked(existing, meta_path, tmp)
 
     def save_config(self, config_yaml: str) -> None:
         path = os.path.join(self.base_path, "config.yaml")
@@ -127,6 +144,7 @@ class RunManager:
     def mark_failed(self, error: str) -> None:
         duration = time.time() - self._start_time
         meta_path = os.path.join(self.base_path, "meta.json")
+        tmp = meta_path + ".tmp"
         with self._meta_lock:
             existing = {}
             if os.path.exists(meta_path):
@@ -141,11 +159,12 @@ class RunManager:
                 "status": "failed",
                 "error": error,
             })
-            self._write_meta(existing)
+            self._write_meta_unlocked(existing, meta_path, tmp)
 
     def mark_cancelled(self) -> None:
         duration = time.time() - self._start_time
         meta_path = os.path.join(self.base_path, "meta.json")
+        tmp = meta_path + ".tmp"
         with self._meta_lock:
             existing = {}
             if os.path.exists(meta_path):
@@ -158,7 +177,7 @@ class RunManager:
                 "status": "cancelled",
                 "duration_s": round(duration, 3),
             })
-            self._write_meta(existing)
+            self._write_meta_unlocked(existing, meta_path, tmp)
 
     # ── Runtime control ────────────────────────────────────────────────────────
 
@@ -202,6 +221,13 @@ class RunManager:
         path = os.path.join(self.base_path, "resume_state.json")
         with self._meta_lock:
             if not os.path.exists(path):
+                # SA-RJ4 fix: warn instead of silently no-oping so callers can
+                # detect that init_resume_state() was never called.
+                log.warning(
+                    "update_resume_state called for run '%s' but resume_state.json "
+                    "does not exist — was init_resume_state() called?",
+                    self.run_id,
+                )
                 return
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -278,7 +304,19 @@ class RunManager:
         if not candidates:
             return None
 
-        candidates.sort(key=lambda x: x[0], reverse=True)
+        # SA-RJ3 fix: parse timestamps before sorting so mixed "+00:00" vs "Z"
+        # formats don't break lexicographic order.
+        def _parse_ts(ts: str) -> float:
+            from datetime import datetime
+            try:
+                return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                try:
+                    return float(ts)
+                except Exception:
+                    return 0.0
+
+        candidates.sort(key=lambda x: _parse_ts(x[0]), reverse=True)
         return _load_checkpoint_outputs(candidates[0][1])
 
     # ── Artifact registration ──────────────────────────────────────────────────
@@ -310,6 +348,7 @@ class RunManager:
         data,
         metadata: dict | None = None,
         input_artifact_ids: list[str] | None = None,
+        name: str | None = None,
     ) -> "ArtifactRecord":
         from app.core.artifact_store import ArtifactRecord
 
@@ -320,6 +359,9 @@ class RunManager:
             artifact_type=artifact_type,
             data=data,
             metadata=metadata,
+            # SA-RJ5 fix: forward name so by_name index is populated when a
+            # caller provides a name (previously always passed name=None).
+            name=name,
         )
 
         _input_ids = input_artifact_ids or []

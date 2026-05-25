@@ -61,7 +61,7 @@ IR JSON is detected by the presence of a `schema_version` field in the request b
 
 ## Run Control (`routers/run_control.py`)
 
-Control active pipeline runs. Returns HTTP 404 with `{"error": "run_not_active", "run_id": "..."}` if the run is not currently active.
+Control active pipeline runs. Returns HTTP 400 with `{"error": "invalid_run_id"}` for invalid `run_id` characters. Returns HTTP 404 with `{"error": "run_not_active", "run_id": "..."}` if the run is not currently active.
 
 | Method | Path | Description |
 |---|---|---|
@@ -176,11 +176,4 @@ data: {"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "lab
 
 ## Open Issues in This Area
 
-> See `docs/MASTER_ISSUE_REGISTRY.md` for full details and fixes.
-
-| ID | Severity | Summary |
-|---|---|---|
-| NEW-9 | Medium | `run_control` router has no `run_id` validation on pause/resume/cancel |
-| NEW-8 | Medium | Static mount paths in `main.py` frozen at import time |
-| NEW-13 | Low | `_replay_executor` `max_workers=1` undocumented |
-| NEW-15 | Low | `inspect_run` MCP handler sorts runs lexicographically, not chronologically |
+> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.

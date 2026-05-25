@@ -12,6 +12,11 @@ Both delegate to `run_pipeline_ir()` via `GraphIR` — no separate logic.
 ```python
 from app.core.sdk import PipelineNode, Pipeline
 
+# PipelineNode — validates config at construction time.
+# Note: _ir_node is NOT set in __init__ (ARCH-5 fix). Use to_ir_node(index)
+# to get the correctly-indexed IRNode. to_dict() uses self.node_type/config directly.
+node = PipelineNode("audio_conditioner", {"sample_rate": 16000})
+
 # Linear pipeline — output → input auto-chained
 pipeline = Pipeline([
     PipelineNode("dataset_ingest", {"path": "workspace/datasets/input/speech"}),

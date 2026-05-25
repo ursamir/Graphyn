@@ -39,11 +39,13 @@ def _write_checkpoint(
 
         checkpoint_dir = os.path.join(run_base_path, "checkpoints", f"node_{node_id}")
 
-        # Guard against path traversal via a malicious node_id.
-        checkpoint_dir_resolved = os.path.realpath(checkpoint_dir)
-        run_base_resolved = os.path.realpath(run_base_path)
-        if not checkpoint_dir_resolved.startswith(run_base_resolved + os.sep) and \
-           checkpoint_dir_resolved != run_base_resolved:
+        # SA-C1 fix: use os.path.abspath (does NOT resolve symlinks) for the
+        # prefix check. os.path.realpath resolves symlinks, allowing an attacker
+        # who can create a symlink inside the run directory to escape the guard.
+        checkpoint_dir_abs = os.path.abspath(checkpoint_dir)
+        run_base_abs = os.path.abspath(run_base_path)
+        if not checkpoint_dir_abs.startswith(run_base_abs + os.sep) and \
+           checkpoint_dir_abs != run_base_abs:
             raise ValueError(
                 f"node_id '{node_id}' would escape the run directory. "
                 "node_id must not contain path traversal sequences."
@@ -58,6 +60,13 @@ def _write_checkpoint(
         }
 
         if not audio_ports:
+            # SA-C2 fix: warn when a node has no audio outputs so users know
+            # it will re-execute on resume rather than being silently skipped.
+            log.warning(
+                "Node '%s' has no AudioSample outputs — checkpoint not written; "
+                "node will re-execute on resume.",
+                node_id,
+            )
             return
 
         # Write each port to its own named subdirectory (matches pipeline_cache.py format).
@@ -158,7 +167,17 @@ def _load_checkpoint_outputs(checkpoint_dir: str) -> dict | None:
                 samples = []
                 for entry in port_manifest["samples"]:
                     wav_path = os.path.join(port_dir, entry["filename"])
-                    data, sample_rate = sf.read(wav_path, dtype="float32", always_2d=False)
+                    try:
+                        data, sample_rate = sf.read(wav_path, dtype="float32", always_2d=False)
+                    except Exception as exc:
+                        # SA-C3 fix: include wav_path in the error message so
+                        # operators can identify which file is missing/corrupt.
+                        log.warning(
+                            "Checkpoint load failed for node '%s' port '%s' "
+                            "(file: %s): %s — will re-execute",
+                            checkpoint_dir, port_name, wav_path, exc,
+                        )
+                        return None
                     try:
                         sample = AudioSample.model_validate({
                             "path": entry["path"],
@@ -181,7 +200,15 @@ def _load_checkpoint_outputs(checkpoint_dir: str) -> dict | None:
         samples = []
         for entry in top_manifest.get("samples", []):
             wav_path = os.path.join(checkpoint_dir, entry["filename"])
-            data, sample_rate = sf.read(wav_path, dtype="float32", always_2d=False)
+            try:
+                data, sample_rate = sf.read(wav_path, dtype="float32", always_2d=False)
+            except Exception as exc:
+                # SA-C3 fix: include wav_path in the error message.
+                log.warning(
+                    "Checkpoint load failed for '%s' (file: %s): %s — will re-execute",
+                    checkpoint_dir, wav_path, exc,
+                )
+                return None
             try:
                 sample = AudioSample.model_validate({
                     "path": entry["path"],
