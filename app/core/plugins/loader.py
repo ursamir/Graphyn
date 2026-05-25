@@ -1,5 +1,20 @@
 # app/core/plugins/loader.py
-"""PluginLoader — validates and loads manifest-based plugins into the NodeRegistry.
+"""
+Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
+Responsibility:   Validate and load a manifest-based plugin into the
+                  NodeRegistry. Runs all compatibility and dependency checks
+                  before importing any plugin code.
+Owns:             PluginLoader.load() — manifest parse, platform compat check,
+                  Python compat check, dependency check, entry-point import,
+                  node type registration.
+Public Surface:   PluginLoader.load(plugin_dir) → list[str]
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not bypass AutoDiscovery for node registration.
+Dependencies:     app.core.plugins.{manifest, dependencies, errors},
+                  app.core.nodes.{discovery, errors, registry},
+                  packaging, stdlib (logging, sys, pathlib).
+Reason To Change: New compatibility check added, or entry-point import
+                  strategy changes.
 
 Responsibilities:
   1. Parse and validate the plugin manifest (``plugin.toml`` / ``plugin.json``).
@@ -8,16 +23,6 @@ Responsibilities:
   4. Verify all declared Python dependencies are satisfied.
   5. Import each entry-point file and register its Node subclasses.
   6. Return the list of newly registered node_types.
-
-Usage::
-
-    from pathlib import Path
-    from app.core.plugins.loader import PluginLoader
-    from app.core.nodes.registry import NodeRegistry
-
-    registry = NodeRegistry()
-    loader = PluginLoader(registry)
-    new_types = loader.load(Path("/path/to/my-plugin"))
 """
 from __future__ import annotations
 

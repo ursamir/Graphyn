@@ -1,31 +1,23 @@
 # app/core/nodes/__init__.py
-"""Enhanced Node System — public API.
+"""
+Bounded Context:  BC3 — Node Catalog
+Responsibility:   Package initialiser that runs AutoDiscovery and PluginManager
+                  startup loading, populating the NodeRegistry singleton before
+                  any caller accesses it. Re-exports the full public node API.
+Owns:             registry singleton (NodeRegistry), AutoDiscovery startup
+                  sequence, GRAPHYN_SKIP_PLUGIN_LOAD test-isolation flag,
+                  re-exports of Node, InputPort, OutputPort, PortDataType,
+                  NodeMetadata, NodeObserver, AutoDiscovery, NodeRegistry.
+Public Surface:   registry, Node, InputPort, OutputPort, PortDataType,
+                  NodeMetadata, NodeObserver, AutoDiscovery, NodeRegistry.
+Must NOT:         Import from app.domain or app.api at module level.
+                  Must not perform network I/O at import time.
+Dependencies:     app.core.nodes.{registry, discovery, base, ports, metadata,
+                  observers}, app.core.plugins.manager, app.core.config.
+Reason To Change: New public symbol added to the node API, or startup
+                  sequence changes (e.g. new plugin loader step).
 
-.. warning::
-    WARNING: Importing this module triggers full plugin discovery and loading.
-    This includes filesystem scanning, module imports, and potentially network
-    calls (if GRAPHYN_PLUGIN_AUTO_INSTALL is set). Set GRAPHYN_SKIP_PLUGIN_LOAD=1
-    to skip plugin loading (useful in tests and lightweight scripts).
-
-Importing this module guarantees:
-  1. AutoDiscovery has scanned all node files and the plugins directory.
-  2. The NodeRegistry singleton is fully populated.
-  3. The TypeCatalogue contains all PortDataType subclasses.
-
-Usage::
-
-    from app.core.nodes import registry
-    node_class = registry.get_class("clean")
-    metadata   = registry.get_metadata("clean")
-
-Test isolation
---------------
-Set ``GRAPHYN_SKIP_PLUGIN_LOAD=1`` (or ``true``) to skip the
-``PluginManager.load_enabled_plugins()`` call and the plugins-dir scan.
-This avoids touching the filesystem during unit tests that don't need
-real plugins::
-
-    GRAPHYN_SKIP_PLUGIN_LOAD=1 pytest tests/
+Set GRAPHYN_SKIP_PLUGIN_LOAD=1 to skip plugin loading in tests.
 """
 from __future__ import annotations
 

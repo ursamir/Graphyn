@@ -1,9 +1,17 @@
+# app/core/webhook.py
 """
-WebhookService — fire-and-forget HTTP POST notifications.
-
-Persists webhook configuration to workspace/webhooks.json.
-Sends notifications in background threads using httpx.
-Never raises on notification failure.
+Bounded Context:  BC6 — Observability & Storage
+Responsibility:   Fire-and-forget HTTP POST webhook notifications. Persists
+                  webhook configuration and sends notifications in background
+                  threads with SSRF protection.
+Owns:             WebhookService — save(), load(), notify(), _send().
+Public Surface:   WebhookService.save(url, events), .notify(event, payload)
+Must NOT:         Import from app.domain or app.api at module level.
+                  Must never raise on notification failure (fire-and-forget).
+Dependencies:     stdlib (ipaddress, json, logging, socket, threading, urllib),
+                  httpx (lazy, inside _send()), app.core.config (webhooks_path).
+Reason To Change: Webhook delivery guarantees change (e.g. retry added),
+                  SSRF protection policy evolves, or new event types are added.
 """
 
 import ipaddress

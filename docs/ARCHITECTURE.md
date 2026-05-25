@@ -84,6 +84,8 @@
 │  app/core/logger.py           PipelineLogger: structured events     │
 │  app/core/pipeline_cache.py   PipelineCache: SHA-256 keyed          │
 │  app/core/artifact_store.py   ArtifactStore: content-addressed      │
+│  app/core/artifact_serializer.py  ArtifactSerializerRegistry:       │
+│                               pluggable type handler interface       │
 │  app/core/provenance.py       ProvenanceStore: lineage tracking     │
 │  app/core/ingestion.py        URL + HuggingFace ingestion           │
 │  app/core/project_manager.py  Project lifecycle                     │
@@ -95,6 +97,8 @@
 │  DATA MODELS LAYER                                                  │
 │                                                                     │
 │  app/models/audio_sample.py       AudioSample (PortDataType)        │
+│  app/models/audio_artifact_serializer.py  AudioSampleHandler:       │
+│                               domain-side ArtifactTypeHandler impl  │
 │  app/models/feature_array.py      FeatureArray (PortDataType)       │
 │  app/models/tensor_batch.py       TensorBatch (PortDataType)        │
 │  app/models/model_artifact.py     ModelArtifact (PortDataType)      │
@@ -124,18 +128,23 @@
 
 ```
 sdk.py
-  └── pipeline.py (run_pipeline_ir)
+  └── orchestrator.py (run_pipeline_ir)
         ├── ir/loader.py (load_ir, dump_ir)
         │     └── ir/models.py (GraphIR, IRNode, IREdge)
-        ├── nodes/registry.py (NodeRegistry singleton)
-        │     ├── nodes/base.py (Node)
-        │     ├── nodes/metadata.py (NodeMetadata)
-        │     └── nodes/catalogue.py (TypeCatalogue)
+        ├── registry_runtime.py (get_registry, resolve_capability)
+        │     └── nodes/registry.py (NodeRegistry singleton)
+        │           ├── nodes/base.py (Node)
+        │           ├── nodes/metadata.py (NodeMetadata)
+        │           └── nodes/catalogue.py (TypeCatalogue)
+        ├── planner.py (PipelineGraph, _ir_to_pipeline_config)
+        ├── node_executor.py (NodeExecutor)
         ├── executor.py (ParallelExecutor)
+        │     └── registry_runtime.py (resolve_capability)  ← NOT orchestrator
         ├── pipeline_cache.py (PipelineCache)
-        ├── run_manager.py (RunManager)
+        ├── run_journal.py (RunManager)
         │     ├── artifact_store.py (ArtifactStore)
         │     └── provenance.py (ProvenanceStore)
+        ├── run_control.py (_ACTIVE_RUNS registry)
         ├── logger.py (PipelineLogger)
         ├── conditions.py (evaluate_condition)
         └── events.py (EventSource subclasses)
@@ -147,11 +156,13 @@ api/main.py
 mcp/server.py
   └── mcp/tool_registry.py
         └── mcp/handlers/*.py
-              └── sdk.py / pipeline.py / run_manager.py / ...
+              └── sdk.py / orchestrator.py / run_journal.py / ...
+              └── registry_runtime.py (resolve_capability)  ← optimization handler
 
 cli/main.py
   └── sdk.py (Pipeline.from_json, Pipeline.from_yaml)
-  └── pipeline.py (run_pipeline_ir)
+  └── orchestrator.py (run_pipeline_ir)
+  └── registry_runtime.py (resolve_capability)  ← inspect command
 
 plugins/manager.py
   ├── plugins/installer.py
@@ -160,6 +171,8 @@ plugins/manager.py
   ├── plugins/store.py
   └── plugins/index.py
 ```
+
+**Key dependency rule:** `executor.py` and all MCP/CLI callers import `resolve_capability` from `registry_runtime`, NOT from `orchestrator`. This prevents intra-BC5 circular coupling and keeps capability resolution in BC3 where it belongs.
 
 ---
 
@@ -224,10 +237,12 @@ Node produces output
          │
          ├── ArtifactStore.register()
          │   ├── compute SHA-256 content_hash
+         │   │   └── handler.compute_content_hash_input()  ← via registry
          │   ├── check index.json for deduplication
          │   ├── serialize data to artifacts/{id}/data/
-         │   │   ├── audio_samples → WAV files + manifest.json
-         │   │   └── others       → data.json
+         │   │   ├── registered type → handler.serialize()  ← via registry
+         │   │   │   (e.g. audio_samples → AudioSampleHandler → WAV + manifest)
+         │   │   └── unregistered type → data.json (JSON fallback)
          │   ├── write artifacts/{id}/record.json (ArtifactRecord)
          │   └── update artifacts/index.json
          │

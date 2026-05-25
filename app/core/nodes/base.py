@@ -1,5 +1,18 @@
 # app/core/nodes/base.py
-"""Node base class for the Enhanced Node System."""
+"""
+Bounded Context:  BC2 — Node Contract
+Responsibility:   Define the base class and lifecycle protocol for all pipeline
+                  nodes. The single contract every node implementation must satisfy.
+Owns:             Node (generic base class), SISO wrapper installation logic,
+                  _maybe_wrap_siso(), _install_siso_wrapper().
+Public Surface:   Node[InputT, OutputT] — subclass to implement a node.
+Must NOT:         Import from app.domain, app.api, app.core.orchestrator,
+                  app.core.planner, or any BC4/BC5/BC6 module.
+Dependencies:     BC2 (nodes.config, nodes.ports, nodes.retry, nodes.compat,
+                  nodes.observers), stdlib (inspect, logging, typing).
+Reason To Change: Node lifecycle protocol changes (new hooks, new port
+                  conventions), or SISO wrapper detection logic evolves.
+"""
 from __future__ import annotations
 
 import inspect

@@ -1,16 +1,18 @@
 # app/mcp/handlers/graph.py
-"""Graph generation, validation, and schema MCP tool handlers.
-
-Implements five tools (Req 3.1–3.13, 7.5–7.9):
-  - generate_graph              — construct a validated GraphIR from a node list
-  - validate_graph              — validate a GraphIR document
-  - get_graph_schema            — return the JSON Schema for GraphIR
-  - get_graph_capability_summary — aggregate capability metadata for a graph
-  - get_event_schema            — return the NDJSON event schema
-
-All graph construction delegates to Pipeline / PipelineNode (Req 3.10, 6.2).
-All validation delegates to load_ir() (Req 3.3, 3.11, 6.3).
-All registry queries delegate to get_registry() (Req 6.4).
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   Graph generation, validation, schema, capability summary,
+                  and event schema MCP tool handlers.
+Owns:             generate_graph_handler, validate_graph_handler,
+                  get_graph_schema_handler, get_graph_capability_summary_handler,
+                  get_event_schema_handler — and their SCHEMA/DESCRIPTION constants.
+Public Surface:   All five handler functions above.
+Must NOT:         Contain graph construction logic beyond delegating to Pipeline/
+                  PipelineNode and load_ir(). Must not import from app.domain.
+Dependencies:     BC1 (ir.loader, ir.models), BC3 (registry_runtime — lazy),
+                  SDK (sdk.Pipeline, sdk.PipelineNode — lazy), stdlib (typing).
+Reason To Change: Graph tool schemas change, new graph tools are added, or
+                  capability summary fields change.
 """
 from __future__ import annotations
 

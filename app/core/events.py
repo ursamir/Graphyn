@@ -1,13 +1,15 @@
-"""Event sources for event-driven pipeline execution (Phase 3).
-
-Provides:
-  - EventSource — abstract base class
-  - FileWatcherSource — watches a directory for new/modified files
-  - TimerSource — fires at a configurable interval
-  - QueueSource — reads from an asyncio.Queue
-  - create_event_source() — factory function
-
-Req 6.1 – 6.11
+# app/core/events.py
+"""
+Bounded Context:  BC5 — Execution Runtime
+Responsibility:   Event sources for event-driven pipeline execution. Provides
+                  async generators that yield event payloads to trigger nodes.
+Owns:             EventSource (ABC), FileWatcherSource, TimerSource,
+                  QueueSource, create_event_source() factory.
+Public Surface:   EventSource, create_event_source(source_type, source_config)
+Must NOT:         Import from app.domain, app.api, or any storage module.
+Dependencies:     stdlib (asyncio, abc, fnmatch, os, datetime), watchfiles (optional).
+Reason To Change: New event source types are added, or existing source
+                  configuration schemas change.
 """
 from __future__ import annotations
 

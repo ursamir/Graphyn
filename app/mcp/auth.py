@@ -1,7 +1,16 @@
 # app/mcp/auth.py
-"""Token authentication middleware for MCP tool invocations.
-
-Req 1.9, 1.10, 8.9
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   Token authentication middleware for MCP tool invocations.
+Owns:             check_auth() — validates _meta.auth_token against
+                  GRAPHYN_API_TOKEN. Reads token on every call (no caching)
+                  so token rotation takes effect immediately.
+Public Surface:   check_auth(arguments) -> dict | None
+Must NOT:         Cache the API token at module level. Must not import from
+                  app.domain or any execution module.
+Dependencies:     app.core.config (api_token), stdlib (typing).
+Reason To Change: Auth scheme changes (e.g. JWT, OAuth), or token location
+                  in arguments changes.
 """
 from __future__ import annotations
 

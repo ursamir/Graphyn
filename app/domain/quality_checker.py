@@ -1,12 +1,22 @@
+# app/domain/quality_checker.py
 """
-QualityChecker — automated quality checks for audio dataset versions.
+Bounded Context:  Domain — Data Quality
+Responsibility:   Automated quality checks for audio dataset versions.
+                  Persists findings to quality_report.json. Never raises —
+                  all errors are recorded as findings.
+Owns:             QualityChecker class, all check implementations
+                  (duration_range, sample_rate, clipping, dc_offset, snr,
+                  duplicates, outliers, class_imbalance).
+Public Surface:   QualityChecker.run(project, version) → dict
+Must NOT:         Import from app.core.nodes, app.core.orchestrator, or
+                  app.core.executor. Must not register node types.
+Dependencies:     app.core.config (datasets_output_dir), stdlib (hashlib,
+                  json, pathlib), numpy, librosa, soundfile (optional).
+Reason To Change: New quality check type added, or report schema changes.
 
 Checks: duration_range, sample_rate, clipping, dc_offset, snr,
         duplicates (SHA-256 PCM hash), outliers (3-sigma on duration/amplitude/centroid),
         class_imbalance (< 20% of mean label count)
-
-Never raises — all errors are recorded as findings.
-Persists findings to quality_report.json in the project directory.
 """
 
 from __future__ import annotations

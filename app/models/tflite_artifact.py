@@ -1,9 +1,19 @@
 # app/models/tflite_artifact.py
-"""TFLiteArtifact — TFLite model artifact.
+"""
+Bounded Context:  Domain — Data Types
+Responsibility:   Typed data contract for a TFLite model artifact. Output of
+                  edge_optimizer node (TFLite backend).
+Owns:             TFLiteArtifact Pydantic model — tflite_path, labels,
+                  quantisation, file_size_bytes.
+Public Surface:   TFLiteArtifact
+Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+                  Must not contain quantization logic.
+Dependencies:     pydantic (PortDataType base).
+Reason To Change: TFLiteArtifact schema gains new fields, or quantization
+                  format options change.
 
-Migrated from examples/06_speech_commands_e2e/plugins/data_types.py.
 Registered in TypeCatalogue as 'app.models.tflite_artifact.TFLiteArtifact'
-by AutoDiscovery.
+by AutoDiscovery. Migrated from examples/06_speech_commands_e2e/.
 """
 # NOTE: Do NOT use `from __future__ import annotations` here — it turns all
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()

@@ -1,6 +1,17 @@
 # app/cli/main.py
 """
-Graphyn CLI
+Bounded Context:  CLI Interface
+Responsibility:   Command-line entry point for pipeline execution, validation,
+                  migration, inspection, node listing, and run history.
+Owns:             Argument parsing, subcommand dispatch, CLI output formatting,
+                  domain serializer registration at startup.
+Public Surface:   main() — invoked as ``python -m app.cli.main`` or ``graphyn``.
+Must NOT:         Contain pipeline execution logic — delegate to SDK/orchestrator.
+                  Must not import app.api.
+Dependencies:     argparse, app.core.sdk, app.core.ir, app.core.nodes.registry,
+                  app.core.run_journal, app.core.config,
+                  app.models.audio_artifact_serializer (startup hook).
+Reason To Change: New CLI subcommand added, or output format changes.
 
 Subcommands:
   run      --graph PATH [--seed N]    Execute a pipeline from IR JSON (canonical)
@@ -28,6 +39,13 @@ from app.core.config import runs_dir as _runs_dir
 # NEW-18 fix: do NOT resolve RUNS_DIR at module import time.
 # GRAPHYN_PROJECT_DIR may be set after this module is imported (e.g. in tests).
 # Each function that needs the runs directory calls _runs_dir() at call time.
+
+# ── Domain serializer registration ───────────────────────────────────────────
+# Register the AudioSampleHandler so that artifact_store, pipeline_cache, and
+# checkpoint can serialize/deserialize AudioSample objects without importing
+# domain models themselves (ARCH-2 fix).
+from app.models.audio_artifact_serializer import register_audio_serializer as _reg_audio
+_reg_audio()
 
 
 def _list_runs():
@@ -101,8 +119,7 @@ def _make_stdout_logger(base_class):
 def cmd_inspect(args):
     """Inspect an IR JSON graph file and print a human-readable summary."""
     from app.core.ir.loader import load_ir_from_file, IRVersionError
-    from app.core.orchestrator import _resolve_capability
-    from app.core.registry_runtime import get_registry
+    from app.core.registry_runtime import get_registry, resolve_capability as _resolve_capability
 
     graph_path = args.graph
     if not os.path.isfile(graph_path):

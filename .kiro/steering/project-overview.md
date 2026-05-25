@@ -45,6 +45,8 @@ General-purpose AI/workflow execution platform. Four interfaces share `app/core/
 | Re-export shim (legacy) | `app/core/run_manager.py`, `app/core/pipeline.py` |
 | Structured logging | `app/core/logger.py` |
 | Artifact store | `app/core/artifact_store.py` |
+| Artifact serializer registry | `app/core/artifact_serializer.py` |
+| Audio artifact serializer (domain) | `app/models/audio_artifact_serializer.py` |
 | Provenance store | `app/core/provenance.py` |
 | Runtime backend ABC | `app/core/runtime_backend.py` |
 | SDK | `app/core/sdk.py` |
@@ -68,6 +70,8 @@ General-purpose AI/workflow execution platform. Four interfaces share `app/core/
 | `GRAPHYN_PLUGINS_DIR` | `"plugins"` | Plugin install directory |
 | `GRAPHYN_PLUGIN_AUTO_INSTALL` | `""` | `"1"` or `"true"` to auto-install missing plugin deps via pip |
 | `GRAPHYN_PLUGIN_INDEX_URL` | `""` | Remote plugin index URL |
+| `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | `""` | Comma-separated URL prefixes; empty = allow all (SEC-6 fix) |
+| `GRAPHYN_REDIS_URL` | `""` | Redis connection URL; empty = use in-process store (SCALE-1/SCALE-2) |
 
 ## Run Commands
 

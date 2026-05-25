@@ -10,6 +10,10 @@ fileMatchPattern: "app/core/nodes/registry.py,app/core/nodes/discovery.py,app/co
 ```python
 from app.core.nodes import registry          # preferred
 from app.core.registry_runtime import get_registry; registry = get_registry()
+
+# Capability resolution (canonical — use this, not orchestrator._resolve_capability)
+from app.core.registry_runtime import resolve_capability
+cap = resolve_capability(ir_node, registry)
 ```
 
 ## `NodeRegistry` Key Methods

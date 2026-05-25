@@ -1,5 +1,19 @@
 # app/core/nodes/registry.py
-"""NodeRegistry — singleton registry mapping node_type strings to Node classes and metadata."""
+"""
+Bounded Context:  BC3 — Node Catalog
+Responsibility:   Thread-safe singleton registry mapping node_type strings to
+                  Node classes and NodeMetadata.
+Owns:             NodeRegistry — register, unregister, get_class, get_metadata,
+                  list_nodes, find_compatible_nodes, to_json, get_config_schema,
+                  get_port_schema.
+Public Surface:   NodeRegistry (all public methods above).
+Must NOT:         Import from app.domain, app.api, app.core.orchestrator,
+                  app.core.planner, or any BC4/BC5/BC6 module.
+Dependencies:     BC2 (nodes.catalogue, nodes.compat, nodes.errors,
+                  nodes.metadata), stdlib (json, threading).
+Reason To Change: Registry query API changes, new introspection methods are
+                  added, or thread-safety strategy evolves.
+"""
 from __future__ import annotations
 
 import json

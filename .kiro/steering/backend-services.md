@@ -37,7 +37,12 @@ run.base_path        # "workspace/runs/{run_id}"
 | `register_artifact(node_id, node_type, artifact_type, data, metadata=None, input_artifact_ids=None, name=None)` | Delegates to `ArtifactStore` + `ProvenanceStore`; returns `ArtifactRecord` |
 | `get_provenance_summary()` | Returns `{"run_id", "graph_hash", "artifacts", "provenance_records"}` |
 
-**Active run registry** (`run_control.py`): `register_active_run(run)`, `get_active_run(run_id)`, `deregister_active_run(run_id)` — module-level dict, process-local. Returns `None` for unknown/completed/wrong-worker runs (ambiguity documented in docstring). Migration path to Redis documented in module docstring (SCALE-1).
+**Active run registry** (`run_control.py`): `register_active_run(run)`, `get_active_run(run_id)`, `deregister_active_run(run_id)`.
+
+- **In-process mode** (default, `GRAPHYN_REDIS_URL` unset): module-level dict, process-local. Identical to previous behaviour.
+- **Redis mode** (`GRAPHYN_REDIS_URL` set): run registrations are mirrored to Redis key `graphyn:active_run:{run_id}` (24-hour TTL). The `RunManager` object is always kept in the in-process dict for signal delivery within this worker. `get_active_run` checks the in-process dict first; if absent, checks Redis and logs a debug note when the run is active on another worker. Returns `None` in all not-found cases (SCALE-1 fix).
+
+Returns `None` for unknown/completed/wrong-worker runs (ambiguity documented in docstring).
 
 `ResumeError` is imported at module top-level from `app.core.nodes.errors`. No circular import.
 
@@ -86,7 +91,7 @@ Downloads run in background daemon threads. Always use `job.append_progress(even
 
 - `ProjectManager` (`app/domain/project_manager.py`) — full project lifecycle under `workspace/datasets/output/{project}/`
 - `QualityChecker` (`app/domain/quality_checker.py`) — runs checks against `contract.json`, writes `quality_report.json`
-- `IngestionService` (`app/domain/ingestion.py`) — URL and HuggingFace dataset download jobs; job store is process-local (SCALE-2)
+- `IngestionService` (`app/domain/ingestion.py`) — URL and HuggingFace dataset download jobs. Job store is in-process by default; when `GRAPHYN_REDIS_URL` is set, completed job state is persisted to Redis (`graphyn:ingest_job:{id}` + `graphyn:ingest_events:{id}`, 24-hour TTL) enabling cross-worker streaming (SCALE-2 fix). `get_job()` checks in-process dict first, then falls back to Redis.
 - `WebhookService` (`app/core/webhook.py`) — HTTP POST notifications; config at `workspace/webhooks.json`. DNS rebinding SSRF fixed: `_send()` re-validates resolved IP at send time (NEW-12).
 - `stable_hash()` (`app/core/utils/hash.py`) — deterministic hash across Python runs; used for node seeds, export file IDs, split group ordering
 
@@ -104,6 +109,32 @@ versions = store.get_versions(artifact_name)
 
 `SUPPORTED_ARTIFACT_TYPES`: `audio_samples`, `model_artifact`, `tflite_artifact`, `prediction_result`, `feature_array`, `generic`.
 
-`_infer_artifact_type(value)` — module-level helper that infers the correct `artifact_type` string from a node output value. Checks for `DatasetArtifact`, audio sample lists (duck-typed via `.data` + `.sample_rate`), split dicts (`train`/`val`/`test`), feature dicts, and `np.ndarray`. Falls back to `"generic"`. Import from `app.core.artifact_store` (not `pipeline.py`).
+`_infer_artifact_type(value)` — module-level helper that infers the correct `artifact_type` string from a node output value. Delegates to `ArtifactSerializerRegistry.infer_type()` first (domain handlers registered at startup), then falls back to built-in heuristics for `DatasetArtifact`, split dicts, feature dicts, and `np.ndarray`. Import from `app.core.artifact_store`.
+
+**ARCH-2 fix:** `_serialize_audio_samples()` and audio duck-typing removed from platform infrastructure. All WAV I/O now lives in `app/models/audio_artifact_serializer.py` (domain layer) and is injected via `ArtifactSerializerRegistry` at startup.
+
+## `ArtifactSerializerRegistry` (`artifact_serializer.py`)
+
+Pluggable serializer registry. Platform defines the interface; domain registers handlers at startup.
+
+```python
+# Platform interface (app/core/artifact_serializer.py)
+from app.core.artifact_serializer import get_serializer_registry, ArtifactTypeHandler
+
+# Domain registration — call once at startup from each entry point
+from app.models.audio_artifact_serializer import register_audio_serializer
+register_audio_serializer()
+
+# Registry usage (called internally by artifact_store, pipeline_cache, checkpoint)
+registry = get_serializer_registry()
+handler = registry.get("audio_samples")   # None if not registered
+handler.serialize(data, dest_dir)
+data = handler.deserialize(src_dir)
+artifact_type = registry.infer_type(value)
+```
+
+`ArtifactTypeHandler` ABC methods: `serialize(data, dest_dir)`, `deserialize(src_dir) → Any | None`, `compute_content_hash_input(data) → str`, `infer_type(value) → str | None`.
+
+`AudioSampleHandler` (`app/models/audio_artifact_serializer.py`) — domain-side implementation for `audio_samples`. Owns WAV I/O, manifest format, and `AudioSample` duck-typing. Registered at startup via `register_audio_serializer()`.
 
 > All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.

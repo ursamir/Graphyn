@@ -1,9 +1,18 @@
-"""IR Loader — serialization, deserialization, and version validation.
-
-No imports from app/core/pipeline.py, app/core/nodes/, or app/core/sdk.py.
-Only pydantic, json, and the Python standard library.
-
-Req 1.7 – 1.9
+"""
+Bounded Context:  BC1 — Graph Language
+Responsibility:   Serialize, deserialize, and version-validate GraphIR documents.
+Owns:             load_ir(), load_ir_from_file(), dump_ir(), dump_ir_to_file(),
+                  IRVersionError, IRValidationError, CURRENT_IR_VERSION.
+Public Surface:   load_ir(dict) -> GraphIR, load_ir_from_file(path) -> GraphIR,
+                  dump_ir(GraphIR) -> dict, dump_ir_to_file(GraphIR, path),
+                  CURRENT_IR_VERSION, IRVersionError.
+Must NOT:         Import from app.core.nodes, app.core.orchestrator,
+                  app.core.sdk, app.domain, or app.api.
+                  Must remain pure — only pydantic, json, and stdlib.
+Dependencies:     pydantic, stdlib (json, warnings, pathlib),
+                  app.core.ir.models (GraphIR).
+Reason To Change: IR schema version bumps, new serialization format support,
+                  or migration path changes.
 """
 from __future__ import annotations
 

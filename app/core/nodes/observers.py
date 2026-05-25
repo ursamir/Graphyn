@@ -1,8 +1,14 @@
 # app/core/nodes/observers.py
-"""Observer interfaces and implementations for the Enhanced Node System.
-
-Provides structured event callbacks at each node lifecycle stage for
-logging, metrics collection, and distributed tracing.
+"""
+Bounded Context:  BC2 — Node Contract
+Responsibility:   Define the observer interface and concrete implementations
+                  for node lifecycle event callbacks.
+Owns:             NodeObserver (ABC), LoggingObserver, CompositeObserver.
+Public Surface:   NodeObserver, LoggingObserver, CompositeObserver.
+Must NOT:         Import from app.domain, app.api, or any BC3/BC4/BC5/BC6 module.
+Dependencies:     stdlib (abc, json, logging, traceback).
+Reason To Change: New lifecycle events are added to the node protocol, or
+                  new built-in observer implementations are needed.
 """
 from __future__ import annotations
 

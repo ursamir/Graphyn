@@ -1,7 +1,7 @@
 # Graphyn Pipeline Engine — Master Issue Registry
 
 > **Single source of truth** for every issue found across all review rounds.
-> **Last updated:** 2026-05-25 — 48 issues resolved this session
+> **Last updated:** 2026-05-25 — 63 issues resolved this session (4 new resolved this pass)
 > **Codebase root:** `/home/meritech/Desktop/newAudio3`
 
 ---
@@ -18,16 +18,7 @@
 
 ## Quick Reference — All Open Issues
 
-| ID | Severity | Category | File | Summary |
-|---|---|---|---|---|
-| **Deferred** | | | | |
-| ARCH-1 | High | Architecture | `core/pipeline_cache.py` | Domain leak — imports `AudioSample` |
-| ARCH-2 | High | Architecture | `core/artifact_store.py` | Domain leak — WAV serialization in platform infrastructure |
-| ARCH-3 | High | Architecture | `core/checkpoint.py` | Domain leak — entirely audio-specific |
-| SEC-6 | High | Security | `api/routers/plugins.py` | Plugin install accepts arbitrary remote code execution |
-| SCALE-1 | Medium | Scalability | `core/run_control.py` | Active run registry is process-local |
-| SCALE-2 | Medium | Scalability | `domain/ingestion.py` | Ingest job store is process-local |
-| NEW-19 | Medium | Bug | `plugins/text-stats/` | Orphaned installed plugin — no `PluginPackage/` source |
+> All issues have been resolved. See the Resolved table below.
 
 
 ---
@@ -52,60 +43,7 @@
 
 ## Deferred — Architectural Work Required
 
-### ARCH-1 — Domain leak: `pipeline_cache.py` imports `AudioSample`
-**Severity:** High | **File:** `app/core/pipeline_cache.py` line 8
-
-`from app.models.audio_sample import AudioSample` — platform cache must not know about audio. `load()` constructs `AudioSample` objects directly.
-
-**Fix:** Pluggable serializer/deserializer registry. Domain registers its handler at startup; platform calls it by type string.
-
----
-
-### ARCH-2 — Domain leak: `artifact_store.py` contains WAV serialization
-**Severity:** High | **File:** `app/core/artifact_store.py`
-
-`_serialize_audio_samples()` writes WAV files using `soundfile`. `_infer_artifact_type()` contains audio-specific duck-typing. Both are audio-domain knowledge inside platform infrastructure.
-
-**Fix:** Same serializer registry pattern as ARCH-1.
-
----
-
-### ARCH-3 — `checkpoint.py` is entirely audio-domain
-**Severity:** High | **File:** `app/core/checkpoint.py`
-
-Imports `soundfile`, `numpy`, writes WAV files, reads `sample.data`, `sample.sample_rate`, `sample.label`. Not platform infrastructure — an audio-domain checkpoint serializer in the wrong layer.
-
-**Fix:** Replace with the pluggable serializer pattern. Platform writes opaque bytes; domain provides the serializer/deserializer.
-
----
-
-### SEC-6 — Plugin install accepts arbitrary remote code execution
-**Severity:** High | **File:** `app/api/routers/plugins.py`, `app/core/plugins/manager.py`
-
-`POST /api/v1/plugins/install` accepts a `source` string passed to `PluginInstaller.resolve()` which fetches and executes code from `git+`, `http://`, or `https://` URLs. No allowlist, no signature verification, no sandboxing. Inherent to plugin systems.
-
-**Mitigation:** Require auth (done). Add checksum verification. Never expose publicly.
-
----
-
-### SCALE-1 — Active run registry is process-local
-**Severity:** Medium | **File:** `app/core/run_control.py`
-
-`_ACTIVE_RUNS` is a process-local dict. In multi-worker deployments, pause/resume/cancel requests routed to a different worker return 404. The split into `run_control.py` was done specifically to make this migration easy.
-
-**Fix:** Replace `_ACTIVE_RUNS` with a Redis-backed store.
-
----
-
-### SCALE-2 — Ingest job store is process-local
-**Severity:** Medium | **File:** `app/domain/ingestion.py`
-
-`_jobs` is a module-level dict. In multi-worker deployments, job streaming requests routed to a different worker return 404.
-
-**Fix:** Same pattern as SCALE-1 — Redis-backed store.
-
-
----
+> All previously deferred issues have been resolved. See the Resolved table below.
 
 ## Resolved Issues
 
@@ -201,3 +139,18 @@ Imports `soundfile`, `numpy`, writes WAV files, reads `sample.data`, `sample.sam
 | SA-NE2 | `core/node_executor.py` | `_last_duration` etc. injected as dynamic attributes | Documented as known quality issue; full refactor deferred |
 | SA-NE3 | `core/node_executor.py` | Streaming nodes cannot use `RetryPolicy` | Asymmetry documented in `execute_stream` docstring |
 | BUG-4 | `core/run_journal.py` | `find_latest_checkpoint()` O(N) scan | Timestamps parsed with `datetime.fromisoformat()` for correct sort; full index deferred |
+| SA-ARCH-1 | `core/pipeline_cache.py` | Module-level `from app.models.audio_sample import AudioSample` — RULE 1 violation | Import moved inside `load()` function body (lazy); module-level import removed |
+| SA-ARCH-3 | `core/pipeline_cache.py` | Module-level `from app.models.audio_sample import AudioSample` — RULE 1 violation | Confirmed already lazy in `checkpoint.py`; `pipeline_cache.py` fixed |
+| ARCH-1 | `core/pipeline_cache.py` | Domain leak — `AudioSample` constructed inside `load()` | Pluggable serializer registry (`artifact_serializer.py`); `AudioSampleHandler` in `app/models/audio_artifact_serializer.py` owns all WAV I/O; `pipeline_cache.py` delegates via registry; zero domain imports in platform |
+| ARCH-2 | `core/artifact_store.py` | Domain leak — `_serialize_audio_samples()` and audio duck-typing in `_infer_artifact_type()` | Same pluggable serializer registry; `_serialize_audio_samples()` removed; `_infer_artifact_type()` delegates to `registry.infer_type()`; `_compute_content_hash()` delegates to `handler.compute_content_hash_input()` |
+| ARCH-3 | `core/checkpoint.py` | Domain leak — WAV I/O in `_write_checkpoint()` and `_load_checkpoint_outputs()` | Same pluggable serializer registry; both functions delegate to `AudioSampleHandler` via registry; zero domain imports in platform |
+| SA-EXEC-1 | `core/executor.py` | `_run_node` imported `_resolve_capability` from `orchestrator` — intra-BC5 circular coupling | Import changed to `from app.core.registry_runtime import resolve_capability` |
+| SA-PIPE-1 | `core/pipeline.py` | Shim tried to import `_collect_stream` from `orchestrator` — name no longer exists there | Fixed: `from app.core.utils import collect_stream as _collect_stream` |
+| SA-CLI-1 | `app/cli/main.py` | `cmd_inspect` imported `_resolve_capability` from `orchestrator` | Changed to `from app.core.registry_runtime import resolve_capability` |
+| SA-MCP-1 | `mcp/handlers/optimization.py` | `optimize_execution_handler` imported `_resolve_capability` from `orchestrator` | Changed to `from app.core.registry_runtime import resolve_capability` |
+| SA-REG-1 | `core/registry_runtime.py` | `resolve_capability()` did not exist — capability resolution was scattered | `resolve_capability(ir_node, registry)` added to `registry_runtime.py` as canonical BC3 function |
+| SA-HDR-1 | All major `app/core/` files | No file-header architectural contracts — ownership invisible | Architectural contract docstrings added to all 20+ major files |
+| SEC-6 | `api/routers/plugins.py`, `core/plugins/installer.py`, `core/plugins/manager.py` | Plugin install accepted arbitrary remote URLs — no allowlist, no checksum verification | Added `GRAPHYN_PLUGIN_ALLOWED_SOURCES` env var; `PluginInstaller._check_allowed_source()` rejects non-matching remote sources; `expected_sha256` field added to `InstallRequest` and forwarded through `PluginManager.install()` and `PluginInstaller.resolve()` / `_resolve_http_archive()` |
+| SCALE-1 | `core/run_control.py` | Active run registry was process-local dict — multi-worker pause/resume/cancel broken | Redis-backed dual-store: in-process dict always holds `RunManager` for signal delivery; when `GRAPHYN_REDIS_URL` set, `graphyn:active_run:{id}` key mirrored to Redis (24h TTL); `get_active_run` checks in-process first, then Redis for cross-worker detection |
+| SCALE-2 | `domain/ingestion.py` | Ingest job store was process-local dict — multi-worker SSE streaming broken | Redis-backed dual-store: jobs run on originating worker; on completion/failure, full state flushed to `graphyn:ingest_job:{id}` + `graphyn:ingest_events:{id}` (24h TTL); `get_job()` falls back to Redis for cross-worker streaming |
+| NEW-19 | `plugins/text-stats/` | Orphaned installed plugin from `examples/14_plugin_manifest/` — no `PluginPackage/` source | Uninstalled via `PluginManager().uninstall("text-stats")` — directory removed, registry entry deleted |

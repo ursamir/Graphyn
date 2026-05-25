@@ -144,6 +144,11 @@ from app.core.nodes import registry
 # or
 from app.core.registry_runtime import get_registry
 registry = get_registry()
+
+# Capability resolution — canonical location (NOT orchestrator._resolve_capability)
+from app.core.registry_runtime import resolve_capability
+cap = resolve_capability(ir_node, registry)
+# Returns IRCapabilityMetadata. Precedence: IRNode.capability_metadata > NodeMetadata fields.
 ```
 
 | Method | Description |

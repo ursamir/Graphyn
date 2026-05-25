@@ -1,21 +1,21 @@
 """
-Graphyn Python SDK
-
-Provides a programmatic API for defining and running pipelines without the UI.
-
-Usage::
-
-    from app.core.sdk import PipelineNode, Pipeline
-
-    pipeline = Pipeline([
-        PipelineNode("input", {"path": "workspace/datasets/input/speech"}),
-        PipelineNode("clean", {"sample_rate": 16000}),
-        PipelineNode("split", {"train": 0.8, "val": 0.1}),
-        PipelineNode("export", {"project": "my-project", "version": "v1"}),
-    ], seed=42)
-    result = pipeline.run()
-    # result["node_id"] still works (backward compat)
-    # result.artifacts gives list[ArtifactRecord]
+Bounded Context:  Application Layer — SDK
+Responsibility:   Provide the Python SDK for programmatic pipeline definition
+                  and execution. The primary interface for Python callers.
+Owns:             Pipeline, PipelineNode, ArtifactCollection.
+Public Surface:   Pipeline (run, run_with_manager, from_json, from_yaml, to_ir,
+                  to_json, subscribe, validate, pause, resume, cancel);
+                  PipelineNode; ArtifactCollection.
+Must NOT:         Contain execution logic — delegates entirely to
+                  run_pipeline_ir() and RunManager. Must not import from
+                  app.domain or app.api at module level.
+Dependencies:     BC1 (ir.models, ir.loader), BC5 (orchestrator — lazy),
+                  BC6 (run_journal — lazy, provenance — lazy),
+                  BC3 (registry_runtime — lazy via PipelineNode._validate),
+                  app.core.logger (lazy), app.core.plugins.manager (lazy).
+Reason To Change: SDK public API evolves (new Pipeline methods, new
+                  ArtifactCollection accessors), or execution delegation
+                  strategy changes.
 """
 from __future__ import annotations
 

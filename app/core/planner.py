@@ -1,11 +1,21 @@
 # app/core/planner.py
-"""Graph planning — DAG builder, topological sort, and execution wave computation.
-
-Extracted from pipeline.py. Responsible for:
-  - NodeSpec, EdgeSpec, PipelineConfig  — internal data structures
-  - _parse_pipeline_config              — legacy YAML dict → PipelineConfig
-  - _ir_to_pipeline_config              — GraphIR → PipelineConfig
-  - PipelineGraph                       — DAG builder + validator + wave planner
+"""
+Bounded Context:  BC4 — Execution Planner
+Responsibility:   Transform a GraphIR into an executable DAG: instantiate nodes,
+                  validate edges, compute topological order and parallel waves.
+Owns:             NodeSpec, EdgeSpec, PipelineConfig (internal data structures);
+                  PipelineGraph (DAG builder + validator + wave planner);
+                  _ir_to_pipeline_config(), _parse_pipeline_config() (parsers).
+Public Surface:   PipelineGraph, PipelineConfig, NodeSpec, EdgeSpec,
+                  _ir_to_pipeline_config(), _parse_pipeline_config()
+Must NOT:         Execute nodes, persist state, import from app.domain,
+                  import from BC5 (orchestrator/executor), or import from app.api.
+Dependencies:     BC1 (ir.models via _ir_to_pipeline_config), BC2 (nodes.base,
+                  nodes.observers, nodes.compat, nodes.errors),
+                  BC3 (registry_runtime for node class lookup),
+                  app.core.utils.hash (stable_hash for node seeding).
+Reason To Change: DAG construction algorithm changes, wave computation strategy
+                  evolves, or new node instantiation requirements emerge.
 """
 from __future__ import annotations
 

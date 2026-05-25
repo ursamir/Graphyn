@@ -1,5 +1,16 @@
 # app/api/main.py
-"""Graphyn API — thin app factory.
+"""
+Bounded Context:  REST API Layer
+Responsibility:   FastAPI application factory. Wires auth, CORS, routers,
+                  static mounts, and domain serializer registration at startup.
+Owns:             App instance, auth dependency (_auth_dep), CORS middleware,
+                  router inclusion, static file mounts.
+Public Surface:   app (FastAPI instance) — imported by uvicorn entry point.
+Must NOT:         Contain endpoint logic — all routes live in app/api/routers/.
+Dependencies:     fastapi, app.api.routers.*, app.core.config,
+                  app.models.audio_artifact_serializer (startup hook).
+Reason To Change: New router added, CORS origins change, auth strategy changes,
+                  or new startup hook is required.
 
 All endpoint logic lives in routers under app/api/routers/.
 All routes are served under /api/v1/.
@@ -29,6 +40,13 @@ from app.api.routers.plugins import router as plugins_router
 from app.core.config import api_token, datasets_output_dir, datasets_input_dir, runs_dir
 
 _logger = logging.getLogger(__name__)
+
+# ── Domain serializer registration ───────────────────────────────────────────
+# Register the AudioSampleHandler so that artifact_store, pipeline_cache, and
+# checkpoint can serialize/deserialize AudioSample objects without importing
+# domain models themselves (ARCH-2 fix).
+from app.models.audio_artifact_serializer import register_audio_serializer as _reg_audio
+_reg_audio()
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 

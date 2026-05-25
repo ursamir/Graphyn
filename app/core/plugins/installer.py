@@ -1,25 +1,25 @@
+# app/core/plugins/installer.py
 """
-PluginInstaller — resolves a source string to a local plugin directory.
-
-Supports five source types:
-  1. Git repository  (``git+<url>`` or ``<url>.git``)
-  2. HTTP archive    (``http(s)://...zip`` / ``...tar.gz``)
-  3. Local directory (existing path containing ``plugin.toml``)
-  4. Local archive   (existing ``.zip`` / ``.tar.gz`` file)
-  5. Plugin index    (plain name, optionally with ``==`` / ``>=`` version)
-
-The caller (``PluginManager``) is responsible for moving the resolved
-directory to the final install location.  All temporary directories created
-here are cleaned up on both success and failure.
-
-Usage::
-
-    from app.core.plugins.installer import PluginInstaller
-
-    installer = PluginInstaller(index_client=my_index_client)
-    plugin_dir = installer.resolve("audio-denoiser==1.2.0")
-    # plugin_dir is a Path to a temp directory containing plugin.toml
-    # caller must move/copy it before it is cleaned up
+Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
+Responsibility:   Resolve a plugin source string to a local directory
+                  containing plugin.toml. Supports git URLs, HTTP archives,
+                  local paths/archives, and plugin index lookups.
+Owns:             Source routing logic, git clone, HTTP download, archive
+                  extraction, manifest directory search, checksum verification,
+                  and remote source allowlist enforcement.
+Public Surface:   PluginInstaller.resolve(source, version_constraint, expected_sha256)
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not register node types or touch the registry.
+Dependencies:     stdlib (hashlib, io, re, shutil, subprocess, tarfile,
+                  tempfile, zipfile), httpx, app.core.plugins.errors,
+                  app.core.config (plugin_allowed_sources — lazy import).
+Security:         Remote sources validated against GRAPHYN_PLUGIN_ALLOWED_SOURCES
+                  allowlist before any network request (SEC-6 fix).
+                  HTTP archives optionally verified via SHA-256 checksum.
+                  Archive extraction uses is_relative_to() path traversal guard.
+                  Git clone uses "--" separator to prevent flag injection (G4-23).
+Reason To Change: New source type added, allowlist logic changes, or archive
+                  format support extended.
 """
 
 from __future__ import annotations
@@ -77,6 +77,7 @@ class PluginInstaller:
         self,
         source: str,
         version_constraint: str | None = None,
+        expected_sha256: str | None = None,
     ) -> Path:
         """Resolve *source* to a local directory containing ``plugin.toml``.
 
@@ -97,6 +98,11 @@ class PluginInstaller:
         version_constraint:
             Optional PEP 440 version constraint string (e.g. ``">=1.0"``).
             Only used for index lookups; ignored for URL / path sources.
+        expected_sha256:
+            Optional expected SHA-256 hex digest of the downloaded archive.
+            When provided for HTTP archive sources, the digest is verified
+            before extraction and ``PluginInstallError`` is raised on mismatch.
+            Ignored for local path and git sources (SEC-6 fix).
 
         Returns
         -------
@@ -108,8 +114,13 @@ class PluginInstaller:
         Raises
         ------
         PluginInstallError
-            On any fetch, clone, extraction, or validation failure.
+            On any fetch, clone, extraction, validation, or allowlist failure.
         """
+        # SEC-6 fix: validate remote sources against the allowlist before
+        # fetching any content.  Local path sources are never restricted.
+        if source.startswith(("git+", "http://", "https://")):
+            self._check_allowed_source(source)
+
         # --- 1. Git source ---
         if source.startswith("git+") or source.endswith(".git"):
             return self._resolve_git(source)
@@ -117,7 +128,7 @@ class PluginInstaller:
         # --- 2. HTTP archive ---
         if source.startswith(("http://", "https://")):
             if source.endswith(".zip") or source.endswith(".tar.gz"):
-                return self._resolve_http_archive(source)
+                return self._resolve_http_archive(source, expected_sha256=expected_sha256)
             # Non-archive HTTP URL: treat as git URL (e.g. bare GitHub URL)
             return self._resolve_git(source)
 
@@ -143,6 +154,41 @@ class PluginInstaller:
     # ------------------------------------------------------------------
     # Resolver implementations (Task 9.2)
     # ------------------------------------------------------------------
+
+    def _check_allowed_source(self, source: str) -> None:
+        """Raise PluginInstallError if *source* is not on the allowlist.
+
+        The allowlist is read from ``GRAPHYN_PLUGIN_ALLOWED_SOURCES`` via
+        ``app.core.config.plugin_allowed_sources()``.  When the list is empty
+        (the default), all sources are permitted.
+
+        Parameters
+        ----------
+        source:
+            Remote source string to validate.
+
+        Raises
+        ------
+        PluginInstallError
+            When the allowlist is non-empty and *source* does not start with
+            any of the listed prefixes.
+        """
+        from app.core.config import plugin_allowed_sources as _allowed_sources  # noqa: PLC0415
+
+        allowed = _allowed_sources()
+        if not allowed:
+            return  # allowlist not configured — permit all (backward compat)
+
+        for prefix in allowed:
+            if source.startswith(prefix):
+                return
+
+        raise PluginInstallError(
+            f"Plugin source {source!r} is not in the allowed sources list. "
+            f"Set GRAPHYN_PLUGIN_ALLOWED_SOURCES to include this prefix, "
+            f"or leave it unset to allow all sources. "
+            f"Current allowed prefixes: {allowed}"
+        )
 
     def _resolve_git(self, url: str) -> Path:
         """Clone *url* with ``git clone --depth 1`` and return the manifest dir."""
@@ -179,15 +225,21 @@ class PluginInstaller:
                 f"Unexpected error cloning {url!r}: {exc}"
             ) from exc
 
-    def _resolve_http_archive(self, url: str) -> Path:
+    def _resolve_http_archive(self, url: str, expected_sha256: str | None = None) -> Path:
         """Download an HTTP archive and extract it to a temporary directory.
 
         Enforces a ``_MAX_DOWNLOAD_BYTES`` size limit to prevent DoS via
         oversized archives (PL-09 fix).
+
+        When *expected_sha256* is provided, the downloaded bytes are verified
+        against the digest before extraction.  A mismatch raises
+        ``PluginInstallError`` (SEC-6 fix).
         """
         tmpdir = Path(tempfile.mkdtemp(prefix="kiro_plugin_http_"))
         try:
             data = self._download_with_limit(url)
+            if expected_sha256:
+                self._verify_checksum(data, f"sha256:{expected_sha256}")
             extracted = self._extract_archive_bytes(data, url, tmpdir)
             return self._find_manifest_dir(extracted)
         except PluginInstallError:

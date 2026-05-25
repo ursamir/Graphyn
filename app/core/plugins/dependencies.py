@@ -1,18 +1,22 @@
+# app/core/plugins/dependencies.py
 """
-Dependency checker for the plugin ecosystem (Phase 5).
+Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
+Responsibility:   Verify that all PEP 508 dependency strings declared in a
+                  plugin manifest are satisfied by the current Python
+                  environment. Optionally auto-install missing packages.
+Owns:             DependencyChecker.check(), _parse_requirements(),
+                  _find_unsatisfied(), _auto_install().
+Public Surface:   DependencyChecker.check(dependencies: list[str])
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not register node types or touch the registry.
+Dependencies:     packaging, importlib.metadata, subprocess, stdlib,
+                  app.core.plugins.errors, app.core.config (plugin_auto_install
+                  — lazy import).
+Reason To Change: Dependency resolution strategy changes, or auto-install
+                  mechanism is replaced (e.g. uv instead of pip).
 
-``DependencyChecker.check()`` validates that all PEP 508 dependency strings
-declared in a plugin manifest are satisfied by the current Python environment.
-
-Optional auto-install mode (``GRAPHYN_PLUGIN_AUTO_INSTALL=1``) installs missing
-packages via ``pip`` before raising an error.
-
-Usage::
-
-    from app.core.plugins.dependencies import DependencyChecker
-
-    checker = DependencyChecker()
-    checker.check(manifest.dependencies)   # raises on failure
+Optional auto-install mode (``GRAPHYN_PLUGIN_AUTO_INSTALL=1``) installs
+missing packages via ``pip`` before raising an error.
 """
 
 from __future__ import annotations

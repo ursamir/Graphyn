@@ -1,5 +1,18 @@
 # app/core/nodes/retry.py
-"""RetryPolicy for the Enhanced Node System."""
+"""
+Bounded Context:  BC2 — Node Contract
+Responsibility:   Exponential back-off retry configuration for nodes.
+                  Defines the wait schedule between execution attempts.
+Owns:             RetryPolicy Pydantic model and wait_before_attempt().
+Public Surface:   RetryPolicy — declare as ``retry_policy: ClassVar[RetryPolicy]``
+                  on a Node subclass to override the default (max_attempts=1,
+                  no retry).
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not contain execution logic — only configuration.
+Dependencies:     pydantic.
+Reason To Change: Retry strategy changes (e.g. jitter, max_wait_seconds added),
+                  or new back-off algorithms are supported.
+"""
 from __future__ import annotations
 
 from pydantic import BaseModel, field_validator

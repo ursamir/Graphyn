@@ -1,15 +1,24 @@
 # app/core/pipeline.py
-"""Backward-compatibility shim for the pipeline module.
+"""
+Bounded Context:  BC5 — Execution Runtime (re-export shim)
+Responsibility:   Backward-compatibility shim. Re-exports all public names
+                  from the focused modules that replaced the original god module.
+Owns:             Re-export declarations only — no implementation.
+Public Surface:   All names previously importable from app.core.pipeline
+                  (NodeSpec, EdgeSpec, PipelineConfig, NodeExecutor,
+                  run_pipeline_ir, run_pipeline_ir_async, RunManager, etc.)
+Must NOT:         Contain any implementation logic. Must not be the canonical
+                  import path for new code — import from the focused modules.
+Dependencies:     app.core.planner, app.core.node_executor, app.core.checkpoint,
+                  app.core.orchestrator, app.core.run_journal, app.core.utils.
+Reason To Change: A re-exported name is removed or renamed in its source module.
 
 All implementation has been extracted into focused modules:
-  - app.core.planner       — PipelineGraph, NodeSpec, EdgeSpec, PipelineConfig,
-                             _ir_to_pipeline_config, _parse_pipeline_config
+  - app.core.planner       — PipelineGraph, NodeSpec, EdgeSpec, PipelineConfig
   - app.core.node_executor — NodeExecutor, _count_port_items
   - app.core.checkpoint    — _write_checkpoint, _load_checkpoint_outputs
-  - app.core.orchestrator  — run_pipeline_ir_async, run_pipeline_ir,
-                             _resolve_capability, _collect_stream
-
-All public names are re-exported here so existing imports continue to work.
+  - app.core.orchestrator  — run_pipeline_ir_async, run_pipeline_ir
+  - app.core.utils         — collect_stream (re-exported as _collect_stream)
 """
 from __future__ import annotations
 
@@ -40,8 +49,11 @@ from app.core.orchestrator import (
     run_pipeline_ir_async,
     run_pipeline_ir,
     _resolve_capability,
-    _collect_stream,
 )
+
+# SA-O5: _collect_stream was extracted to app.core.utils.collect_stream.
+# Re-export under the old private name for any legacy callers.
+from app.core.utils import collect_stream as _collect_stream
 
 # ── ResumeError (lives in errors.py, re-exported here for legacy imports) ─────
 from app.core.nodes.errors import ResumeError

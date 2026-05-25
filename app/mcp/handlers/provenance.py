@@ -1,7 +1,19 @@
 # app/mcp/handlers/provenance.py
-"""MCP tool handlers for provenance and artifact operations.
-
-Req 6 §1, §2, §3
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   list_artifacts, get_artifact_lineage, replay_run tool handlers.
+                  Thin delegation to ArtifactStore, ProvenanceStore, and the
+                  pipeline executor.
+Owns:             list_artifacts_handler, get_artifact_lineage_handler,
+                  replay_run_handler and their SCHEMA/DESCRIPTION constants,
+                  _REPLAY_EXECUTOR (module-level shared ThreadPoolExecutor).
+Public Surface:   All three handler functions above.
+Must NOT:         Contain artifact storage logic — delegates to ArtifactStore
+                  and ProvenanceStore. Must not import from app.domain.
+Dependencies:     BC5 (orchestrator — module-level import), BC6 (artifact_store,
+                  provenance, run_journal — lazy), BC1 (ir.loader — lazy),
+                  app.core.config (runs_dir — lazy), stdlib (concurrent.futures).
+Reason To Change: Provenance tool schemas change, or replay strategy changes.
 """
 from __future__ import annotations
 

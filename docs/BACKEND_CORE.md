@@ -183,6 +183,38 @@ See [PIPELINE_EXECUTION.md](./PIPELINE_EXECUTION.md#pipelinecache) for full deta
 
 ---
 
+## `ArtifactSerializerRegistry`
+
+**File:** `app/core/artifact_serializer.py`
+
+Pluggable serializer registry that decouples platform storage infrastructure from domain-specific serialization logic (ARCH-2 fix). Platform code calls the registry; domain code registers handlers at startup.
+
+```python
+# Domain registration — call once at each entry point startup
+from app.models.audio_artifact_serializer import register_audio_serializer
+register_audio_serializer()
+
+# Registry access (used internally by artifact_store, pipeline_cache, checkpoint)
+from app.core.artifact_serializer import get_serializer_registry
+registry = get_serializer_registry()
+handler = registry.get("audio_samples")   # None if not registered
+```
+
+**`ArtifactTypeHandler` ABC** — implement to add a new serializable type:
+
+| Method | Description |
+|---|---|
+| `serialize(data, dest_dir)` | Write data to dest_dir (guaranteed to exist) |
+| `deserialize(src_dir) → Any \| None` | Read data from src_dir; return None on miss |
+| `compute_content_hash_input(data) → str` | Stable string for SHA-256 deduplication |
+| `infer_type(value) → str \| None` | Return artifact_type string if value matches; None otherwise |
+
+**`AudioSampleHandler`** (`app/models/audio_artifact_serializer.py`) — domain-side implementation for `audio_samples`. Owns WAV I/O (soundfile), manifest.json format, and AudioSample construction. Registered via `register_audio_serializer()`.
+
+**Fail-open design:** if no handler is registered for a type, `artifact_store` falls back to JSON serialization; `pipeline_cache` and `checkpoint` log a warning and treat it as a miss (node re-executes).
+
+---
+
 ## `ProjectManager`
 
 **File:** `app/core/project_manager.py`

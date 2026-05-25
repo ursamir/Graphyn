@@ -1,5 +1,15 @@
 # app/core/nodes/metadata.py
-"""NodeMetadata — describes a node's identity, ports, and display properties."""
+"""
+Bounded Context:  BC2 — Node Contract
+Responsibility:   Define NodeMetadata — the identity, capability, and port
+                  descriptor envelope for a registered node type.
+Owns:             NodeMetadata (Pydantic model with all capability fields).
+Public Surface:   NodeMetadata.
+Must NOT:         Import from app.domain, app.api, or any BC3/BC4/BC5/BC6 module.
+Dependencies:     pydantic, stdlib (re, typing).
+Reason To Change: New capability fields are added to the node contract, or
+                  metadata validation rules change.
+"""
 from __future__ import annotations
 
 from typing import Any

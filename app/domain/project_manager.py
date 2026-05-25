@@ -1,7 +1,18 @@
+# app/domain/project_manager.py
 """
-ProjectManager — central service for all project-level operations.
-
-Operates on workspace/datasets/output/{project}/.
+Bounded Context:  Domain — Project Management
+Responsibility:   Full project lifecycle for audio dataset projects stored
+                  under workspace/datasets/output/{project}/.
+Owns:             ProjectManager class — create, get, update, delete, clone,
+                  list versions, taxonomy, contract, spec, annotations,
+                  quality reports, snapshots, curation decisions.
+Public Surface:   ProjectManager (all methods)
+Must NOT:         Import from app.core.nodes, app.core.orchestrator, or
+                  app.core.executor. Must not register node types.
+Dependencies:     app.core.config (datasets_output_dir), stdlib (csv,
+                  datetime, hashlib, io, json, pathlib, shutil, uuid).
+Reason To Change: Project schema changes, new project-level operation added,
+                  or storage layout changes.
 """
 
 from __future__ import annotations

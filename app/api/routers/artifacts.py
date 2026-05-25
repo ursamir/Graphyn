@@ -1,13 +1,17 @@
-from __future__ import annotations
-
 # app/api/routers/artifacts.py
-"""Artifacts API — /api/v1/artifacts endpoints.
-
-Provides artifact discovery, lineage, and replay endpoints.
-All data access is delegated to ArtifactStore and ProvenanceStore.
-
-Requirements: req-05 §1
 """
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for artifact discovery, lineage, and replay.
+Owns:             Route definitions for GET /artifacts, GET /artifacts/{id},
+                  GET /artifacts/{id}/lineage, POST /artifacts/{id}/replay.
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain artifact storage logic — delegate to ArtifactStore
+                  and ProvenanceStore.
+Dependencies:     fastapi, app.core.artifact_store, app.core.provenance,
+                  app.core.run_journal, app.core.orchestrator.
+Reason To Change: New artifact endpoint added, or replay behaviour changes.
+"""
+from __future__ import annotations
 
 import re
 from concurrent.futures import ThreadPoolExecutor

@@ -1,11 +1,18 @@
-from __future__ import annotations
-
-"""ProvenanceStore — artifact lineage tracking (Phase 4).
-
-This module defines:
-- ProvenanceRecord: immutable Pydantic model for provenance metadata
-- ProvenanceStore: stores and queries provenance records (see req-02)
+# app/core/provenance.py
 """
+Bounded Context:  BC6 — Observability & Storage
+Responsibility:   Artifact lineage tracking. Records which node/run produced
+                  each artifact and what inputs it consumed.
+Owns:             ProvenanceRecord (immutable model), ProvenanceStore (lineage
+                  storage with by_run and by_graph_hash secondary indexes).
+Public Surface:   ProvenanceStore.record(), .get_lineage(), .find_by_run(),
+                  .find_reproducible(); ProvenanceRecord.
+Must NOT:         Import from app.domain, app.api, or any execution module.
+Dependencies:     stdlib, pydantic, app.core.config (provenance_dir).
+Reason To Change: Provenance schema evolves, new index strategies are added,
+                  or lineage query API changes.
+"""
+from __future__ import annotations
 
 import json
 import logging

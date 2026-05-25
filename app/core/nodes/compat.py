@@ -1,5 +1,17 @@
 # app/core/nodes/compat.py
-"""CompatibilityChecker and JSON Schema helpers for the Enhanced Node System."""
+"""
+Bounded Context:  BC2 — Node Contract
+Responsibility:   Port type compatibility checking and JSON Schema conversion
+                  for port data types.
+Owns:             CompatibilityChecker (static methods), _type_to_schema(),
+                  type_to_schema (public alias).
+Public Surface:   CompatibilityChecker.are_compatible(), .check_connection();
+                  type_to_schema(t) -> dict | None.
+Must NOT:         Import from app.domain, app.api, or any BC3/BC4/BC5/BC6 module.
+Dependencies:     BC2 (nodes.errors), pydantic, stdlib (types, typing).
+Reason To Change: New type compatibility rules are needed (e.g. covariance
+                  policy changes), or JSON Schema output format evolves.
+"""
 from __future__ import annotations
 
 import types

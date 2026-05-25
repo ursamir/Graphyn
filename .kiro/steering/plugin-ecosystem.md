@@ -72,3 +72,4 @@ PluginError
 | `GRAPHYN_PLUGIN_AUTO_INSTALL` | `""` | `"1"` or `"true"` to auto-install pip deps |
 | `GRAPHYN_PLUGIN_INDEX_URL` | `""` | Remote index URL |
 | `GRAPHYN_HOME` | `~/.graphyn/` | `PluginStore` writes to `{GRAPHYN_HOME}/plugins/` |
+| `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | `""` | Comma-separated URL prefixes; empty = allow all. When set, remote sources not matching any prefix are rejected with `PluginInstallError` (SEC-6 fix) |

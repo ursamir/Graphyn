@@ -1,8 +1,20 @@
 # app/api/routers/plugins.py
-"""Plugins API — /api/v1/plugins endpoints.
-
-Provides plugin lifecycle management over HTTP. All operations delegate to
-PluginManager and PluginIndexClient.
+"""
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for plugin lifecycle management.
+                  All logic delegates to PluginManager and PluginIndexClient.
+Owns:             Route definitions, request/response models, error mapping,
+                  remote-vs-local source detection, background task dispatch.
+Public Surface:   GET/POST/DELETE /api/v1/plugins/* endpoints
+Must NOT:         Contain plugin business logic — delegate to PluginManager.
+                  Must not import PluginLoader, PluginStore, or PluginInstaller
+                  directly.
+Dependencies:     fastapi, app.core.plugins.{manager, index, errors}.
+Security:         InstallRequest.expected_sha256 forwarded to PluginManager
+                  for HTTP archive checksum verification (SEC-6 fix).
+                  Source allowlist enforced inside PluginInstaller — rejected
+                  sources surface as PluginInstallError → HTTP 502.
+Reason To Change: New plugin endpoint added, or install request schema changes.
 
 Requirements: req-07 §8.1–§8.10
 """
@@ -94,6 +106,14 @@ def _plugin_http_error(exc: Exception) -> HTTPException:
 class InstallRequest(BaseModel):
     source: str
     upgrade: bool = False
+    expected_sha256: str | None = None
+    """Optional SHA-256 hex digest of the downloaded archive.
+
+    When provided for HTTP archive sources (``http://`` / ``https://`` ending
+    in ``.zip`` or ``.tar.gz``), the digest is verified before extraction.
+    A mismatch causes the install to fail with HTTP 502.  Ignored for local
+    path and git sources (SEC-6 fix).
+    """
 
 
 # ── GET /plugins ──────────────────────────────────────────────────────────────
@@ -151,12 +171,16 @@ def install_plugin(
     - **Local sources**: install runs synchronously; returns
       ``{"name": ..., "version": ..., "status": "installed"}``.
 
+    When ``GRAPHYN_PLUGIN_ALLOWED_SOURCES`` is set, remote sources not
+    matching any listed prefix are rejected with HTTP 502 (SEC-6 fix).
+
     Requirements: req-07 §8.3, §8.10
     """
     from app.core.plugins.manager import PluginManager
 
     source = body.source
     upgrade = body.upgrade
+    expected_sha256 = body.expected_sha256
 
     if _is_remote_source(source):
         # Async path — return immediately, install in background
@@ -165,7 +189,7 @@ def install_plugin(
         def _bg_install() -> None:
             try:
                 mgr = PluginManager()
-                mgr.install(source, upgrade=upgrade)
+                mgr.install(source, upgrade=upgrade, expected_sha256=expected_sha256)
                 log.info("Background install of '%s' completed.", parsed_name)
             except Exception as exc:
                 log.error(
@@ -181,7 +205,7 @@ def install_plugin(
     # Synchronous path — local source
     manager = PluginManager()
     try:
-        record = manager.install(source, upgrade=upgrade)
+        record = manager.install(source, upgrade=upgrade, expected_sha256=expected_sha256)
     except (
         PluginNotFoundError,
         PluginAlreadyInstalledError,

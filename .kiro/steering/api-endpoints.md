@@ -123,7 +123,7 @@ Error responses use `{"error": "<ErrorClassName>", "detail": "<message>"}`. Remo
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/v1/plugins` | List all installed plugins → JSON array of `PluginRecord` |
-| POST | `/api/v1/plugins/install` | Body: `{"source": str, "upgrade": bool}` → sync: `{"name", "version", "status": "installed"}` / async: `{"status": "installing", "name": "..."}` |
+| POST | `/api/v1/plugins/install` | Body: `{"source": str, "upgrade": bool, "expected_sha256": str|null}` → sync: `{"name", "version", "status": "installed"}` / async: `{"status": "installing", "name": "..."}` |
 | GET | `/api/v1/plugins/search` | `?q=<query>` → JSON array of index entries |
 | GET | `/api/v1/plugins/{name}` | Full `PluginRecord` for installed plugin; 404 if not found |
 | POST | `/api/v1/plugins/{name}/enable` | Enable plugin → `{"name": ..., "enabled": true}`; 404 if not found |

@@ -1,5 +1,16 @@
 # app/core/nodes/errors.py
-"""Custom exception hierarchy for the Enhanced Node System."""
+"""
+Bounded Context:  BC2 — Node Contract  (shared with BC3, BC4, BC5)
+Responsibility:   Define the exception hierarchy for the node system. All node
+                  and pipeline errors derive from NodeSystemError.
+Owns:             NodeSystemError, NodeNotFoundError, DuplicateNodeTypeError,
+                  NodeMetadataError, NodeTypeError, PortTypeNotFoundError,
+                  DuplicatePortTypeError, PipelineGraphError, ResumeError.
+Public Surface:   All exception classes above.
+Must NOT:         Import from any other app module. Pure stdlib only.
+Dependencies:     stdlib only.
+Reason To Change: New error categories are needed in the node/pipeline system.
+"""
 from __future__ import annotations
 
 

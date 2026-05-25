@@ -1,8 +1,19 @@
-"""Migration utility — converts YAML pipeline configs to IR JSON files.
+# app/core/ir/migrate.py
+"""
+Bounded Context:  BC1 — Graph Language
+Responsibility:   CLI-facing migration utility. Converts YAML pipeline config
+                  files to IR JSON files on disk.
+Owns:             migrate_yaml_to_ir_file() — reads YAML, converts via
+                  yaml_shim, writes .graph.json.
+Public Surface:   migrate_yaml_to_ir_file(yaml_path, output_path) → str
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not emit DeprecationWarning — this is the migration
+                  tool itself, not a deprecated call site.
+Dependencies:     app.core.ir.{yaml_shim, loader}, yaml, stdlib (pathlib).
+Reason To Change: Output format changes, or new migration source formats
+                  (e.g. JSON v0 → v1) are added.
 
-No DeprecationWarning is emitted here. This is the migration tool itself.
-
-Req 4.4
+No DeprecationWarning is emitted here. Req 4.4
 """
 from __future__ import annotations
 

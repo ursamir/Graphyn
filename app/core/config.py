@@ -1,17 +1,32 @@
 # app/core/config.py
 """
-Graphyn — centralised path and environment variable resolution.
-
-All platform code reads paths from this module. Never read env vars directly.
+Bounded Context:  Platform Infrastructure (shared by all BCs)
+Responsibility:   Centralised path and environment variable resolution.
+                  Single source of truth for all filesystem paths and
+                  environment-driven configuration.
+Owns:             All path accessor functions (graphyn_home, plugins_home,
+                  project_dir, runs_dir, artifacts_dir, cache_dir,
+                  provenance_dir, datasets_input_dir, datasets_output_dir,
+                  webhooks_path) and api_token(), redis_url(),
+                  plugin_allowed_sources().
+Public Surface:   All functions above.
+Must NOT:         Import from any other app module. Pure stdlib only.
+                  Must never cache env var reads at module level (token
+                  rotation must take effect without process restart).
+Dependencies:     stdlib (os, pathlib).
+Reason To Change: New environment variables are added, directory layout
+                  changes, or the three-tier model is restructured.
 
 ## Environment variables
 
-  GRAPHYN_HOME               Default: ~/.graphyn/
-  GRAPHYN_PROJECT_DIR        Default: workspace/
-  GRAPHYN_API_TOKEN          Default: "" (no auth)
-  GRAPHYN_PLUGINS_DIR        Default: plugins/
-  GRAPHYN_PLUGIN_AUTO_INSTALL Default: "" (disabled)
-  GRAPHYN_PLUGIN_INDEX_URL   Default: "" (no remote index)
+  GRAPHYN_HOME                    Default: ~/.graphyn/
+  GRAPHYN_PROJECT_DIR             Default: workspace/
+  GRAPHYN_API_TOKEN               Default: "" (no auth)
+  GRAPHYN_PLUGINS_DIR             Default: plugins/
+  GRAPHYN_PLUGIN_AUTO_INSTALL     Default: "" (disabled)
+  GRAPHYN_PLUGIN_INDEX_URL        Default: "" (no remote index)
+  GRAPHYN_PLUGIN_ALLOWED_SOURCES  Default: "" (all sources allowed)
+  GRAPHYN_REDIS_URL               Default: "" (use in-process store)
 
 ## Three-tier directory model
 
@@ -107,6 +122,25 @@ def plugin_auto_install() -> bool:
     return _env("GRAPHYN_PLUGIN_AUTO_INSTALL").lower() in ("1", "true")
 
 
+def plugin_allowed_sources() -> list[str]:
+    """Return the list of allowed plugin source URL prefixes.
+
+    Override: GRAPHYN_PLUGIN_ALLOWED_SOURCES env var — comma-separated URL
+    prefixes (e.g. ``"https://plugins.example.com/,git+https://github.com/myorg/"``).
+
+    When the env var is unset or empty, all sources are allowed (backward
+    compatible default). When set, ``PluginInstaller.resolve()`` rejects any
+    remote source that does not start with one of the listed prefixes.
+
+    Local path sources (no ``git+``, ``http://``, ``https://`` prefix) are
+    never subject to the allowlist — they are always permitted.
+    """
+    raw = _env("GRAPHYN_PLUGIN_ALLOWED_SOURCES")
+    if not raw:
+        return []
+    return [prefix.strip() for prefix in raw.split(",") if prefix.strip()]
+
+
 # ---------------------------------------------------------------------------
 # Tier 2 — Project directory  (runs, artifacts, datasets, provenance)
 # ---------------------------------------------------------------------------
@@ -170,3 +204,13 @@ def api_token() -> str:
     Empty string means no authentication required.
     """
     return _env("GRAPHYN_API_TOKEN")
+
+
+def redis_url() -> str:
+    """Return the Redis connection URL, or empty string if not configured.
+
+    Override: GRAPHYN_REDIS_URL env var (e.g. ``"redis://localhost:6379/0"``).
+    Empty string means use the in-process (dict-backed) store — backward
+    compatible default for single-worker deployments.
+    """
+    return _env("GRAPHYN_REDIS_URL")

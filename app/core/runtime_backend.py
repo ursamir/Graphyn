@@ -1,12 +1,20 @@
 # app/core/runtime_backend.py
-"""RuntimeBackend — pluggable execution backend abstraction (V1.md §7.2).
-
-Defines the interface that all execution backends must implement.
-The default ``LocalPythonBackend`` wraps the existing ``run_pipeline_ir``
-function and is used by all current interfaces (SDK, CLI, REST, MCP).
-
-Future backends (Docker, Kubernetes, edge, GPU, WASM) implement this
-interface without touching the core executor.
+"""
+Bounded Context:  BC5 — Execution Runtime
+Responsibility:   Pluggable execution backend abstraction. Defines the interface
+                  all backends must implement and provides the default local backend.
+Owns:             RuntimeBackend (ABC), LocalPythonBackend, backend registry
+                  (_BACKEND_REGISTRY, _BACKEND_INSTANCES), register_backend(),
+                  get_backend(), list_backends().
+Public Surface:   RuntimeBackend, LocalPythonBackend, get_backend(),
+                  register_backend(), list_backends()
+Must NOT:         Import from app.domain or app.api at module level.
+                  LocalPythonBackend imports orchestrator lazily inside execute()
+                  to avoid circular imports.
+Dependencies:     BC1 (ir.models — TYPE_CHECKING only), BC6 (run_journal —
+                  TYPE_CHECKING only), stdlib (abc, threading).
+Reason To Change: New execution backends are added (Docker, K8s, edge),
+                  or the backend lifecycle protocol changes.
 
 Usage::
 

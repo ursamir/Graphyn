@@ -1,14 +1,24 @@
+# app/core/plugins/manager.py
 """
-PluginManager — orchestrates all plugin lifecycle operations.
-
-This is the single entry point for CLI, REST API, and SDK plugin operations.
-It delegates to:
-  - ``PluginInstaller``  — resolve source strings to local directories
-  - ``PluginLoader``     — validate manifests, check compat/deps, register nodes
-  - ``PluginStore``      — persist ``PluginRecord`` objects on disk
-  - ``PluginIndexClient`` — browse/search the plugin index
-
-Requirements: req-03 §4.3, §4.6, §4.9
+Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
+Responsibility:   Orchestrate all plugin lifecycle operations — install,
+                  uninstall, enable, disable, startup loading.
+Owns:             Install workflow (resolve → manifest → copy → load → persist),
+                  uninstall workflow (unload → delete record → remove dir),
+                  enable/disable (registry reload/unload), startup loading.
+Public Surface:   PluginManager.install(), uninstall(), enable(), disable(),
+                  list_installed(), get(), load_enabled_plugins()
+Must NOT:         Import from app.domain or app.api.
+                  Must not call PluginLoader, PluginStore, or PluginInstaller
+                  directly from outside this package.
+Dependencies:     app.core.plugins.{installer, loader, store, index, manifest,
+                  errors}, app.core.config (plugins_home — lazy import),
+                  stdlib (logging, os, shutil, datetime).
+Security:         install() forwards expected_sha256 to PluginInstaller.resolve()
+                  for HTTP archive checksum verification (SEC-6 fix).
+                  Source allowlist enforced inside PluginInstaller.
+Reason To Change: Plugin lifecycle steps change, or new install source types
+                  are added.
 """
 
 from __future__ import annotations
@@ -73,7 +83,7 @@ class PluginManager:
     # install
     # ------------------------------------------------------------------
 
-    def install(self, source: str, upgrade: bool = False) -> PluginRecord:
+    def install(self, source: str, upgrade: bool = False, expected_sha256: str | None = None) -> PluginRecord:
         """Install a plugin from *source*.
 
         Steps:
@@ -99,6 +109,11 @@ class PluginManager:
             or plain plugin name (optionally with version specifier).
         upgrade:
             When ``True``, replace an existing installation with the same name.
+        expected_sha256:
+            Optional expected SHA-256 hex digest of the downloaded archive.
+            When provided for HTTP archive sources, the digest is verified
+            before extraction (SEC-6 fix).  Ignored for local path and git
+            sources.
 
         Returns
         -------
@@ -117,7 +132,8 @@ class PluginManager:
         PluginDependencyError
             If one or more declared Python dependencies are not satisfied.
         PluginInstallError
-            If the source cannot be fetched or extracted.
+            If the source cannot be fetched, extracted, or is not on the
+            allowlist (when ``GRAPHYN_PLUGIN_ALLOWED_SOURCES`` is set).
         """
         # Step 1 — parse name from source (best-effort; authoritative name comes from manifest)
         _pre_name, _ver = self._installer._parse_name_version(source)
@@ -142,7 +158,7 @@ class PluginManager:
             self.uninstall(_pre_name)
 
         # Step 4 — resolve source to a temp directory
-        resolved_dir: Path = self._installer.resolve(source)
+        resolved_dir: Path = self._installer.resolve(source, expected_sha256=expected_sha256)
         # The resolved_dir lives inside a tmpdir created by the installer.
         # We must clean it up after copying to the final install location (PL-07 fix).
         resolved_tmpdir: Path = resolved_dir.parent

@@ -1,5 +1,20 @@
 # app/api/routers/runs.py
-"""Runs API — /api/v1/runs endpoints."""
+"""
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for run history, status, checkpoints,
+                  artifacts, and provenance.
+Owns:             Route definitions for GET /runs, GET /runs/{run_id},
+                  GET /runs/{run_id}/status,
+                  GET /runs/{run_id}/checkpoints/**,
+                  GET /runs/{run_id}/artifacts,
+                  GET /runs/{run_id}/provenance.
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain run persistence logic — delegate to RunJournal,
+                  ArtifactStore, and ProvenanceStore.
+Dependencies:     fastapi, app.core.run_journal, app.core.artifact_store,
+                  app.core.config, stdlib (json, pathlib).
+Reason To Change: New run history endpoint added, or response schema changes.
+"""
 from __future__ import annotations
 
 import json

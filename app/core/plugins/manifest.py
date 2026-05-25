@@ -1,16 +1,20 @@
+# app/core/plugins/manifest.py
 """
-Plugin manifest model and parser for the plugin ecosystem (Phase 5).
+Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
+Responsibility:   Parse and validate plugin manifest files (plugin.toml /
+                  plugin.json) into a typed PluginManifest model.
+Owns:             PluginManifest Pydantic model, load_manifest(), all field
+                  validators, TOML/JSON parsers, _rewrap_validation_error().
+Public Surface:   PluginManifest, load_manifest(plugin_dir) → PluginManifest
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not execute plugin code or touch the registry.
+Dependencies:     pydantic, packaging, stdlib (json, re, sys, pathlib),
+                  tomllib (3.11+) or tomli (3.10), app.core.plugins.errors.
+Reason To Change: Manifest schema gains new fields, or a new manifest format
+                  (e.g. plugin.json v2) is added.
 
 Supports ``plugin.toml`` (preferred) and ``plugin.json`` manifest files.
 Both formats are parsed into a validated ``PluginManifest`` Pydantic model.
-
-Usage::
-
-    from pathlib import Path
-    from app.core.plugins.manifest import load_manifest
-
-    manifest = load_manifest(Path("/path/to/my-plugin"))
-    print(manifest.name, manifest.version)
 """
 
 from __future__ import annotations

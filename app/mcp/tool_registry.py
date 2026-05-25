@@ -1,7 +1,13 @@
 # app/mcp/tool_registry.py
-"""Registers all MCP tools on the server instance.
-
-Req 1.1, 1.2, 1.7
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   Register all MCP tools on the server instance at startup.
+                  Single place that wires handler functions to tool names.
+Owns:             register_all_tools() — imports all handlers and calls register().
+Public Surface:   register_all_tools(register_fn)
+Must NOT:         Contain handler logic. Must not import from app.domain.
+Dependencies:     app.mcp.handlers.* (all handler modules).
+Reason To Change: A new MCP tool is added or removed, or a handler is renamed.
 """
 from __future__ import annotations
 

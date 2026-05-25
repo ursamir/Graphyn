@@ -1,5 +1,20 @@
 # app/api/routers/system.py
-"""System API — health, cleanup, webhooks, and projects-registry endpoints."""
+"""
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for system health, cleanup, webhook
+                  configuration, and projects registry.
+Owns:             Route definitions for GET /system/health,
+                  POST /system/cleanup,
+                  GET/PUT /system/webhooks,
+                  POST /system/webhooks/test,
+                  GET /system/projects-registry.
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain cleanup or webhook logic — delegate to ArtifactStore,
+                  WebhookService, and ProjectManager.
+Dependencies:     fastapi, app.core.{artifact_store, webhook, config},
+                  app.domain.project_manager, stdlib (shutil, datetime).
+Reason To Change: New system endpoint added, or cleanup policy changes.
+"""
 from __future__ import annotations
 
 import shutil

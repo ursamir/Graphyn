@@ -1,8 +1,16 @@
 # app/core/validation.py
-"""Pipeline and node config validation using the Enhanced Node System.
-
-All validation uses registry.get_class() + Config.model_validate() directly.
-No dict-style registry access (registry[node_type]) anywhere in this module.
+"""
+Bounded Context:  Application Layer — Validation
+Responsibility:   Validate pipeline config dicts (YAML-derived or API-supplied)
+                  against the node registry. Used by the REST API and CLI.
+Owns:             validate_pipeline(), _validate_dag_edges(),
+                  _validate_connections().
+Public Surface:   validate_pipeline(config, registry) -> list[dict]
+Must NOT:         Import from app.domain or app.api. Must not execute nodes.
+Dependencies:     BC2 (nodes.compat, nodes.errors — lazy), BC3 (registry —
+                  passed as argument), pydantic.
+Reason To Change: Validation rules evolve (new edge constraints, new config
+                  requirements), or the pipeline config schema changes.
 """
 from __future__ import annotations
 

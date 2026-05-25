@@ -1,5 +1,15 @@
 # app/models/data_sample.py
-"""DataSample — domain-agnostic base type for pipeline data.
+"""
+Bounded Context:  Domain — Data Types
+Responsibility:   Domain-agnostic base type for pipeline data samples.
+                  Subclass for new domains (TextSample, ImageSample, etc.).
+Owns:             DataSample Pydantic model — id, source, metadata dict.
+Public Surface:   DataSample
+Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+                  Must not contain pipeline execution logic.
+Dependencies:     pydantic (PortDataType base), stdlib (typing).
+Reason To Change: DataSample schema gains new fields, or the PortDataType
+                  base class interface changes.
 
 Subclass this for new domains: TextSample, ImageSample, etc.
 AutoDiscovery registers every subclass in TypeCatalogue automatically.

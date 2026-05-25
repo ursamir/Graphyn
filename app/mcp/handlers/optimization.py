@@ -1,11 +1,18 @@
 # app/mcp/handlers/optimization.py
-"""optimize_execution MCP tool handler (V1.md §11).
-
-Analyses a GraphIR and returns execution recommendations:
-- parallel vs sequential
-- cacheable subgraph identification
-- hardware placement hints based on capability metadata
-- partial execution suggestions
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   optimize_execution tool handler. Analyses a GraphIR and
+                  returns execution recommendations (parallelism, caching,
+                  hardware placement, partial execution hints).
+Owns:             optimize_execution_handler(), OPTIMIZE_EXECUTION_SCHEMA/DESCRIPTION.
+Public Surface:   optimize_execution_handler(arguments) -> dict
+Must NOT:         Contain execution logic — analysis only, no side effects.
+                  Must not import from app.domain.
+Dependencies:     BC1 (ir.loader — lazy), BC3 (registry_runtime — lazy),
+                  BC4 (planner — lazy), BC3 resolve_capability (via
+                  registry_runtime.resolve_capability — NOT orchestrator).
+Reason To Change: New optimization recommendations are added, or the tool
+                  schema changes.
 """
 from __future__ import annotations
 
@@ -45,8 +52,7 @@ def optimize_execution_handler(arguments: dict[str, Any]) -> Any:
     """Analyse a GraphIR and return execution optimization recommendations."""
     from app.core.ir.loader import load_ir
     from app.core.planner import PipelineGraph, _ir_to_pipeline_config
-    from app.core.orchestrator import _resolve_capability
-    from app.core.registry_runtime import get_registry
+    from app.core.registry_runtime import get_registry, resolve_capability as _resolve_capability
 
     graph_dict = arguments.get("graph")
     if not graph_dict:

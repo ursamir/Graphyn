@@ -1,9 +1,19 @@
 # app/models/model_artifact.py
-"""ModelArtifact — trained Keras model artifact.
+"""
+Bounded Context:  Domain — Data Types
+Responsibility:   Typed data contract for a trained model artifact. Produced
+                  by trainer and evaluator nodes.
+Owns:             ModelArtifact Pydantic model — model_path, labels, history,
+                  metrics.
+Public Surface:   ModelArtifact
+Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+                  Must not contain training logic.
+Dependencies:     pydantic (PortDataType base).
+Reason To Change: ModelArtifact schema gains new fields, or metrics schema
+                  changes.
 
-Migrated from examples/06_speech_commands_e2e/plugins/data_types.py.
 Registered in TypeCatalogue as 'app.models.model_artifact.ModelArtifact'
-by AutoDiscovery.
+by AutoDiscovery. Migrated from examples/06_speech_commands_e2e/.
 """
 # NOTE: Do NOT use `from __future__ import annotations` here — it turns all
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()

@@ -132,13 +132,18 @@ store.get(artifact_id)                 # fetch single record
 
 `pipeline.py` is a re-export shim. The real implementations are:
 
-| File | Responsibility |
-|---|---|
-| `orchestrator.py` | Main async entry point — coordinates all execution modes |
-| `planner.py` | DAG builder, topological sort, wave planner |
-| `node_executor.py` | Drives a single node through its lifecycle with retry |
-| `checkpoint.py` | Checkpoint read/write for resumable execution (audio-domain only — ARCH-3) |
-| `executor.py` | Parallel wave executor using `asyncio.gather` + `ThreadPoolExecutor` |
+| File | Responsibility | BC |
+|---|---|---|
+| `orchestrator.py` | Main async entry point — coordinates all execution modes | BC5 |
+| `planner.py` | DAG builder, topological sort, wave planner | BC4 |
+| `node_executor.py` | Drives a single node through its lifecycle with retry | BC5 |
+| `checkpoint.py` | Checkpoint read/write for resumable execution | BC6 |
+| `executor.py` | Parallel wave executor using `asyncio.gather` + `ThreadPoolExecutor` | BC5 |
+| `registry_runtime.py` | Registry singleton accessor + `resolve_capability()` | BC3 |
+
+**Capability resolution** lives in `registry_runtime.resolve_capability(ir_node, registry)` — NOT in `orchestrator._resolve_capability`. The orchestrator keeps a backward-compat alias. All new callers (CLI, MCP handlers, executor) import from `registry_runtime` directly.
+
+**RULE 1 enforcement:** `checkpoint.py` and `pipeline_cache.py` do NOT import `app.models` at module level. `AudioSample` is imported lazily inside function bodies only. This keeps the platform core domain-agnostic at import time.
 
 ## Open Issues in This Area
 

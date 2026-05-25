@@ -1,7 +1,16 @@
+# app/api/routers/ingest.py
 """
-FastAPI router for audio ingestion endpoints.
-
-Supports URL-based and HuggingFace dataset ingestion with SSE progress streaming.
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for audio ingestion — URL-based and
+                  HuggingFace dataset ingestion with SSE progress streaming.
+Owns:             Route definitions for POST /ingest/url,
+                  GET /ingest/url/{job_id}/stream,
+                  POST /ingest/huggingface,
+                  GET /ingest/huggingface/{job_id}/stream.
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain ingestion logic — delegate to IngestionService.
+Dependencies:     fastapi, app.domain.ingestion.IngestionService.
+Reason To Change: New ingestion source type added, or SSE protocol changes.
 """
 
 from typing import Optional

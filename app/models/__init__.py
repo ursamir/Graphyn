@@ -1,16 +1,20 @@
 # app/models/__init__.py
-"""Data models for the pipeline engine.
-
-Re-exports all PortDataType subclasses so that
-``from app.models import FeatureArray`` works.
-
-V1.md §5.3 — standardized typed data contracts.
-
-Note: Plugin-specific types (DatasetArtifact, EmbeddingVector,
-ExperimentArtifact, etc.) are defined inside their respective plugins
-and registered automatically by AutoDiscovery when the plugin is installed.
-Only platform-core types that the platform infrastructure itself depends on
-belong here.
+"""
+Bounded Context:  Domain — Data Types
+Responsibility:   Public API surface for platform-core data models. Re-exports
+                  all PortDataType subclasses so callers use a single import
+                  path (``from app.models import AudioSample``).
+Owns:             Re-export declarations for all platform-core types.
+Public Surface:   AudioSample, DataSample, DeploymentArtifact, FeatureArray,
+                  ModelArtifact, PredictionResult, TensorBatch, TFLiteArtifact.
+Must NOT:         Define plugin-specific types here — those belong in the
+                  plugin's types.py and are registered by AutoDiscovery.
+                  Must not import from app.core.nodes.registry at module level.
+Dependencies:     app.models.{audio_sample, data_sample, deployment_artifact,
+                  feature_array, model_artifact, prediction_result,
+                  tensor_batch, tflite_artifact}.
+Reason To Change: New platform-core data type is added, or an existing type
+                  is renamed or removed.
 """
 from app.models.audio_sample import AudioSample
 from app.models.data_sample import DataSample

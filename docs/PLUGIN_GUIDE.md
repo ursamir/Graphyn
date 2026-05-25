@@ -182,6 +182,33 @@ Remote sources (`git+`, `http://`, `https://`) install asynchronously — poll `
 
 ---
 
+## Security
+
+**Source allowlist (`GRAPHYN_PLUGIN_ALLOWED_SOURCES`):** Set this env var to a comma-separated list of URL prefixes to restrict which remote sources are permitted. When unset, all sources are allowed (backward-compatible default). When set, any remote source not matching a listed prefix is rejected with `PluginInstallError` before any network request is made.
+
+```bash
+# Only allow plugins from your org's GitHub and internal registry
+export GRAPHYN_PLUGIN_ALLOWED_SOURCES="git+https://github.com/myorg/,https://plugins.internal.example.com/"
+```
+
+**Checksum verification (`expected_sha256`):** For HTTP archive sources, pass the expected SHA-256 hex digest to verify the downloaded archive before extraction. Mismatch raises `PluginInstallError`.
+
+```python
+manager.install(
+    "https://plugins.example.com/my-plugin-1.0.0.zip",
+    expected_sha256="abc123...",
+)
+```
+
+Via REST API:
+```json
+{"source": "https://plugins.example.com/my-plugin-1.0.0.zip", "expected_sha256": "abc123..."}
+```
+
+**Never expose the plugin install endpoint publicly.** Auth (`GRAPHYN_API_TOKEN`) is the primary gate.
+
+---
+
 ## `PluginManager` Reference
 
 | Method | Returns | Raises |

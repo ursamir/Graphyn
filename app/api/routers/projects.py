@@ -1,7 +1,17 @@
+# app/api/routers/projects.py
 """
-FastAPI router for all /projects/* endpoints.
-
-Wires ProjectManager methods to HTTP routes.
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for full project lifecycle management —
+                  create, get, update, delete, clone, list versions, taxonomy,
+                  contract, spec, annotations, quality reports, snapshots,
+                  and curation decisions.
+Owns:             All route definitions under /api/v1/projects/.
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain project storage logic — delegate to ProjectManager
+                  and QualityChecker.
+Dependencies:     fastapi, app.domain.project_manager.ProjectManager,
+                  app.domain.quality_checker.QualityChecker.
+Reason To Change: New project endpoint added, or project schema changes.
 """
 
 from __future__ import annotations

@@ -1,5 +1,15 @@
 # app/core/nodes/ports.py
-"""Port descriptors and PortDataType base class for the Enhanced Node System."""
+"""
+Bounded Context:  BC2 — Node Contract
+Responsibility:   Define port descriptors and the PortDataType base class.
+                  Ports are the typed connection points between nodes.
+Owns:             InputPort, OutputPort, PortDataType.
+Public Surface:   InputPort, OutputPort, PortDataType.
+Must NOT:         Import from app.domain, app.api, or any BC3/BC4/BC5/BC6 module.
+Dependencies:     pydantic, stdlib (typing).
+Reason To Change: Port descriptor fields change (new cardinality options,
+                  new validation rules), or PortDataType base class evolves.
+"""
 from __future__ import annotations
 
 from typing import Any, Literal, get_origin

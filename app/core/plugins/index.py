@@ -1,9 +1,22 @@
+# app/core/plugins/index.py
 """
-PluginIndexClient — fetches, caches, and searches the plugin index.
+Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
+Responsibility:   Fetch, cache, and search the remote or local plugin index.
+                  Provides lookup by name and optional version constraint.
+Owns:             PluginIndexEntry model, PluginIndexClient class, in-memory
+                  class-level cache, remote fetch (streaming, 10 MB limit),
+                  local fallback read, search(), lookup().
+Public Surface:   PluginIndexEntry, PluginIndexClient.fetch(), .search(),
+                  .lookup()
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not install or load plugins.
+Dependencies:     httpx, pydantic, packaging, stdlib (json, logging, threading,
+                  pathlib), app.core.plugins.errors, app.core.config.
+Reason To Change: Index JSON schema changes, or a new index transport is added.
 
 The index is a JSON document with a top-level ``plugins`` array. It can be
-hosted remotely (configured via ``GRAPHYN_PLUGIN_INDEX_URL``) or stored locally
-at ``{GRAPHYN_HOME}/plugins/index.json``.
+hosted remotely (``GRAPHYN_PLUGIN_INDEX_URL``) or stored locally at
+``{GRAPHYN_HOME}/plugins/index.json``.
 
 Requirements: req-05 §6.1–§6.9
 """

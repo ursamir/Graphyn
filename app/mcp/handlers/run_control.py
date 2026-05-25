@@ -1,7 +1,17 @@
 # app/mcp/handlers/run_control.py
-"""MCP tool handlers for runtime control — pause, resume, cancel.
-
-Req 7.9
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   pause_run, resume_run, cancel_run tool handlers. Thin
+                  delegation to the active run registry.
+Owns:             handle_pause_run, handle_resume_run, handle_cancel_run
+                  and their SCHEMA/DESCRIPTION constants.
+Public Surface:   All three handler functions above.
+Must NOT:         Contain run lifecycle logic — delegates entirely to
+                  get_active_run(run_id).pause/resume/cancel().
+                  Must not import from app.domain.
+Dependencies:     BC6 (run_control.get_active_run — module-level import).
+Reason To Change: run_control tool schemas change, or new control operations
+                  are added (e.g. step, restart).
 """
 from app.core.run_control import get_active_run
 

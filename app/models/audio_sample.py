@@ -1,5 +1,16 @@
 # app/models/audio_sample.py
-"""AudioSample — domain data type for a single audio clip.
+"""
+Bounded Context:  Domain — Audio Data Types
+Responsibility:   Domain data type for a single audio clip. Participates in
+                  the TypeCatalogue and port-type compatibility checks.
+Owns:             AudioSample Pydantic model — waveform array, sample rate,
+                  label, path, metadata dict.
+Public Surface:   AudioSample
+Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+                  Must not contain pipeline execution logic.
+Dependencies:     pydantic (PortDataType base), stdlib (typing).
+Reason To Change: AudioSample schema gains new fields, or the PortDataType
+                  base class interface changes.
 
 Migrated from @dataclass to Pydantic PortDataType so that it participates
 in the Enhanced Node System's TypeCatalogue and port-type compatibility checks.

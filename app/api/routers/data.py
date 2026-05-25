@@ -1,5 +1,17 @@
 # app/api/routers/data.py
-"""Data API — /api/v1/data endpoints for input/output datasets and file uploads."""
+"""
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for input/output dataset management and
+                  audio file uploads.
+Owns:             Route definitions for GET/POST /data/inputs,
+                  GET /data/outputs, POST /data/merge.
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain dataset storage logic — delegate to filesystem
+                  helpers and config path functions.
+Dependencies:     fastapi, app.core.config, stdlib (csv, os, datetime,
+                  pathlib).
+Reason To Change: New data endpoint added, or upload/merge behaviour changes.
+"""
 from __future__ import annotations
 
 import csv

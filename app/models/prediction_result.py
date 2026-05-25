@@ -1,9 +1,19 @@
 # app/models/prediction_result.py
-"""PredictionResult — inference result for one audio clip.
+"""
+Bounded Context:  Domain — Data Types
+Responsibility:   Typed data contract for inference results from classification
+                  and detection nodes.
+Owns:             PredictionResult Pydantic model — source_path,
+                  predicted_label, probabilities, metadata.
+Public Surface:   PredictionResult
+Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+                  Must not contain inference logic.
+Dependencies:     pydantic (PortDataType base).
+Reason To Change: PredictionResult schema gains new fields, or probability
+                  representation changes.
 
-Migrated from examples/06_speech_commands_e2e/plugins/data_types.py.
 Registered in TypeCatalogue as 'app.models.prediction_result.PredictionResult'
-by AutoDiscovery.
+by AutoDiscovery. Migrated from examples/06_speech_commands_e2e/.
 """
 # NOTE: Do NOT use `from __future__ import annotations` here — it turns all
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()

@@ -1,9 +1,19 @@
 # app/models/feature_array.py
-"""FeatureArray — acoustic feature array for one audio clip.
+"""
+Bounded Context:  Domain — Data Types
+Responsibility:   Typed data contract for acoustic feature arrays extracted
+                  from audio clips. Produced by feature_frontend node.
+Owns:             FeatureArray Pydantic model — data (float32 [T,F]), label,
+                  sample_rate, source_path, feature_type, metadata.
+Public Surface:   FeatureArray
+Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+                  Must not contain feature extraction logic.
+Dependencies:     pydantic (PortDataType base), numpy.
+Reason To Change: FeatureArray schema gains new fields, or feature_type
+                  enum values change.
 
-Migrated from examples/06_speech_commands_e2e/plugins/data_types.py.
 Registered in TypeCatalogue as 'app.models.feature_array.FeatureArray'
-by AutoDiscovery.
+by AutoDiscovery. Migrated from examples/06_speech_commands_e2e/.
 """
 # NOTE: Do NOT use `from __future__ import annotations` here — it turns all
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()

@@ -1,8 +1,18 @@
 # app/mcp/handlers/execution.py
-"""execute_pipeline tool handler.
-
-Delegates to run_pipeline_ir() (V1.md §3.1).
-Req 4.1–4.14
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   execute_pipeline tool handler. Validates a GraphIR, allocates
+                  a RunManager, and submits execution to a background thread.
+                  Returns run_id within 500ms.
+Owns:             execute_pipeline_handler(), EXECUTE_PIPELINE_SCHEMA/DESCRIPTION,
+                  _PIPELINE_EXECUTOR (module-level shared ThreadPoolExecutor).
+Public Surface:   execute_pipeline_handler(arguments) -> dict
+Must NOT:         Contain execution logic — delegates to run_pipeline_ir().
+                  Must not import from app.domain.
+Dependencies:     BC1 (ir.loader), BC5 (orchestrator — module-level import),
+                  BC6 (run_journal), stdlib (concurrent.futures, typing).
+Reason To Change: execute_pipeline tool schema changes, or async execution
+                  strategy changes (e.g. move to a task queue).
 """
 from __future__ import annotations
 

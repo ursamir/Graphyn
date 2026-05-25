@@ -1,5 +1,14 @@
 # app/core/utils/hash.py
-"""Non-cryptographic stable hash utilities.
+"""
+Bounded Context:  Platform Infrastructure (shared by all BCs)
+Responsibility:   Non-cryptographic stable hash utilities for deterministic
+                  node seeds, export file IDs, and split group ordering.
+Owns:             stable_hash() — MD5-based, JSON-serialised, cross-run stable.
+Public Surface:   stable_hash(*args) → int
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not be used for security purposes (not cryptographic).
+Dependencies:     stdlib (hashlib, json).
+Reason To Change: Hash algorithm changes, or new hash utility functions added.
 
 Uses MD5 for speed — NOT for security. The ``usedforsecurity=False`` flag
 is required on FIPS-compliant systems where MD5 is otherwise blocked.

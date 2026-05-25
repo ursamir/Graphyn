@@ -1,5 +1,18 @@
 # app/core/nodes/config.py
-"""NodeConfig base class for the Enhanced Node System."""
+"""
+Bounded Context:  BC2 — Node Contract
+Responsibility:   Base configuration model for all node Config classes.
+                  Provides strict validation (extra="forbid"), mutability,
+                  and JSON round-trip support.
+Owns:             NodeConfig Pydantic base class.
+Public Surface:   NodeConfig — subclass as ``class Config(NodeConfig)`` inside
+                  each Node subclass.
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not contain node-specific fields.
+Dependencies:     pydantic.
+Reason To Change: Global config model settings change (e.g. extra policy,
+                  serialization mode), or new base validators are added.
+"""
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict

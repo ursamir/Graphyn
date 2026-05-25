@@ -1,14 +1,26 @@
-from __future__ import annotations
-
-"""ArtifactStore — content-addressed, typed artifact registry (Phase 4).
-
-This module defines:
-- ArtifactRecord: immutable Pydantic model for artifact metadata
-- ArtifactNotFoundError: raised when an artifact ID is not found
-- ArtifactSerializationError: raised when artifact serialization fails
-- SUPPORTED_ARTIFACT_TYPES: frozenset of valid artifact type strings
-- ArtifactStore: content-addressed artifact registry (see req-01)
+# app/core/artifact_store.py
 """
+Bounded Context:  BC6 — Observability & Storage
+Responsibility:   Content-addressed, typed artifact registry. Stores artifact
+                  metadata envelopes and serialized data with deduplication.
+Owns:             ArtifactRecord (immutable metadata model), ArtifactStore
+                  (registry with content-hash deduplication and secondary indexes).
+Public Surface:   ArtifactStore.register(), .get(), .list(), .get_versions(),
+                  .cleanup(); ArtifactRecord; ArtifactNotFoundError;
+                  ArtifactSerializationError; SUPPORTED_ARTIFACT_TYPES;
+                  _infer_artifact_type() (delegates to ArtifactSerializerRegistry).
+Must NOT:         Import from app.domain, app.api, or app.core.orchestrator.
+                  Must not contain domain-specific serialization logic (WAV I/O,
+                  AudioSample construction, audio duck-typing). All such logic
+                  lives in app/models/audio_artifact_serializer.py and is
+                  injected via ArtifactSerializerRegistry at startup.
+Dependencies:     stdlib, pydantic, app.core.config (path resolution),
+                  app.core.artifact_serializer (registry interface — no domain
+                  knowledge flows through it).
+Reason To Change: New artifact types, storage format changes, index strategy
+                  changes, or deduplication policy evolves.
+"""
+from __future__ import annotations
 
 import hashlib
 import json
@@ -41,7 +53,23 @@ SUPPORTED_ARTIFACT_TYPES: frozenset[str] = frozenset(
 
 
 def _infer_artifact_type(value: Any) -> str:
-    """Infer the ArtifactStore artifact_type string from a node output value."""
+    """Infer the ArtifactStore artifact_type string from a node output value.
+
+    Delegates to the ArtifactSerializerRegistry first (domain handlers
+    registered at startup). Falls back to built-in heuristics for generic
+    platform types (DatasetArtifact, numpy arrays, split dicts).
+
+    ARCH-2 fix: audio duck-typing removed from platform infrastructure.
+    AudioSample detection is now handled by AudioSampleHandler.infer_type()
+    registered via register_audio_serializer() at startup.
+    """
+    from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+    registry = get_serializer_registry()
+    inferred = registry.infer_type(value)
+    if inferred is not None:
+        return inferred
+
+    # Built-in platform heuristics (no domain model imports)
     try:
         from app.models.dataset_artifact import DatasetArtifact  # noqa: PLC0415
         if isinstance(value, DatasetArtifact):
@@ -51,8 +79,6 @@ def _infer_artifact_type(value: Any) -> str:
 
     if isinstance(value, list) and value:
         first = value[0]
-        if hasattr(first, "data") and hasattr(first, "sample_rate"):
-            return "audio_samples"
         if hasattr(first, "model_dump"):
             return "generic"
 
@@ -63,7 +89,7 @@ def _infer_artifact_type(value: Any) -> str:
             return "feature_array"
 
     try:
-        import numpy as np
+        import numpy as np  # noqa: PLC0415
         if isinstance(value, np.ndarray):
             return "feature_array"
     except ImportError:
@@ -293,38 +319,19 @@ class ArtifactStore:
     def _compute_content_hash(self, artifact_type: str, data: Any) -> str:
         """Compute SHA-256 content hash for the given artifact data.
 
-        For ``audio_samples``: hash path + sample_rate + shape + label + a
-        truncated digest of the raw PCM bytes for each sample, so that two
-        files with identical metadata but different audio content produce
-        different hashes (prevents false deduplication).
+        For registered artifact types: delegates to the handler's
+        ``compute_content_hash_input()`` method.
 
         For all others: hash ``json.dumps(data, sort_keys=True, default=str)``.
+
+        ARCH-2 fix: audio-specific hashing logic removed from platform
+        infrastructure. AudioSampleHandler.compute_content_hash_input()
+        in app/models/audio_artifact_serializer.py owns that logic.
         """
-        if artifact_type == "audio_samples":
-            manifest_entries = []
-            for sample in data:
-                path = getattr(sample, "path", None) or getattr(sample, "source_path", str(id(sample)))
-                sr = getattr(sample, "sample_rate", 0)
-                raw_data = getattr(sample, "data", None)
-                shape = tuple(raw_data.shape) if raw_data is not None else ()
-                label = getattr(sample, "label", None)
-                # Include a hash of the actual PCM bytes to distinguish files
-                # that share the same path/shape/sr but have different content.
-                if raw_data is not None and hasattr(raw_data, "tobytes"):
-                    try:
-                        pcm_hash = hashlib.sha256(raw_data.tobytes()).hexdigest()[:16]
-                    except Exception:
-                        pcm_hash = ""
-                else:
-                    pcm_hash = ""
-                manifest_entries.append({
-                    "path": path,
-                    "sample_rate": sr,
-                    "shape": list(shape),
-                    "label": label,
-                    "pcm_hash": pcm_hash,
-                })
-            raw = json.dumps(manifest_entries, sort_keys=True)
+        from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+        handler = get_serializer_registry().get(artifact_type)
+        if handler is not None:
+            raw = handler.compute_content_hash_input(data)
         else:
             try:
                 def _numpy_default(obj: Any) -> Any:
@@ -359,45 +366,27 @@ class ArtifactStore:
     def _serialize_data(self, artifact_type: str, data: Any, data_dir: Path) -> None:
         """Write artifact data to data_dir.
 
+        Delegates to the ArtifactSerializerRegistry for registered types.
+        Falls back to JSON serialization for unregistered types.
+
+        ARCH-2 fix: _serialize_audio_samples() removed. WAV I/O is now
+        handled by AudioSampleHandler in app/models/audio_artifact_serializer.py,
+        registered at startup via register_audio_serializer().
+
         Raises ArtifactSerializationError on failure.
         """
+        from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
         data_dir.mkdir(parents=True, exist_ok=True)
         try:
-            if artifact_type == "audio_samples":
-                self._serialize_audio_samples(data, data_dir)
+            handler = get_serializer_registry().get(artifact_type)
+            if handler is not None:
+                handler.serialize(data, data_dir)
             else:
                 self._serialize_json(data, data_dir)
         except ArtifactSerializationError:
             raise
         except Exception as exc:
             raise ArtifactSerializationError(artifact_type, exc) from exc
-
-    def _serialize_audio_samples(self, samples: list, data_dir: Path) -> None:
-        """Write WAV files + manifest.json (same format as PipelineCache)."""
-        import numpy as np
-        import soundfile as sf
-
-        manifest_entries = []
-        for i, sample in enumerate(samples):
-            filename = f"{i}.wav"
-            wav_path = data_dir / filename
-            sample_data = getattr(sample, "data", None)
-            sample_rate = getattr(sample, "sample_rate", 22050)
-            if sample_data is not None and len(sample_data) > 0:
-                sf.write(str(wav_path), sample_data, sample_rate)
-            else:
-                sf.write(str(wav_path), np.array([], dtype=np.float32), sample_rate)
-            manifest_entries.append(
-                {
-                    "filename": filename,
-                    "label": getattr(sample, "label", None),
-                    "path": getattr(sample, "path", None) or getattr(sample, "source_path", ""),
-                    "sample_rate": sample_rate,
-                    "metadata": getattr(sample, "metadata", {}),
-                }
-            )
-        manifest = {"samples": manifest_entries}
-        (data_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     def _serialize_json(self, data: Any, data_dir: Path) -> None:
         """Write data.json using model_dump or json.dumps.

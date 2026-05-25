@@ -1,11 +1,16 @@
 # app/core/executor.py
-"""Parallel wave executor for the Advanced Runtime (Phase 3).
-
-Provides:
-  - ParallelExecutor — executes all nodes in a wave concurrently using
-    asyncio.gather + ThreadPoolExecutor for sync nodes.
-
-Req 1.1 – 1.10 (parallel execution)
+"""
+Bounded Context:  BC5 — Execution Runtime
+Responsibility:   Execute all nodes in a single parallel wave concurrently.
+Owns:             ParallelExecutor — wave-level concurrent execution.
+Public Surface:   ParallelExecutor.run_wave(), ParallelExecutor.shutdown()
+Must NOT:         Understand audio domain logic, import from app.domain,
+                  import from orchestrator (avoids intra-BC5 circular coupling).
+Dependencies:     BC2 (nodes.base via executors), BC3 (registry_runtime for
+                  capability resolution), BC6 (checkpoint, artifact_store),
+                  app.core.utils (collect_stream), app.core.conditions.
+Reason To Change: Parallel execution strategy changes (thread pool sizing,
+                  wave scheduling, error propagation policy).
 """
 from __future__ import annotations
 
@@ -179,7 +184,7 @@ class ParallelExecutor:
         the same wave — created once in ``run_wave`` rather than per node.
         """
         from app.core.checkpoint import _write_checkpoint
-        from app.core.orchestrator import _resolve_capability
+        from app.core.registry_runtime import resolve_capability as _resolve_capability
 
         node = graph_obj.get_node(node_id)
         exec_ = executors[node_id]

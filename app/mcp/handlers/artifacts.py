@@ -1,7 +1,16 @@
 # app/mcp/handlers/artifacts.py
-"""inspect_run tool handler.
-
-Req 5.1–5.12
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   inspect_run tool handler. Reads run metadata, logs, graph
+                  snapshots, and checkpoint manifests from the workspace.
+Owns:             inspect_run_handler(), INSPECT_RUN_SCHEMA/DESCRIPTION,
+                  _get_runs_dir() (lazy path resolver).
+Public Surface:   inspect_run_handler(arguments) -> dict
+Must NOT:         Contain business logic beyond filesystem reads. Must not
+                  import from app.domain.
+Dependencies:     app.core.config (runs_dir — lazy), stdlib (json, os, pathlib).
+Reason To Change: inspect_run tool schema changes, new inspection modes are
+                  added, or workspace layout changes.
 """
 from __future__ import annotations
 

@@ -1,4 +1,17 @@
 # app/core/logger.py
+"""
+Bounded Context:  BC6 — Observability & Storage
+Responsibility:   Structured event logging for pipeline execution. Emits typed
+                  events to an in-memory deque and an optional streaming queue.
+Owns:             PipelineLogger — all pipeline/node lifecycle event methods.
+Public Surface:   PipelineLogger (pipeline_start, node_start, node_end,
+                  node_error, node_skip, wave_start, wave_end, summary, etc.)
+Must NOT:         Import from app.domain, app.api, or any execution module.
+                  Must not persist logs directly (that is run_journal's job).
+Dependencies:     stdlib (logging, time, collections, queue, datetime).
+Reason To Change: New event types are added, log format changes, or the
+                  bounded deque size policy changes.
+"""
 
 import logging
 import time

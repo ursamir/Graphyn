@@ -1,5 +1,20 @@
 # app/api/routers/nodes.py
-"""Node Catalogue API — /api/v1/nodes and /api/v1/types endpoints."""
+"""
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for node catalogue discovery — list, get,
+                  config schema, port schema, config validation, type listing,
+                  and compatibility queries.
+Owns:             Route definitions for GET /nodes, GET /nodes/{node_type},
+                  GET /nodes/{node_type}/config-schema,
+                  GET /nodes/{node_type}/port-schema,
+                  POST /nodes/{node_type}/validate-config,
+                  GET /types, GET /nodes/compatible.
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain node registration logic — delegate to NodeRegistry.
+Dependencies:     fastapi, pydantic, app.core.nodes.registry,
+                  app.core.nodes.compat.
+Reason To Change: New node catalogue endpoint added, or response schema changes.
+"""
 from __future__ import annotations
 
 from typing import Any

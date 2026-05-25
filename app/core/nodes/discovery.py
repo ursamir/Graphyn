@@ -1,5 +1,19 @@
 # app/core/nodes/discovery.py
-"""AutoDiscovery — scans node directories and registers Node/PortDataType subclasses."""
+"""
+Bounded Context:  BC3 — Node Catalog
+Responsibility:   Scan node directories and plugin directories, import modules,
+                  and register Node/PortDataType subclasses into the registry.
+Owns:             AutoDiscovery — run(), _scan_directory(), _import_file(),
+                  _process_module(), _register_node().
+Public Surface:   AutoDiscovery(registry).run(nodes_dir, plugins_dir, models_dir)
+Must NOT:         Import from app.domain, app.api, app.core.orchestrator,
+                  app.core.planner, or any BC4/BC5/BC6 module.
+Dependencies:     BC2 (nodes.base, nodes.ports, nodes.metadata, nodes.errors),
+                  BC3 (nodes.registry, nodes.catalogue), app.core.config
+                  (plugins_home), stdlib (importlib, logging, os, pathlib, re).
+Reason To Change: Plugin discovery protocol changes (new manifest format,
+                  new directory layout), or node registration rules evolve.
+"""
 from __future__ import annotations
 
 import importlib

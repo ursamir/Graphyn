@@ -1,9 +1,16 @@
-"""Graph IR Pydantic models — runtime-agnostic graph representation.
-
-No imports from app/core/pipeline.py, app/core/nodes/, or app/core/sdk.py.
-Only pydantic and the Python standard library.
-
-Req 1.1 – 1.11
+"""
+Bounded Context:  BC1 — Graph Language
+Responsibility:   Define the canonical, versioned, immutable data model for
+                  pipeline graphs. The single source of truth for graph structure.
+Owns:             GraphIR, IRNode, IREdge, IRMetadata, IRParameter,
+                  IRCapabilityMetadata — all frozen Pydantic models.
+Public Surface:   All model classes above.
+Must NOT:         Import from app.core.nodes, app.core.orchestrator,
+                  app.core.sdk, app.domain, or app.api.
+                  Must remain pure — only pydantic and stdlib.
+Dependencies:     pydantic, stdlib (re, copy, types).
+Reason To Change: Graph schema evolves (new fields on IRNode/IREdge/GraphIR),
+                  or validation rules change.
 """
 from __future__ import annotations
 

@@ -1,3 +1,33 @@
+# app/core/pipeline_cache.py
+"""
+Bounded Context:  BC6 — Observability & Storage
+Responsibility:   Content-keyed cache for node outputs. Avoids re-executing
+                  nodes whose inputs and config have not changed.
+Owns:             PipelineCache class — key derivation, load, save, clear.
+Public Surface:   PipelineCache().key(), .input_hash(), .load(), .save(), .clear()
+Must NOT:         Import app.models at module level (RULE 1 — platform must not
+                  depend on domain models at import time). AudioSample is
+                  never imported here — WAV I/O is delegated to
+                  AudioSampleHandler via ArtifactSerializerRegistry.
+                  Must not share its base directory with ArtifactStore (SA-PC4).
+Dependencies:     stdlib, pydantic (lazy), app.core.config (cache_dir),
+                  app.core.artifact_serializer (registry — no domain knowledge).
+Reason To Change: Cache storage format evolves, new cacheable output types
+                  are added, or cache key derivation strategy changes.
+
+## ARCH-1 + ARCH-2 fix
+
+All WAV I/O and AudioSample construction previously inline in load()/save()
+has been removed. The cache now delegates to ArtifactSerializerRegistry:
+
+    registry = get_serializer_registry()
+    handler  = registry.get("audio_samples")   # None if not registered
+    if handler:
+        handler.serialize(samples, port_dir)
+        samples = handler.deserialize(port_dir)
+
+This means pipeline_cache.py contains zero domain-model imports.
+"""
 import hashlib
 import json
 import logging
@@ -6,9 +36,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Optional
 
-import pydantic
-
-from app.models.audio_sample import AudioSample
+import pydantic  # noqa: F401 — kept for backward compat; ValidationError no longer used inline
 
 logger = logging.getLogger(__name__)
 
@@ -231,34 +259,24 @@ class PipelineCache:
 
         if port_dirs:
             try:
-                import soundfile as sf
+                from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+                handler = get_serializer_registry().get("audio_samples")
+                if handler is None:
+                    logger.warning(
+                        "Cache read (port subdirs): no handler registered for 'audio_samples' — "
+                        "will re-execute. Call register_audio_serializer() at startup.",
+                    )
+                    return None
                 result: dict = {}
                 for port_dir in port_dirs:
                     port_name = port_dir.name[len("port_"):]
-                    port_manifest_path = port_dir / "manifest.json"
-                    if not port_manifest_path.exists():
-                        continue
-                    with open(port_manifest_path, "r", encoding="utf-8") as f:
-                        manifest = json.load(f)
-                    samples = []
-                    for entry in manifest["samples"]:
-                        wav_path = port_dir / entry["filename"]
-                        data, sample_rate = sf.read(str(wav_path), dtype="float32", always_2d=False)
-                        try:
-                            sample = AudioSample.model_validate({
-                                "path": entry["path"],
-                                "sample_rate": entry["sample_rate"],
-                                "data": data,
-                                "label": entry["label"],
-                                "metadata": entry.get("metadata", {}),
-                            })
-                        except pydantic.ValidationError as exc:
-                            logger.warning(
-                                "Cache entry validation failed for key %s port %s (%s) — skipping",
-                                cache_key, port_name, exc,
-                            )
-                            return None
-                        samples.append(sample)
+                    samples = handler.deserialize(port_dir)
+                    if samples is None:
+                        logger.warning(
+                            "Cache read (port subdirs) failed for key %s port %s — will re-execute",
+                            cache_key, port_name,
+                        )
+                        return None
                     result[port_name] = samples
                 if result:
                     return result
@@ -277,30 +295,17 @@ class PipelineCache:
             return None
 
         try:
-            import soundfile as sf
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-
-            samples = []
-            for entry in manifest["samples"]:
-                wav_path = cache_dir / entry["filename"]
-                data, sample_rate = sf.read(str(wav_path), dtype="float32", always_2d=False)
-                try:
-                    sample = AudioSample.model_validate({
-                        "path": entry["path"],
-                        "sample_rate": entry["sample_rate"],
-                        "data": data,
-                        "label": entry["label"],
-                        "metadata": entry.get("metadata", {}),
-                    })
-                except pydantic.ValidationError as exc:
-                    logger.warning(
-                        "Cache entry validation failed for key %s (%s) — skipping",
-                        cache_key, exc,
-                    )
-                    return None
-                samples.append(sample)
-
+            from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+            handler = get_serializer_registry().get("audio_samples")
+            if handler is None:
+                logger.warning(
+                    "Cache read (manifest.json): no handler registered for 'audio_samples' — "
+                    "will re-execute. Call register_audio_serializer() at startup.",
+                )
+                return None
+            samples = handler.deserialize(cache_dir)
+            if samples is None:
+                return None
             # Return in the standard outputs-dict shape
             return {"output": samples}
 
@@ -342,32 +347,27 @@ class PipelineCache:
         }
 
         if audio_ports:
-            import numpy as np
-            import soundfile as sf
+            from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+            handler = get_serializer_registry().get("audio_samples")
+            if handler is None:
+                logger.warning(
+                    "Cache.save: no handler registered for 'audio_samples' — "
+                    "skipping audio port cache write. Call register_audio_serializer() at startup.",
+                )
+                return
             # Write each AudioSample port to its own named subdirectory so that
             # all ports are preserved (previously only the first port was saved).
             for port_name, audio_samples in audio_ports.items():
                 port_dir = cache_dir / f"port_{port_name}"
                 port_dir.mkdir(parents=True, exist_ok=True)
-                manifest_entries = []
-                for i, sample in enumerate(audio_samples):
-                    filename = f"{i}.wav"
-                    wav_path = port_dir / filename
-                    if sample.data is not None and len(sample.data) > 0:
-                        sf.write(str(wav_path), sample.data, sample.sample_rate)
-                    else:
-                        sf.write(str(wav_path), np.array([], dtype=np.float32), sample.sample_rate)
-                    manifest_entries.append({
-                        "filename": filename,
-                        "label": sample.label,
-                        "path": sample.path,
-                        "sample_rate": sample.sample_rate,
-                        "metadata": sample.metadata,
-                    })
-                manifest = {"samples": manifest_entries}
-                manifest_path = port_dir / "manifest.json"
-                with open(manifest_path, "w", encoding="utf-8") as f:
-                    json.dump(manifest, f, indent=2)
+                try:
+                    handler.serialize(audio_samples, port_dir)
+                except Exception as exc:
+                    logger.warning(
+                        "Cache.save: failed to serialize audio port '%s' (%s) — skipping",
+                        port_name, exc,
+                    )
+                    return
 
             # SA-PC3 fix: write a top-level manifest.json listing all port names
             # so load() can discover ports reliably without scanning for port_*

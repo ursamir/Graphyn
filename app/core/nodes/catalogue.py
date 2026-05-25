@@ -1,5 +1,15 @@
 # app/core/nodes/catalogue.py
-"""TypeCatalogue — maps fully-qualified type names to Python type objects."""
+"""
+Bounded Context:  BC3 — Node Catalog
+Responsibility:   Map fully-qualified PortDataType class names to Python type
+                  objects. Enables string-based type resolution at runtime.
+Owns:             TypeCatalogue — register(), resolve(), list_types().
+Public Surface:   TypeCatalogue.
+Must NOT:         Import from app.domain, app.api, or any BC4/BC5/BC6 module.
+Dependencies:     BC2 (nodes.errors, nodes.ports), stdlib (threading).
+Reason To Change: Type resolution strategy changes, or new catalogue query
+                  methods are needed.
+"""
 from __future__ import annotations
 
 import threading

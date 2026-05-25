@@ -1,9 +1,23 @@
+# app/core/plugins/store.py
 """
-PluginStore — persistence layer for installed plugin records.
+Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
+Responsibility:   Persist and retrieve PluginRecord objects from disk.
+                  Single source of truth for installed plugin state.
+Owns:             PluginRecord model, PluginStore class, registry.json I/O,
+                  threading lock, atomic write via os.replace().
+Public Surface:   PluginRecord, PluginStore.get(), .list(), .save(),
+                  .delete(), .update_enabled()
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not load or execute plugin code.
+Dependencies:     pydantic, stdlib (json, logging, os, tempfile, threading,
+                  pathlib), app.core.plugins.errors, app.core.config.
+Reason To Change: PluginRecord schema changes, or storage backend changes
+                  (e.g. SQLite migration).
 
-Stores plugin state in ``{base_dir}/plugins/registry.json`` as a JSON object
-mapping plugin name → PluginRecord dict.  All read-modify-write operations
-acquire a threading lock and writes are atomic (write-to-temp + os.replace).
+Stores plugin state in ``{GRAPHYN_HOME}/plugins/registry.json`` as a JSON
+object mapping plugin name → PluginRecord dict. All read-modify-write
+operations acquire a threading lock and writes are atomic (write-to-temp
++ os.replace).
 """
 
 from __future__ import annotations

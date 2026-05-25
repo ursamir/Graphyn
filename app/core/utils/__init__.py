@@ -1,5 +1,16 @@
 # app/core/utils/__init__.py
-"""Utility helpers for the Graphyn platform."""
+"""
+Bounded Context:  Platform Infrastructure (shared by all BCs)
+Responsibility:   Shared utility helpers used across bounded contexts.
+Owns:             stable_hash(), collect_stream().
+Public Surface:   stable_hash(*args) -> int
+                  collect_stream(executor, inputs) -> dict
+Must NOT:         Import from app.domain, app.api, or any specific BC module.
+                  Must remain dependency-free (only stdlib + BC2 node interface).
+Dependencies:     app.core.utils.hash (stable_hash), stdlib (typing, asyncio).
+Reason To Change: New cross-cutting utilities are needed, or the stream
+                  collection protocol changes.
+"""
 from __future__ import annotations
 
 from typing import Any

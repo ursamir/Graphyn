@@ -121,7 +121,7 @@ graphyn plugin install PluginPackage/Audio/my_plugin/
 
 | Method | Description |
 |---|---|
-| `install(source, upgrade=False)` | Copy to `plugins/<name>/` → load → persist record |
+| `install(source, upgrade=False, expected_sha256=None)` | Copy to `plugins/<name>/` → load → persist record. `expected_sha256`: optional SHA-256 hex digest verified before extraction for HTTP archive sources (SEC-6 fix) |
 | `uninstall(name)` | Unload types → delete record → remove directory |
 | `enable(name)` / `disable(name)` | Reload or unload node types from registry |
 | `list_installed()` | Return all `PluginRecord` objects |
@@ -203,5 +203,3 @@ Reference: `PluginPackage/Audio/demo.py`
 | `multimodal_fusion` | `multimodal-fusion` | Features | v1.0.0 |
 
 When adding a plugin: add a row here and update `PluginPackage/NODES.md` capability matrix.
-
-> ⚠️ **NEW-19 (open):** `plugins/text-stats/` is an orphaned installed plugin with no `PluginPackage/` source. Either add the source to `PluginPackage/Common/text_stats/` or uninstall it: `PluginManager().uninstall("text-stats")`.

@@ -1,10 +1,17 @@
 # app/models/tensor_batch.py
-"""TensorBatch — a batch of tensors for ML training/inference.
-
-Used as the typed data contract between feature extraction, dataset assembly,
-and model training nodes. Supports multimodal workflows (audio, vision, text).
-
-V1.md §5.3 — standardized typed data contract.
+"""
+Bounded Context:  Domain — Data Types
+Responsibility:   Typed data contract for batches of tensors used between
+                  feature extraction, dataset assembly, and model training nodes.
+                  Supports multimodal workflows (audio, vision, text).
+Owns:             TensorBatch Pydantic model — data (float32 [N,...]), labels,
+                  split, source_ids, metadata.
+Public Surface:   TensorBatch
+Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+                  Must not contain tensor manipulation logic.
+Dependencies:     pydantic (PortDataType base), stdlib (typing).
+Reason To Change: TensorBatch schema gains new fields, or split enum values
+                  change. V1.md §5.3.
 """
 # NOTE: Do NOT use `from __future__ import annotations` here — it turns all
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()

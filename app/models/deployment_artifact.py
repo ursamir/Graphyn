@@ -1,13 +1,22 @@
 # app/models/deployment_artifact.py
-"""DeploymentArtifact — a packaged model ready for edge/cloud deployment.
+"""
+Bounded Context:  Domain — Data Types
+Responsibility:   Typed data contract for a packaged model ready for
+                  edge/cloud deployment. Output of deployment_packager and
+                  edge_optimizer nodes.
+Owns:             DeploymentArtifact Pydantic model — artifact_path,
+                  model_format, target_hardware, quantization, labels,
+                  benchmark results, metadata.
+Public Surface:   DeploymentArtifact
+Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+                  Must not contain packaging logic.
+Dependencies:     pydantic (PortDataType base), stdlib (typing).
+Reason To Change: DeploymentArtifact schema gains new fields, new hardware
+                  targets are added, or benchmark schema changes.
 
 Represents the output of a deployment packaging node — a self-contained
 bundle containing the model, runtime metadata, hardware target info,
-and benchmark results.
-
-V1.md §5.3 — standardized typed data contract.
-V1.md §14 — Edge AI deployment targets.
-Phase 6 prerequisite: supports_edge capability field maps to this type.
+and benchmark results. V1.md §5.3, §14.
 """
 from __future__ import annotations
 

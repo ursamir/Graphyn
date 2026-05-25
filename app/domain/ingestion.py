@@ -1,9 +1,28 @@
+# app/domain/ingestion.py
 """
-Ingestion service for downloading audio from URLs or HuggingFace datasets.
-
-Supports:
-- URL-based ingestion: download files to workspace/datasets/input/{label}/
-- HuggingFace dataset ingestion: stream and save audio samples
+Bounded Context:  Domain — Data Ingestion
+Responsibility:   Download audio from URLs or HuggingFace datasets into the
+                  workspace input directory. Track job progress and expose a
+                  streaming interface for SSE consumers.
+Owns:             IngestionJob model, _jobs store (in-process + Redis),
+                  IngestionService (start_url_job, start_hf_job, get_job,
+                  stream_job), background worker threads.
+Public Surface:   IngestionService, IngestionJob, SUPPORTED_EXTENSIONS
+Must NOT:         Import from app.core.nodes or app.core.orchestrator.
+                  Must not register node types.
+Dependencies:     app.core.config (datasets_input_dir, redis_url),
+                  stdlib (threading, time, uuid, pathlib, re),
+                  httpx, soundfile, librosa, numpy, datasets (optional).
+Scalability:      When GRAPHYN_REDIS_URL is set, completed job state is
+                  persisted to Redis (graphyn:ingest_job:{id} +
+                  graphyn:ingest_events:{id}, 24h TTL) enabling cross-worker
+                  SSE streaming. get_job() checks in-process dict first, then
+                  falls back to Redis (SCALE-2 fix).
+Security:         Label values sanitized via _sanitize_label() (G3-23).
+                  Download size capped at 500 MB per file (SEC-4).
+                  Path traversal guard via is_relative_to() in HF job (G3-23).
+Reason To Change: New ingestion source type added, job store backend changes,
+                  or progress event schema changes.
 """
 
 import threading
@@ -42,16 +61,102 @@ SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
 # Maximum number of completed jobs to keep in memory (B-29 fix)
 _MAX_COMPLETED_JOBS = 200
 
-# Module-level job store and its lock
+# ---------------------------------------------------------------------------
+# Job store — in-process dict (default) or Redis-backed (GRAPHYN_REDIS_URL)
+#
 # SCALABILITY NOTE (BUG-10 / SCALE-2):
-# _jobs is process-local. In a multi-worker deployment (e.g. uvicorn --workers N),
-# a job started on worker A cannot be streamed from worker B. The SSE stream
-# endpoint will return 404 if routed to a different worker.
-# Migration path: replace _jobs with a Redis-backed store (same interface).
+# When GRAPHYN_REDIS_URL is set, completed job progress events are persisted
+# in Redis so that any worker in a multi-worker deployment can stream them.
+# Running jobs still execute on the worker that started them; the Redis store
+# is used for progress fan-out and cross-worker streaming.
+# When GRAPHYN_REDIS_URL is empty (default), the in-process dict is used —
+# identical behaviour to the previous single-dict implementation.
+# ---------------------------------------------------------------------------
+
 _jobs: dict[str, "IngestionJob"] = {}
 _jobs_lock = threading.Lock()
 
 from app.core.config import datasets_input_dir as _datasets_input_dir
+
+
+# ---------------------------------------------------------------------------
+# Redis helpers for job store
+# ---------------------------------------------------------------------------
+
+def _get_redis_client():
+    """Return a connected redis.Redis client, or None if unavailable."""
+    from app.core.config import redis_url as _redis_url  # noqa: PLC0415
+
+    url = _redis_url()
+    if not url:
+        return None
+    try:
+        import redis  # type: ignore[import]  # noqa: PLC0415
+        return redis.Redis.from_url(url, decode_responses=True, socket_timeout=2.0)
+    except ImportError:
+        logger.warning(
+            "ingestion: GRAPHYN_REDIS_URL is set but the 'redis' package is not "
+            "installed. Falling back to in-process job store. "
+            "Install it with: pip install redis"
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "ingestion: failed to connect to Redis at %r: %s. "
+            "Falling back to in-process job store.",
+            url,
+            exc,
+        )
+        return None
+
+
+def _redis_job_key(job_id: str) -> str:
+    return f"graphyn:ingest_job:{job_id}"
+
+
+def _redis_events_key(job_id: str) -> str:
+    return f"graphyn:ingest_events:{job_id}"
+
+
+def _persist_job_to_redis(job: "IngestionJob") -> None:
+    """Write job status and all progress events to Redis (best-effort)."""
+    import json  # noqa: PLC0415
+
+    client = _get_redis_client()
+    if client is None:
+        return
+    try:
+        pipe = client.pipeline()
+        pipe.hset(_redis_job_key(job.job_id), mapping={"status": job.status})
+        pipe.expire(_redis_job_key(job.job_id), 86400)  # 24-hour TTL
+        events = job.read_progress()
+        if events:
+            pipe.delete(_redis_events_key(job.job_id))
+            pipe.rpush(_redis_events_key(job.job_id), *[json.dumps(e) for e in events])
+            pipe.expire(_redis_events_key(job.job_id), 86400)
+        pipe.execute()
+    except Exception as exc:
+        logger.debug("ingestion: Redis persist failed for job %r: %s", job.job_id, exc)
+
+
+def _load_job_from_redis(job_id: str) -> "IngestionJob | None":
+    """Reconstruct an IngestionJob from Redis (for cross-worker streaming)."""
+    import json  # noqa: PLC0415
+
+    client = _get_redis_client()
+    if client is None:
+        return None
+    try:
+        status = client.hget(_redis_job_key(job_id), "status")
+        if status is None:
+            return None
+        raw_events = client.lrange(_redis_events_key(job_id), 0, -1)
+        events = [json.loads(e) for e in raw_events]
+        job = IngestionJob(job_id=job_id, status=status, progress=events)
+        return job
+    except Exception as exc:
+        logger.debug("ingestion: Redis load failed for job %r: %s", job_id, exc)
+        return None
 
 
 class IngestionJob(BaseModel):
@@ -88,7 +193,10 @@ class IngestionJob(BaseModel):
 
 
 def _register_job(job: "IngestionJob") -> None:
-    """Add a job to the store, evicting old completed jobs if over the limit (B-29 fix)."""
+    """Add a job to the in-process store, evicting old completed jobs if over
+    the limit (B-29 fix).  Also writes the initial record to Redis when
+    GRAPHYN_REDIS_URL is configured (SCALE-2 fix).
+    """
     with _jobs_lock:
         _jobs[job.job_id] = job
         # Evict oldest completed/failed jobs when over the limit
@@ -100,6 +208,9 @@ def _register_job(job: "IngestionJob") -> None:
             # Remove oldest first (dict insertion order is preserved in Python 3.7+)
             for jid in to_remove[:len(_jobs) - _MAX_COMPLETED_JOBS]:
                 del _jobs[jid]
+
+    # Persist initial record to Redis (best-effort — never blocks job start)
+    _persist_job_to_redis(job)
 
 
 class IngestionService:
@@ -138,6 +249,7 @@ class IngestionService:
                 "message": "httpx is not installed; cannot download URLs",
             })
             job.set_status("failed")
+            _persist_job_to_redis(job)
             return
 
         dest_dir = self.BASE_INPUT / _sanitize_label(label)
@@ -235,6 +347,8 @@ class IngestionService:
             "label_distribution": label_distribution,
         })
         job.set_status("completed")
+        # Flush final state to Redis so other workers can stream it (SCALE-2 fix)
+        _persist_job_to_redis(job)
 
     # ------------------------------------------------------------------
     # HuggingFace ingestion
@@ -282,6 +396,7 @@ class IngestionService:
                 "message": "The 'datasets' library is not installed; cannot ingest from HuggingFace",
             })
             job.set_status("failed")
+            _persist_job_to_redis(job)
             return
 
         try:
@@ -292,6 +407,7 @@ class IngestionService:
                 "message": f"Failed to load HuggingFace dataset '{repo_id}': {type(exc).__name__}: {exc}",
             })
             job.set_status("failed")
+            _persist_job_to_redis(job)
             return
 
         total_files = 0
@@ -365,6 +481,7 @@ class IngestionService:
                 "message": f"Streaming error: {type(exc).__name__}: {exc}",
             })
             job.set_status("failed")
+            _persist_job_to_redis(job)
             return
 
         # Emit summary event
@@ -375,6 +492,8 @@ class IngestionService:
             "label_distribution": label_distribution,
         })
         job.set_status("completed")
+        # Flush final state to Redis so other workers can stream it (SCALE-2 fix)
+        _persist_job_to_redis(job)
 
     # ------------------------------------------------------------------
     # Job access
@@ -383,12 +502,23 @@ class IngestionService:
     def get_job(self, job_id: str) -> IngestionJob:
         """Return the IngestionJob for the given job_id.
 
-        Raises KeyError if the job does not exist.
+        Checks the in-process dict first (fast path — job is on this worker).
+        Falls back to Redis when GRAPHYN_REDIS_URL is configured, enabling
+        cross-worker job streaming (SCALE-2 fix).
+
+        Raises KeyError if the job does not exist in either store.
         """
         with _jobs_lock:
-            if job_id not in _jobs:
-                raise KeyError(f"No ingestion job with id '{job_id}'")
-            return _jobs[job_id]
+            job = _jobs.get(job_id)
+        if job is not None:
+            return job
+
+        # Redis fallback — job may be on another worker or evicted from memory
+        redis_job = _load_job_from_redis(job_id)
+        if redis_job is not None:
+            return redis_job
+
+        raise KeyError(f"No ingestion job with id '{job_id}'")
 
     def stream_job(self, job_id: str) -> Generator[dict, None, None]:
         """Yield progress events from the job as they arrive.

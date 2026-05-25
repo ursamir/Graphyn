@@ -1,11 +1,19 @@
 # app/core/orchestrator.py
-"""Pipeline orchestrator — coordinates full pipeline execution.
-
-Extracted from pipeline.py. Responsible for:
-  - run_pipeline_ir_async  — async execution entry point
-  - run_pipeline_ir        — synchronous shim
-  - _resolve_capability    — IRNode capability resolution
-  - _collect_stream        — streaming output collector
+"""
+Bounded Context:  BC5 — Execution Runtime
+Responsibility:   Coordinate execution of validated DAGs across all execution
+                  modes (sequential, parallel, event-driven).
+Owns:             run_pipeline_ir_async(), run_pipeline_ir() entry points.
+Public Surface:   run_pipeline_ir(graph, **kwargs) -> dict
+                  run_pipeline_ir_async(graph, **kwargs) -> dict
+Must NOT:         Understand audio domain logic, parse API requests,
+                  persist artifacts directly, or import from app.domain.
+Dependencies:     BC1 (ir.models, ir.loader), BC2 (nodes.base, nodes.observers),
+                  BC3 (registry_runtime), BC4 (planner), BC6 (checkpoint,
+                  artifact_store, run_journal, run_control, pipeline_cache,
+                  logger), app.core.utils, app.core.conditions, app.core.events.
+Reason To Change: Runtime execution semantics evolve (new execution mode,
+                  cancellation protocol, resume logic, partial execution).
 """
 from __future__ import annotations
 
@@ -29,39 +37,27 @@ from app.core.planner import (
 from app.core.node_executor import NodeExecutor
 from app.core.checkpoint import _write_checkpoint, _load_checkpoint_outputs
 from app.core.utils import collect_stream as _collect_stream
+from app.core.registry_runtime import resolve_capability as _resolve_capability_impl
 
 log = logging.getLogger(__name__)
 
 
 # ── Capability resolution ──────────────────────────────────────────────────────
+# Canonical implementation lives in registry_runtime (BC3).
+# This alias is kept here for backward compatibility with any callers that
+# imported _resolve_capability directly from orchestrator (e.g. CLI inspect,
+# MCP optimization handler). New code should import from registry_runtime.
 
 def _resolve_capability(ir_node: Any, registry: Any) -> Any:
     """Resolve capability metadata for a node instance.
 
-    Precedence: IRNode.capability_metadata > NodeMetadata capability fields.
-    Falls back to IRCapabilityMetadata() defaults for unknown node types.
+    Delegates to registry_runtime.resolve_capability — canonical implementation
+    lives in BC3 (Node Catalog) since it only depends on IR models and the registry.
+
+    Kept here as a backward-compatible alias. New callers should import
+    resolve_capability from app.core.registry_runtime directly.
     """
-    from app.core.ir.models import IRCapabilityMetadata
-
-    if ir_node.capability_metadata is not None:
-        return ir_node.capability_metadata
-
-    try:
-        meta = registry.get_metadata(ir_node.node_type)
-        return IRCapabilityMetadata(
-            requires_gpu=meta.requires_gpu,
-            supports_cpu=meta.supports_cpu,
-            supports_edge=meta.supports_edge,
-            deterministic=meta.deterministic,
-            cacheable=meta.cacheable,
-            streaming_support=meta.streaming_support,
-            realtime_support=meta.realtime_support,
-            memory_requirements=meta.memory_requirements,
-            dependency_requirements=meta.dependency_requirements,
-            batch_support=meta.batch_support,
-        )
-    except Exception:
-        return IRCapabilityMetadata()
+    return _resolve_capability_impl(ir_node, registry)
 
 
 # ── Main async execution entry point ──────────────────────────────────────────

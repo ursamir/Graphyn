@@ -1,5 +1,15 @@
+# app/core/plugins/errors.py
 """
-Plugin error hierarchy for the plugin ecosystem (Phase 5).
+Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
+Responsibility:   Define the plugin exception hierarchy so callers can catch
+                  at different levels of specificity.
+Owns:             PluginError base class and all subclasses.
+Public Surface:   PluginError, PluginManifestError, PluginCompatibilityError,
+                  PluginDependencyError, PluginInstallError, PluginNotFoundError,
+                  PluginAlreadyInstalledError, PluginIndexError.
+Must NOT:         Import from any other app module. Pure exception definitions.
+Dependencies:     stdlib only.
+Reason To Change: New plugin error category is added.
 
 All plugin exceptions are subclasses of ``PluginError`` so callers can catch
 at different levels of specificity:

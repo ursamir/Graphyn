@@ -1,5 +1,17 @@
 # app/api/routers/run_control.py
-"""Runtime control endpoints — pause, resume, cancel active pipeline runs.
+"""
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for runtime control of active pipeline runs —
+                  pause, resume, cancel.
+Owns:             Route definitions for POST /runs/{run_id}/pause,
+                  POST /runs/{run_id}/resume,
+                  POST /runs/{run_id}/cancel.
+                  run_id validation helper (_validate_run_id).
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain run control logic — delegate to get_active_run()
+                  from app.core.run_control.
+Dependencies:     fastapi, app.core.run_control.
+Reason To Change: New run control action added, or run_id validation changes.
 
 Req 7.5, 7.6
 """

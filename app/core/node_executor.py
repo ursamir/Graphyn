@@ -1,12 +1,16 @@
 # app/core/node_executor.py
-"""NodeExecutor — drives a single node through its full lifecycle with retry.
-
-Extracted from pipeline.py. Responsible for:
-  - setup / teardown lifecycle
-  - on_start → process → on_end sequencing
-  - exponential back-off retry via RetryPolicy
-  - streaming execution via process_stream()
-  - _count_port_items helper
+"""
+Bounded Context:  BC5 — Execution Runtime
+Responsibility:   Drive a single node through its full lifecycle with retry.
+Owns:             NodeExecutor class — setup/teardown, on_start→process→on_end
+                  sequencing, exponential back-off retry, streaming execution.
+Public Surface:   NodeExecutor(node, run_id), .setup(), .teardown(),
+                  .execute(inputs) -> dict, .execute_stream(inputs) -> AsyncGen
+Must NOT:         Understand pipeline topology, import from app.domain,
+                  import from orchestrator or executor (no intra-BC5 cycles).
+Dependencies:     BC2 (nodes.base, nodes.observers, nodes.retry).
+Reason To Change: Node lifecycle protocol changes, retry policy evolves,
+                  or streaming execution semantics change.
 """
 from __future__ import annotations
 

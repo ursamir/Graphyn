@@ -1,7 +1,17 @@
 # app/mcp/server.py
-"""MCP server — stdio transport, tool dispatch, structured logging.
-
-Req 1.1–1.11
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   MCP server startup, stdio transport loop, and tool dispatch.
+                  Thin shell — all business logic lives in handlers/ and core.
+Owns:             _server (Server instance), _TOOLS registry, _register(),
+                  handle_list_tools(), handle_call_tool(), _startup(), main().
+Public Surface:   main() — entry point for `graphyn mcp` and `python -m app.mcp.server`.
+Must NOT:         Contain business logic. Each handler must stay ≤ ~30 lines.
+                  Must log to stderr only (stdout is JSON-RPC transport).
+Dependencies:     mcp (server, types), app.mcp.auth, app.mcp.tool_registry,
+                  stdlib (asyncio, json, logging, sys).
+Reason To Change: MCP protocol version changes, transport changes (stdio →
+                  HTTP), or tool dispatch mechanism evolves.
 """
 from __future__ import annotations
 
@@ -104,6 +114,11 @@ async def handle_call_tool(
 def _startup() -> None:
     """Register all tools. Exit with code 1 on any registration failure (Req 1.3)."""
     try:
+        # Register domain serializers so artifact_store/pipeline_cache/checkpoint
+        # can handle AudioSample objects without importing domain models (ARCH-2 fix).
+        from app.models.audio_artifact_serializer import register_audio_serializer
+        register_audio_serializer()
+
         # Import here to avoid circular dependency at module load time
         from app.mcp.tool_registry import register_all_tools
         register_all_tools(_register)

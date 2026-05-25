@@ -1,8 +1,16 @@
 # app/mcp/handlers/discovery.py
-"""list_nodes MCP tool handler.
-
-Implements the Node Discovery Tool (Req 2.1–2.11).
-All registry queries are delegated to get_registry() — no separate catalogue.
+"""
+Bounded Context:  Application Layer — MCP Interface
+Responsibility:   list_nodes tool handler. Exposes node discovery, capability
+                  filtering, port-type compatibility, and schema queries.
+Owns:             list_nodes_handler(), LIST_NODES_SCHEMA/DESCRIPTION,
+                  _serialize_node_metadata(), _resolve_capability() (local helper),
+                  _CAPABILITY_FIELDS constant.
+Public Surface:   list_nodes_handler(arguments) -> dict
+Must NOT:         Contain registry mutation logic. Must not import from app.domain.
+Dependencies:     BC3 (registry_runtime — module-level import), stdlib (typing).
+Reason To Change: list_nodes tool schema changes, new capability fields are
+                  added, or new dispatch modes are needed.
 """
 from __future__ import annotations
 

@@ -1,15 +1,24 @@
-"""Condition expression evaluator for conditional edges (Phase 3).
-
-Provides a restricted eval() that allows only safe boolean expressions
-against a node's output dict.
+# app/core/conditions.py
+"""
+Bounded Context:  BC5 — Execution Runtime
+Responsibility:   Safe evaluation of boolean condition expressions on node
+                  output dicts for conditional edge routing.
+Owns:             evaluate_condition(), ConditionEvaluationError,
+                  _validate_ast() (AST whitelist enforcer).
+Public Surface:   evaluate_condition(expression, output) -> bool
+                  ConditionEvaluationError
+Must NOT:         Import from app.domain, app.api, or any storage module.
+                  Must not execute arbitrary Python — only the whitelisted
+                  AST node types are permitted.
+Dependencies:     stdlib (ast).
+Reason To Change: Condition expression language is extended (new operators,
+                  new allowed names), or security policy tightens.
 
 Allowed: comparisons (==, !=, <, >, <=, >=), boolean ops (and, or, not),
          arithmetic ops (+, -, *, /, %), subscript access (output["key"]),
          len() calls, integer/float/string/bool literals.
 Disallowed: imports, function calls (except len), attribute access on non-output names,
             assignments, comprehensions, lambdas.
-
-Req 5.2, 5.3, 5.6
 """
 from __future__ import annotations
 

@@ -1,12 +1,21 @@
 # app/api/routers/pipelines.py
-"""Pipeline API — validate, run (stream), run-async, and template endpoints.
+"""
+Bounded Context:  REST API Layer
+Responsibility:   HTTP endpoints for pipeline validation, synchronous streaming
+                  execution, async execution, and template management.
+Owns:             Route definitions for POST /pipelines/validate,
+                  POST /pipelines/run (NDJSON stream),
+                  POST /pipelines/run-async,
+                  GET/POST/DELETE /pipelines/templates/*.
+Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
+Must NOT:         Contain pipeline execution logic — delegate to SDK/orchestrator.
+Dependencies:     fastapi, app.core.sdk, app.core.ir, app.core.config.
+Reason To Change: New pipeline endpoint added, streaming protocol changes,
+                  or template storage changes.
 
 Accepts both IR JSON (canonical) and YAML (deprecated) formats.
 IR JSON is detected by the presence of a 'schema_version' field in the request body.
-
-All execution delegates to Pipeline.run_with_manager() (SDK as source of truth — V1.md §3.1).
-
-Req 4.7 – 4.9
+All execution delegates to Pipeline.run_with_manager() (SDK as source of truth).
 """
 from __future__ import annotations
 

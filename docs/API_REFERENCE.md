@@ -712,16 +712,19 @@ Plugin lifecycle management. All operations delegate to `PluginManager`. Error r
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/v1/plugins` | List all installed plugins → JSON array of `PluginRecord` |
-| POST | `/api/v1/plugins/install` | Install a plugin; body: `{"source": str, "upgrade": bool}` |
+| POST | `/api/v1/plugins/install` | Install a plugin; body: `{"source": str, "upgrade": bool, "expected_sha256": str\|null}` |
 | GET | `/api/v1/plugins/search` | Search plugin index; `?q=<query>` → JSON array of index entries |
 | GET | `/api/v1/plugins/{name}` | Get full `PluginRecord` for an installed plugin |
 | POST | `/api/v1/plugins/{name}/enable` | Enable plugin → `{"name": ..., "enabled": true}` |
 | POST | `/api/v1/plugins/{name}/disable` | Disable plugin → `{"name": ..., "enabled": false}` |
 | DELETE | `/api/v1/plugins/{name}` | Uninstall plugin → `{"name": ..., "status": "uninstalled"}` |
 
-**Install response shapes:**
-- Local source (synchronous): `{"name": "...", "version": "...", "status": "installed"}`
-- Remote source (async, `git+`, `http://`, `https://`): `{"status": "installing", "name": "..."}` — poll `GET /plugins/{name}` for the result
+**Install request fields:**
+- `source` (required) — local path, `git+<url>`, `https://<url>.zip`, or plain plugin name
+- `upgrade` (optional, default `false`) — replace existing installation
+- `expected_sha256` (optional) — SHA-256 hex digest of the downloaded archive; verified before extraction for HTTP archive sources (SEC-6 fix)
+
+**Security:** When `GRAPHYN_PLUGIN_ALLOWED_SOURCES` is set, remote sources not matching any listed prefix are rejected with HTTP 502.
 
 **Error code mapping:**
 

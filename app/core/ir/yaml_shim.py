@@ -1,4 +1,15 @@
-"""YAML compatibility shim — converts legacy YAML pipeline configs to GraphIR.
+# app/core/ir/yaml_shim.py
+"""
+Bounded Context:  BC1 — Graph Language
+Responsibility:   Convert legacy YAML pipeline configs to GraphIR. Pure
+                  conversion — no I/O, no warnings emitted here.
+Owns:             yaml_config_to_ir(), load_yaml_with_deprecation().
+Public Surface:   yaml_config_to_ir(raw_dict) → GraphIR,
+                  load_yaml_with_deprecation(path) → GraphIR
+Must NOT:         Import from app.domain, app.api, or app.models.
+                  Must not execute pipelines or touch the registry.
+Dependencies:     app.core.ir.{loader, models}, stdlib (warnings), yaml.
+Reason To Change: YAML schema changes, or new edge format variants are added.
 
 No DeprecationWarning is emitted from yaml_config_to_ir() — it is a pure
 conversion function. The warning is emitted only by load_yaml_with_deprecation()

@@ -1,17 +1,19 @@
 # app/core/run_journal.py
-"""Run journal — filesystem persistence for a single pipeline run.
-
-Extracted from run_manager.py. Responsible for:
-  - Creating the run directory and writing initial meta.json
-  - Persisting graph IR, logs, metadata, config
-  - Tracking pause/cancel state via threading.Event
-  - Resume state (resume_state.json) read/write
-  - Checkpoint discovery (find_latest_checkpoint)
-  - Artifact registration facade (delegates to ArtifactStore + ProvenanceStore)
-  - Provenance summary
-
-The control-plane functions (register_active_run, get_active_run,
-deregister_active_run) live in run_control.py.
+"""
+Bounded Context:  BC6 — Observability & Storage
+Responsibility:   Filesystem persistence for a single pipeline run. Manages
+                  the run directory lifecycle, meta.json, resume state,
+                  checkpoint discovery, and artifact registration facade.
+Owns:             RunManager class — run directory, meta.json, pause/cancel
+                  threading events, artifact registration delegation.
+Public Surface:   RunManager (constructor, save_*, mark_*, pause, resume,
+                  cancel, register_artifact, artifacts, get_provenance_summary)
+Must NOT:         Import from app.domain, app.api, or app.core.orchestrator.
+                  Must not understand pipeline execution order or node logic.
+Dependencies:     BC6 (artifact_store, provenance, checkpoint), BC1 (ir.loader),
+                  app.core.config, app.core.nodes.errors (ResumeError).
+Reason To Change: Run persistence format evolves, resume state schema changes,
+                  or artifact registration delegation changes.
 """
 from __future__ import annotations
 
