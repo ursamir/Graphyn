@@ -7,9 +7,9 @@ Public Surface:   Pipeline (run, run_with_manager, from_json, from_yaml, to_ir,
                   to_json, subscribe, validate, pause, resume, cancel);
                   PipelineNode; ArtifactCollection.
 Must NOT:         Contain execution logic — delegates entirely to
-                  run_pipeline_ir() and RunManager. Must not import from
+                  get_backend().execute() and RunManager. Must not import from
                   app.domain or app.api at module level.
-Dependencies:     BC1 (ir.models, ir.loader), BC5 (orchestrator — lazy),
+Dependencies:     BC1 (ir.models, ir.loader), BC5 (runtime_backend — lazy),
                   BC6 (run_journal — lazy, provenance — lazy),
                   BC3 (registry_runtime — lazy via PipelineNode._validate),
                   app.core.logger (lazy), app.core.plugins.manager (lazy).
@@ -379,8 +379,8 @@ class Pipeline:
         Returns ``(raw_outputs, run_manager)`` so both public methods can
         build their return values from the same execution.
         """
-        from app.core.orchestrator import run_pipeline_ir
-        from app.core.run_journal import RunManager
+        from app.core.runtime_backend import get_backend  # noqa: PLC0415
+        from app.core.run_journal import RunManager  # noqa: PLC0415
 
         if run_manager is None:
             run_manager = RunManager()
@@ -391,7 +391,7 @@ class Pipeline:
 
         _logger = self._make_subscriber_logger(logger)
 
-        raw_outputs = run_pipeline_ir(
+        raw_outputs = get_backend().execute(
             graph,
             logger=_logger,
             use_cache=use_cache,
@@ -603,41 +603,34 @@ class Pipeline:
     def validate(self) -> list[str]:
         """Validate the pipeline and return a list of error strings.
 
-        Returns an empty list if the pipeline is valid. Delegates to the same
-        validation logic used by the REST API and CLI (G5-17 fix).
+        Returns an empty list if the pipeline is valid. Uses IR-native
+        validation: structural checks via load_ir() then topology checks
+        via PipelineGraph. No longer round-trips through the deprecated
+        YAML-format dict (G5-17 / SDK-validate fix).
 
         Returns:
             List of validation error strings. Empty list means valid.
         """
-        from app.core.validation import validate_pipeline
-        from app.core.ir.loader import dump_ir
+        from app.core.ir.loader import load_ir, dump_ir  # noqa: PLC0415
+        from app.core.planner import PipelineGraph, _ir_to_pipeline_config  # noqa: PLC0415
 
-        graph_dict = dump_ir(self._graph_ir)
-        # validate_pipeline expects the raw pipeline config dict format;
-        # convert from IR format to the expected structure.
-        pipeline_cfg = {
-            "pipeline": {
-                "seed": self._graph_ir.metadata.seed,
-                "nodes": [
-                    {"id": n.id, "type": n.node_type, "config": dict(n.config)}
-                    for n in self._graph_ir.nodes
-                ],
-                "edges": [
-                    {
-                        "from": [e.src_id, e.src_port],
-                        "to": [e.dst_id, e.dst_port],
-                    }
-                    for e in self._graph_ir.edges
-                ] if self._graph_ir.edges else None,
-            }
-        }
         errors: list[str] = []
+
+        # Step 1: structural IR validation (schema, node IDs, edge refs)
         try:
-            from app.core.registry_runtime import get_registry  # noqa: PLC0415
-            registry = get_registry()
-            validate_pipeline(pipeline_cfg, registry)
+            graph_dict = dump_ir(self._graph_ir)
+            load_ir(graph_dict)
         except Exception as exc:
             errors.append(str(exc))
+            return errors  # no point continuing if IR is structurally invalid
+
+        # Step 2: node type resolution + config validation + topology (cycle check)
+        try:
+            pipeline_cfg = _ir_to_pipeline_config(self._graph_ir)
+            PipelineGraph(pipeline_cfg)
+        except Exception as exc:
+            errors.append(str(exc))
+
         return errors
 
     def pause(self) -> None:

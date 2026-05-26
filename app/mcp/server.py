@@ -119,6 +119,11 @@ def _startup() -> None:
         from app.models.audio_artifact_serializer import register_audio_serializer
         register_audio_serializer()
 
+        # Explicitly populate the NodeRegistry singleton after the domain serializer
+        # is registered so node imports that reference AudioSample work correctly.
+        from app.core.nodes import initialize_registry
+        initialize_registry()
+
         # Import here to avoid circular dependency at module load time
         from app.mcp.tool_registry import register_all_tools
         register_all_tools(_register)

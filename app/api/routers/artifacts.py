@@ -163,6 +163,7 @@ def replay_artifact(artifact_id: str):
     from app.core.sdk import Pipeline, PipelineNode
 
     def _do_replay():
+        from app.core.runtime_backend import get_backend  # noqa: PLC0415
         try:
             nodes = [PipelineNode(n.node_type, dict(n.config)) for n in graph.nodes]
             replay_pipeline = Pipeline(

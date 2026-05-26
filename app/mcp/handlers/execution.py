@@ -7,9 +7,9 @@ Responsibility:   execute_pipeline tool handler. Validates a GraphIR, allocates
 Owns:             execute_pipeline_handler(), EXECUTE_PIPELINE_SCHEMA/DESCRIPTION,
                   _PIPELINE_EXECUTOR (module-level shared ThreadPoolExecutor).
 Public Surface:   execute_pipeline_handler(arguments) -> dict
-Must NOT:         Contain execution logic — delegates to run_pipeline_ir().
+Must NOT:         Contain execution logic — delegates to get_backend().execute().
                   Must not import from app.domain.
-Dependencies:     BC1 (ir.loader), BC5 (orchestrator — module-level import),
+Dependencies:     BC1 (ir.loader), BC5 (runtime_backend — module-level import),
                   BC6 (run_journal), stdlib (concurrent.futures, typing).
 Reason To Change: execute_pipeline tool schema changes, or async execution
                   strategy changes (e.g. move to a task queue).
@@ -19,7 +19,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from app.core.orchestrator import run_pipeline_ir  # module-level import — patchable in tests
+from app.core.runtime_backend import get_backend as _get_backend  # module-level — patchable in tests
 
 # NEW-7 fix: module-level shared executor — avoids creating a new ThreadPoolExecutor
 # per call (which leaks OS threads under load when shutdown(wait=False) is used).
@@ -90,7 +90,7 @@ def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
     # Step 3: Submit execution to shared background executor (NEW-7 fix — avoids
     # per-call ThreadPoolExecutor leak; NEW-16 fix — removes redundant thread layer).
     _PIPELINE_EXECUTOR.submit(
-        run_pipeline_ir,
+        _get_backend().execute,
         graph,
         use_cache=use_cache,
         streaming=streaming,

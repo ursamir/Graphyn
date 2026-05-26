@@ -26,7 +26,8 @@ has been removed. The cache now delegates to ArtifactSerializerRegistry:
         handler.serialize(samples, port_dir)
         samples = handler.deserialize(port_dir)
 
-This means pipeline_cache.py contains zero domain-model imports.
+AudioSample detection also uses registry.infer_type() instead of duck-typing
+(ARCH-1/ARCH-2 follow-up fix) — pipeline_cache.py contains zero domain knowledge.
 """
 import hashlib
 import json
@@ -43,17 +44,6 @@ logger = logging.getLogger(__name__)
 from app.core.config import cache_dir as _cache_dir
 
 # ── Helpers to detect cacheable output types ──────────────────────────────────
-
-def _is_audio_sample_list(value: Any) -> bool:
-    """Return True if value is a non-empty list of AudioSample objects."""
-    return (
-        isinstance(value, list)
-        and len(value) > 0
-        and hasattr(value[0], "path")
-        and hasattr(value[0], "sample_rate")
-        and hasattr(value[0], "data")
-    )
-
 
 def _is_json_serializable(value: Any) -> bool:
     """Return True if value can be round-tripped through JSON."""
@@ -99,6 +89,28 @@ class PipelineCache:
                 raise
             # Config not yet initialised (e.g. in tests) — skip the check
         self._base_override = value
+
+    def compute_key(self, node_type: str, config: dict, inputs: dict) -> str:
+        """Compute the cache key for a node given its type, config, and inputs dict.
+
+        Combines per-port input hashes so port identity is preserved (NEW-6 fix).
+        This is the single canonical implementation — both the sequential
+        orchestrator and the parallel executor call this method so the hashing
+        strategy is never duplicated.
+
+        Args:
+            node_type: The node's type string.
+            config: The node's config dict.
+            inputs: The node's input dict (port_name → value).
+
+        Returns:
+            A SHA-256 hex digest string suitable for use as a cache directory name.
+        """
+        import hashlib as _hashlib  # noqa: PLC0415
+        combined_input_hash = _hashlib.sha256(
+            "".join(self.input_hash(v) for v in inputs.values()).encode()
+        ).hexdigest()
+        return self.key(node_type, config, combined_input_hash)
 
     def key(self, node_type: str, config: dict, input_hash: str) -> str:
         """SHA-256 of node_type + sorted_json(config) + input_hash."""
@@ -340,10 +352,14 @@ class PipelineCache:
 
         # ── Check for AudioSample list on any port ─────────────────────────────
         # Collect ALL ports that carry AudioSample data so none are dropped.
+        # ARCH-1/ARCH-2 follow-up: use registry.infer_type() instead of
+        # duck-typing so pipeline_cache.py contains zero domain knowledge.
+        from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+        _ser_registry = get_serializer_registry()
         audio_ports: dict[str, list] = {
             port_name: value
             for port_name, value in outputs.items()
-            if _is_audio_sample_list(value)
+            if _ser_registry.infer_type(value) == "audio_samples"
         }
 
         if audio_ports:

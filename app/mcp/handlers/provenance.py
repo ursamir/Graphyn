@@ -10,7 +10,7 @@ Owns:             list_artifacts_handler, get_artifact_lineage_handler,
 Public Surface:   All three handler functions above.
 Must NOT:         Contain artifact storage logic — delegates to ArtifactStore
                   and ProvenanceStore. Must not import from app.domain.
-Dependencies:     BC5 (orchestrator — module-level import), BC6 (artifact_store,
+Dependencies:     BC5 (runtime_backend — module-level import), BC6 (artifact_store,
                   provenance, run_journal — lazy), BC1 (ir.loader — lazy),
                   app.core.config (runs_dir — lazy), stdlib (concurrent.futures).
 Reason To Change: Provenance tool schemas change, or replay strategy changes.
@@ -21,7 +21,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from app.core.orchestrator import run_pipeline_ir  # module-level import — patchable in tests
+from app.core.runtime_backend import get_backend as _get_backend  # module-level — patchable in tests
 
 # NEW-7 fix: module-level shared executor — avoids creating a new ThreadPoolExecutor
 # per replay_run call (which leaks OS threads under load).
@@ -194,7 +194,7 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
         new_run_manager = RunManager()
 
         # NEW-7 fix: use module-level shared executor instead of per-call pool.
-        _REPLAY_EXECUTOR.submit(run_pipeline_ir, graph, run_manager=new_run_manager)
+        _REPLAY_EXECUTOR.submit(_get_backend().execute, graph, run_manager=new_run_manager)
 
         return {"run_id": new_run_manager.run_id, "status": "started"}
     except Exception as e:

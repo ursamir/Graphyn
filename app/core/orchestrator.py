@@ -18,7 +18,6 @@ Reason To Change: Runtime execution semantics evolve (new execution mode,
 from __future__ import annotations
 
 import asyncio
-import hashlib as _hashlib
 import json
 import logging
 import os
@@ -384,13 +383,7 @@ async def run_pipeline_ir_async(
                 node_cfg_dict = next(
                     (spec.config for spec in pipeline_cfg.nodes if spec.node_id == node_id), {}
                 )
-                # NEW-6 fix: hash each port separately and combine so port
-                # identity is preserved. list(inputs.values()) loses port names
-                # and causes key collisions for multi-port nodes.
-                combined_input_hash = _hashlib.sha256(
-                    "".join(cache.input_hash(v) for v in inputs.values()).encode()
-                ).hexdigest()
-                cache_key = cache.key(node_type, node_cfg_dict, combined_input_hash)
+                cache_key = cache.compute_key(node_type, node_cfg_dict, inputs)
                 cached_result = cache.load(cache_key)
                 if cached_result is not None:
                     node_outputs[node_id] = cached_result

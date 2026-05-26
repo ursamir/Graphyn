@@ -3,9 +3,11 @@
 Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Serialize and deserialize per-node outputs to disk for
                   resumable pipeline execution.
-Owns:             _write_checkpoint(), _load_checkpoint_outputs()
+Owns:             _write_checkpoint(), _load_checkpoint_outputs(),
+                  _find_latest_checkpoint()
 Public Surface:   _write_checkpoint(run_base_path, node_id, outputs, logger)
                   _load_checkpoint_outputs(checkpoint_dir) -> dict | None
+                  _find_latest_checkpoint(node_id) -> dict | None
 Must NOT:         Import app.models at module level (RULE 1 — platform must
                   not depend on domain models at import time). AudioSample is
                   never imported here — WAV I/O is delegated to
@@ -28,13 +30,15 @@ Both functions now delegate to ArtifactSerializerRegistry:
         handler.serialize(samples, port_dir)
         samples = handler.deserialize(port_dir)
 
-This means checkpoint.py contains zero domain-model imports.
+AudioSample detection also uses registry.infer_type() instead of duck-typing
+(ARCH-3 follow-up fix) — checkpoint.py contains zero domain-model knowledge.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -80,10 +84,16 @@ def _write_checkpoint(
         os.makedirs(checkpoint_dir, exist_ok=True)
 
         # Collect ALL ports that carry AudioSample-like lists so none are dropped.
+        # ARCH-3 fix: use the serializer registry's infer_type() instead of
+        # duck-typing for AudioSample attributes. This removes domain knowledge
+        # from platform infrastructure.
+        from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+        _ser_registry = get_serializer_registry()
         audio_ports: dict[str, list] = {
             port_name: value
             for port_name, value in outputs.items()
-            if isinstance(value, list) and value and _is_audio_sample_list(value)
+            if isinstance(value, list) and value
+            and _ser_registry.infer_type(value) == "audio_samples"
         }
 
         if not audio_ports:
@@ -135,14 +145,73 @@ def _write_checkpoint(
                 pass
 
 
-def _is_audio_sample_list(value: list) -> bool:
-    """Return True if value looks like a list of AudioSample objects."""
-    first = value[0]
-    return (
-        hasattr(first, "data")
-        and hasattr(first, "sample_rate")
-        and hasattr(first, "label")
-    )
+def _find_latest_checkpoint(node_id: str) -> dict | None:
+    """Search runs/ for the most recent checkpoint for node_id.
+
+    Extracted from RunManager (SA-RJ-ARCH fix): checkpoint discovery is a
+    storage query that belongs in checkpoint.py, not in the run lifecycle
+    manager. RunManager.find_latest_checkpoint() now delegates here.
+
+    Args:
+        node_id: The node ID to search checkpoints for.
+
+    Returns:
+        The loaded checkpoint outputs dict, or None if not found.
+    """
+    from app.core.config import runs_dir as _runs_dir  # noqa: PLC0415
+
+    runs_dir_path = str(_runs_dir())
+    if not os.path.exists(runs_dir_path):
+        return None
+
+    candidates = []
+    for run_dir_name in os.listdir(runs_dir_path):
+        runs_dir_resolved = str(Path(runs_dir_path).resolve())
+        candidate_resolved = str(Path(os.path.join(runs_dir_path, run_dir_name)).resolve())
+        if not candidate_resolved.startswith(runs_dir_resolved + os.sep) and \
+           candidate_resolved != runs_dir_resolved:
+            log.warning(
+                "Skipping suspicious run directory '%s' — resolved path escapes runs dir",
+                run_dir_name,
+            )
+            continue
+        checkpoint_dir = os.path.join(
+            runs_dir_path, run_dir_name, "checkpoints", f"node_{node_id}"
+        )
+        manifest_path = os.path.join(checkpoint_dir, "manifest.json")
+        if os.path.exists(manifest_path):
+            meta_path = os.path.join(runs_dir_path, run_dir_name, "meta.json")
+            created_at = ""
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        meta = json.load(f)
+                    created_at = meta.get("created_at", "")
+                except Exception:
+                    pass
+            if not created_at:
+                try:
+                    mtime = os.path.getmtime(os.path.join(runs_dir_path, run_dir_name))
+                    created_at = str(mtime)
+                except Exception:
+                    created_at = "0"
+            candidates.append((created_at, checkpoint_dir))
+
+    if not candidates:
+        return None
+
+    def _parse_ts(ts: str) -> float:
+        from datetime import datetime  # noqa: PLC0415
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            try:
+                return float(ts)
+            except Exception:
+                return 0.0
+
+    candidates.sort(key=lambda x: _parse_ts(x[0]), reverse=True)
+    return _load_checkpoint_outputs(candidates[0][1])
 
 
 def _load_checkpoint_outputs(checkpoint_dir: str) -> dict | None:

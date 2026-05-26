@@ -118,22 +118,21 @@ class PipelineConfig:
 ## Primary Execution Entry Point
 
 ```python
-from app.core.pipeline import run_pipeline_ir
+# Canonical — all interfaces use this
+from app.core.runtime_backend import get_backend
+result = get_backend().execute(graph, logger=None, use_cache=True, checkpoint=False,
+    streaming=False, parallel=False, observer=None, run_manager=None,
+    max_workers=None, resume_run_id=None, include_nodes=None,
+    exclude_nodes=None, input_overrides=None, event_driven=False)
 
-result = run_pipeline_ir(
-    graph: GraphIR,
-    logger=None,
-    use_cache=True,
-    checkpoint=False,
-    streaming=False,
-    observer=None,
-    run_manager=None,
-) -> dict[str, Any]   # outputs of final node
+# Direct orchestrator access (internal / backward compat only)
+from app.core.pipeline import run_pipeline_ir
+result = run_pipeline_ir(graph, ...)
 ```
 
-`run_pipeline(config_path)` is a **deprecated shim** — it reads the raw YAML for `save_config()`, then calls `load_yaml_with_deprecation(config_path)` (emitting a `DeprecationWarning` about YAML format), then calls `run_pipeline_ir`. Emits two `DeprecationWarning`s total.
+`RuntimeBackend` is the canonical execution entry point. `LocalPythonBackend` (the default) delegates to `run_pipeline_ir`. Custom backends can be registered via `register_backend(id, BackendClass)`. All interfaces (SDK, API, MCP, CLI) call `get_backend().execute()`.
 
-Nodes are chained automatically: each node's `output` port connects to the next node's `input` port. No `edges` key needed.
+`run_pipeline(config_path)` is a **deprecated shim** — it reads the raw YAML for `save_config()`, then calls `load_yaml_with_deprecation(config_path)` (emitting a `DeprecationWarning` about YAML format), then calls `run_pipeline_ir`. Emits two `DeprecationWarning`s total.
 
 ```yaml
 pipeline:
@@ -313,20 +312,22 @@ Unconnected optional ports receive `None`.
 
 **File:** `app/core/pipeline_cache.py`
 
-Caches node outputs as WAV files + `manifest.json` under `workspace/cache/{sha256}/`.
+Caches node outputs under `workspace/cache/{sha256}/`. Domain-agnostic — uses `ArtifactSerializerRegistry.infer_type()` to detect serializable output types; no domain model imports.
 
 ```python
 cache = PipelineCache()
 
-# Compute cache key
-key = cache.key(node_type, config_dict, cache.input_hash(samples))
+# Canonical key computation (preferred — shared by sequential and parallel executors)
+key = cache.compute_key(node_type, config_dict, inputs)
 
-# Check / load
-if cache.has(key):
-    samples = cache.load(key)   # returns list[AudioSample] or None on corrupt cache
+# Or manually:
+key = cache.key(node_type, config_dict, cache.input_hash(value))
+
+# Load — treat None as a miss; never call has() first (TOCTOU hazard)
+cached = cache.load(key)   # returns outputs dict or None
 
 # Save
-cache.save(key, samples)
+cache.save(key, outputs)
 
 # Clear all
 stats = cache.clear()  # {"entries_deleted": N, "bytes_freed": N}
@@ -334,38 +335,19 @@ stats = cache.clear()  # {"entries_deleted": N, "bytes_freed": N}
 
 ### Cache key
 
-`SHA-256(node_type + sorted_json(config) + input_hash)`
-
-### Input hash
-
-`SHA-256` of all sample `path:sample_rate:data.shape` strings concatenated.
+`SHA-256(node_type + sorted_json(config) + combined_input_hash)` where `combined_input_hash` is `SHA-256` of all per-port input hashes concatenated (preserves port identity).
 
 ### Cache format
 
 ```
 workspace/cache/{sha256}/
-├── 0.wav
-├── 1.wav
-├── ...
-└── manifest.json
+├── outputs.json          # generic JSON-serializable outputs
+# or for AudioSample outputs:
+├── port_{name}/
+│   ├── 0.wav … N.wav
+│   └── manifest.json
+└── manifest.json         # lists cached_ports
 ```
-
-`manifest.json`:
-```json
-{
-  "samples": [
-    {
-      "filename": "0.wav",
-      "label": "speech",
-      "path": "/original/path.wav",
-      "sample_rate": 16000,
-      "metadata": {}
-    }
-  ]
-}
-```
-
-Cache is only applied when the node has a single list-valued input (audio samples). Nodes with dict inputs (e.g. `ExportNode`) are not cached.
 
 ---
 

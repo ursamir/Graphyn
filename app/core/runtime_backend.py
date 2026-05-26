@@ -3,6 +3,9 @@
 Bounded Context:  BC5 — Execution Runtime
 Responsibility:   Pluggable execution backend abstraction. Defines the interface
                   all backends must implement and provides the default local backend.
+                  This is the CANONICAL execution entry point — all interfaces
+                  (SDK, API, MCP, CLI) must call get_backend().execute() rather
+                  than importing run_pipeline_ir directly.
 Owns:             RuntimeBackend (ABC), LocalPythonBackend, backend registry
                   (_BACKEND_REGISTRY, _BACKEND_INSTANCES), register_backend(),
                   get_backend(), list_backends().

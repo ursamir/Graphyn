@@ -23,11 +23,11 @@ run.base_path   # "workspace/runs/a1b2c3d4"
 | `save_config(yaml_str)` | Write `config.yaml` to the run directory |
 | `save_logs(logs)` | Write `logs.json` (list of log entry dicts) |
 | `save_metadata(metadata)` | Merge caller metadata with run bookkeeping fields and write `meta.json` with `status: "completed"` |
-| `mark_failed(error)` | Update `meta.json` with `status: "failed"` and `error` field |
+| `get_provenance_summary()` | **Phase 4** — returns `{"run_id", "graph_hash", "artifacts", "provenance_records"}` dict |
 | `save_graph_ir(data)` | Write `graph.json`; also computes and stores `self._graph_hash` (Phase 4) |
 | `compute_graph_hash(graph_ir)` | **Phase 4** — static method; returns SHA-256 hex of `dump_ir(graph_ir)` JSON |
+| `find_latest_checkpoint(node_id)` | Delegates to `checkpoint._find_latest_checkpoint()` — searches all runs for the most recent checkpoint for `node_id`; returns outputs dict or `None` |
 | `register_artifact(node_id, node_type, artifact_type, data, metadata=None, input_artifact_ids=None)` | **Phase 4** — stores artifact via `ArtifactStore`, records lineage via `ProvenanceStore`, returns `ArtifactRecord` |
-| `get_provenance_summary()` | **Phase 4** — returns `{"run_id", "graph_hash", "artifacts", "provenance_records"}` dict |
 
 ### `meta.json` structure
 

@@ -5,9 +5,11 @@ Responsibility:   Define the exception hierarchy for the node system. All node
                   and pipeline errors derive from NodeSystemError.
 Owns:             NodeSystemError, NodeNotFoundError, DuplicateNodeTypeError,
                   NodeMetadataError, NodeTypeError, PortTypeNotFoundError,
-                  DuplicatePortTypeError, PipelineGraphError, ResumeError.
+                  DuplicatePortTypeError, PipelineGraphError.
 Public Surface:   All exception classes above.
 Must NOT:         Import from any other app module. Pure stdlib only.
+          Must NOT own ResumeError — that is a run-persistence error
+          belonging to app.core.errors (BC6 / Platform Infrastructure).
 Dependencies:     stdlib only.
 Reason To Change: New error categories are needed in the node/pipeline system.
 """
@@ -46,5 +48,12 @@ class PipelineGraphError(NodeSystemError):
     """Raised for invalid pipeline graph structure (cycles, missing ports, etc.)."""
 
 
-class ResumeError(RuntimeError):
-    """Raised when a resume operation cannot be completed."""
+# ---------------------------------------------------------------------------
+# Backward-compatibility re-export
+# ---------------------------------------------------------------------------
+# ResumeError has been moved to app.core.errors (platform-level errors module).
+# This alias is kept so existing imports of
+#   from app.core.nodes.errors import ResumeError
+# continue to work without modification.
+# New code should import from app.core.errors directly.
+from app.core.errors import ResumeError  # noqa: E402, F401

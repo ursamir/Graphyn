@@ -47,6 +47,12 @@ from app.core.config import runs_dir as _runs_dir
 from app.models.audio_artifact_serializer import register_audio_serializer as _reg_audio
 _reg_audio()
 
+# ── Registry initialization ───────────────────────────────────────────────────
+# Explicitly populate the NodeRegistry singleton after the domain serializer
+# is registered so node imports that reference AudioSample work correctly.
+from app.core.nodes import initialize_registry as _init_registry
+_init_registry()
+
 
 def _list_runs():
     """Return a list of run metadata dicts sorted by created_at descending."""
@@ -315,7 +321,7 @@ def cmd_run(args):
         # Apply seed override (Req 4.5.7) — rebuild IR with new seed then run directly
         if args.seed is not None:
             from app.core.ir.models import GraphIR, IRMetadata
-            from app.core.orchestrator import run_pipeline_ir
+            from app.core.runtime_backend import get_backend
             graph = pipeline.to_ir()
             new_graph = GraphIR(
                 schema_version=graph.schema_version,
@@ -331,7 +337,7 @@ def cmd_run(args):
                 parameters=graph.parameters,
             )
             try:
-                run_pipeline_ir(
+                get_backend().execute(
                     new_graph,
                     logger=logger,
                     parallel=parallel,
@@ -373,7 +379,7 @@ def cmd_run(args):
         # Apply seed override (Req 4.5.7) — rebuild IR with new seed then run directly
         if args.seed is not None:
             from app.core.ir.models import GraphIR, IRMetadata
-            from app.core.orchestrator import run_pipeline_ir
+            from app.core.runtime_backend import get_backend
             graph = pipeline.to_ir()
             new_graph = GraphIR(
                 schema_version=graph.schema_version,
@@ -389,7 +395,7 @@ def cmd_run(args):
                 parameters=graph.parameters,
             )
             try:
-                run_pipeline_ir(
+                get_backend().execute(
                     new_graph,
                     logger=logger,
                     parallel=parallel,

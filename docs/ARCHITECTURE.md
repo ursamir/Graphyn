@@ -31,16 +31,30 @@
 │  FastAPI REST       Pipeline class    argparse CLI  stdio JSON-RPC  │
 │  10 routers         PipelineNode      14 commands   14 tools        │
 └──────────────────────────────┬──────────────────────────────────────┘
-                               │ all call run_pipeline_ir()
+                               │ all call get_backend().execute()
+┌──────────────────────────────▼──────────────────────────────────────┐
+│  BACKEND ABSTRACTION LAYER                                          │
+│                                                                     │
+│  app/core/runtime_backend.py                                        │
+│  ├── RuntimeBackend (ABC)     canonical execution entry point       │
+│  ├── LocalPythonBackend       default — delegates to orchestrator   │
+│  ├── get_backend()            returns cached backend singleton      │
+│  └── register_backend()       register custom backends              │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  EXECUTION LAYER                                                    │
 │                                                                     │
-│  app/core/pipeline.py                                               │
-│  ├── run_pipeline_ir()        primary async entry point             │
+│  app/core/orchestrator.py                                           │
+│  ├── run_pipeline_ir()        synchronous shim                      │
 │  ├── run_pipeline_ir_async()  async implementation                  │
-│  ├── PipelineGraph            DAG builder + topo sort               │
-│  ├── NodeExecutor             per-node lifecycle driver             │
+│                                                                     │
+│  app/core/planner.py                                                │
+│  ├── PipelineGraph            DAG builder + topo sort + waves       │
 │  └── _ir_to_pipeline_config() IR → PipelineConfig conversion        │
+│                                                                     │
+│  app/core/node_executor.py                                          │
+│  └── NodeExecutor             per-node lifecycle driver             │
 │                                                                     │
 │  app/core/executor.py                                               │
 │  └── ParallelExecutor         wave-based asyncio + ThreadPool       │
@@ -128,40 +142,44 @@
 
 ```
 sdk.py
-  └── orchestrator.py (run_pipeline_ir)
-        ├── ir/loader.py (load_ir, dump_ir)
-        │     └── ir/models.py (GraphIR, IRNode, IREdge)
-        ├── registry_runtime.py (get_registry, resolve_capability)
-        │     └── nodes/registry.py (NodeRegistry singleton)
-        │           ├── nodes/base.py (Node)
-        │           ├── nodes/metadata.py (NodeMetadata)
-        │           └── nodes/catalogue.py (TypeCatalogue)
-        ├── planner.py (PipelineGraph, _ir_to_pipeline_config)
-        ├── node_executor.py (NodeExecutor)
-        ├── executor.py (ParallelExecutor)
-        │     └── registry_runtime.py (resolve_capability)  ← NOT orchestrator
-        ├── pipeline_cache.py (PipelineCache)
-        ├── run_journal.py (RunManager)
-        │     ├── artifact_store.py (ArtifactStore)
-        │     └── provenance.py (ProvenanceStore)
-        ├── run_control.py (_ACTIVE_RUNS registry)
-        ├── logger.py (PipelineLogger)
-        ├── conditions.py (evaluate_condition)
-        └── events.py (EventSource subclasses)
+  └── runtime_backend.py (get_backend().execute())
+        └── orchestrator.py (run_pipeline_ir — LocalPythonBackend impl)
+              ├── ir/loader.py (load_ir, dump_ir)
+              │     └── ir/models.py (GraphIR, IRNode, IREdge)
+              ├── registry_runtime.py (get_registry, resolve_capability)
+              │     └── nodes/registry.py (NodeRegistry singleton)
+              │           ├── nodes/base.py (Node)
+              │           ├── nodes/metadata.py (NodeMetadata)
+              │           └── nodes/catalogue.py (TypeCatalogue)
+              ├── planner.py (PipelineGraph, _ir_to_pipeline_config)
+              ├── node_executor.py (NodeExecutor)
+              ├── executor.py (ParallelExecutor)
+              │     └── registry_runtime.py (resolve_capability)  ← NOT orchestrator
+              ├── pipeline_cache.py (PipelineCache.compute_key())
+              ├── run_journal.py (RunManager)
+              │     ├── artifact_store.py (ArtifactStore)
+              │     └── provenance.py (ProvenanceStore)
+              ├── run_control.py (_ACTIVE_RUNS registry)
+              ├── logger.py (PipelineLogger)
+              ├── conditions.py (evaluate_condition)
+              └── events.py (EventSource subclasses)
 
 api/main.py
+  ├── initialize_registry()              ← explicit startup call
   └── api/routers/*.py
         └── sdk.py (Pipeline, PipelineNode)
 
 mcp/server.py
+  ├── initialize_registry()              ← explicit startup call (in _startup())
   └── mcp/tool_registry.py
         └── mcp/handlers/*.py
-              └── sdk.py / orchestrator.py / run_journal.py / ...
+              └── runtime_backend.py (get_backend().execute())
               └── registry_runtime.py (resolve_capability)  ← optimization handler
 
 cli/main.py
+  ├── initialize_registry()              ← explicit startup call (module level)
   └── sdk.py (Pipeline.from_json, Pipeline.from_yaml)
-  └── orchestrator.py (run_pipeline_ir)
+  └── runtime_backend.py (get_backend().execute())  ← seed-override paths
   └── registry_runtime.py (resolve_capability)  ← inspect command
 
 plugins/manager.py
@@ -303,30 +321,33 @@ SISO shorthand (auto-detected by __init_subclass__):
 Application startup (API / CLI / MCP)
          │
          ▼
-    registry_runtime.get_registry()
-    ├── (first call) creates NodeRegistry singleton
-    ├── PluginManager.load_enabled_plugins()   ← load enabled plugins first
-    └── AutoDiscovery.run(
-            nodes_dir="app/core/nodes",
-            plugins_dir=plugins_home(),
-            models_dir="app/models"
-        )
-        ├── scan app/core/nodes/*.py           ← framework files only (no node impls)
-        ├── scan app/models/*.py               ← PortDataType subclasses → TypeCatalogue
-        └── scan plugins/{name}/               ← manifest-based plugins (29 nodes)
-            └── PluginLoader.load(plugin_dir)
-                ├── load_manifest()
-                ├── check platform_version
-                ├── check min_python
-                ├── DependencyChecker.verify()
-                └── import entry_points → register node types
+    initialize_registry()              ← explicit call from each entry point
+    (app/core/nodes/__init__.py)       ← idempotent; no-op on second call
+         │
+         ├── PluginManager.load_enabled_plugins()   ← load enabled plugins first
+         └── AutoDiscovery.run(
+                 nodes_dir="app/core/nodes",
+                 plugins_dir=plugins_home(),   ← None if PluginManager loaded them
+                 models_dir="app/models"
+             )
+             ├── scan app/core/nodes/*.py           ← framework files only
+             ├── scan app/models/*.py               ← PortDataType → TypeCatalogue
+             └── scan plugins/{name}/               ← manifest-based plugins
+                 └── PluginLoader.load(plugin_dir)
+                     ├── load_manifest()
+                     ├── check platform_version / min_python
+                     ├── DependencyChecker.verify()
+                     └── import entry_points → register node types
 
     For each Node subclass found:
     ├── derive node_type (explicit or PascalCase → snake_case)
     ├── check for duplicates (DuplicateNodeTypeError)
     ├── validate NodeMetadata presence
-    ├── populate metadata.input_ports / output_ports from class declarations
+    ├── populate metadata.input_ports / output_ports
     └── NodeRegistry.register(node_type, cls, metadata)
+
+    Test isolation: GRAPHYN_SKIP_PLUGIN_LOAD=1 skips plugin loading.
+    Do NOT call initialize_registry() in tests needing an empty registry.
 ```
 
 ---

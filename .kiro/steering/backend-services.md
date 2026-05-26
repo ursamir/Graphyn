@@ -29,7 +29,7 @@ run.base_path        # "workspace/runs/{run_id}"
 | `init_resume_state(graph_hash)` | Create `resume_state.json` |
 | `update_resume_state(node_id)` | Append to `completed_nodes` |
 | `load_resume_state(run_id)` | Load prior run's state; raises `ResumeError` |
-| `find_latest_checkpoint(node_id)` | Returns `{"output": [...]}` or `None` |
+| `find_latest_checkpoint(node_id)` | Delegates to `checkpoint._find_latest_checkpoint()` — returns `{"output": [...]}` or `None` |
 | `pause()` / `resume()` / `cancel()` | Runtime control via `threading.Event` |
 | `wait_if_paused()` | Blocks until resumed (called between nodes) |
 | `is_paused` / `is_cancelled` | Properties |
@@ -44,7 +44,7 @@ run.base_path        # "workspace/runs/{run_id}"
 
 Returns `None` for unknown/completed/wrong-worker runs (ambiguity documented in docstring).
 
-`ResumeError` is imported at module top-level from `app.core.nodes.errors`. No circular import.
+`ResumeError` is defined in `app.core.errors` (platform-level errors module) and re-exported from `app.core.nodes.errors` for backward compatibility.
 
 `resume_state.json` schema: `{"schema_version": "1.0", "run_id": "...", "completed_nodes": [...], "graph_hash": "..."}`.
 

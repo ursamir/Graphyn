@@ -243,14 +243,9 @@ class ParallelExecutor:
                 if spec.node_id == node_id:
                     node_cfg_dict = spec.config
                     break
-            # NEW-6 fix: hash each port separately and combine so port identity
-            # is preserved. Passing list(inputs.values()) loses port names and
-            # causes key collisions for multi-port nodes.
-            import hashlib as _hashlib
-            combined_input_hash = _hashlib.sha256(
-                "".join(cache.input_hash(v) for v in inputs.values()).encode()
-            ).hexdigest()
-            cache_key = cache.key(node_type, node_cfg_dict, combined_input_hash)
+            # Use the canonical compute_key() on PipelineCache so the hashing
+            # strategy is never duplicated between sequential and parallel paths.
+            cache_key = cache.compute_key(node_type, node_cfg_dict, inputs)
             cached_result = cache.load(cache_key)
             if cached_result is not None:
                 node_outputs[node_id] = cached_result

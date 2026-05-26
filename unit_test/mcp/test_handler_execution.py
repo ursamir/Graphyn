@@ -6,11 +6,26 @@ from unittest.mock import patch
 
 from app.mcp.handlers.execution import execute_pipeline_handler
 from app.mcp.handlers.graph import generate_graph_handler
+from app.core.ir.loader import CURRENT_IR_VERSION
 
 
 def _valid_graph():
-    """Return a valid GraphIR dict for a single audio_conditioner node."""
-    return generate_graph_handler({"nodes": [{"node_type": "audio_conditioner"}]})
+    """Return a valid GraphIR dict for a single audio_conditioner node.
+
+    Falls back to a minimal valid IR dict when the node type is not registered
+    (e.g. when GRAPHYN_SKIP_PLUGIN_LOAD=1 is set in the test environment).
+    """
+    result = generate_graph_handler({"nodes": [{"node_type": "audio_conditioner"}]})
+    if result.get("error"):
+        # Fallback: minimal valid IR that doesn't require any registered node type
+        # for load_ir() structural validation (node type is checked at execution time)
+        return {
+            "schema_version": CURRENT_IR_VERSION,
+            "metadata": {"name": "test", "seed": 0},
+            "nodes": [{"id": "n0", "node_type": "audio_conditioner", "config": {}}],
+            "edges": [],
+        }
+    return result
 
 
 class TestExecutePipeline:
@@ -36,24 +51,24 @@ class TestExecutePipeline:
         assert result.get("valid") is False or result.get("error") is True
 
     def test_use_cache_forwarded(self):
-        """use_cache parameter is forwarded to run_pipeline_ir."""
+        """use_cache parameter is forwarded to backend.execute."""
         graph = _valid_graph()
         captured = {}
 
-        def fake_run(g, use_cache=True, **kwargs):
+        def fake_execute(g, use_cache=True, **kwargs):
             captured["use_cache"] = use_cache
 
-        # Patch run_pipeline_ir AND make executor.submit call it synchronously
-        import concurrent.futures
         from unittest.mock import MagicMock
+        import app.mcp.handlers.execution as _exec_mod
 
-        real_submit = concurrent.futures.ThreadPoolExecutor.submit
+        mock_backend = MagicMock()
+        mock_backend.execute.side_effect = fake_execute
 
-        def sync_submit(self, fn, *args, **kwargs):
+        def sync_submit(fn, *args, **kwargs):
             fn(*args, **kwargs)
 
-        with patch("app.mcp.handlers.execution.run_pipeline_ir", fake_run):
-            with patch.object(concurrent.futures.ThreadPoolExecutor, "submit", sync_submit):
+        with patch("app.mcp.handlers.execution._get_backend", return_value=mock_backend):
+            with patch.object(_exec_mod._PIPELINE_EXECUTOR, "submit", sync_submit):
                 execute_pipeline_handler({"graph": graph, "use_cache": False})
 
         assert captured.get("use_cache") is False
@@ -63,16 +78,20 @@ class TestExecutePipeline:
         graph = _valid_graph()
         captured = {}
 
-        def fake_run(g, use_cache=True, **kwargs):
+        def fake_execute(g, use_cache=True, **kwargs):
             captured["use_cache"] = use_cache
 
-        import concurrent.futures
+        from unittest.mock import MagicMock
+        import app.mcp.handlers.execution as _exec_mod
 
-        def sync_submit(self, fn, *args, **kwargs):
+        mock_backend = MagicMock()
+        mock_backend.execute.side_effect = fake_execute
+
+        def sync_submit(fn, *args, **kwargs):
             fn(*args, **kwargs)
 
-        with patch("app.mcp.handlers.execution.run_pipeline_ir", fake_run):
-            with patch.object(concurrent.futures.ThreadPoolExecutor, "submit", sync_submit):
+        with patch("app.mcp.handlers.execution._get_backend", return_value=mock_backend):
+            with patch.object(_exec_mod._PIPELINE_EXECUTOR, "submit", sync_submit):
                 execute_pipeline_handler({"graph": graph})
 
         assert captured.get("use_cache") is True

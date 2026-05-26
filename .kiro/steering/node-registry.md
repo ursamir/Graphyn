@@ -41,10 +41,27 @@ Registry also holds `type_catalogue: TypeCatalogue`.
 
 **Registration:** `Node` subclasses with `metadata: ClassVar[NodeMetadata]` → `NodeRegistry`. `PortDataType` subclasses → `TypeCatalogue`.
 
-**`AutoDiscovery` scans at import via `app/core/nodes/__init__.py`:**
+## Registry Initialization
+
+**Entry points MUST call `initialize_registry()` once before serving requests:**
+
+```python
+from app.core.nodes import initialize_registry
+initialize_registry()   # idempotent — safe to call multiple times
+```
+
+Called in: `app/api/main.py`, `app/cli/main.py` (module level), `app/mcp/server._startup()`.
+
+**`initialize_registry()` sequence:**
+1. `PluginManager().load_enabled_plugins()` — loads enabled plugins from store
+2. `AutoDiscovery(registry).run(nodes_dir, plugins_dir, models_dir)` — scans and registers
+
+**Test isolation:** set `GRAPHYN_SKIP_PLUGIN_LOAD=1` to skip plugin loading. Do NOT call `initialize_registry()` in tests that need an empty registry.
+
+**`AutoDiscovery` scans:**
 1. `app/core/nodes/` — skips framework files (base, ports, config, etc.)
 2. `app/models/` — registers `PortDataType` subclasses
-3. `plugins/` (or `GRAPHYN_PLUGINS_DIR`) — loads all enabled plugins
+3. `plugins/` (or `GRAPHYN_PLUGINS_DIR`) — loads all enabled plugins (skipped if PluginManager already loaded them)
 
 **`node_type` derivation** (if not set): PascalCase → snake_case, strip `_node` suffix. Always set explicitly.
 
@@ -95,5 +112,5 @@ NodeSystemError
 └── PipelineGraphError         # cycle, missing port, unknown node ID
 
 RuntimeError
-└── ResumeError                # resume operation cannot be completed
+└── ResumeError                # resume operation cannot be completed (app.core.errors)
 ```

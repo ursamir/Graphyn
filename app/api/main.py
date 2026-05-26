@@ -48,6 +48,13 @@ _logger = logging.getLogger(__name__)
 from app.models.audio_artifact_serializer import register_audio_serializer as _reg_audio
 _reg_audio()
 
+# ── Registry initialization ───────────────────────────────────────────────────
+# Explicitly populate the NodeRegistry singleton. This must happen after the
+# domain serializer is registered (above) so AutoDiscovery can import node
+# modules that reference AudioSample without triggering a missing-handler warning.
+from app.core.nodes import initialize_registry as _init_registry
+_init_registry()
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 # Token is intentionally NOT cached at module level.

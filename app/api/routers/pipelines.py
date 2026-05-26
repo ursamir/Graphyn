@@ -221,6 +221,7 @@ def run_pipeline_async(payload: dict = Body(...)):
         run_mgr.save_config(payload.get("yaml", ""))
 
     def _run():
+        from app.core.runtime_backend import get_backend  # noqa: PLC0415
         try:
             pipeline.run(run_manager=run_mgr)
         except Exception as exc:

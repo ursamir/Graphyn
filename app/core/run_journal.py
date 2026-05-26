@@ -3,15 +3,16 @@
 Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Filesystem persistence for a single pipeline run. Manages
                   the run directory lifecycle, meta.json, resume state,
-                  checkpoint discovery, and artifact registration facade.
+                  and artifact registration facade.
 Owns:             RunManager class — run directory, meta.json, pause/cancel
                   threading events, artifact registration delegation.
+                  Checkpoint discovery delegated to app.core.checkpoint.
 Public Surface:   RunManager (constructor, save_*, mark_*, pause, resume,
                   cancel, register_artifact, artifacts, get_provenance_summary)
 Must NOT:         Import from app.domain, app.api, or app.core.orchestrator.
                   Must not understand pipeline execution order or node logic.
 Dependencies:     BC6 (artifact_store, provenance, checkpoint), BC1 (ir.loader),
-                  app.core.config, app.core.nodes.errors (ResumeError).
+                  app.core.config, app.core.errors (ResumeError).
 Reason To Change: Run persistence format evolves, resume state schema changes,
                   or artifact registration delegation changes.
 """
@@ -25,11 +26,10 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.config import project_dir as _project_dir
-from app.core.nodes.errors import ResumeError
+from app.core.errors import ResumeError
 
 log = logging.getLogger(__name__)
 
@@ -262,64 +262,14 @@ class RunManager:
             ) from exc
 
     def find_latest_checkpoint(self, node_id: str) -> dict | None:
-        """Search runs/ for the most recent checkpoint for node_id."""
-        from app.core.config import runs_dir as _runs_dir
-        from app.core.checkpoint import _load_checkpoint_outputs
+        """Search runs/ for the most recent checkpoint for node_id.
 
-        runs_dir_path = str(_runs_dir())
-        if not os.path.exists(runs_dir_path):
-            return None
-
-        candidates = []
-        for run_dir_name in os.listdir(runs_dir_path):
-            runs_dir_resolved = str(Path(runs_dir_path).resolve())
-            candidate_resolved = str(Path(os.path.join(runs_dir_path, run_dir_name)).resolve())
-            if not candidate_resolved.startswith(runs_dir_resolved + os.sep) and \
-               candidate_resolved != runs_dir_resolved:
-                log.warning(
-                    "Skipping suspicious run directory '%s' — resolved path escapes runs dir",
-                    run_dir_name,
-                )
-                continue
-            checkpoint_dir = os.path.join(
-                runs_dir_path, run_dir_name, "checkpoints", f"node_{node_id}"
-            )
-            manifest_path = os.path.join(checkpoint_dir, "manifest.json")
-            if os.path.exists(manifest_path):
-                meta_path = os.path.join(runs_dir_path, run_dir_name, "meta.json")
-                created_at = ""
-                if os.path.exists(meta_path):
-                    try:
-                        with open(meta_path) as f:
-                            meta = json.load(f)
-                        created_at = meta.get("created_at", "")
-                    except Exception:
-                        pass
-                if not created_at:
-                    try:
-                        mtime = os.path.getmtime(os.path.join(runs_dir_path, run_dir_name))
-                        created_at = str(mtime)
-                    except Exception:
-                        created_at = "0"
-                candidates.append((created_at, checkpoint_dir))
-
-        if not candidates:
-            return None
-
-        # SA-RJ3 fix: parse timestamps before sorting so mixed "+00:00" vs "Z"
-        # formats don't break lexicographic order.
-        def _parse_ts(ts: str) -> float:
-            from datetime import datetime
-            try:
-                return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-            except Exception:
-                try:
-                    return float(ts)
-                except Exception:
-                    return 0.0
-
-        candidates.sort(key=lambda x: _parse_ts(x[0]), reverse=True)
-        return _load_checkpoint_outputs(candidates[0][1])
+        Delegates to checkpoint._find_latest_checkpoint() — checkpoint
+        discovery is a storage query that belongs in checkpoint.py, not
+        in the run lifecycle manager (SA-RJ-ARCH fix).
+        """
+        from app.core.checkpoint import _find_latest_checkpoint  # noqa: PLC0415
+        return _find_latest_checkpoint(node_id)
 
     # ── Artifact registration ──────────────────────────────────────────────────
 

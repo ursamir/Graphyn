@@ -5,7 +5,7 @@ fileMatchPattern: "app/core/sdk.py,app/cli/**"
 
 # SDK and CLI
 
-Both delegate to `run_pipeline_ir()` via `GraphIR` — no separate logic.
+Both delegate to `get_backend().execute()` via `GraphIR` — no separate execution logic. The SDK calls `get_backend().execute()` internally; the CLI calls `get_backend().execute()` for seed-override paths and `pipeline.run()` for standard paths.
 
 ## Python SDK (`app/core/sdk.py`)
 
@@ -61,6 +61,8 @@ run.cancel()   # cancel after current node
 
 # Validation
 errors = pipeline.validate()  # → list[str]; empty = valid
+# Uses IR-native validation: load_ir() structural check + PipelineGraph topology check.
+# Does NOT round-trip through the deprecated YAML-format dict.
 
 # Serialization
 pipeline.to_json("pipeline.graph.json")

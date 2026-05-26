@@ -34,17 +34,22 @@ IRCapabilityMetadata(requires_gpu=False, supports_cpu=True, supports_edge=False,
 ## Execution Entry Points
 
 ```python
-# Synchronous (primary public API) — MUST NOT be called from an async context.
-# If a running event loop is detected, raises RuntimeError directing the caller
-# to use `await run_pipeline_ir_async(...)` instead (G2-01).
-result = run_pipeline_ir(graph, logger=None, use_cache=True, checkpoint=False,
+# Canonical entry point — all interfaces use get_backend().execute()
+from app.core.runtime_backend import get_backend
+result = get_backend().execute(graph, logger=None, use_cache=True, checkpoint=False,
     streaming=False, parallel=False, observer=None, run_manager=None,
     max_workers=None, resume_run_id=None, include_nodes=None,
     exclude_nodes=None, input_overrides=None, event_driven=False)
 
+# Direct orchestrator access (internal / backward compat only)
+# Synchronous — MUST NOT be called from an async context.
+result = run_pipeline_ir(graph, ...)
+
 # Async-native (Phase 3) — awaitable from existing event loops
 result = await run_pipeline_ir_async(graph, ...)
 ```
+
+**`RuntimeBackend` is the canonical execution entry point.** All interfaces (SDK, API, MCP, CLI) call `get_backend().execute()`. `run_pipeline_ir` is an implementation detail of `LocalPythonBackend` — new code must not import it directly. Custom backends can be registered via `register_backend(id, BackendClass)`.
 
 All new parameters default to `False`/`None` — existing call sites unchanged.
 
@@ -63,7 +68,7 @@ Wave 0 = source nodes; each subsequent wave = nodes whose predecessors are all i
 
 **Parallel** (`parallel=True`): `ParallelExecutor` (`app/core/executor.py`) runs each wave with `asyncio.gather` + `ThreadPoolExecutor`. Emits `wave_start`/`wave_end` events. Respects `cacheable=False`.
 
-**Resumability** (`resume_run_id="<id>"`): loads `resume_state.json` from prior run, skips completed nodes, loads checkpoint outputs. `ResumeError` (from `app.core.nodes.errors`) raised for missing/malformed state.
+**Resumability** (`resume_run_id="<id>"`): loads `resume_state.json` from prior run, skips completed nodes, loads checkpoint outputs. `ResumeError` (from `app.core.errors`) raised for missing/malformed state.
 
 **Partial execution** (`include_nodes=[...]` or `exclude_nodes=[...]`): mutually exclusive. Boundary nodes source inputs from `input_overrides` → `find_latest_checkpoint` → `None`.
 
@@ -81,12 +86,15 @@ Wave 0 = source nodes; each subsequent wave = nodes whose predecessors are all i
 ## `PipelineCache`
 
 ```python
+# Canonical key computation — use compute_key() to avoid duplication
+key = cache.compute_key(node_type, config_dict, inputs)   # preferred
+# or manually:
 key = cache.key(node_type, config_dict, cache.input_hash(samples))
-if cache.has(key): samples = cache.load(key)
-cache.save(key, samples)
+cached = cache.load(key)   # None = miss; never call has() first (TOCTOU)
+cache.save(key, outputs)
 ```
 
-Key: `SHA-256(node_type + sorted_json(config) + input_hash)`. Location: `workspace/cache/{sha256}/`. Only caches list-valued outputs.
+Key: `SHA-256(node_type + sorted_json(config) + combined_input_hash)`. Location: `workspace/cache/{sha256}/`. `compute_key()` is the single canonical implementation shared by both sequential and parallel executors — never duplicate the hashing logic.
 
 ## Run Directory Structure
 
@@ -143,7 +151,7 @@ store.get(artifact_id)                 # fetch single record
 
 **Capability resolution** lives in `registry_runtime.resolve_capability(ir_node, registry)` — NOT in `orchestrator._resolve_capability`. The orchestrator keeps a backward-compat alias. All new callers (CLI, MCP handlers, executor) import from `registry_runtime` directly.
 
-**RULE 1 enforcement:** `checkpoint.py` and `pipeline_cache.py` do NOT import `app.models` at module level. `AudioSample` is imported lazily inside function bodies only. This keeps the platform core domain-agnostic at import time.
+**RULE 1 enforcement:** `checkpoint.py` and `pipeline_cache.py` do NOT import `app.models` at module level. AudioSample detection uses `get_serializer_registry().infer_type()` — no duck-typing, no domain knowledge in platform infrastructure. This keeps the platform core domain-agnostic at import time.
 
 ## Open Issues in This Area
 

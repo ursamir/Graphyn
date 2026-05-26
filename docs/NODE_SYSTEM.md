@@ -163,19 +163,33 @@ cap = resolve_capability(ir_node, registry)
 
 ---
 
-## `AutoDiscovery`
+## `AutoDiscovery` and Registry Initialization
 
-Runs at import via `app/core/nodes/__init__.py`. Scans:
+**Entry points MUST call `initialize_registry()` once before serving requests:**
 
+```python
+from app.core.nodes import initialize_registry
+initialize_registry()   # idempotent — safe to call multiple times
+```
+
+Called in: `app/api/main.py`, `app/cli/main.py` (module level), `app/mcp/server._startup()`.
+
+`initialize_registry()` runs:
+1. `PluginManager().load_enabled_plugins()` — loads enabled plugins from store
+2. `AutoDiscovery(registry).run(nodes_dir, plugins_dir, models_dir)` — scans and registers
+
+**AutoDiscovery scans:**
 1. `app/core/nodes/` — framework files only (no node implementations here)
 2. `app/models/` — registers `PortDataType` subclasses in `TypeCatalogue`
-3. `plugins/` (or `GRAPHYN_PLUGINS_DIR`) — loads all enabled plugins via `PluginLoader`
+3. `plugins/` (or `GRAPHYN_PLUGINS_DIR`) — loads all enabled plugins via `PluginLoader` (skipped if PluginManager already loaded them)
 
 **Registration rules:**
 - `node_type` from `cls.node_type` if set, else PascalCase → snake_case (strips `_node` suffix)
 - Class must have `metadata: ClassVar[NodeMetadata]` — missing → warning + skip
 - Duplicate `node_type` → `DuplicateNodeTypeError` (server fails to start)
 - Import error → warning + skip
+
+**Test isolation:** set `GRAPHYN_SKIP_PLUGIN_LOAD=1` to skip plugin loading. Do NOT call `initialize_registry()` in tests that need an empty registry.
 
 ---
 

@@ -1,7 +1,7 @@
 # Graphyn Pipeline Engine — Master Issue Registry
 
 > **Single source of truth** for every issue found across all review rounds.
-> **Last updated:** 2026-05-25 — 63 issues resolved this session (4 new resolved this pass)
+> **Last updated:** 2026-05-26 — 71 issues resolved (8 new resolved this pass — architectural review findings)
 > **Codebase root:** `/home/meritech/Desktop/newAudio3`
 
 ---
@@ -154,3 +154,11 @@
 | SCALE-1 | `core/run_control.py` | Active run registry was process-local dict — multi-worker pause/resume/cancel broken | Redis-backed dual-store: in-process dict always holds `RunManager` for signal delivery; when `GRAPHYN_REDIS_URL` set, `graphyn:active_run:{id}` key mirrored to Redis (24h TTL); `get_active_run` checks in-process first, then Redis for cross-worker detection |
 | SCALE-2 | `domain/ingestion.py` | Ingest job store was process-local dict — multi-worker SSE streaming broken | Redis-backed dual-store: jobs run on originating worker; on completion/failure, full state flushed to `graphyn:ingest_job:{id}` + `graphyn:ingest_events:{id}` (24h TTL); `get_job()` falls back to Redis for cross-worker streaming |
 | NEW-19 | `plugins/text-stats/` | Orphaned installed plugin from `examples/14_plugin_manifest/` — no `PluginPackage/` source | Uninstalled via `PluginManager().uninstall("text-stats")` — directory removed, registry entry deleted |
+| ARCH-REVIEW-1 | `core/nodes/errors.py` | `ResumeError` owned by BC2 (Node Contract) but is a BC6 run-persistence error — wrong bounded context | Moved to `app/core/errors.py` (platform-level); `nodes/errors.py` re-exports for backward compat; `run_journal.py` imports from `app.core.errors` |
+| ARCH-REVIEW-2 | `core/checkpoint.py`, `core/pipeline_cache.py` | `_is_audio_sample_list()` duck-typing embeds domain knowledge in platform infrastructure | Replaced with `get_serializer_registry().infer_type()` in both files; duck-typing functions deleted |
+| ARCH-REVIEW-3 | `core/pipeline_cache.py`, `core/orchestrator.py`, `core/executor.py` | Cache key computation duplicated between sequential and parallel execution paths | `PipelineCache.compute_key(node_type, config, inputs)` added as single canonical implementation; both paths call it |
+| ARCH-REVIEW-4 | `core/run_journal.py` | `RunManager.find_latest_checkpoint()` — O(N) directory scan owned by run lifecycle manager | Extracted to `checkpoint._find_latest_checkpoint()`; `RunManager.find_latest_checkpoint()` delegates |
+| ARCH-REVIEW-5 | `core/sdk.py` | `Pipeline.validate()` round-trips through deprecated YAML-format dict | Replaced with IR-native validation: `load_ir()` structural check + `PipelineGraph()` topology check |
+| ARCH-REVIEW-6 | `core/runtime_backend.py` | `RuntimeBackend` abstraction existed but was unwired — all interfaces imported `run_pipeline_ir` directly | All interfaces (SDK, API, MCP, CLI) now call `get_backend().execute()`; `run_pipeline_ir` is an implementation detail of `LocalPythonBackend` |
+| ARCH-REVIEW-7 | `core/nodes/__init__.py` | Registry populated at import time via side effects — hidden execution ordering, incompatible with lazy loading | Startup logic extracted to explicit `initialize_registry()` function; called once by each entry point after domain serializer registration |
+| ARCH-REVIEW-8 | `core/run_manager.py` | Shim re-exported private names `_ACTIVE_RUNS`, `_ACTIVE_RUNS_LOCK`, `_WORKSPACE` | Private names removed from `__all__` and re-export list; only public names exported |
