@@ -1,7 +1,9 @@
 # Graphyn Platform — Functional Correctness Review (Self-Advancing)
 
 You are a Senior Engineer conducting a deep functional correctness review of the Graphyn platform.
-This prompt is self-advancing: you read the checkpoint, do exactly one group, update the checkpoint, and stop.
+This prompt is self-advancing: you read the checkpoint, do exactly one group, write all findings to files, update the checkpoint, and stop.
+
+**Nothing goes to chat.** All findings are written to files. The only thing printed to chat is the final SESSION COMPLETE line at the very end.
 
 ---
 
@@ -10,19 +12,17 @@ This prompt is self-advancing: you read the checkpoint, do exactly one group, up
 Read `review_agent_work/functional_review_checkpoint.md`.
 
 Find the row where `Status = pending` with the lowest group number. That is your group for this session.
-If all groups are `done`, output "All groups complete. Functional review finished." and stop.
+If all groups are `done`, write a file `review_agent_work/File_review/COMPLETE.md` with a one-paragraph summary, print "All groups complete. Functional review finished." to chat, and stop.
 
 ---
 
 ## STEP 2 — READ CONTEXT (mandatory, do not skip)
 
-Read these files completely before touching any source file:
+Read this file completely before touching any source file:
 
-- `review_agent_work/Output.md` — prior architectural findings; do NOT re-report anything in here
-- `docs/MASTER_ISSUE_REGISTRY.md` — all resolved and open issues; do NOT re-report anything in here
-- `docs/ARCHITECTURE.md` — platform intent and bounded context map
-- `docs/PIPELINE_EXECUTION.md` — execution contract
-- `docs/NODE_SYSTEM.md` — node lifecycle and port contract
+- `review_agent_work/functional_review_checkpoint.md` — already read in Step 1; re-check the group-specific focus areas for your group
+
+This is the only context file. Do NOT read anything under `docs/` or anywhere else in `review_agent_work/`. The functional review looks only at the source code — no prior findings, no issue history.
 
 ---
 
@@ -35,7 +35,7 @@ Do not begin analysis until all files are read.
 
 ## STEP 4 — REVIEW
 
-Your role is functional correctness only. You are NOT doing architectural boundary analysis (already done in Output.md).
+Your role is functional correctness only. You are NOT doing architectural boundary analysis (already done in `review_agent_work/Output.md`).
 
 **Standard dimensions — apply to every function/method/class:**
 
@@ -54,13 +54,53 @@ Your role is functional correctness only. You are NOT doing architectural bounda
 
 ---
 
-## STEP 5 — OUTPUT FORMAT
+## STEP 5 — WRITE OUTPUT FILES
 
-### Per finding:
+### Output directory — MANDATORY RULE
+
+Every output file for a group goes inside a **dedicated group subfolder**:
 
 ```
+review_agent_work/File_review/GROUP_<number>_<name>/
+```
+
+Examples:
+- Group 5 (Planner) → `review_agent_work/File_review/GROUP_05_Planner/`
+- Group 6 (Execution Runtime) → `review_agent_work/File_review/GROUP_06_Execution_Runtime/`
+
+**Never write files directly into `review_agent_work/File_review/`.** All per-file review files AND the group index file go inside the group subfolder. This prevents basename collisions across groups (e.g. two groups both having a file called `errors.py` or `nodes.py`).
+
+### Naming per-file output files
+
+The output filename is `<basename>.md` where `<basename>` is the source filename without its directory path.
+
+Examples:
+- `app/core/ir/models.py` → `GROUP_01_IR_Core/models.md`
+- `app/core/orchestrator.py` → `GROUP_06_Execution_Runtime/orchestrator.md`
+- `PluginPackage/Audio/audio_classifier/nodes.py` → `GROUP_13_Audio_Plugins_Batch_1/audio_classifier_nodes.md`
+- `PluginPackage/Common/trainer/nodes.py` → `GROUP_16_Common_Plugins/trainer_nodes.md`
+
+**Collision rule:** If two files in the same group produce the same basename (e.g. two `nodes.py` files, or two `errors.py` files from different packages), prefix with the immediate parent folder name:
+- `app/core/nodes/errors.py` → `node_errors.md`
+- `app/core/plugins/errors.py` → `plugin_errors.md`
+
+### File structure — each output file must follow this exact layout:
+
+```markdown
+# Functional Review — <source file path>
+
+**Group:** <group number> — <group name>
+**Reviewed:** <date>
+**Reviewer:** Functional Correctness Agent
+
+---
+
+## Findings
+
+<!-- One block per finding. If no findings, write "No findings." -->
+
 --------------------------------------------------------------------
-FILE:        <path>
+FILE:        <source file path>
 FUNCTION:    <ClassName.method_name or function_name>
 CATEGORY:    <Silent Failure | Error Handling | Edge Case | Async Bug |
               State Bug | Type Safety | Resource Leak | Performance |
@@ -88,50 +128,68 @@ Data loss? Silent wrong result? Crash? Hang? Security issue?
 FIX DIRECTION:
 Minimal concrete fix. Code snippet if it fits in ≤5 lines.
 --------------------------------------------------------------------
-```
 
-### Per file (after all findings for that file):
+<!-- repeat for each finding -->
 
-```
-FUNCTIONAL HEALTH SUMMARY — <filename>
-Overall Risk:      LOW | MEDIUM | HIGH | CRITICAL
-Silent Failures:   <count>
-Error Handling:    COMPLETE | PARTIAL | MISSING
-Async Safety:      SAFE | UNSAFE | N/A
-State Safety:      SAFE | UNSAFE | N/A
-Resource Safety:   SAFE | UNSAFE | N/A
-Test Hostile:      YES | NO | PARTIAL
-Top Risk:          <one sentence — the single most dangerous thing in this file>
-```
+---
 
-### Group summary (after all files):
+## Functional Health Summary
 
-```
-GROUP SUMMARY — <group name>
-Files reviewed: <n>
-Total findings: <n>
-  CRITICAL: <n>
-  HIGH:     <n>
-  MEDIUM:   <n>
-  LOW:      <n>
-Most dangerous file: <filename> — <one sentence why>
+| Field | Value |
+|---|---|
+| Overall Risk | LOW \| MEDIUM \| HIGH \| CRITICAL |
+| Silent Failures | <count> |
+| Error Handling | COMPLETE \| PARTIAL \| MISSING |
+| Async Safety | SAFE \| UNSAFE \| N/A |
+| State Safety | SAFE \| UNSAFE \| N/A |
+| Resource Safety | SAFE \| UNSAFE \| N/A |
+| Test Hostile | YES \| NO \| PARTIAL |
+| Top Risk | <one sentence — the single most dangerous thing in this file, or "None" if clean> |
 ```
 
 ---
 
-## STEP 6 — UPDATE REGISTRY AND KNOWN ISSUES
+## STEP 6 — WRITE GROUP INDEX FILE
 
-After completing all findings:
+After writing all per-file output files, create one index file **inside the same group subfolder**:
 
-1. Open `docs/MASTER_ISSUE_REGISTRY.md`.
-   - Add each new finding as a row in the correct priority section.
-   - Follow the existing row format exactly.
-   - Do not rewrite the file — add rows only.
+```
+review_agent_work/File_review/GROUP_<number>_<name>/GROUP_<number>_<name>.md
+```
 
-2. Open `docs/KNOWN_ISSUES.md`.
-   - Add each CRITICAL and HIGH finding to the correct priority tier.
-   - Follow the existing format exactly.
-   - Do not rewrite the file — add rows only.
+Example: `review_agent_work/File_review/GROUP_06_Execution_Runtime/GROUP_06_Execution_Runtime.md`
+
+### Index file structure:
+
+```markdown
+# Group Review Index — <group number>: <group name>
+
+**Files reviewed:** <n>
+**Total findings:** <n> (CRITICAL: <n> | HIGH: <n> | MEDIUM: <n> | LOW: <n>)
+**Date:** <date>
+
+---
+
+## File Summaries
+
+| File | Overall Risk | Silent Failures | Top Risk |
+|---|---|---|---|
+| <filename.md> | <risk> | <count> | <one sentence> |
+| ... | | | |
+
+---
+
+## Priority Findings (CRITICAL and HIGH only)
+
+List every CRITICAL and HIGH finding from all files in this group, in severity order.
+Format: `[SEVERITY] <file> — <function> — <one sentence description>`
+
+---
+
+## Most Dangerous File
+
+<filename> — <one sentence why>
+```
 
 ---
 
@@ -144,17 +202,21 @@ Open `review_agent_work/functional_review_checkpoint.md`.
 - Set `last_completed_name` to your group name.
 - Set `current_group` to the next pending group number (or `complete` if none remain).
 
+Do not change anything else in the checkpoint file.
+
 ---
 
 ## STEP 8 — STOP AND REPORT
 
-Output exactly this at the end:
+Print exactly this to chat (and nothing else — all findings are already in the files):
 
 ```
 ---
 SESSION COMPLETE
 Group reviewed: <number> — <name>
-Findings: <n> total (<n> CRITICAL, <n> HIGH, <n> MEDIUM, <n> LOW)
+Files reviewed: <n>
+Findings: <n> total (CRITICAL: <n> | HIGH: <n> | MEDIUM: <n> | LOW: <n>)
+Output written to: review_agent_work/File_review/GROUP_<number>_<name>/
 Next session: run this prompt again to review Group <next number> — <next name>
 ---
 ```
@@ -171,7 +233,10 @@ Then stop. Do not begin the next group.
 4. Async bugs are invisible in tests but catastrophic in production.
 5. Shared mutable state at class or module level is a concurrency bug waiting to happen.
 6. If a config validator accepts invalid values, the error surfaces deep in process() with a confusing traceback.
-7. Do not re-report anything already in Output.md or MASTER_ISSUE_REGISTRY.md.
+7. You have no prior findings to cross-check. Review the code fresh and report everything you find.
 8. Be precise: cite line numbers and variable names.
 9. Do not add findings for things that are already correct. Only report real problems.
 10. One group per session. Do not advance past your assigned group.
+11. Do not print findings to chat. Write them to files only.
+12. **Never write output files directly into `review_agent_work/File_review/` — always use the group subfolder.**
+13. **When two source files share the same basename (e.g. `errors.py`, `nodes.py`), prefix the output filename with the immediate parent folder name** (e.g. `node_errors.md`, `plugin_errors.md`).

@@ -1,31 +1,31 @@
 # Functional Review Checkpoint
 
 ## Status
-current_group: 1
+current_group: complete
 total_groups: 16
-last_completed_group: 0
-last_completed_name: none
+last_completed_group: 16
+last_completed_name: Common Plugins
 
 ## Groups
 
 | # | Name | Status | Files |
 |---|---|---|---|
-| 1 | IR Core | pending | `app/core/ir/models.py`, `app/core/ir/loader.py`, `app/core/ir/yaml_shim.py`, `app/core/ir/migrate.py` |
-| 2 | Node Base | pending | `app/core/nodes/base.py`, `app/core/nodes/ports.py`, `app/core/nodes/config.py`, `app/core/nodes/retry.py`, `app/core/nodes/metadata.py`, `app/core/nodes/observers.py`, `app/core/nodes/compat.py`, `app/core/nodes/errors.py` |
-| 3 | Registry & Discovery | pending | `app/core/nodes/registry.py`, `app/core/nodes/discovery.py`, `app/core/nodes/catalogue.py`, `app/core/registry_runtime.py` |
-| 4 | Plugin Ecosystem | pending | `app/core/plugins/manager.py`, `app/core/plugins/loader.py`, `app/core/plugins/installer.py`, `app/core/plugins/store.py`, `app/core/plugins/manifest.py`, `app/core/plugins/dependencies.py`, `app/core/plugins/errors.py`, `app/core/plugins/index.py` |
-| 5 | Planner | pending | `app/core/planner.py` |
-| 6 | Execution Runtime | pending | `app/core/orchestrator.py`, `app/core/node_executor.py`, `app/core/executor.py`, `app/core/conditions.py`, `app/core/events.py`, `app/core/runtime_backend.py` |
-| 7 | Observability & Storage | pending | `app/core/checkpoint.py`, `app/core/pipeline_cache.py`, `app/core/artifact_store.py`, `app/core/artifact_serializer.py`, `app/core/run_journal.py`, `app/core/run_control.py`, `app/core/provenance.py`, `app/core/logger.py` |
-| 8 | Platform Infra | pending | `app/core/config.py`, `app/core/validation.py`, `app/core/webhook.py`, `app/core/errors.py`, `app/core/utils/hash.py` |
-| 9 | SDK & CLI | pending | `app/core/sdk.py`, `app/cli/main.py` |
-| 10 | API | pending | `app/api/main.py`, `app/api/routers/pipelines.py`, `app/api/routers/runs.py`, `app/api/routers/artifacts.py`, `app/api/routers/run_control.py`, `app/api/routers/nodes.py`, `app/api/routers/plugins.py` |
-| 11 | MCP | pending | `app/mcp/server.py`, `app/mcp/tool_registry.py`, `app/mcp/auth.py`, `app/mcp/handlers/execution.py`, `app/mcp/handlers/provenance.py`, `app/mcp/handlers/optimization.py`, `app/mcp/handlers/graph.py`, `app/mcp/handlers/discovery.py`, `app/mcp/handlers/run_control.py`, `app/mcp/handlers/artifacts.py` |
-| 12 | Domain & Models | pending | `app/domain/ingestion.py`, `app/domain/project_manager.py`, `app/domain/quality_checker.py`, `app/models/audio_sample.py`, `app/models/audio_artifact_serializer.py`, `app/models/feature_array.py`, `app/models/model_artifact.py`, `app/models/prediction_result.py`, `app/models/tensor_batch.py`, `app/models/tflite_artifact.py`, `app/models/deployment_artifact.py` |
-| 13 | Audio Plugins Batch 1 | pending | `PluginPackage/Audio/audio_classifier/nodes.py`, `PluginPackage/Audio/audio_conditioner/nodes.py`, `PluginPackage/Audio/audio_event_detector/nodes.py`, `PluginPackage/Audio/audio_exporter/nodes.py`, `PluginPackage/Audio/audio_generator/nodes.py`, `PluginPackage/Audio/audio_quality_gate/nodes.py` |
-| 14 | Audio Plugins Batch 2 | pending | `PluginPackage/Audio/alignment_node/nodes.py`, `PluginPackage/Audio/audio_annotator/nodes.py`, `PluginPackage/Audio/augmentation_pipeline/nodes.py`, `PluginPackage/Audio/dataset_ingest/nodes.py`, `PluginPackage/Audio/feature_frontend/nodes.py`, `PluginPackage/Audio/input/nodes.py`, `PluginPackage/Audio/output/nodes.py` |
-| 15 | Audio Plugins Batch 3 | pending | `PluginPackage/Audio/segmenter/nodes.py`, `PluginPackage/Audio/speaker_separator/nodes.py`, `PluginPackage/Audio/speech_enhancer/nodes.py`, `PluginPackage/Audio/speech_synthesizer/nodes.py`, `PluginPackage/Audio/stream_ingest/nodes.py`, `PluginPackage/Audio/stream_processor/nodes.py`, `PluginPackage/Audio/voice_converter/nodes.py`, `PluginPackage/Audio/environment_simulator/nodes.py` |
-| 16 | Common Plugins | pending | `PluginPackage/Common/dataset_balancer/nodes.py`, `PluginPackage/Common/dataset_builder/nodes.py`, `PluginPackage/Common/dataset_versioner/nodes.py`, `PluginPackage/Common/deployment_packager/nodes.py`, `PluginPackage/Common/edge_optimizer/nodes.py`, `PluginPackage/Common/embedding_generator/nodes.py`, `PluginPackage/Common/evaluator/nodes.py`, `PluginPackage/Common/experiment_tracker/nodes.py`, `PluginPackage/Common/multimodal_fusion/nodes.py`, `PluginPackage/Common/realtime_inference/nodes.py`, `PluginPackage/Common/trainer/nodes.py` |
+| 1 | IR Core | done | `app/core/ir/models.py`, `app/core/ir/loader.py`, `app/core/ir/yaml_shim.py`, `app/core/ir/migrate.py` |
+| 2 | Node Base | done | `app/core/nodes/base.py`, `app/core/nodes/ports.py`, `app/core/nodes/config.py`, `app/core/nodes/retry.py`, `app/core/nodes/metadata.py`, `app/core/nodes/observers.py`, `app/core/nodes/compat.py`, `app/core/nodes/errors.py` |
+| 3 | Registry & Discovery | done | `app/core/nodes/registry.py`, `app/core/nodes/discovery.py`, `app/core/nodes/catalogue.py`, `app/core/registry_runtime.py` |
+| 4 | Plugin Ecosystem | done | `app/core/plugins/manager.py`, `app/core/plugins/loader.py`, `app/core/plugins/installer.py`, `app/core/plugins/store.py`, `app/core/plugins/manifest.py`, `app/core/plugins/dependencies.py`, `app/core/plugins/errors.py`, `app/core/plugins/index.py` |
+| 5 | Planner | done | `app/core/planner.py` |
+| 6 | Execution Runtime | done | `app/core/orchestrator.py`, `app/core/node_executor.py`, `app/core/executor.py`, `app/core/conditions.py`, `app/core/events.py`, `app/core/runtime_backend.py` |
+| 7 | Observability & Storage | done | `app/core/checkpoint.py`, `app/core/pipeline_cache.py`, `app/core/artifact_store.py`, `app/core/artifact_serializer.py`, `app/core/run_journal.py`, `app/core/run_control.py`, `app/core/provenance.py`, `app/core/logger.py` |
+| 8 | Platform Infra | done | `app/core/config.py`, `app/core/validation.py`, `app/core/webhook.py`, `app/core/errors.py`, `app/core/utils/hash.py` |
+| 9 | SDK & CLI | done | `app/core/sdk.py`, `app/cli/main.py` |
+| 10 | API | done | `app/api/main.py`, `app/api/routers/pipelines.py`, `app/api/routers/runs.py`, `app/api/routers/artifacts.py`, `app/api/routers/run_control.py`, `app/api/routers/nodes.py`, `app/api/routers/plugins.py` |
+| 11 | MCP | done | `app/mcp/server.py`, `app/mcp/tool_registry.py`, `app/mcp/auth.py`, `app/mcp/handlers/execution.py`, `app/mcp/handlers/provenance.py`, `app/mcp/handlers/optimization.py`, `app/mcp/handlers/graph.py`, `app/mcp/handlers/discovery.py`, `app/mcp/handlers/run_control.py`, `app/mcp/handlers/artifacts.py` |
+| 12 | Domain & Models | done | `app/domain/ingestion.py`, `app/domain/project_manager.py`, `app/domain/quality_checker.py`, `app/models/audio_sample.py`, `app/models/audio_artifact_serializer.py`, `app/models/feature_array.py`, `app/models/model_artifact.py`, `app/models/prediction_result.py`, `app/models/tensor_batch.py`, `app/models/tflite_artifact.py`, `app/models/deployment_artifact.py` |
+| 13 | Audio Plugins Batch 1 | done | `PluginPackage/Audio/audio_classifier/nodes.py`, `PluginPackage/Audio/audio_conditioner/nodes.py`, `PluginPackage/Audio/audio_event_detector/nodes.py`, `PluginPackage/Audio/audio_exporter/nodes.py`, `PluginPackage/Audio/audio_generator/nodes.py`, `PluginPackage/Audio/audio_quality_gate/nodes.py` |
+| 14 | Audio Plugins Batch 2 | done | `PluginPackage/Audio/alignment_node/nodes.py`, `PluginPackage/Audio/audio_annotator/nodes.py`, `PluginPackage/Audio/augmentation_pipeline/nodes.py`, `PluginPackage/Audio/dataset_ingest/nodes.py`, `PluginPackage/Audio/feature_frontend/nodes.py`, `PluginPackage/Audio/input/nodes.py`, `PluginPackage/Audio/output/nodes.py` |
+| 15 | Audio Plugins Batch 3 | done | `PluginPackage/Audio/segmenter/nodes.py`, `PluginPackage/Audio/speaker_separator/nodes.py`, `PluginPackage/Audio/speech_enhancer/nodes.py`, `PluginPackage/Audio/speech_synthesizer/nodes.py`, `PluginPackage/Audio/stream_ingest/nodes.py`, `PluginPackage/Audio/stream_processor/nodes.py`, `PluginPackage/Audio/voice_converter/nodes.py`, `PluginPackage/Audio/environment_simulator/nodes.py` |
+| 16 | Common Plugins | done | `PluginPackage/Common/dataset_balancer/nodes.py`, `PluginPackage/Common/dataset_builder/nodes.py`, `PluginPackage/Common/dataset_versioner/nodes.py`, `PluginPackage/Common/deployment_packager/nodes.py`, `PluginPackage/Common/edge_optimizer/nodes.py`, `PluginPackage/Common/embedding_generator/nodes.py`, `PluginPackage/Common/evaluator/nodes.py`, `PluginPackage/Common/experiment_tracker/nodes.py`, `PluginPackage/Common/multimodal_fusion/nodes.py`, `PluginPackage/Common/realtime_inference/nodes.py`, `PluginPackage/Common/trainer/nodes.py` |
 
 ## Group-Specific Focus Areas
 
