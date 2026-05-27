@@ -23,25 +23,56 @@ class NodeSystemError(Exception):
 class NodeNotFoundError(NodeSystemError):
     """Raised when a node_type is not found in the registry."""
 
+    def __init__(self, message: str = "", *, node_type: str | None = None) -> None:
+        self.node_type = node_type
+        super().__init__(message)
+
 
 class DuplicateNodeTypeError(NodeSystemError):
     """Raised when two classes resolve to the same node_type during AutoDiscovery."""
+
+    def __init__(self, message: str = "", *, node_type: str | None = None) -> None:
+        self.node_type = node_type
+        super().__init__(message)
 
 
 class NodeMetadataError(NodeSystemError):
     """Raised when a Node subclass is missing required metadata fields."""
 
+    def __init__(self, message: str = "", *, node_class: str | None = None) -> None:
+        self.node_class = node_class
+        super().__init__(message)
+
 
 class NodeTypeError(NodeSystemError):
     """Raised when an output port type is incompatible with an input port type."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        src_port: str | None = None,
+        dst_port: str | None = None,
+    ) -> None:
+        self.src_port = src_port
+        self.dst_port = dst_port
+        super().__init__(message)
 
 
 class PortTypeNotFoundError(NodeSystemError):
     """Raised when a type name cannot be resolved in TypeCatalogue."""
 
+    def __init__(self, message: str = "", *, type_name: str | None = None) -> None:
+        self.type_name = type_name
+        super().__init__(message)
+
 
 class DuplicatePortTypeError(NodeSystemError):
     """Raised when a PortDataType subclass is registered under a name already in use."""
+
+    def __init__(self, message: str = "", *, type_name: str | None = None) -> None:
+        self.type_name = type_name
+        super().__init__(message)
 
 
 class PipelineGraphError(NodeSystemError):
@@ -56,4 +87,11 @@ class PipelineGraphError(NodeSystemError):
 #   from app.core.nodes.errors import ResumeError
 # continue to work without modification.
 # New code should import from app.core.errors directly.
-from app.core.errors import ResumeError  # noqa: E402, F401
+# Lazy import via __getattr__ avoids a hard module-level dependency on
+# app.core.errors, preserving the "Must NOT import from any other app module"
+# contract at import time.
+def __getattr__(name: str) -> object:
+    if name == "ResumeError":
+        from app.core.errors import ResumeError  # noqa: PLC0415
+        return ResumeError
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

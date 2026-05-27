@@ -52,10 +52,22 @@ class TensorBatch(PortDataType):
     @field_validator("data", mode="before")
     @classmethod
     def _coerce_float32(cls, v):
-        """Coerce data to float32 ndarray; None → empty 1-D array."""
+        """Coerce data to float32 ndarray; None → empty 1-D array.
+
+        Raises ValueError for a non-empty 1-D array: the contract requires
+        shape [batch_size, *feature_dims], so a flat vector is ambiguous and
+        almost certainly a caller error.
+        """
         if v is None:
             return np.zeros((0,), dtype=np.float32)
-        return np.asarray(v, dtype=np.float32)
+        arr = np.asarray(v, dtype=np.float32)
+        if arr.ndim == 1 and arr.shape[0] > 0:
+            raise ValueError(
+                "TensorBatch.data must be 2-D or higher for non-empty batches "
+                f"(got shape {arr.shape}). Reshape to (N, 1) if each element "
+                "is a scalar sample."
+            )
+        return arr
 
     @property
     def batch_size(self) -> int:
@@ -63,6 +75,13 @@ class TensorBatch(PortDataType):
         return self.data.shape[0] if self.data.ndim > 0 else 0
 
     def model_post_init(self, __context: Any) -> None:
-        """Ensure data is always a float32 array even when using default."""
+        """Safety net for model_construct() callers that bypass field_validator.
+
+        Normal construction always passes through _coerce_float32, so this
+        branch is unreachable in practice.  It exists solely to guarantee a
+        valid float32 array when TensorBatch is assembled via
+        ``TensorBatch.model_construct(data=None)`` (e.g. in test fixtures or
+        deserialization shims that skip validation).
+        """
         if self.data is None:
             object.__setattr__(self, "data", np.zeros((0,), dtype=np.float32))

@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import numpy as np
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from app.core.nodes.ports import PortDataType
 
@@ -46,7 +46,7 @@ class AudioSample(PortDataType):
     sample_rate: int
     data: Optional[Any] = None   # numpy.ndarray | None
     label: str = ""
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("data", mode="before")
     @classmethod

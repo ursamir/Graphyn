@@ -145,6 +145,11 @@ class PluginInstaller:
                 source.endswith(".zip") or source.endswith(".tar.gz")
             ):
                 return self._resolve_local_archive(local)
+            if local.is_file():
+                raise PluginInstallError(
+                    f"Local file {source!r} is not a supported archive format. "
+                    "Supported formats: .zip, .tar.gz"
+                )
 
         # --- 5. Plain name / index lookup ---
         name, ver = self._parse_name_version(source)
@@ -191,7 +196,14 @@ class PluginInstaller:
         )
 
     def _resolve_git(self, url: str) -> Path:
-        """Clone *url* with ``git clone --depth 1`` and return the manifest dir."""
+        """Clone *url* with ``git clone --depth 1`` and return the manifest dir.
+
+        Returns the manifest directory.  The root tmpdir is always
+        ``returned_path.parent`` up to the ``kiro_plugin_git_*`` prefix —
+        callers must use :meth:`_tmpdir_for` to obtain the root for cleanup.
+        The root tmpdir is stored as an attribute on the returned Path via
+        ``returned_path.__tmpdir__`` so ``manager.py`` can always find it.
+        """
         # PL-08 fix: check that git is available before attempting the clone
         if shutil.which("git") is None:
             raise PluginInstallError(
@@ -209,13 +221,24 @@ class PluginInstaller:
                 ["git", "clone", "--depth", "1", "--", clone_url, str(tmpdir)],
                 capture_output=True,
                 text=True,
+                timeout=120,  # prevent indefinite hang on slow/unresponsive servers
             )
             if result.returncode != 0:
                 raise PluginInstallError(
                     f"Git clone failed for {url!r}.\n"
                     f"git stderr:\n{result.stderr.strip()}"
                 )
-            return self._find_manifest_dir(tmpdir)
+            manifest_dir = self._find_manifest_dir(tmpdir)
+            # Attach the root tmpdir so manager.py can always clean it up,
+            # regardless of how many levels deep the manifest was found.
+            manifest_dir._installer_tmpdir = tmpdir  # type: ignore[attr-defined]
+            return manifest_dir
+        except subprocess.TimeoutExpired:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            raise PluginInstallError(
+                f"Git clone timed out after 120 seconds for {url!r}. "
+                "The remote server may be slow or unresponsive."
+            )
         except PluginInstallError:
             shutil.rmtree(tmpdir, ignore_errors=True)
             raise
@@ -288,7 +311,9 @@ class PluginInstaller:
         tmpdir = Path(tempfile.mkdtemp(prefix="kiro_plugin_local_"))
         dest = tmpdir / path.name
         try:
-            shutil.copytree(str(path), str(dest))
+            # symlinks=True: preserve symlinks rather than dereference them,
+            # preventing content exfiltration from outside the plugin directory.
+            shutil.copytree(str(path), str(dest), symlinks=True)
             return dest
         except Exception as exc:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -532,6 +557,14 @@ class PluginInstaller:
                 with tarfile.open(fileobj=buf) as tf:
                     dest_resolved = dest_dir.resolve()
                     for member in tf.getmembers():
+                        # Reject symlink and hardlink members to prevent path
+                        # traversal via linkname (member.name is safe but
+                        # member.linkname could point outside dest_dir).
+                        if member.issym() or member.islnk():
+                            raise PluginInstallError(
+                                f"Archive contains a symlink or hardlink entry "
+                                f"'{member.name}' — not allowed for security reasons."
+                            )
                         member_path = (dest_dir / member.name).resolve()
                         # PL-10 fix: use is_relative_to()
                         if not member_path.is_relative_to(dest_resolved):

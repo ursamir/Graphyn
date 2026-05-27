@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import copy
+import logging
 from typing import ClassVar
 
 import librosa
 import numpy as np
+
+from pydantic import field_validator
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
 from app.models.audio_sample import AudioSample
+
+log = logging.getLogger(__name__)
 
 
 class AudioConditionerNode(Node):
@@ -106,12 +110,21 @@ class AudioConditionerNode(Node):
         # not lazy/generator-based — both paths call _condition_one() per sample)
         batch_size: int = 0
 
+        @field_validator("compress_ratio")
+        @classmethod
+        def _ratio_positive(cls, v: float) -> float:
+            if v <= 0:
+                raise ValueError("compress_ratio must be > 0")
+            return v
+
     # ── internal helpers ──────────────────────────────────────────────────────
 
     def _remove_dc_offset(self, y: np.ndarray) -> np.ndarray:
         return y - np.mean(y)
 
     def _apply_preemphasis(self, y: np.ndarray, coeff: float) -> np.ndarray:
+        if len(y) == 0:
+            return y
         return np.concatenate([[y[0]], y[1:] - coeff * y[:-1]])
 
     def _peak_normalize(self, y: np.ndarray, target_db: float) -> np.ndarray:
@@ -147,10 +160,19 @@ class AudioConditionerNode(Node):
         y_2d = y[:, np.newaxis] if y.ndim == 1 else y.T
         try:
             loudness = meter.integrated_loudness(y_2d)
-        except Exception:
+        except Exception as e:
+            log.warning(
+                "AudioConditionerNode: LUFS normalization failed (%s) — returning unchanged", e
+            )
+            self._lufs_skipped = True
             return y  # can't measure — return unchanged
 
         if not np.isfinite(loudness):
+            log.warning(
+                "AudioConditionerNode: LUFS loudness is non-finite (audio too short or silent) "
+                "— returning unchanged"
+            )
+            self._lufs_skipped = True
             return y  # silence or too short — skip
 
         gain_db = target_lufs - loudness
@@ -182,9 +204,17 @@ class AudioConditionerNode(Node):
 
     def _condition_one(self, sample: AudioSample) -> AudioSample | None:
         """Condition a single AudioSample. Returns None if sample should be skipped."""
-        new_sample = copy.deepcopy(sample)
+        # Use model_copy() + explicit array copy to avoid deepcopy memory overhead
+        # on large audio arrays while still isolating all mutable fields.
+        new_sample = sample.model_copy()
+        new_sample.data = sample.data.copy()
+        new_sample.metadata = dict(sample.metadata)
+
         y = new_sample.data.astype(np.float32)
         sr = new_sample.sample_rate
+
+        # Reset per-sample LUFS skip flag
+        self._lufs_skipped: bool = False
 
         # DC offset removal
         if self.config.remove_dc_offset:
@@ -206,6 +236,8 @@ class AudioConditionerNode(Node):
         # Trim silence
         if self.config.trim_silence:
             y, _ = librosa.effects.trim(y, top_db=self.config.trim_threshold_db)
+            if len(y) == 0:
+                return None  # entirely silent — skip
 
         # Pre-emphasis
         if self.config.preemphasis:
@@ -254,6 +286,7 @@ class AudioConditionerNode(Node):
                 "normalize": self.config.normalize,
                 "normalize_method": self.config.normalize_method,
                 "target_lufs": self.config.target_lufs if self.config.normalize_method == "lufs" else None,
+                "lufs_normalization_skipped": self._lufs_skipped,
                 "preemphasis": self.config.preemphasis,
                 "compress": self.config.compress,
                 "output_format": "float32",
@@ -266,6 +299,8 @@ class AudioConditionerNode(Node):
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, samples: list[AudioSample]) -> list[AudioSample]:
+        if not samples:
+            return []
         output: list[AudioSample] = []
         batch_size = self.config.batch_size
 

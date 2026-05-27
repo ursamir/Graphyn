@@ -107,11 +107,11 @@ records = store.list(run_id=..., node_type=..., artifact_type=...)
 versions = store.get_versions(artifact_name)
 ```
 
-`SUPPORTED_ARTIFACT_TYPES`: `audio_samples`, `model_artifact`, `tflite_artifact`, `prediction_result`, `feature_array`, `generic`.
+`_get_supported_artifact_types()` — returns a `frozenset[str]` of currently supported artifact type strings, derived dynamically from the `ArtifactSerializerRegistry` plus the built-in `"generic"` fallback. Replaces the old hardcoded `SUPPORTED_ARTIFACT_TYPES` constant.
 
-`_infer_artifact_type(value)` — module-level helper that infers the correct `artifact_type` string from a node output value. Delegates to `ArtifactSerializerRegistry.infer_type()` first (domain handlers registered at startup), then falls back to built-in heuristics for `DatasetArtifact`, split dicts, feature dicts, and `np.ndarray`. Import from `app.core.artifact_store`.
+`_infer_artifact_type(value)` — module-level helper that infers the correct `artifact_type` string from a node output value. Delegates entirely to `ArtifactSerializerRegistry.infer_type()` (domain handlers registered at startup). Falls back to `"generic"` if no handler recognises the value. Contains zero domain-specific heuristics. Import from `app.core.artifact_store`.
 
-**ARCH-2 fix:** `_serialize_audio_samples()` and audio duck-typing removed from platform infrastructure. All WAV I/O now lives in `app/models/audio_artifact_serializer.py` (domain layer) and is injected via `ArtifactSerializerRegistry` at startup.
+**Clean migration:** `SUPPORTED_ARTIFACT_TYPES` constant, `DatasetArtifact` inline import, and all dict-key/duck-typing heuristics (`"feature_array"`, `"train"`/`"val"`/`"test"`, `np.ndarray` check) have been removed from platform infrastructure. All type inference belongs in domain handlers registered via `ArtifactSerializerRegistry` at startup.
 
 ## `ArtifactSerializerRegistry` (`artifact_serializer.py`)
 

@@ -143,14 +143,20 @@ def _resolve_capability(ir_node_cap, node_meta) -> dict[str, bool]:
     }
 
 
-def _serialize_node_metadata(meta) -> dict[str, Any]:
+def _serialize_node_metadata(meta, registry=None) -> dict[str, Any]:
     """Convert a NodeMetadata object to a JSON-serialisable dict.
 
     Returns all 10 fields required by Req 2.1:
     node_type, label, description, category, version, tags,
     input_ports, output_ports, config_schema, capability_metadata.
+
+    ``registry`` should be passed by the caller (already fetched) to avoid
+    a redundant get_registry() call per node when serialising a list.
+    Falls back to get_registry() when called in isolation (e.g. single-node
+    lookup paths).
     """
-    registry = get_registry()
+    if registry is None:
+        registry = get_registry()
     return {
         "node_type":           meta.node_type,
         "label":               meta.label,
@@ -214,13 +220,13 @@ def list_nodes_handler(arguments: dict[str, Any]) -> Any:
             }
 
         # Req 2.5: return full schema for single node
-        return _serialize_node_metadata(meta)
+        return _serialize_node_metadata(meta, registry)
 
     # ── port type compatibility ───────────────────────────────────────────────
     # Req 2.9: filter by output_type + direction
     output_type = arguments.get("output_type")
     direction = arguments.get("direction")
-    if output_type is not None:
+    if output_type:  # truthy check: empty string falls through to category path
         if direction not in ("input", "output"):
             return {
                 "error": True,
@@ -240,7 +246,7 @@ def list_nodes_handler(arguments: dict[str, Any]) -> Any:
                 "available_types": registry.type_catalogue.list_types(),
             }
         matching = registry.find_compatible_nodes(type_cls, direction)
-        return {"nodes": [_serialize_node_metadata(m) for m in matching]}
+        return {"nodes": [_serialize_node_metadata(m, registry) for m in matching]}
 
     # ── capability_filter key validation ─────────────────────────────────────
     # Req 2.4: validate keys before filtering; return error on unknown key
@@ -260,7 +266,14 @@ def list_nodes_handler(arguments: dict[str, Any]) -> Any:
     # ── category filter ───────────────────────────────────────────────────────
     # Req 2.3: exact category match; empty list (not error) when no match
     category = arguments.get("category")
-    nodes = registry.list_nodes(category=category)
+    try:
+        nodes = registry.list_nodes(category=category)
+    except Exception as exc:
+        return {
+            "error": True,
+            "error_type": "registry_error",
+            "message": str(exc),
+        }
 
     # ── capability filter ─────────────────────────────────────────────────────
     # Req 2.4: filter by resolved capability values
@@ -273,4 +286,4 @@ def list_nodes_handler(arguments: dict[str, Any]) -> Any:
         nodes = filtered
 
     # Req 2.1, 2.2: return all (or filtered) nodes with full metadata
-    return {"nodes": [_serialize_node_metadata(m) for m in nodes]}
+    return {"nodes": [_serialize_node_metadata(m, registry) for m in nodes]}

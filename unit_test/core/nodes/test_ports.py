@@ -2,7 +2,10 @@
 """Tests for app/core/nodes/ports.py — Req 18 (port descriptors and PortDataType)."""
 from __future__ import annotations
 
+from typing import Optional
+
 import pytest
+from pydantic import ValidationError
 
 from app.core.nodes.ports import InputPort, OutputPort, PortDataType
 
@@ -26,8 +29,14 @@ class TestInputPort:
         assert port.cardinality == "multi"
 
     def test_optional_port(self):
-        port = InputPort(name="opt", data_type=str, required=False)
+        """required=False port must use Optional/None-accepting data_type."""
+        port = InputPort(name="opt", data_type=Optional[str], required=False)
         assert port.required is False
+
+    def test_optional_port_rejects_non_nullable_type(self):
+        """required=False with a non-nullable data_type must raise at declaration time."""
+        with pytest.raises(ValidationError, match="does not accept None"):
+            InputPort(name="opt", data_type=str, required=False)
 
     def test_data_type_none_allowed(self):
         """Source nodes may have data_type=None."""

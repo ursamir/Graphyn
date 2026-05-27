@@ -92,19 +92,34 @@ def optimize_execution_handler(arguments: dict[str, Any]) -> Any:
     edge_compatible_nodes: list[str] = []
     non_cacheable_nodes: list[str] = []
     non_deterministic_nodes: list[str] = []
+    unknown_capability_nodes: list[str] = []  # nodes whose capability could not be resolved
 
     for ir_node in graph.nodes:
+        # Determine whether the node type is registered before resolving.
+        # resolve_capability() returns IRCapabilityMetadata() defaults for
+        # NodeNotFoundError (unknown type) — we must detect that case
+        # explicitly so we can warn callers rather than silently using defaults.
+        node_type_known = True
         try:
-            cap = _resolve_capability(ir_node, registry)
+            registry.get_metadata(ir_node.node_type)
         except Exception:
-            cap = None
+            node_type_known = False
+
+        cap = None
+        if node_type_known:
+            try:
+                cap = _resolve_capability(ir_node, registry)
+            except Exception:
+                # Non-NodeNotFoundError exception (e.g. AttributeError on a
+                # malformed ir_node) — treat as unknown capability.
+                node_type_known = False
 
         analysis: dict[str, Any] = {
             "node_id": ir_node.id,
             "node_type": ir_node.node_type,
         }
 
-        if cap is not None:
+        if cap is not None and node_type_known:
             analysis["capability"] = {
                 "requires_gpu": cap.requires_gpu,
                 "supports_cpu": cap.supports_cpu,
@@ -126,6 +141,7 @@ def optimize_execution_handler(arguments: dict[str, Any]) -> Any:
                 non_deterministic_nodes.append(ir_node.id)
         else:
             analysis["capability"] = None
+            unknown_capability_nodes.append(ir_node.id)
 
         node_analysis.append(analysis)
 
@@ -158,15 +174,32 @@ def optimize_execution_handler(arguments: dict[str, Any]) -> Any:
         if e.condition is not None
     ]
 
+    # ── Disconnected graph detection ──────────────────────────────────────────
+    is_disconnected = len(graph.edges) == 0 and len(graph.nodes) > 1
+
     # ── Recommendations ───────────────────────────────────────────────────────
     recommendations: list[str] = []
 
+    if unknown_capability_nodes:
+        recommendations.append(
+            f"WARNING: Could not resolve capability metadata for nodes "
+            f"{unknown_capability_nodes} — hardware requirements unknown. "
+            "Verify node types are registered before deploying."
+        )
+
     if can_parallelize:
         parallel_waves = [w for w in waves if len(w) > 1]
-        recommendations.append(
-            f"Enable parallel=True: {len(parallel_waves)} wave(s) contain multiple "
-            f"independent nodes (max {max_wave_size} nodes in one wave)."
-        )
+        if is_disconnected:
+            recommendations.append(
+                f"Graph has {len(graph.nodes)} nodes and no edges (disconnected). "
+                f"All nodes can run in parallel (max {max_wave_size} nodes in one wave), "
+                "but there is no data flow between them — verify this is intentional."
+            )
+        else:
+            recommendations.append(
+                f"Enable parallel=True: {len(parallel_waves)} wave(s) contain multiple "
+                f"independent nodes (max {max_wave_size} nodes in one wave)."
+            )
 
     if non_cacheable_nodes:
         recommendations.append(
@@ -214,12 +247,14 @@ def optimize_execution_handler(arguments: dict[str, Any]) -> Any:
         "execution_waves": wave_summary,
         "can_parallelize": can_parallelize,
         "max_wave_parallelism": max_wave_size,
+        "is_disconnected": is_disconnected,
         "source_nodes": source_nodes,
         "sink_nodes": sink_nodes,
         "requires_gpu_nodes": requires_gpu_nodes,
         "edge_compatible_nodes": edge_compatible_nodes,
         "non_cacheable_nodes": non_cacheable_nodes,
         "non_deterministic_nodes": non_deterministic_nodes,
+        "unknown_capability_nodes": unknown_capability_nodes,
         "conditional_edges": conditional_edges,
         "node_analysis": node_analysis,
         "recommendations": recommendations,

@@ -144,6 +144,14 @@ class DatasetBuilderNode(Node):
             if fixed_length > 0:
                 arr = self._pad_or_truncate(arr, fixed_length)
             frames.append(arr)
+        # Guard: when fixed_length==0, all frames must have the same shape
+        if fixed_length == 0:
+            shapes = {arr.shape for arr in frames}
+            if len(shapes) > 1:
+                raise ValueError(
+                    f"DatasetBuilderNode: variable-length features detected {shapes}. "
+                    "Set fixed_length > 0 to enable automatic padding/truncation."
+                )
         X = np.stack(frames)                    # [N, T, F]
         X = X[..., np.newaxis].astype(np.float32)  # [N, T, F, 1]
         y = np.array(
@@ -158,7 +166,7 @@ class DatasetBuilderNode(Node):
         if split in valid_splits:
             return split
         # Infer from path: look for /train/, /val/, /test/ in the path
-        path_lower = f.source_path.replace("\\", "/").lower()
+        path_lower = (f.source_path or "").replace("\\", "/").lower()
         for s in valid_splits:
             if f"/{s}/" in path_lower:
                 return s
@@ -300,8 +308,14 @@ class DatasetBuilderNode(Node):
         features = inputs.get("input") or []
         if not features:
             return {"output": DatasetArtifact(
+                X_train=np.zeros((0, 1, 1, 1), dtype=np.float32),
+                y_train=np.zeros((0,), dtype=np.int32),
+                X_val=np.zeros((0, 1, 1, 1), dtype=np.float32),
+                y_val=np.zeros((0,), dtype=np.int32),
+                X_test=np.zeros((0, 1, 1, 1), dtype=np.float32),
+                y_test=np.zeros((0,), dtype=np.int32),
                 labels=[],
-                input_shape=(),
+                input_shape=(1, 1, 1),
                 n_classes=0,
             )}
 
@@ -314,10 +328,11 @@ class DatasetBuilderNode(Node):
         labels_arr = np.array([label_to_idx[f.label] for f in features], dtype=np.int32)
 
         # ── Determine split mode ──────────────────────────────────────────────
-        # If ANY feature has a valid split in metadata/path, use metadata-split
-        # mode (legacy behaviour). Otherwise use auto-split.
+        # Use metadata-split mode only when ALL features have a valid split in
+        # metadata/path. If only SOME do (mixed batch), fall back to auto-split
+        # to avoid a misleading ValueError for features without split info.
         valid_splits = {"train", "val", "test"}
-        has_split_metadata = any(
+        has_split_metadata = all(
             self._infer_split(f) in valid_splits for f in features
         )
 
@@ -333,7 +348,7 @@ class DatasetBuilderNode(Node):
                     )
             # Group by split, sorted by source_path for determinism
             split_groups: dict = {"train": [], "val": [], "test": []}
-            for f in sorted(features, key=lambda x: x.source_path):
+            for f in sorted(features, key=lambda x: x.source_path or ""):
                 split_groups[self._infer_split(f)].append(f)
         else:
             # Auto-split using split_ratios

@@ -174,6 +174,7 @@ class TrainerNode(Node):
                 patience=3,
                 verbose=1,
             ),
+            keras.callbacks.TerminateOnNaN(),  # stop immediately on NaN loss
         ]
 
         log.info(
@@ -191,6 +192,15 @@ class TrainerNode(Node):
             verbose=1,
         )
 
+        # Check for NaN loss (TerminateOnNaN stops training but does not raise)
+        import math as _math
+        final_loss = history.history.get("loss", [float("nan")])[-1]
+        if _math.isnan(final_loss):
+            raise RuntimeError(
+                "TrainerNode (keras): training produced NaN loss. "
+                "Check learning rate, input data, and model initialization."
+            )
+
         # Save in .keras format
         keras_model_path = str(out_path / "model.keras")
         model.save(keras_model_path)
@@ -206,9 +216,13 @@ class TrainerNode(Node):
             tf.saved_model.save(model, saved_model_path)
         log.info("TrainerNode (keras): SavedModel exported to: %s", saved_model_path)
 
-        # Save X_train representative data for INT8 TFLite calibration
+        # Save X_train representative data for INT8 TFLite calibration.
+        # Save only the first 1000 samples — EdgeOptimizerNode uses at most
+        # representative_samples (default 100), so saving the full training
+        # set wastes disk space for large datasets.
         repr_path = str(out_path / "saved_model" / "X_train_repr.npy")
-        np.save(repr_path, dataset.X_train)
+        n_repr = min(1000, len(dataset.X_train))
+        np.save(repr_path, dataset.X_train[:n_repr])
 
         # Warn if val_accuracy is below threshold
         val_accs = history.history.get("val_accuracy", [0.0])
@@ -297,31 +311,41 @@ class TrainerNode(Node):
             train_correct = 0
             train_total = 0
 
-            for X_batch, y_batch in train_loader:
-                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
-                optimizer.zero_grad()
+            try:
+                for X_batch, y_batch in train_loader:
+                    X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+                    optimizer.zero_grad()
 
-                if use_amp:
-                    try:
-                        ctx = torch.amp.autocast("cuda")
-                    except TypeError:
-                        ctx = torch.cuda.amp.autocast()  # type: ignore[attr-defined]
-                    with ctx:
+                    if use_amp:
+                        try:
+                            ctx = torch.amp.autocast("cuda")
+                        except TypeError:
+                            ctx = torch.cuda.amp.autocast()  # type: ignore[attr-defined]
+                        with ctx:
+                            logits = model(X_batch)
+                            loss = criterion(logits, y_batch)
+                        scaler.scale(loss).backward()
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
                         logits = model(X_batch)
                         loss = criterion(logits, y_batch)
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    logits = model(X_batch)
-                    loss = criterion(logits, y_batch)
-                    loss.backward()
-                    optimizer.step()
+                        loss.backward()
+                        optimizer.step()
 
-                train_loss += loss.item() * X_batch.size(0)
-                preds = logits.argmax(dim=1)
-                train_correct += (preds == y_batch).sum().item()
-                train_total += X_batch.size(0)
+                    train_loss += loss.item() * X_batch.size(0)
+                    preds = logits.argmax(dim=1)
+                    train_correct += (preds == y_batch).sum().item()
+                    train_total += X_batch.size(0)
+
+            except torch.cuda.OutOfMemoryError as oom_err:
+                log.error(
+                    "TrainerNode (pytorch): CUDA OOM at epoch %d. "
+                    "Reduce batch_size (current: %d). Error: %s",
+                    epoch + 1, self.config.batch_size, oom_err,
+                )
+                torch.cuda.empty_cache()
+                break
 
             avg_train_loss = train_loss / max(train_total, 1)
             avg_train_acc = train_correct / max(train_total, 1)
@@ -365,6 +389,16 @@ class TrainerNode(Node):
                 avg_train_loss, avg_train_acc, avg_val_loss, avg_val_acc,
             )
 
+            # ── NaN detection ─────────────────────────────────────────────────
+            import math as _math
+            if _math.isnan(avg_train_loss) or _math.isnan(avg_val_loss):
+                log.error(
+                    "TrainerNode (pytorch): NaN loss detected at epoch %d. "
+                    "Stopping training. Check learning rate, input data, and model initialization.",
+                    epoch + 1,
+                )
+                break
+
             # ── EarlyStopping ─────────────────────────────────────────────────
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
@@ -383,6 +417,11 @@ class TrainerNode(Node):
         # Restore best weights
         if best_state is not None:
             model.load_state_dict(best_state)
+        else:
+            raise RuntimeError(
+                "TrainerNode (pytorch): training failed — no valid checkpoint was saved. "
+                "Check for NaN loss, CUDA OOM, or data issues."
+            )
 
         # Save model state dict
         pt_path = out_path / "model.pt"
@@ -588,6 +627,15 @@ class ModelBuilderNode(Node):
         apply the SISO wrapper — avoids double-wrapping the return value.
         """
         dataset = inputs.get("input")
+        if dataset is None:
+            raise ValueError(
+                "ModelBuilderNode: 'input' port received None — expected DatasetArtifact"
+            )
+        if getattr(dataset, "n_classes", 0) == 0:
+            raise ValueError(
+                "ModelBuilderNode: dataset has 0 classes — cannot build model. "
+                "Ensure DatasetBuilderNode produced a non-empty dataset."
+            )
         backend = self.config.backend
         if backend == "auto":
             try:

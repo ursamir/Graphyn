@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -66,6 +67,8 @@ class PluginIndexClient:
 
     # Class-level cache shared across all instances — req-05 §6.7
     _cache: list[PluginIndexEntry] | None = None
+    _cache_time: float = 0.0
+    _CACHE_TTL: float = 300.0  # 5 minutes
     _cache_lock: threading.Lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
@@ -89,12 +92,18 @@ class PluginIndexClient:
             PluginIndexError: When the remote fetch fails (network error or
                 non-2xx response). req-05 §6.8
         """
-        if PluginIndexClient._cache is not None:
+        if (
+            PluginIndexClient._cache is not None
+            and (time.monotonic() - PluginIndexClient._cache_time) < PluginIndexClient._CACHE_TTL
+        ):
             return PluginIndexClient._cache
 
         with PluginIndexClient._cache_lock:
             # Double-checked locking: re-check after acquiring the lock
-            if PluginIndexClient._cache is not None:
+            if (
+                PluginIndexClient._cache is not None
+                and (time.monotonic() - PluginIndexClient._cache_time) < PluginIndexClient._CACHE_TTL
+            ):
                 return PluginIndexClient._cache
 
             from app.core.config import plugin_index_url as _plugin_index_url
@@ -118,6 +127,7 @@ class PluginIndexClient:
                     )
 
             PluginIndexClient._cache = entries
+            PluginIndexClient._cache_time = time.monotonic()
             return entries
 
     def search(self, query: str) -> list[PluginIndexEntry]:
@@ -191,8 +201,13 @@ class PluginIndexClient:
                     e for e in matches
                     if Version(e.version) in spec
                 ]
-            except Exception:
+            except Exception as exc:
                 # Fallback: exact string match if specifier parsing fails
+                logger.debug(
+                    "Version specifier '%s' is not valid PEP 440: %s — falling back to exact match",
+                    version_str,
+                    exc,
+                )
                 versioned = [e for e in matches if e.version == version_str]
 
             if not versioned:
@@ -228,8 +243,9 @@ class PluginIndexClient:
         _MAX_INDEX_BYTES = 10 * 1024 * 1024  # 10 MB
         chunks: list[bytes] = []
         total = 0
+        _timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
         try:
-            with httpx.stream("GET", url, timeout=10, follow_redirects=True) as response:
+            with httpx.stream("GET", url, timeout=_timeout, follow_redirects=True) as response:
                 if not response.is_success:
                     raise PluginIndexError(
                         f"Plugin index fetch from '{url}' returned HTTP {response.status_code}."
@@ -252,7 +268,17 @@ class PluginIndexClient:
         try:
             data = json.loads(b"".join(chunks))
             plugins_raw = data.get("plugins", [])
-            return [PluginIndexEntry(**item) for item in plugins_raw]
+            entries: list[PluginIndexEntry] = []
+            for item in plugins_raw:
+                try:
+                    entries.append(PluginIndexEntry(**item))
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping malformed remote index entry %r: %s",
+                        item.get("name", "?") if isinstance(item, dict) else "?",
+                        exc,
+                    )
+            return entries
         except PluginIndexError:
             raise
         except Exception as exc:
@@ -285,7 +311,17 @@ class PluginIndexClient:
             with index_path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
             plugins_raw = data.get("plugins", [])
-            return [PluginIndexEntry(**item) for item in plugins_raw]
+            entries: list[PluginIndexEntry] = []
+            for item in plugins_raw:
+                try:
+                    entries.append(PluginIndexEntry(**item))
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping malformed local index entry %r: %s",
+                        item.get("name", "?") if isinstance(item, dict) else "?",
+                        exc,
+                    )
+            return entries
         except Exception as exc:
             raise PluginIndexError(
                 f"Failed to parse local plugin index at '{index_path}': {exc}"

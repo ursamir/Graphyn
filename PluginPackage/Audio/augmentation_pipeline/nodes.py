@@ -114,6 +114,15 @@ class AugmentationPipelineNode(Node):
             # Always include the original
             out.append(copy.deepcopy(s))
 
+            # Skip augmentation copies for empty/None audio
+            if s.data is None or len(s.data) == 0:
+                log.warning(
+                    "AugmentationPipelineNode: skipping augmentation copies for "
+                    "empty audio sample '%s'",
+                    getattr(s, "path", "<unknown>"),
+                )
+                continue
+
             # Generate copies_per_sample augmented versions
             for copy_idx in range(self.config.copies_per_sample):
                 augmented = copy.deepcopy(s)
@@ -187,6 +196,10 @@ class AugmentationPipelineNode(Node):
     def _aug_gain(self, s: AudioSample, cfg: dict) -> AudioSample:
         """Random gain in gain_db range → 10^(gain/20) * y."""
         gain_range = cfg.get("gain_db", [-6, 6])
+        if not isinstance(gain_range, (list, tuple)) or len(gain_range) < 2:
+            raise ValueError(
+                f"AugmentationPipelineNode: 'gain_db' must be [min, max], got: {gain_range!r}"
+            )
         gain_db = float(self.rng.uniform(gain_range[0], gain_range[1]))
         factor = 10 ** (gain_db / 20.0)
         s.data = (s.data * factor).astype(np.float32)
@@ -198,6 +211,10 @@ class AugmentationPipelineNode(Node):
     def _aug_pitch_shift(self, s: AudioSample, cfg: dict) -> AudioSample:
         """librosa.effects.pitch_shift with random semitones."""
         semitones_range = cfg.get("semitones", [-2, 2])
+        if not isinstance(semitones_range, (list, tuple)) or len(semitones_range) < 2:
+            raise ValueError(
+                f"AugmentationPipelineNode: 'semitones' must be [min, max], got: {semitones_range!r}"
+            )
         n_steps = float(self.rng.uniform(semitones_range[0], semitones_range[1]))
         s.data = librosa.effects.pitch_shift(
             y=s.data, sr=s.sample_rate, n_steps=n_steps
@@ -215,6 +232,10 @@ class AugmentationPipelineNode(Node):
         to normalise lengths before building ML datasets.
         """
         rate_range = cfg.get("rate", [0.9, 1.1])
+        if not isinstance(rate_range, (list, tuple)) or len(rate_range) < 2:
+            raise ValueError(
+                f"AugmentationPipelineNode: 'rate' must be [min, max], got: {rate_range!r}"
+            )
         rate = float(self.rng.uniform(rate_range[0], rate_range[1]))
         s.data = librosa.effects.time_stretch(y=s.data, rate=rate).astype(np.float32)
         s.metadata["time_stretch_rate"] = rate
@@ -225,9 +246,13 @@ class AugmentationPipelineNode(Node):
     def _aug_speed_perturb(self, s: AudioSample, cfg: dict) -> AudioSample:
         """Resample to sr*factor then back to sr (changes duration and pitch)."""
         speed_range = cfg.get("speed_factor", [0.9, 1.1])
+        if not isinstance(speed_range, (list, tuple)) or len(speed_range) < 2:
+            raise ValueError(
+                f"AugmentationPipelineNode: 'speed_factor' must be [min, max], got: {speed_range!r}"
+            )
         factor = float(self.rng.uniform(speed_range[0], speed_range[1]))
         orig_sr = s.sample_rate
-        target_sr = int(orig_sr * factor)
+        target_sr = max(1, int(orig_sr * factor))
 
         resampled = librosa.resample(y=s.data, orig_sr=orig_sr, target_sr=target_sr)
         perturbed = librosa.resample(y=resampled, orig_sr=target_sr, target_sr=orig_sr)
@@ -280,6 +305,10 @@ class AugmentationPipelineNode(Node):
     def _aug_noise_inject(self, s: AudioSample, cfg: dict) -> AudioSample:
         """Add Gaussian noise at a target SNR (dB)."""
         snr_range = cfg.get("snr_db", [5, 20])
+        if not isinstance(snr_range, (list, tuple)) or len(snr_range) < 2:
+            raise ValueError(
+                f"AugmentationPipelineNode: 'snr_db' must be [min, max], got: {snr_range!r}"
+            )
         snr_db = float(self.rng.uniform(snr_range[0], snr_range[1]))
 
         signal_power = float(np.mean(s.data ** 2))
@@ -338,17 +367,24 @@ class AugmentationPipelineNode(Node):
                 y_decoded = np.pad(y_decoded, (0, len(s.data) - len(y_decoded)))
 
             s.data = y_decoded.astype(np.float32)
+            method = "ogg"
 
-        except Exception:
+        except Exception as exc:
             # Fallback: low-pass filter to simulate bandwidth reduction
             # Lower bitrate → lower cutoff frequency
+            log.warning(
+                "AugmentationPipelineNode: codec_degrade soundfile path failed (%s); "
+                "falling back to low-pass filter approximation.",
+                exc,
+            )
             cutoff_hz = max(1000.0, bitrate * 40.0)  # rough approximation
             nyq = s.sample_rate / 2.0
             cutoff_norm = min(cutoff_hz / nyq, 0.99)
             sos = scipy.signal.butter(4, cutoff_norm, btype="low", output="sos")
             s.data = scipy.signal.sosfilt(sos, s.data).astype(np.float32)
+            method = "lowpass_fallback"
 
-        s.metadata["codec_degrade"] = {"codec": codec, "bitrate": bitrate}
+        s.metadata["codec_degrade"] = {"codec": codec, "bitrate": bitrate, "method": method}
         return s
 
     # ── parametric EQ ─────────────────────────────────────────────────────────
@@ -369,6 +405,14 @@ class AugmentationPipelineNode(Node):
             q = float(band.get("q", 1.0))
 
             if abs(gain_db) < 0.01:
+                continue
+
+            # Reject frequencies at or above Nyquist — filter would be degenerate
+            if freq >= sr / 2.0:
+                log.warning(
+                    "AugmentationPipelineNode: EQ band freq %.1fHz >= Nyquist %.1fHz — skipping",
+                    freq, sr / 2.0,
+                )
                 continue
 
             # Design IIR peaking filter (Audio EQ Cookbook)

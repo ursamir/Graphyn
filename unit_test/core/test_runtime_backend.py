@@ -6,6 +6,7 @@ import pytest
 from app.core.runtime_backend import (
     LocalPythonBackend,
     RuntimeBackend,
+    _reset_backend_registry,
     get_backend,
     list_backends,
     register_backend,
@@ -20,9 +21,9 @@ def test_get_backend_local_python_returns_local_python_backend():
     assert isinstance(backend, LocalPythonBackend)
 
 
-def test_get_backend_nonexistent_raises_key_error():
-    """Req 19.13 — get_backend('nonexistent') raises KeyError."""
-    with pytest.raises(KeyError):
+def test_get_backend_nonexistent_raises_value_error():
+    """Req 19.13 — get_backend('nonexistent') raises ValueError."""
+    with pytest.raises(ValueError):
         get_backend("nonexistent")
 
 
@@ -45,9 +46,7 @@ def test_register_backend_makes_get_backend_succeed():
         backend = get_backend("my_backend")
         assert isinstance(backend, LocalPythonBackend)
     finally:
-        # Clean up the registry to avoid polluting other tests
-        from app.core.runtime_backend import _BACKEND_REGISTRY
-        _BACKEND_REGISTRY.pop("my_backend", None)
+        _reset_backend_registry()
 
 
 def test_register_backend_non_subclass_raises_type_error():

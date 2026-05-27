@@ -14,9 +14,12 @@ Reason To Change: Validation rules evolve (new edge constraints, new config
 """
 from __future__ import annotations
 
+import logging
 import pydantic
 
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_dag_edges(nodes: list[dict], edges: list[dict], registry: Any) -> None:
@@ -32,11 +35,18 @@ def _validate_dag_edges(nodes: list[dict], edges: list[dict], registry: Any) -> 
         ValueError: if any edge references an unknown node id or port name,
                     or if port types are incompatible.
     """
+    # Pre-pass: every node in DAG format must have an "id" key.
+    for idx, node in enumerate(nodes):
+        if "id" not in node:
+            raise ValueError(
+                f"pipeline.nodes[{idx}] is missing required 'id' field "
+                "(DAG-format pipelines require each node to have a unique 'id')."
+            )
+
     # Build id → type mapping
     id_to_type: dict[str, str] = {}
     for node in nodes:
-        if "id" in node:
-            id_to_type[node["id"]] = node["type"]
+        id_to_type[node["id"]] = node["type"]
 
     try:
         from app.core.nodes.compat import CompatibilityChecker
@@ -157,8 +167,10 @@ def _validate_connections(nodes: list[dict], registry: Any) -> None:
                         )
     except ValueError:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "_validate_connections skipped due to unexpected error: %s", exc
+        )
 
 
 def validate_pipeline(config: Any, registry: Any) -> list[dict]:
@@ -189,7 +201,7 @@ def validate_pipeline(config: Any, registry: Any) -> list[dict]:
         raise ValueError("'pipeline' section must be a mapping")
 
     seed = pipeline.get("seed")
-    if not (isinstance(seed, int) and not isinstance(seed, bool)):
+    if seed is not None and not (isinstance(seed, int) and not isinstance(seed, bool)):
         raise ValueError("pipeline.seed must be an integer")
 
     nodes = pipeline.get("nodes", [])
@@ -220,7 +232,10 @@ def validate_pipeline(config: Any, registry: Any) -> list[dict]:
         try:
             node_class = registry.get_class(node_type)
         except Exception:
-            available = sorted(m.node_type for m in registry.list_nodes())
+            try:
+                available = sorted(m.node_type for m in registry.list_nodes())
+            except Exception:
+                available = ["<registry unavailable>"]
             raise ValueError(
                 f"Unknown node type '{node_type}'. "
                 f"Available types: {', '.join(available)}"

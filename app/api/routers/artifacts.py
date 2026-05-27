@@ -14,7 +14,7 @@ Reason To Change: New artifact endpoint added, or replay behaviour changes.
 from __future__ import annotations
 
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -26,9 +26,11 @@ router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 _ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # Single shared executor for non-blocking replay.
-# NEW-13: max_workers=1 means concurrent replay requests queue silently —
-# only one replay runs at a time. Increase if concurrent replays are needed.
+# max_workers=1 means only one replay runs at a time; additional requests are
+# queued up to MAX_QUEUED_REPLAYS — beyond that a 429 is returned immediately.
 _replay_executor = ThreadPoolExecutor(max_workers=1)
+_replay_futures: list[Future] = []  # type: ignore[type-arg]
+_MAX_QUEUED_REPLAYS = 10
 
 
 def _validate_artifact_id(artifact_id: str) -> None:
@@ -123,8 +125,6 @@ def replay_artifact(artifact_id: str):
     """
     _validate_artifact_id(artifact_id)
 
-    import os
-
     from app.core.artifact_store import ArtifactNotFoundError, ArtifactStore
     from app.core.ir.loader import load_ir_from_file
     from app.core.run_journal import RunManager
@@ -138,9 +138,17 @@ def replay_artifact(artifact_id: str):
 
     original_run_id = artifact_record.run_id
 
-    # Step 2: locate and load graph.json for the original run
+    # Step 2: locate and load graph.json for the original run.
+    # Resolve the path and verify it stays within runs_dir to prevent path
+    # traversal if original_run_id ever contains ".." components (MEDIUM fix).
     from app.core.config import runs_dir as _runs_dir
-    graph_path = _runs_dir() / original_run_id / "graph.json"
+    _base = _runs_dir().resolve()
+    graph_path = (_base / original_run_id / "graph.json").resolve()
+    if not str(graph_path).startswith(str(_base) + "/"):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid run_id in artifact record",
+        )
     if not graph_path.exists():
         raise HTTPException(
             status_code=422,
@@ -159,11 +167,20 @@ def replay_artifact(artifact_id: str):
     new_run_mgr = RunManager()
     new_run_id = new_run_mgr.run_id
 
-    # Step 4: submit replay via Pipeline.run_with_manager() (V1.md §3.1)
+    # Step 4: submit replay via Pipeline.run_with_manager() (V1.md §3.1).
+    # Bounded queue: prune completed futures and reject if too many are pending
+    # to prevent unbounded memory growth under concurrent replay requests (HIGH fix).
+    global _replay_futures  # noqa: PLW0603
+    _replay_futures = [f for f in _replay_futures if not f.done()]
+    if len(_replay_futures) >= _MAX_QUEUED_REPLAYS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many replay requests queued — try again later",
+        )
+
     from app.core.sdk import Pipeline, PipelineNode
 
     def _do_replay():
-        from app.core.runtime_backend import get_backend  # noqa: PLC0415
         try:
             nodes = [PipelineNode(n.node_type, dict(n.config)) for n in graph.nodes]
             replay_pipeline = Pipeline(
@@ -174,9 +191,15 @@ def replay_artifact(artifact_id: str):
             )
             replay_pipeline.run(run_manager=new_run_mgr)
         except Exception as exc:
-            new_run_mgr.mark_failed(str(exc))
+            # Wrap mark_failed so a disk-full or other error here is not
+            # silently swallowed by the executor (HIGH fix).
+            try:
+                new_run_mgr.mark_failed(str(exc))
+            except Exception:
+                pass
 
-    _replay_executor.submit(_do_replay)
+    future = _replay_executor.submit(_do_replay)
+    _replay_futures.append(future)
 
     # Step 5: return immediately
     return {"run_id": new_run_id, "status": "started"}

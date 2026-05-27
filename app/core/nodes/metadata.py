@@ -90,7 +90,7 @@ class NodeMetadata(BaseModel):
     def _version_format(cls, v: str) -> str:
         """Validate that version is a semver-like string (e.g. '1.0.0', '2.1', '1.0.0-beta')."""
         import re
-        if not re.match(r"^\d+(\.\d+)*([.\-+][a-zA-Z0-9._\-+]*)?$", v):
+        if not re.match(r"^\d+(\.\d+)*([.\-+][a-zA-Z0-9._\-+]+)?$", v):
             raise ValueError(
                 f"version must be a semver-like string (e.g. '1.0.0', '2.1'), got {v!r}"
             )

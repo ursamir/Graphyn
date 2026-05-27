@@ -12,16 +12,20 @@ Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
                   ArtifactStore, and ProvenanceStore.
 Dependencies:     fastapi, app.core.run_journal, app.core.artifact_store,
-                  app.core.config, stdlib (json, pathlib).
+                  app.core.config, stdlib (json, pathlib, re).
 Reason To Change: New run history endpoint added, or response schema changes.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from app.core.config import runs_dir as _runs_dir
+
+# ASCII-only run_id: must start with alphanumeric, hyphens allowed in body.
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -37,7 +41,7 @@ def _run_dir(run_id: str) -> Path:
     Validates run_id is alphanumeric (hyphens allowed) and that the resolved
     path stays within the runs root (SEC-7 fix — consistent with _safe_child()).
     """
-    if not run_id.replace("-", "").isalnum() or not run_id.replace("-", ""):
+    if not _RUN_ID_RE.match(run_id):
         raise HTTPException(status_code=400, detail="Invalid run_id")
     runs_root = _get_runs_root().resolve()
     path = (runs_root / run_id).resolve()
@@ -64,21 +68,29 @@ def list_runs(
     if not runs_root.exists():
         return []
 
+    # Sort by directory mtime (OS-level — no file reads) then slice, so only
+    # the requested page of meta.json files is read from disk.  This keeps the
+    # operation O(page_size) in disk I/O regardless of total run count.
+    try:
+        entries = sorted(
+            (e for e in runs_root.iterdir() if e.is_dir()),
+            key=lambda e: e.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
+
+    page = entries[offset: offset + limit]
     runs = []
-    for entry in runs_root.iterdir():
-        if not entry.is_dir():
-            continue
+    for entry in page:
         meta_path = entry / "meta.json"
         if not meta_path.exists():
             continue
         try:
-            meta = json.loads(meta_path.read_text())
+            runs.append(json.loads(meta_path.read_text()))
         except Exception:
             continue
-        runs.append(meta)
-
-    runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-    return runs[offset: offset + limit]
+    return runs
 
 
 # ── Get run ───────────────────────────────────────────────────────────────────
@@ -132,10 +144,15 @@ def get_run_status(run_id: str):
 
     node_stats = meta.get("node_stats")
     num_nodes = meta.get("num_nodes")
-    if node_stats and isinstance(node_stats, list):
+    if node_stats and isinstance(node_stats, list) and isinstance(num_nodes, int) and num_nodes > 0:
         completed = len(node_stats)
-        total = num_nodes if isinstance(num_nodes, int) and num_nodes > 0 else completed
-        progress_pct = round(completed / total * 100, 1)
+        progress_pct = round(completed / num_nodes * 100, 1)
+        last = node_stats[-1]
+        if isinstance(last, dict):
+            current_node = last.get("node_type")
+    elif node_stats and isinstance(node_stats, list):
+        # num_nodes absent or zero — cannot compute meaningful progress;
+        # return None rather than silently reporting 100%.
         last = node_stats[-1]
         if isinstance(last, dict):
             current_node = last.get("node_type")
@@ -179,7 +196,7 @@ def get_checkpoint_manifest(run_id: str, node_id: str):
     if exact.is_dir():
         checkpoint_dir = exact
     else:
-        for entry in checkpoints_dir.iterdir():
+        for entry in sorted(checkpoints_dir.iterdir()):
             if entry.is_dir() and entry.name.startswith(node_id):
                 checkpoint_dir = entry
                 break

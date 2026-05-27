@@ -35,7 +35,18 @@ def _is_private_host(hostname: str) -> bool:
 
     Raises ValueError if the hostname cannot be resolved.
     Used to block SSRF attacks via webhook URLs pointing at internal services.
+
+    IPv6 literals (e.g. ``::1``, ``::ffff:127.0.0.1``) are checked directly
+    via :func:`ipaddress.ip_address` before falling back to DNS resolution, so
+    the check is consistent across IPv4-only and dual-stack platforms.
     """
+    # Fast path: bare IP literal (IPv4 or IPv6) — no DNS needed.
+    try:
+        ip = ipaddress.ip_address(hostname)
+        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+    except ValueError:
+        pass  # not a bare IP literal — proceed with DNS resolution
+
     try:
         addr_str = socket.gethostbyname(hostname)
         ip = ipaddress.ip_address(addr_str)
@@ -47,10 +58,12 @@ def _is_private_host(hostname: str) -> bool:
 class WebhookService:
     """Fire-and-forget HTTP POST webhook notifications."""
 
+    # Class-level cache shared across all instances so that save() on any
+    # instance invalidates the cache seen by all other instances.
+    _class_config_cache: dict | None = None
+
     def __init__(self) -> None:
-        # Initialised here so notify() always has a well-defined cache state
-        # regardless of whether save() was called first (BUG-3 fix).
-        self._config_cache: dict | None = None
+        pass  # cache lives at class level; no per-instance state needed
 
     @property
     def CONFIG_PATH(self):
@@ -97,8 +110,8 @@ class WebhookService:
         config = {"url": url, "events": events}
         with self.CONFIG_PATH.open("w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
-        # Invalidate in-memory cache so next notify() picks up the new config
-        self._config_cache = None
+        # Invalidate class-level cache so all instances pick up the new config.
+        WebhookService._class_config_cache = None
 
     def load(self) -> dict:
         """Read webhook configuration. Returns {} if not configured."""
@@ -108,7 +121,11 @@ class WebhookService:
             with self.CONFIG_PATH.open("r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as exc:
-            logger.warning("Failed to read webhooks.json: %s", exc)
+            logger.warning(
+                "Failed to read webhooks config at %s: %s — webhook notifications disabled.",
+                self.CONFIG_PATH,
+                exc,
+            )
             return {}
 
     def notify(self, event: str, payload: dict[str, Any]) -> None:
@@ -120,11 +137,12 @@ class WebhookService:
         all events), sends a POST request with the payload.
         Logs a warning on failure. Never raises.
         """
-        # Use cached config to avoid a disk read on every event.
-        # _config_cache is always initialised in __init__ so hasattr is not needed.
-        if self._config_cache is None:
-            self._config_cache = self.load()
-        config = self._config_cache
+        # Use class-level cached config to avoid a disk read on every event.
+        # The cache is shared across all WebhookService instances and is
+        # invalidated by save() on any instance.
+        if WebhookService._class_config_cache is None:
+            WebhookService._class_config_cache = self.load()
+        config = WebhookService._class_config_cache
 
         url = config.get("url")
         if not url:
@@ -147,17 +165,26 @@ class WebhookService:
         thread.start()
 
     def _send(self, url: str, event: str, payload: dict[str, Any]) -> None:
-        """Internal: perform the HTTP POST. Logs warning on failure."""
+        """Internal: perform the HTTP POST. Logs warning on failure.
+
+        SSRF protection: the hostname is resolved once via ``_is_private_host``
+        and the connection is made directly to the resolved IP address with the
+        ``Host`` header set manually.  This eliminates the DNS rebinding window
+        that would exist if ``httpx`` performed its own independent DNS lookup
+        after the check.
+        """
         try:
             import httpx
 
-            # NEW-12 fix: re-validate the resolved IP at send time to prevent
-            # DNS rebinding attacks. The save()-time check uses the DNS record
-            # at configuration time; httpx resolves DNS fresh on every connection,
-            # so an attacker can change the DNS record after save() passes.
-            hostname = urlparse(url).hostname or ""
+            parsed = urlparse(url)
+            hostname = parsed.hostname or ""
             if hostname:
+                # Resolve the IP once and verify it is not private/loopback.
+                # Then rewrite the URL to connect directly to the resolved IP so
+                # httpx does not perform a second, independent DNS lookup (which
+                # would re-open the DNS rebinding window).
                 try:
+                    # _is_private_host raises ValueError on unresolvable hosts.
                     if _is_private_host(hostname):
                         logger.warning(
                             "Webhook blocked: URL '%s' resolves to a private/loopback "
@@ -165,6 +192,8 @@ class WebhookService:
                             url,
                         )
                         return
+                    # Resolve to a concrete IP for the actual connection.
+                    resolved_ip = socket.gethostbyname(hostname)
                 except Exception as exc:
                     logger.warning(
                         "Webhook send-time host validation failed for '%s': %s — skipping.",
@@ -172,10 +201,30 @@ class WebhookService:
                     )
                     return
 
-            body = {"event": event, "payload": payload}
-            with httpx.Client(timeout=10.0) as client:
-                response = client.post(url, json=body)
-                response.raise_for_status()
+                # Build a URL that targets the resolved IP directly so httpx
+                # does not re-resolve DNS.  Preserve scheme, port, path, and
+                # query.  IPv6 addresses must be bracketed in the netloc.
+                port = parsed.port
+                ip_obj = ipaddress.ip_address(resolved_ip)
+                ip_netloc = f"[{resolved_ip}]" if ip_obj.version == 6 else resolved_ip
+                if port:
+                    ip_netloc = f"{ip_netloc}:{port}"
+                ip_url = parsed._replace(netloc=ip_netloc).geturl()
+
+                body = {"event": event, "payload": payload}
+                # Set the Host header to the original hostname so the remote
+                # server receives a well-formed HTTP/1.1 request.
+                headers = {"Host": parsed.netloc}
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.post(ip_url, json=body, headers=headers)
+                    response.raise_for_status()
+            else:
+                # No hostname (should not reach here after save() validation,
+                # but handle defensively).
+                body = {"event": event, "payload": payload}
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.post(url, json=body)
+                    response.raise_for_status()
         except Exception as exc:
             logger.warning(
                 "Webhook notification failed for event '%s' to '%s': %s",

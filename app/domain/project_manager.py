@@ -175,13 +175,23 @@ class ProjectManager:
 
     def list_all(self) -> list[dict]:
         """Return list of all project.json contents."""
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
         self.BASE.mkdir(parents=True, exist_ok=True)
         result = []
         for d in sorted(self.BASE.iterdir()):
             if d.is_dir():
                 proj_file = d / "project.json"
                 if proj_file.exists():
-                    result.append(self._read_json(proj_file, {}))
+                    # F7 fix: skip corrupt project.json files rather than
+                    # failing the entire listing
+                    try:
+                        result.append(self._read_json(proj_file, {}))
+                    except (json.JSONDecodeError, OSError) as exc:
+                        _log.warning(
+                            "list_all: skipping corrupt project file %s — %s",
+                            proj_file, exc,
+                        )
         return result
 
     # ------------------------------------------------------------------ #
@@ -391,7 +401,21 @@ class ProjectManager:
             all_wav.add(rel)
 
         annotations = self._read_annotations_dict(name)
-        annotated = set(annotations.keys())
+
+        # Normalize annotation keys to project-dir-relative paths so that
+        # callers who stored absolute paths still match (F1 fix).
+        normalized: set[str] = set()
+        for key in annotations.keys():
+            p = Path(key)
+            if p.is_absolute():
+                try:
+                    normalized.add(str(p.relative_to(d)))
+                except ValueError:
+                    # Absolute path outside project dir — keep as-is (won't match)
+                    normalized.add(key)
+            else:
+                normalized.add(key)
+        annotated = normalized
 
         # Samples that appear in WAV files but have no annotation
         missing = sorted(all_wav - annotated)
@@ -469,6 +493,12 @@ class ProjectManager:
         """
         import uuid as _uuid
         d = self._require_project(name)
+        # F4 fix: validate version string against _VERSION_RE to prevent path traversal
+        if not self._VERSION_RE.match(version):
+            raise ValueError(
+                f"Invalid version string {version!r}. "
+                "Must match pattern v<N> or v<N>.<N>[.<N>...] (e.g. v1, v1.0.0)."
+            )
         version_dir = d / version
         if not version_dir.exists():
             raise FileNotFoundError(
@@ -515,6 +545,8 @@ class ProjectManager:
     def create_snapshot(self, name: str, snapshot_name: str) -> None:
         """Copy current working files to snapshots/{snapshot_name}/."""
         d = self._require_project(name)
+        # F3 fix: validate snapshot_name to prevent path traversal
+        self._validate_name(snapshot_name)
         snap_dir = self._snapshots_dir(name) / snapshot_name
         snap_dir.mkdir(parents=True, exist_ok=True)
 
@@ -552,6 +584,8 @@ class ProjectManager:
         """
         import uuid as _uuid
         d = self._require_project(name)
+        # F4 fix: validate snapshot_name to prevent path traversal
+        self._validate_name(snapshot_name)
         snap_dir = self._snapshots_dir(name) / snapshot_name
         if not snap_dir.exists():
             raise FileNotFoundError(
@@ -679,7 +713,8 @@ class ProjectManager:
 
             # Estimate SNR from first 100ms as noise profile
             snr = self._estimate_snr(wav, sr)
-            snr_values.append(snr)
+            if snr is not None:
+                snr_values.append(snr)
 
         # Build histograms
         duration_histogram = self._build_histogram(
@@ -717,8 +752,11 @@ class ProjectManager:
         }
 
     @staticmethod
-    def _estimate_snr(wav_path: Path, sample_rate: int) -> float:
-        """Estimate SNR using first 100ms as noise profile. Returns dB value.
+    def _estimate_snr(wav_path: Path, sample_rate: int) -> float | None:
+        """Estimate SNR using first 100ms as noise profile. Returns dB value or None.
+
+        Returns None when the file is shorter than the 100ms noise window — these
+        files are excluded from the SNR histogram (F2 fix).
 
         Supports 16-bit, 24-bit, and 32-bit PCM WAV files. For unsupported
         bit depths a warning is logged and 20.0 dB is returned as a fallback
@@ -736,6 +774,9 @@ class ProjectManager:
 
                 # Read first 100ms as noise profile
                 noise_frames = min(int(framerate * 0.1), n_frames)
+                # F2 fix: file shorter than noise window — cannot estimate SNR
+                if n_frames <= noise_frames:
+                    return None  # type: ignore[return-value]
                 raw_noise = wf.readframes(noise_frames)
                 # Read rest as signal
                 raw_signal = wf.readframes(n_frames - noise_frames)
@@ -904,7 +945,14 @@ class ProjectManager:
         return h.hexdigest()
 
     def deduplicate(self, name: str, version: str, mode: str) -> dict:
-        """Find duplicate WAV files by SHA-256 hash."""
+        """Find duplicate WAV files by SHA-256 hash.
+
+        Raises ValueError if the version contains more than max_files WAV files
+        to prevent unbounded synchronous I/O in the API request thread (F5 fix).
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        _MAX_FILES = 10_000
         d = self._require_project(name)
         version_dir = d / version
         if not version_dir.exists():
@@ -912,8 +960,16 @@ class ProjectManager:
                 f"Version '{version}' not found in project '{name}'"
             )
 
+        all_wavs = sorted(version_dir.rglob("*.wav"))
+        if len(all_wavs) > _MAX_FILES:
+            raise ValueError(
+                f"deduplicate: version '{version}' contains {len(all_wavs)} WAV files "
+                f"which exceeds the synchronous limit of {_MAX_FILES}. "
+                "Use a background job for large datasets."
+            )
+
         hash_to_files: dict[str, list[Path]] = {}
-        for wav in sorted(version_dir.rglob("*.wav")):
+        for wav in all_wavs:
             h = self._sha256_wav(wav)
             hash_to_files.setdefault(h, []).append(wav)
 
@@ -1076,7 +1132,7 @@ class ProjectManager:
 @dataset{{{name}_{version},
   title = {{{name}}},
   version = {{{version}}},
-  year = {{{datetime.datetime.utcnow().year}}},
+  year = {{{datetime.datetime.now(datetime.timezone.utc).year}}},
 }}
 ```
 """

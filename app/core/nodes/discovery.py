@@ -16,6 +16,7 @@ Reason To Change: Plugin discovery protocol changes (new manifest format,
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import logging
@@ -149,13 +150,29 @@ class AutoDiscovery:
         """
         nodes_path = Path(nodes_dir)
 
+        # Derive the package prefix from the actual nodes_dir path so that
+        # AutoDiscovery works correctly when nodes_dir is not the default
+        # "app/core/nodes" (e.g. in test fixtures or alternative installs).
+        # Strategy: walk up from nodes_path until we find a directory that is
+        # NOT a Python package (no __init__.py), then build the dotted name
+        # from the remaining path components.
+        def _path_to_package(p: Path) -> str:
+            parts: list[str] = []
+            current = p.resolve()
+            while (current / "__init__.py").exists():
+                parts.append(current.name)
+                current = current.parent
+            return ".".join(reversed(parts)) if parts else p.name
+
+        nodes_package_prefix = _path_to_package(nodes_path)
+
         # 1. Scan framework root (existing behaviour — skips framework files)
-        self._scan_directory(nodes_path, package_prefix="app.core.nodes")
+        self._scan_directory(nodes_path, package_prefix=nodes_package_prefix)
 
         # 2. Scan each Category_Folder (subdirectory with __init__.py)
         for subdir in sorted(nodes_path.iterdir()):
             if subdir.is_dir() and (subdir / "__init__.py").exists():
-                category_prefix = f"app.core.nodes.{subdir.name}"
+                category_prefix = f"{nodes_package_prefix}.{subdir.name}"
                 self._scan_directory(subdir, package_prefix=category_prefix)
 
         # 3. Scan models_dir for PortDataType subclasses
@@ -177,8 +194,16 @@ class AutoDiscovery:
             pass  # explicitly skipped by caller
         else:
             if plugins_dir is _PLUGINS_DIR_DEFAULT:
-                from app.core.config import plugins_home as _plugins_home
-                plugins_dir = str(_plugins_home())
+                try:
+                    from app.core.config import plugins_home as _plugins_home  # noqa: PLC0415
+                    plugins_dir = str(_plugins_home())
+                except Exception as exc:
+                    log.warning(
+                        "AutoDiscovery: could not resolve plugins_dir from config: %s — "
+                        "falling back to 'plugins'. Nodes already registered are unaffected.",
+                        exc,
+                    )
+                    plugins_dir = os.environ.get("GRAPHYN_PLUGINS_DIR", "plugins")
 
             plugins_path = Path(plugins_dir)
             if plugins_path.exists() and plugins_path.is_dir():
@@ -288,29 +313,65 @@ class AutoDiscovery:
         else:
             # Plugin file — load from path using a dotted module name so that
             # cls.__module__ matches module.__name__ during _process_module.
-            # Use the parent directory name as the package prefix when available.
+            #
+            # Use a hash of the full path to guarantee uniqueness across
+            # different plugin root directories that may share subdirectory
+            # names (e.g. plugins_v1/audio_classifier/nodes.py and
+            # plugins_v2/audio_classifier/nodes.py would otherwise both
+            # produce "audio_classifier.nodes" and collide in sys.modules).
             parent = path.parent.name
-            module_name = f"{parent}.{path.stem}" if parent else path.stem
+            path_hash = hashlib.md5(str(path).encode()).hexdigest()[:8]
+            stem = path.stem
+            module_name = (
+                f"_graphyn_plugin_{parent}_{path_hash}.{stem}"
+                if parent
+                else f"_graphyn_plugin_{path_hash}.{stem}"
+            )
             spec = importlib.util.spec_from_file_location(module_name, path)
             module = importlib.util.module_from_spec(spec)
+            # Register in sys.modules BEFORE exec_module so that intra-package
+            # relative imports can resolve.  On failure, remove the broken stub
+            # so that a subsequent retry (e.g. after fixing the plugin file)
+            # does not silently return the empty stub.
             sys.modules[module_name] = module
-            spec.loader.exec_module(module)
+            try:
+                spec.loader.exec_module(module)
+            except Exception:
+                sys.modules.pop(module_name, None)
+                raise
             return module
 
     def _process_module(self, module) -> None:
-        """Inspect *module* and register any PortDataType / Node subclasses found."""
+        """Inspect *module* and register any PortDataType / Node subclasses found.
+
+        Two registration paths:
+        1. ``__module__ == module.__name__`` — classes *defined* in this module.
+        2. ``__all__`` — classes *explicitly re-exported* by the module author
+           (e.g. ``from .base_classifier import AudioClassifierNode`` in
+           ``nodes.py`` with ``__all__ = ["AudioClassifierNode"]``).
+           This allows plugin authors to split implementation across sibling
+           modules and re-export the public classes from the entry-point file.
+        """
         from app.core.nodes.base import Node
+
+        # Build the set of explicitly re-exported names (may be empty).
+        explicit_exports: set[str] = set(getattr(module, "__all__", None) or [])
 
         for attr_name in dir(module):
             obj = getattr(module, attr_name)
             if not isinstance(obj, type):
                 continue
 
+            # A class is eligible if it was defined in this module OR if the
+            # plugin author explicitly listed it in __all__.
+            defined_here = obj.__module__ == module.__name__
+            exported = attr_name in explicit_exports
+
             # Register PortDataType subclasses
             if (
                 issubclass(obj, PortDataType)
                 and obj is not PortDataType
-                and obj.__module__ == module.__name__
+                and (defined_here or exported)
             ):
                 try:
                     self._registry.type_catalogue.register(obj)
@@ -330,7 +391,7 @@ class AutoDiscovery:
             if (
                 issubclass(obj, Node)
                 and obj is not Node
-                and obj.__module__ == module.__name__
+                and (defined_here or exported)
             ):
                 self._register_node(obj)
 
@@ -354,8 +415,12 @@ class AutoDiscovery:
             if existing is not cls:
                 # Allow same class loaded under a different module path
                 # (e.g. AutoDiscovery + PluginLoader both loading the same plugin file)
-                if existing.__name__ == cls.__name__ and existing.__qualname__ == cls.__qualname__:
-                    return  # same class, different import path — skip silently
+                if (
+                    existing.__name__ == cls.__name__
+                    and existing.__qualname__ == cls.__qualname__
+                    and existing.__module__ == cls.__module__
+                ):
+                    return  # genuinely the same class, different import path — skip silently
                 raise DuplicateNodeTypeError(
                     f"node_type '{node_type}' is claimed by both "
                     f"{existing!r} and {cls!r}"
@@ -378,10 +443,20 @@ class AutoDiscovery:
 
         meta: NodeMetadata = raw_meta
 
-        # Populate port dicts on metadata if not already set
-        if not meta.input_ports:
-            meta.input_ports = {k: _port_to_dict(v) for k, v in cls.input_ports.items()}
-        if not meta.output_ports:
-            meta.output_ports = {k: _port_to_dict(v) for k, v in cls.output_ports.items()}
+        # Populate port dicts on metadata if not already set.
+        # Wrap in try/except so a missing input_ports/output_ports class attribute
+        # raises NodeMetadataError (caught by _scan_directory) rather than a
+        # generic AttributeError that produces a confusing "error processing module"
+        # warning.
+        try:
+            if not meta.input_ports:
+                meta.input_ports = {k: _port_to_dict(v) for k, v in cls.input_ports.items()}
+            if not meta.output_ports:
+                meta.output_ports = {k: _port_to_dict(v) for k, v in cls.output_ports.items()}
+        except AttributeError as exc:
+            raise NodeMetadataError(
+                f"Node '{cls.__name__}' is missing port definitions: {exc}. "
+                "Ensure the class defines 'input_ports' and 'output_ports' ClassVars."
+            ) from exc
 
         self._registry.register(node_type, cls, meta)

@@ -96,11 +96,13 @@ class StreamProcessorNode(Node):
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, chunks: list[AudioSample]) -> list[AudioSample]:
+        # Guard: setup() may not have been called when instantiated directly
+        if not hasattr(self, "_buffer"):
+            self.setup()
+
         sr = self.config.sample_rate
         window_samples = int(sr * self.config.window_ms / 1000)
         hop_samples = int(sr * self.config.hop_ms / 1000)
-
-        t_start = time.monotonic()
 
         # Buffer health: drop oldest if over limit
         for chunk in chunks:
@@ -112,9 +114,15 @@ class StreamProcessorNode(Node):
                 )
             self._buffer.append(chunk)
 
-        # Concatenate buffered samples
+        t_start = time.monotonic()
+
+        # Concatenate buffered samples; mono-mix stereo to avoid 2D window slices
+        def _to_mono(arr: np.ndarray) -> np.ndarray:
+            a = arr.astype(np.float32)
+            return a.mean(axis=1) if a.ndim > 1 else a
+
         all_data = np.concatenate(
-            [c.data.astype(np.float32) for c in self._buffer]
+            [_to_mono(c.data) for c in self._buffer]
         ) if self._buffer else np.array([], dtype=np.float32)
 
         # Prepend any leftover from previous call
@@ -126,8 +134,8 @@ class StreamProcessorNode(Node):
         pos = 0
         window_idx = 0
 
-        # Use the first chunk's metadata as template
-        template = list(self._buffer)[0] if self._buffer else None
+        # Use the first chunk's metadata as template (O(1) deque access)
+        template = self._buffer[0] if self._buffer else None
 
         while pos + window_samples <= len(all_data):
             window = all_data[pos:pos + window_samples]

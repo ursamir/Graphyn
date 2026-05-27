@@ -143,11 +143,19 @@ async def run_pipeline_ir_async(
     )
 
     # ── Setup executors ────────────────────────────────────────────────────────
+    # SA-O-SETUP fix: if setup() raises for any node, tear down all executors
+    # that were already set up and deregister the run before propagating.
     executors: dict[str, NodeExecutor] = {}
-    for node_id in graph_obj.execution_order:
-        exec_ = NodeExecutor(graph_obj.get_node(node_id), run_id=run_id)
-        exec_.setup()
-        executors[node_id] = exec_
+    try:
+        for node_id in graph_obj.execution_order:
+            exec_ = NodeExecutor(graph_obj.get_node(node_id), run_id=run_id)
+            exec_.setup()
+            executors[node_id] = exec_
+    except Exception:
+        for exec_ in executors.values():
+            exec_.teardown()
+        deregister_active_run(run.run_id)
+        raise
 
     # ── Edge lookups ───────────────────────────────────────────────────────────
     incoming: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
@@ -165,6 +173,7 @@ async def run_pipeline_ir_async(
     node_stats: list[dict] = []
     completed_nodes: set[str] = set()
     skipped_nodes: list[str] = []
+    _seq_teardown_done = False  # set True by sequential finally to prevent double teardown
 
     # ── Resume ─────────────────────────────────────────────────────────────────
     if resume_run_id is not None:
@@ -211,57 +220,66 @@ async def run_pipeline_ir_async(
         node_index_map = {nid: idx for idx, nid in enumerate(graph_obj.execution_order)}
         ir_nodes_map = {ir_node.id: ir_node for ir_node in graph.nodes}
 
-        for wave_idx, wave in enumerate(graph_obj.execution_waves):
-            if run.is_cancelled:
-                nodes_completed = len(node_stats)
-                nodes_remaining = len(active_nodes) - nodes_completed
-                logger.pipeline_cancelled(run.run_id, nodes_completed, nodes_remaining)
-                for exec_ in executors.values():
-                    exec_.teardown()
-                run.mark_cancelled()
-                run.save_logs(logger.logs)
-                deregister_active_run(run.run_id)
-                last_completed = node_stats[-1]["node_id"] if node_stats else None
-                return node_outputs.get(last_completed, {}) if last_completed else {}
+        # SA-O-PAR fix: wrap the wave loop in try/finally so par_exec.shutdown()
+        # and executor teardowns always run, even when a wave raises.
+        try:
+            for wave_idx, wave in enumerate(graph_obj.execution_waves):
+                if run.is_cancelled:
+                    nodes_completed = len(node_stats)
+                    nodes_remaining = len(active_nodes) - nodes_completed
+                    logger.pipeline_cancelled(run.run_id, nodes_completed, nodes_remaining)
+                    run.mark_cancelled()
+                    run.save_logs(logger.logs)
+                    deregister_active_run(run.run_id)
+                    last_completed = node_stats[-1]["node_id"] if node_stats else None
+                    return node_outputs.get(last_completed, {}) if last_completed else {}
 
-            logger.wave_start(wave_idx, wave)
-            wave_start_time = time.time()
-            try:
-                await par_exec.run_wave(
-                    wave=wave,
-                    graph_obj=graph_obj,
-                    executors=executors,
-                    node_outputs=node_outputs,
-                    incoming=incoming,
-                    pipeline_cfg=pipeline_cfg,
-                    cache=cache,
-                    checkpoint=checkpoint,
-                    run_base_path=run.base_path,
-                    logger=logger,
-                    run_id=run_id,
-                    total_nodes=total_nodes,
-                    node_stats=node_stats,
-                    streaming=streaming,
-                    node_index_map=node_index_map,
-                    ir_nodes_map=ir_nodes_map,
-                    registry=node_registry,
-                    run_manager=run,
-                    edge_conditions=edge_conditions,
-                    graph=graph,
-                )
-            except Exception as exc:
-                run.save_logs(logger.logs)
-                run.mark_failed(str(exc))
-                deregister_active_run(run.run_id)
-                raise
-            logger.wave_end(wave_idx, wave, time.time() - wave_start_time)
-
-        # Shut down the shared thread pool now that all waves are done
-        par_exec.shutdown()
+                logger.wave_start(wave_idx, wave)
+                wave_start_time = time.time()
+                try:
+                    await par_exec.run_wave(
+                        wave=wave,
+                        graph_obj=graph_obj,
+                        executors=executors,
+                        node_outputs=node_outputs,
+                        incoming=incoming,
+                        pipeline_cfg=pipeline_cfg,
+                        cache=cache,
+                        checkpoint=checkpoint,
+                        run_base_path=run.base_path,
+                        logger=logger,
+                        run_id=run_id,
+                        total_nodes=total_nodes,
+                        node_stats=node_stats,
+                        streaming=streaming,
+                        node_index_map=node_index_map,
+                        ir_nodes_map=ir_nodes_map,
+                        registry=node_registry,
+                        run_manager=run,
+                        edge_conditions=edge_conditions,
+                        graph=graph,
+                    )
+                except Exception as exc:
+                    run.save_logs(logger.logs)
+                    run.mark_failed(str(exc))
+                    deregister_active_run(run.run_id)
+                    raise
+                logger.wave_end(wave_idx, wave, time.time() - wave_start_time)
+        finally:
+            # Always shut down the thread pool and teardown executors,
+            # whether the wave loop completed normally, was cancelled, or raised.
+            par_exec.shutdown()
+            for exec_ in executors.values():
+                exec_.teardown()
 
     # ── Sequential execution ───────────────────────────────────────────────────
     elif not event_driven:
-        for idx, node_id in enumerate(graph_obj.execution_order):
+        # SA-O-SEQ fix: wrap the entire sequential loop in try/finally so
+        # executor teardowns always run — on success, exception, or early
+        # return (cancellation). _seq_teardown_done signals the bottom teardown
+        # block to skip (avoids double teardown).
+        try:
+          for idx, node_id in enumerate(graph_obj.execution_order):
             if node_id in completed_nodes:
                 node = graph_obj.get_node(node_id)
                 logger.node_skip(node_id, type(node).__name__, reason="resumed_from_checkpoint")
@@ -278,6 +296,14 @@ async def run_pipeline_ir_async(
                     # passthrough["output"] unconditionally, which would overwrite
                     # a previously set dst_port for multi-port excluded nodes.
                     passthrough[dst_port] = value
+                # SA-O-EXCL fix: warn when an excluded source node (no incoming
+                # edges) will propagate None to all downstream consumers.
+                if not incoming[node_id]:
+                    log.warning(
+                        "Excluded node '%s' has no incoming edges — downstream nodes "
+                        "will receive None for all inputs from it.",
+                        node_id,
+                    )
                 node_outputs[node_id] = passthrough
                 continue
 
@@ -286,8 +312,6 @@ async def run_pipeline_ir_async(
                 nodes_completed = len(node_stats)
                 nodes_remaining = len(active_nodes) - nodes_completed
                 logger.pipeline_cancelled(run.run_id, nodes_completed, nodes_remaining)
-                for exec_ in executors.values():
-                    exec_.teardown()
                 run.mark_cancelled()
                 run.save_logs(logger.logs)
                 deregister_active_run(run.run_id)
@@ -301,8 +325,11 @@ async def run_pipeline_ir_async(
             logger.node_start(node_type, idx, total_nodes=len(active_nodes))
             node_start_time = time.time()
 
-            # Assemble inputs
+            # Assemble inputs — cache condition results to avoid double-evaluation
+            # in the skip-node check below (SA-O-COND fix).
             inputs: dict[str, Any] = {}
+            # Maps (src_id, src_port, dst_port) → bool for edges with conditions
+            _condition_results: dict[tuple[str, str, str], bool] = {}
             for src_id, src_port, dst_port in incoming[node_id]:
                 if src_id not in active_nodes:
                     if input_overrides and node_id in input_overrides and dst_port in input_overrides[node_id]:
@@ -326,6 +353,7 @@ async def run_pipeline_ir_async(
                         run.mark_failed(str(exc))
                         deregister_active_run(run.run_id)
                         raise
+                    _condition_results[(src_id, src_port, dst_port)] = passes
                     if not passes:
                         inputs[dst_port] = None
                         continue
@@ -339,7 +367,8 @@ async def run_pipeline_ir_async(
                 else:
                     inputs[dst_port] = value
 
-            # Skip node if required port has None from a false condition
+            # Skip node if required port has None from a false condition.
+            # Reuse cached condition results — no second evaluation needed.
             skip_node = False
             for port_name, port in node.input_ports.items():
                 if port.required and inputs.get(port_name) is None:
@@ -349,13 +378,9 @@ async def run_pipeline_ir_async(
                             continue
                         condition = edge_conditions.get((src_id, src_port, node_id, dst_port))
                         if condition is not None:
-                            from app.core.conditions import evaluate_condition
-                            src_outputs = node_outputs.get(src_id, {})
-                            try:
-                                if not evaluate_condition(condition, src_outputs):
-                                    false_condition_ports.add(dst_port)
-                            except Exception:
-                                pass
+                            cached = _condition_results.get((src_id, src_port, dst_port))
+                            if cached is False:
+                                false_condition_ports.add(dst_port)
                     if port_name in false_condition_ports:
                         logger.node_skip(node_id, node_type, reason="condition_false")
                         node_outputs[node_id] = {}
@@ -453,11 +478,12 @@ async def run_pipeline_ir_async(
                         )
 
             node_duration = time.time() - node_start_time
-            _output_count = 0
-            for _v in node_outputs[node_id].values():
-                if isinstance(_v, list):
-                    _output_count = len(_v)
-                    break
+            # SA-O-CNT fix: count all outputs — list length for list ports,
+            # 1 for each non-None scalar port, 0 for None ports.
+            _output_count = sum(
+                len(v) if isinstance(v, list) else (0 if v is None else 1)
+                for v in node_outputs[node_id].values()
+            )
             logger.node_end(node_type, idx, node_duration, output_count=_output_count)
             node_stats.append({
                 "node_id": node_id,
@@ -465,6 +491,15 @@ async def run_pipeline_ir_async(
                 "node_index": idx,
                 "duration_s": round(node_duration, 4),
             })
+        except Exception as _e:
+            raise
+        finally:
+            # Teardown all executors whether the loop succeeded, was cancelled
+            # (early return), or raised. Sets _seq_teardown_done so the bottom
+            # teardown block skips (prevents double teardown).
+            for exec_ in executors.values():
+                exec_.teardown()
+            _seq_teardown_done = True
 
     # ── Event-driven execution ─────────────────────────────────────────────────
     if event_driven:
@@ -541,13 +576,16 @@ async def run_pipeline_ir_async(
                             node_outputs[exec_node_id] = exec_outputs
                         except Exception as exc:
                             logger.node_error(exec_node_type, exec_idx, exc)
+                            # SA-O-EVT fix: mark the run failed so it is not
+                            # left in an indeterminate "active" state forever.
+                            run.mark_failed(str(exc))
                             break
                         _node_duration = time.time() - _node_start_time
-                        _output_count = 0
-                        for _v in exec_outputs.values():
-                            if isinstance(_v, list):
-                                _output_count = len(_v)
-                                break
+                        # SA-O-CNT fix: count all outputs correctly.
+                        _output_count = sum(
+                            len(v) if isinstance(v, list) else (0 if v is None else 1)
+                            for v in exec_outputs.values()
+                        )
                         logger.node_end(exec_node_type, exec_idx, _node_duration,
                                         output_count=_output_count)
                         node_stats.append({
@@ -559,10 +597,12 @@ async def run_pipeline_ir_async(
                     trigger_count += 1
 
             async def _cancel_watcher() -> None:
+                # SA-O-DBLCLOSE fix: do NOT close sources here — the finally
+                # block below owns all source cleanup. Closing here and in
+                # finally is a double-close that is unsafe for non-idempotent
+                # sources (e.g. network connections).
                 while not run.is_cancelled:
                     await asyncio.sleep(0.2)
-                for src in sources.values():
-                    await src.close()
 
             try:
                 tasks = [
@@ -596,8 +636,13 @@ async def run_pipeline_ir_async(
             return node_outputs.get(last_id, {})
 
     # ── Teardown and finalize ──────────────────────────────────────────────────
-    for exec_ in executors.values():
-        exec_.teardown()
+    # Parallel path teardown is handled in its own try/finally above.
+    # Sequential path teardown (all paths) is handled in its own try/finally above.
+    # This block only runs when neither parallel nor sequential ran
+    # (event_driven=True with no trigger nodes falls through here).
+    if not _seq_teardown_done and not parallel:
+        for exec_ in executors.values():
+            exec_.teardown()
 
     total_duration = time.time() - start_time
     logger.summary()
@@ -626,6 +671,15 @@ async def run_pipeline_ir_async(
 
     last_id = graph_obj.execution_order[-1]
     deregister_active_run(run.run_id)
+    # SA-O-LAST fix: warn when the last node produced no outputs so callers
+    # can distinguish "pipeline succeeded with empty output" from "last node
+    # was skipped or excluded".
+    if last_id not in node_outputs:
+        log.warning(
+            "Last node '%s' produced no outputs (skipped or excluded). "
+            "Returning empty dict.",
+            last_id,
+        )
     return node_outputs.get(last_id, {})
 
 

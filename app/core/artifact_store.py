@@ -7,13 +7,13 @@ Owns:             ArtifactRecord (immutable metadata model), ArtifactStore
                   (registry with content-hash deduplication and secondary indexes).
 Public Surface:   ArtifactStore.register(), .get(), .list(), .get_versions(),
                   .cleanup(); ArtifactRecord; ArtifactNotFoundError;
-                  ArtifactSerializationError; SUPPORTED_ARTIFACT_TYPES;
+                  ArtifactSerializationError; _get_supported_artifact_types();
                   _infer_artifact_type() (delegates to ArtifactSerializerRegistry).
 Must NOT:         Import from app.domain, app.api, or app.core.orchestrator.
-                  Must not contain domain-specific serialization logic (WAV I/O,
-                  AudioSample construction, audio duck-typing). All such logic
-                  lives in app/models/audio_artifact_serializer.py and is
-                  injected via ArtifactSerializerRegistry at startup.
+                  Must not contain domain-specific serialization logic or
+                  domain type heuristics (duck-typing, hardcoded type strings,
+                  domain model imports). All type inference lives in domain
+                  handlers registered via ArtifactSerializerRegistry at startup.
 Dependencies:     stdlib, pydantic, app.core.config (path resolution),
                   app.core.artifact_serializer (registry interface — no domain
                   knowledge flows through it).
@@ -40,62 +40,32 @@ logger = logging.getLogger(__name__)
 # Supported artifact types
 # ---------------------------------------------------------------------------
 
-SUPPORTED_ARTIFACT_TYPES: frozenset[str] = frozenset(
-    {
-        "audio_samples",
-        "model_artifact",
-        "tflite_artifact",
-        "prediction_result",
-        "feature_array",
-        "generic",
-    }
-)
+def _get_supported_artifact_types() -> frozenset[str]:
+    """Return the set of artifact_type strings currently supported.
+
+    Derived dynamically from the ArtifactSerializerRegistry plus the
+    built-in "generic" fallback. This replaces the old hardcoded
+    SUPPORTED_ARTIFACT_TYPES constant so that new domain types registered
+    at startup are automatically accepted without editing platform code.
+    """
+    from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+    registered = get_serializer_registry().registered_types()
+    return frozenset(registered) | {"generic"}
 
 
 def _infer_artifact_type(value: Any) -> str:
     """Infer the ArtifactStore artifact_type string from a node output value.
 
-    Delegates to the ArtifactSerializerRegistry first (domain handlers
-    registered at startup). Falls back to built-in heuristics for generic
-    platform types (DatasetArtifact, numpy arrays, split dicts).
+    Delegates entirely to the ArtifactSerializerRegistry. Domain handlers
+    (e.g. AudioSampleHandler, FeatureArrayHandler) are registered at startup
+    and implement infer_type() to identify their own values.
 
-    ARCH-2 fix: audio duck-typing removed from platform infrastructure.
-    AudioSample detection is now handled by AudioSampleHandler.infer_type()
-    registered via register_audio_serializer() at startup.
+    Falls back to "generic" for any value no handler recognises.
+    Platform code contains zero domain-specific heuristics.
     """
     from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
-    registry = get_serializer_registry()
-    inferred = registry.infer_type(value)
-    if inferred is not None:
-        return inferred
-
-    # Built-in platform heuristics (no domain model imports)
-    try:
-        from app.models.dataset_artifact import DatasetArtifact  # noqa: PLC0415
-        if isinstance(value, DatasetArtifact):
-            return "generic"
-    except ImportError:
-        pass
-
-    if isinstance(value, list) and value:
-        first = value[0]
-        if hasattr(first, "model_dump"):
-            return "generic"
-
-    if isinstance(value, dict):
-        if any(k in value for k in ("train", "val", "test")):
-            return "generic"
-        if any(k in value for k in ("features", "feature_array")):
-            return "feature_array"
-
-    try:
-        import numpy as np  # noqa: PLC0415
-        if isinstance(value, np.ndarray):
-            return "feature_array"
-    except ImportError:
-        pass
-
-    return "generic"
+    inferred = get_serializer_registry().infer_type(value)
+    return inferred if inferred is not None else "generic"
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +121,7 @@ class ArtifactRecord(BaseModel):
     """SHA-256 hex digest of the canonical serialized artifact data."""
 
     artifact_type: str
-    """One of SUPPORTED_ARTIFACT_TYPES."""
+    """Artifact type string, as returned by _infer_artifact_type()."""
 
     node_id: str
     """The IR node ID that produced this artifact."""
@@ -280,36 +250,70 @@ class ArtifactStore:
     # ------------------------------------------------------------------
 
     def _by_name_path(self, name: str) -> Path:
-        # Sanitize name for use as a filename
-        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in name)[:128]
-        # SA-AS5 fix: prevent "." and ".." from being used as filenames, which
-        # would produce directory references instead of index files.
-        safe = safe.lstrip(".") or "_unnamed"
-        if safe in (".", "..") or not safe:
-            safe = "_unnamed"
-        return self.base / "by_name" / f"{safe}.json"
+        # Use a SHA-256 prefix of the original name as the filename to avoid
+        # sanitization collisions (e.g. "my model" and "my_model" mapping to
+        # the same file). The original name is stored inside the index file
+        # for exact-match filtering in _load_by_name.
+        # SA-AS9 fix: hash-based filename replaces character-substitution
+        # sanitization which caused silent cross-name collisions.
+        import hashlib as _hashlib
+        name_hash = _hashlib.sha256(name.encode("utf-8")).hexdigest()[:32]
+        return self.base / "by_name" / f"{name_hash}.json"
 
     def _load_by_name(self, name: str) -> list[str]:
-        """Return list of artifact_ids for the given name. Returns [] on missing/corrupt."""
+        """Return list of artifact_ids whose stored name exactly matches `name`.
+
+        Index format: list of {"id": str, "name": str} dicts.
+        Legacy format (plain list of str) is also handled for backward compat.
+        Returns [] on missing/corrupt.
+        """
         path = self._by_name_path(name)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
+            if not isinstance(data, list):
+                return []
+            result: list[str] = []
+            for entry in data:
+                if isinstance(entry, dict):
+                    # New format: {"id": ..., "name": ...}
+                    if entry.get("name") == name:
+                        result.append(entry["id"])
+                elif isinstance(entry, str):
+                    # Legacy format: plain artifact_id (no name stored — include all)
+                    result.append(entry)
+            return result
         except FileNotFoundError:
             return []
         except Exception as exc:
-            logger.warning("ArtifactStore: by_name/%s corrupt (%s) — treating as empty", name, exc)
+            logger.warning("ArtifactStore: by_name index for %r corrupt (%s) — treating as empty", name, exc)
             return []
 
     def _append_by_name(self, name: str, artifact_id: str) -> None:
-        """Append artifact_id to the by_name index (caller must hold self._lock)."""
+        """Append artifact_id to the by_name index (caller must hold self._lock).
+
+        Stores {"id": artifact_id, "name": name} so that _load_by_name can
+        filter by exact name match even when two names hash to the same file
+        (extremely unlikely with SHA-256/32 but handled defensively).
+        """
         (self.base / "by_name").mkdir(exist_ok=True)
-        ids = self._load_by_name(name)
-        if artifact_id not in ids:
-            ids.append(artifact_id)
         path = self._by_name_path(name)
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(existing, list):
+                existing = []
+        except FileNotFoundError:
+            existing = []
+        except Exception:
+            existing = []
+        # Avoid duplicates
+        if not any(
+            (isinstance(e, dict) and e.get("id") == artifact_id)
+            or (isinstance(e, str) and e == artifact_id)
+            for e in existing
+        ):
+            existing.append({"id": artifact_id, "name": name})
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(ids, indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
         tmp.replace(path)
 
     # ------------------------------------------------------------------
@@ -446,14 +450,23 @@ class ArtifactStore:
         Returns an existing ArtifactRecord if content_hash already exists
         (content-addressed deduplication). Otherwise creates a new record.
 
+        Deduplication contract: when an existing record is returned, the
+        ``artifact_id`` and ``data_path`` fields refer to the ORIGINAL artifact.
+        The returned record's ``run_id`` and ``node_id`` reflect the CURRENT
+        call's context (so the caller can use them for logging/display), but
+        ``get(artifact_id)`` will return the canonical record with the original
+        ``run_id``. The current run is still registered in the ``by_run`` index.
+        Callers that need the canonical record should call ``get(record.artifact_id)``.
+
         Raises:
-            ValueError: if artifact_type is not in SUPPORTED_ARTIFACT_TYPES
+            ValueError: if artifact_type is not supported by the registry
             ArtifactSerializationError: if serialization fails
         """
-        if artifact_type not in SUPPORTED_ARTIFACT_TYPES:
+        supported = _get_supported_artifact_types()
+        if artifact_type not in supported:
             raise ValueError(
                 f"Unsupported artifact_type {artifact_type!r}. "
-                f"Supported types: {sorted(SUPPORTED_ARTIFACT_TYPES)}"
+                f"Supported types: {sorted(supported)}"
             )
 
         content_hash = self._compute_content_hash(artifact_type, data)
@@ -473,6 +486,10 @@ class ArtifactStore:
         try:
             self._serialize_data(artifact_type, data, tmp_data_dir)
         except ArtifactSerializationError:
+            # SA-AS7 fix: clean up the temp directory before re-raising so that
+            # failed serializations do not accumulate _tmp_*/ directories on disk.
+            import shutil as _shutil
+            _shutil.rmtree(str(tmp_artifact_dir), ignore_errors=True)
             raise
 
         with self._lock:
@@ -726,14 +743,19 @@ class ArtifactStore:
                     continue
                 hashes_to_remove.append(record.content_hash)
                 deleted_ids.append(record.artifact_id)
+                # SA-AS8 fix: rmtree and accounting are INSIDE the try block so
+                # that entries with corrupt record.json are skipped (the except
+                # block continues) rather than silently deleted with stale index
+                # entries left behind.
+                for f in entry.rglob("*"):
+                    if f.is_file():
+                        bytes_freed += f.stat().st_size
+                shutil.rmtree(str(entry), ignore_errors=True)
+                entries_deleted += 1
             except Exception:
-                pass
-
-            for f in entry.rglob("*"):
-                if f.is_file():
-                    bytes_freed += f.stat().st_size
-            shutil.rmtree(str(entry), ignore_errors=True)
-            entries_deleted += 1
+                # Skip entries whose record.json cannot be parsed — do NOT delete
+                # them, as their content-hash index entry would become stale.
+                continue
 
         if hashes_to_remove or deleted_ids:
             with self._lock:
@@ -769,7 +791,12 @@ class ArtifactStore:
                             continue
                         try:
                             ids = json.loads(name_index_file.read_text(encoding="utf-8"))
-                            cleaned = [i for i in ids if i not in deleted_set]
+                            # Handle both new format (list of dicts) and legacy (list of str)
+                            cleaned = [
+                                e for e in ids
+                                if (isinstance(e, dict) and e.get("id") not in deleted_set)
+                                or (isinstance(e, str) and e not in deleted_set)
+                            ]
                             if len(cleaned) != len(ids):
                                 tmp = name_index_file.with_suffix(".json.tmp")
                                 tmp.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")

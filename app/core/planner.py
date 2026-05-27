@@ -75,27 +75,43 @@ def _parse_pipeline_config(raw: dict) -> PipelineConfig:
 
     nodes: list[NodeSpec] = []
     for i, n in enumerate(raw_nodes):
-        node_id = n.get("id") or f"{n['type']}_{i}"
+        node_id = n.get("id") or f"{n.get('type', 'node')}_{i}"
+        # Finding 4 (HIGH): explicit error when "type" is missing
+        node_type = n.get("type")
+        if not node_type:
+            raise ValueError(f"Node at index {i} is missing required field 'type'")
         nodes.append(NodeSpec(
             node_id=node_id,
-            node_type=n["type"],
+            node_type=node_type,
             config=n.get("config", {}),
         ))
 
     raw_edges = pipeline.get("edges")
     if raw_edges:
-        edges = [
-            EdgeSpec(
-                src_id=e["from"][0],
-                src_port=e["from"][1],
-                dst_id=e["to"][0],
-                dst_port=e["to"][1],
+        edges = []
+        for ei, e in enumerate(raw_edges):
+            # Finding 4+5 (HIGH): validate "from" and "to" are 2-element lists
+            from_val = e.get("from")
+            if not isinstance(from_val, (list, tuple)) or len(from_val) < 2:
+                raise ValueError(
+                    f"Edge at index {ei}: 'from' must be a 2-element list [node_id, port], "
+                    f"got: {from_val!r}"
+                )
+            to_val = e.get("to")
+            if not isinstance(to_val, (list, tuple)) or len(to_val) < 2:
+                raise ValueError(
+                    f"Edge at index {ei}: 'to' must be a 2-element list [node_id, port], "
+                    f"got: {to_val!r}"
+                )
+            edges.append(EdgeSpec(
+                src_id=from_val[0],
+                src_port=from_val[1],
+                dst_id=to_val[0],
+                dst_port=to_val[1],
                 # SA-P1 fix: copy condition from YAML edge so it is not silently
                 # dropped (the IR path already copies it correctly).
                 condition=e.get("condition"),
-            )
-            for e in raw_edges
-        ]
+            ))
     else:
         edges = [
             EdgeSpec(
@@ -114,6 +130,9 @@ def _parse_pipeline_config(raw: dict) -> PipelineConfig:
 
 def _ir_to_pipeline_config(graph: Any) -> PipelineConfig:
     """Convert a GraphIR to a PipelineConfig. Pure — no side effects, no I/O."""
+    # Finding 9 (LOW): guard against missing metadata
+    if graph.metadata is None:
+        raise ValueError("GraphIR is missing metadata — cannot extract seed")
     nodes = [
         NodeSpec(
             node_id=ir_node.id,
@@ -151,9 +170,13 @@ class PipelineGraph:
         self,
         config: PipelineConfig,
         observer: NodeObserver | None = None,
+        registry: Any | None = None,
     ) -> None:
         self._config = config
         self._observer = observer
+        # Finding 7 (MEDIUM): accept optional registry for DI / unit-test injection;
+        # if None, _build() fetches the real singleton via get_registry().
+        self._registry = registry
         self._nodes: dict[str, Node] = {}
         self._edges: list[EdgeSpec] = list(config.edges)
         self._topo_order: list[str] = []
@@ -164,18 +187,32 @@ class PipelineGraph:
         from app.core.nodes.compat import CompatibilityChecker
         from app.core.nodes.errors import PipelineGraphError
 
-        node_registry = get_registry()
+        node_registry = self._registry if self._registry is not None else get_registry()
         seed = self._config.seed
 
         for i, spec in enumerate(self._config.nodes):
+            # Finding 1 (CRITICAL): duplicate node ID check — silent overwrite
+            if spec.node_id in self._nodes:
+                raise PipelineGraphError(
+                    f"Duplicate node ID '{spec.node_id}' in pipeline config"
+                )
+            # Finding 2 (HIGH): guard against unknown node type
             node_class = node_registry.get_class(spec.node_type)
+            if node_class is None:
+                raise PipelineGraphError(
+                    f"Unknown node type '{spec.node_type}' for node '{spec.node_id}'"
+                )
             # SA-P3 fix: include node config in the seed so two pipelines with
             # the same seed and node types but different configs produce distinct
             # node seeds (important for augmentation nodes with random behaviour).
-            node_seed = stable_hash(
-                seed, spec.node_type, i,
-                json.dumps(spec.config, sort_keys=True),
-            ) % (2 ** 32)
+            # Finding 3 (HIGH): wrap json.dumps so non-serializable configs give a clear error
+            try:
+                config_str = json.dumps(spec.config, sort_keys=True)
+            except TypeError as exc:
+                raise PipelineGraphError(
+                    f"Node '{spec.node_id}' config is not JSON-serializable: {exc}"
+                ) from exc
+            node_seed = stable_hash(seed, spec.node_type, i, config_str) % (2 ** 32)
             node_config = copy.deepcopy(spec.config)
             node = node_class(config=node_config, seed=node_seed, observer=self._observer)
             self._nodes[spec.node_id] = node
@@ -187,7 +224,16 @@ class PipelineGraph:
                 raise PipelineGraphError(f"Edge references unknown source node '{edge.src_id}'")
             if dst_node is None:
                 raise PipelineGraphError(f"Edge references unknown destination node '{edge.dst_id}'")
-            CompatibilityChecker.check_connection(src_node, edge.src_port, dst_node, edge.dst_port)
+            # Finding 8 (MEDIUM): wrap compat errors so callers only need to catch PipelineGraphError
+            try:
+                CompatibilityChecker.check_connection(src_node, edge.src_port, dst_node, edge.dst_port)
+            except PipelineGraphError:
+                raise
+            except Exception as exc:
+                raise PipelineGraphError(
+                    f"Incompatible edge {edge.src_id}.{edge.src_port} → "
+                    f"{edge.dst_id}.{edge.dst_port}: {exc}"
+                ) from exc
 
         self._topo_order = self._topological_sort()
         self._waves: list[list[str]] = self._compute_waves()
@@ -232,10 +278,13 @@ class PipelineGraph:
 
         # SA-P2 fix: build waves dict in a single pass instead of iterating
         # all nodes for each level — reduces O(N²) to O(N) for deep linear pipelines.
+        # Finding 6 (MEDIUM): empty pipeline must return [] not [[]]
+        if not level:
+            return []
         waves_dict: dict[int, list[str]] = defaultdict(list)
         for nid in self._topo_order:
             waves_dict[level[nid]].append(nid)
-        max_level = max(level.values(), default=0)
+        max_level = max(level.values())
         return [waves_dict[i] for i in range(max_level + 1)]
 
     def get_node(self, node_id: str) -> Node:

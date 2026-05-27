@@ -25,6 +25,19 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def _deep_freeze(v: Any) -> Any:
+    """Recursively wrap dicts in MappingProxyType and lists in tuple.
+
+    Ensures that nested structures inside an IRNode config are fully
+    immutable, not just the top-level mapping (P-23 fix extension).
+    """
+    if isinstance(v, dict):
+        return MappingProxyType({k: _deep_freeze(vv) for k, vv in v.items()})
+    if isinstance(v, list):
+        return tuple(_deep_freeze(i) for i in v)
+    return v
+
+
 class IRCapabilityMetadata(BaseModel):
     """Capability hints for a node instance within a specific graph.
 
@@ -79,7 +92,7 @@ class IRMetadata(BaseModel):
     seed: int
     description: str = ""
     created_at: str | None = None
-    tags: list[str] = []
+    tags: tuple[str, ...] = ()
 
     @field_validator("name")
     @classmethod
@@ -119,10 +132,20 @@ class IRNode(BaseModel):
     @field_validator("config", mode="before")
     @classmethod
     def _deep_copy_config(cls, v: Any) -> Any:
-        """Deep-copy config on construction to prevent external mutation (P-23 fix)."""
-        if isinstance(v, dict):
-            return MappingProxyType(copy.deepcopy(v))
-        return v
+        """Deep-copy and recursively freeze config on construction (P-23 fix).
+
+        Rejects non-dict config values at construction time so callers get a
+        clear ValidationError rather than an AttributeError deep in execution.
+        Uses _deep_freeze to make nested dicts and lists fully immutable, not
+        just the top-level mapping.
+        """
+        if v is None:
+            return MappingProxyType({})
+        if not isinstance(v, dict):
+            raise ValueError(
+                f"IRNode.config must be a dict, got {type(v).__name__}"
+            )
+        return _deep_freeze(copy.deepcopy(v))
 
     @field_validator("id")
     @classmethod
@@ -164,6 +187,13 @@ class IREdge(BaseModel):
 
     Optional boolean condition expression. Edge transmits data only when this evaluates to true.
     """
+
+    @field_validator("src_port", "dst_port")
+    @classmethod
+    def _port_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("IREdge port name must be a non-empty string")
+        return v
 
 
 class IRParameter(BaseModel):
@@ -235,6 +265,11 @@ class GraphIR(BaseModel):
                 raise ValueError(
                     f"IREdge references unknown destination node id '{edge.dst_id}'. "
                     f"Known node ids: {sorted(seen_ids)}"
+                )
+            if edge.src_id == edge.dst_id:
+                raise ValueError(
+                    f"Self-loop detected on node '{edge.src_id}'. "
+                    "A node may not have an edge to itself."
                 )
 
         return self

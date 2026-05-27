@@ -101,6 +101,7 @@ class EmbeddingGeneratorNode(Node):
     def setup(self) -> None:
         self._model_obj = None
         self._processor_obj = None
+        self._cached_model_id: str = ""
         self._resolved_model = self.config.model_name_or_path or self.config.model
         log.debug("EmbeddingGeneratorNode: model='%s'", self._resolved_model)
 
@@ -113,6 +114,12 @@ class EmbeddingGeneratorNode(Node):
         for sample in samples:
             y = sample.data.astype(np.float32)
             sr = sample.sample_rate
+
+            if len(y) == 0:
+                log.warning(
+                    "EmbeddingGeneratorNode: empty audio sample '%s' — skipping", sample.path
+                )
+                continue
 
             if model_key in ("wav2vec2", "hubert", "clap"):
                 emb = self._embed_transformers(y, sr, model_key)
@@ -158,11 +165,14 @@ class EmbeddingGeneratorNode(Node):
 
         model_id = self.config.model_name_or_path or _HF_MODELS.get(model_key, model_key)
 
-        # Cache model + processor
-        if self._model_obj is None:
+        # Cache model + processor, keyed on model_id to detect config changes.
+        # Guard with hasattr in case setup() was not called before process().
+        cached_id = getattr(self, "_cached_model_id", "")
+        if not getattr(self, "_model_obj", None) or cached_id != model_id:
             self._processor_obj = AutoFeatureExtractor.from_pretrained(model_id)
             self._model_obj = AutoModel.from_pretrained(model_id)
             self._model_obj.eval()
+            self._cached_model_id = model_id
 
         # Resample to model-specific expected rate
         target_sr = 16000
@@ -270,6 +280,10 @@ class EmbeddingGeneratorNode(Node):
         """Pool a (T, D) hidden state array to (D,)."""
         if hidden.ndim == 1:
             return hidden
+        # Guard against zero-frame arrays (very short audio)
+        if hidden.shape[0] == 0:
+            d = hidden.shape[1] if hidden.ndim > 1 else 1
+            return np.zeros(d, dtype=np.float32)
         pooling = self.config.pooling
         if pooling == "mean":
             return hidden.mean(axis=0)

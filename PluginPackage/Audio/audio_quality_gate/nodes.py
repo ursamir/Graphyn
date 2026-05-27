@@ -115,7 +115,12 @@ class AudioQualityGateNode(Node):
 
     def process(self, inputs: dict) -> dict:
         """Route each sample to output (passed) or rejected based on quality checks."""
-        samples = inputs.get("input") or []
+        if isinstance(inputs, list):
+            samples = inputs
+        elif isinstance(inputs, dict):
+            samples = inputs.get("input") or []
+        else:
+            samples = []
         passed = []
         rejected = []
 
@@ -157,6 +162,10 @@ class AudioQualityGateNode(Node):
 
     def _check_duration(self, sample: AudioSample) -> str | None:
         """Reject samples outside the configured duration range."""
+        if sample.data is None:
+            return "no_data (data is None)"
+        if not sample.sample_rate or sample.sample_rate <= 0:
+            return f"invalid_sample_rate (sample_rate={sample.sample_rate})"
         duration = len(sample.data) / sample.sample_rate
         if duration < self.config.min_duration_s:
             return f"too_short ({duration:.3f}s < {self.config.min_duration_s}s)"
@@ -184,6 +193,13 @@ class AudioQualityGateNode(Node):
         This is more robust than assuming the first 10ms is noise — it works
         correctly even when audio starts with speech.
         Returns None (no rejection) if the noise floor is essentially silent.
+
+        Limitation: this heuristic can produce inaccurate estimates for audio
+        with non-stationary noise (e.g. music with quiet passages, or a single
+        loud click followed by silence). In such cases the 5th-percentile of
+        |data| is near zero, so noise_power < 1e-10 and the check is skipped.
+        For production use, consider a proper noise estimation algorithm
+        (e.g. minimum statistics or NIST STNR).
         """
         abs_data = np.abs(sample.data)
         noise_floor = float(np.percentile(abs_data, 5))
@@ -198,6 +214,8 @@ class AudioQualityGateNode(Node):
 
     def _check_bandwidth(self, sample: AudioSample) -> str | None:
         """Reject samples with insufficient spectral bandwidth (rolloff at 85% energy)."""
+        if sample.data is None or len(sample.data) == 0:
+            return "empty_audio (zero samples)"
         rolloff = librosa.feature.spectral_rolloff(
             y=sample.data, sr=sample.sample_rate, roll_percent=0.85
         )
@@ -220,8 +238,8 @@ class AudioQualityGateNode(Node):
         meter = pyln.Meter(sample.sample_rate)
         try:
             loudness = meter.integrated_loudness(sample.data)
-        except Exception:
-            return None
+        except (ValueError, RuntimeError):
+            return None  # audio too short or invalid for BS.1770 gating
 
         if loudness < self.config.min_lufs:
             return f"too_quiet ({loudness:.1f} LUFS < {self.config.min_lufs} LUFS)"
@@ -267,9 +285,9 @@ class AudioQualityGateNode(Node):
 
     def _compute_quality_metadata(self, sample: AudioSample) -> dict:
         """Compute and return quality scores for samples that passed all checks."""
-        duration = len(sample.data) / sample.sample_rate
-        clipping_ratio = float(np.mean(np.abs(sample.data) >= 0.99))
-        rms = float(np.sqrt(np.mean(sample.data ** 2)))
+        duration = (len(sample.data) / sample.sample_rate) if sample.data is not None and sample.sample_rate else 0.0
+        clipping_ratio = float(np.mean(np.abs(sample.data) >= 0.99)) if sample.data is not None else 0.0
+        rms = float(np.sqrt(np.mean(sample.data ** 2))) if sample.data is not None else 0.0
         return {
             "duration_s": duration,
             "clipping_ratio": clipping_ratio,

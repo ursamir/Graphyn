@@ -97,30 +97,36 @@ class DatasetBalancerNode(Node):
                 "implemented. Only balance_by='class' is currently supported."
             )
 
+        # Validate target_count — negative values would silently skip all balancing
+        if self.config.target_count < 0:
+            raise ValueError(
+                f"DatasetBalancerNode: target_count must be >= 0, got {self.config.target_count}"
+            )
+
         X = dataset.X_train
         y = dataset.y_train
 
-        if X is None or len(X) == 0:
-            log.warning("DatasetBalancerNode: empty training set — returning unchanged")
+        # Guard: both X and y must be present and length-consistent
+        if X is None or y is None or len(X) == 0:
+            log.warning("DatasetBalancerNode: empty or missing training set — returning unchanged")
             return dataset
+        if len(X) != len(y):
+            raise ValueError(
+                f"DatasetBalancerNode: X_train length {len(X)} != y_train length {len(y)}"
+            )
 
         if strategy == "oversample":
             X_bal, y_bal = self._oversample(X, y, rng)
+            extra_meta: dict = {}
         elif strategy == "undersample":
             X_bal, y_bal = self._undersample(X, y, rng)
+            extra_meta = {}
         elif strategy == "weighted":
             X_bal, y_bal, weights = self._compute_weights(X, y)
-            dataset = copy.deepcopy(dataset)
-            dataset.metadata["class_weights"] = weights.tolist()
-            dataset.X_train = X_bal
-            dataset.y_train = y_bal
-            dataset.metadata["balancer"] = {
-                "strategy": "weighted",
-                "class_weights": weights.tolist(),
-            }
-            return dataset
+            extra_meta = {"class_weights": weights.tolist()}
         elif strategy == "synthetic":
-            X_bal, y_bal = self._flag_synthetic(X, y, dataset)
+            X_bal, y_bal, aug_flags = self._flag_synthetic(X, y)
+            extra_meta = {"needs_augmentation": aug_flags}
         else:
             raise ValueError(
                 f"DatasetBalancerNode: unknown strategy '{strategy}'. "
@@ -130,11 +136,15 @@ class DatasetBalancerNode(Node):
         result = copy.deepcopy(dataset)
         result.X_train = X_bal.astype(np.float32)
         result.y_train = y_bal.astype(np.int32)
-        result.metadata = {**dataset.metadata, "balancer": {
-            "strategy": strategy,
-            "original_count": len(y),
-            "balanced_count": len(y_bal),
-        }}
+        result.metadata = {
+            **dataset.metadata,
+            "balancer": {
+                "strategy": strategy,
+                "original_count": len(y),
+                "balanced_count": len(y_bal),
+            },
+            **extra_meta,
+        }
         return result
 
     # ── oversample ────────────────────────────────────────────────────────────
@@ -194,14 +204,18 @@ class DatasetBalancerNode(Node):
 
     # ── synthetic flagging ────────────────────────────────────────────────────
 
-    def _flag_synthetic(self, X: np.ndarray, y: np.ndarray, dataset) -> tuple:
-        """Flag minority samples for augmentation by setting metadata on a copy."""
-        result_dataset = copy.deepcopy(dataset)
+    def _flag_synthetic(self, X: np.ndarray, y: np.ndarray) -> tuple:
+        """Flag minority samples for augmentation.
+
+        Returns:
+            (X, y, aug_flags) where aug_flags maps class label → deficit count.
+            The caller merges aug_flags into result.metadata["needs_augmentation"].
+        """
         classes, counts = np.unique(y, return_counts=True)
         target = self.config.target_count or int(counts.max())
-        result_dataset.metadata.setdefault("needs_augmentation", {})
+        aug_flags: dict[int, int] = {}
         for cls, cnt in zip(classes, counts):
             deficit = target - cnt
             if deficit > 0:
-                result_dataset.metadata["needs_augmentation"][int(cls)] = int(deficit)
-        return X, y
+                aug_flags[int(cls)] = int(deficit)
+        return X, y, aug_flags

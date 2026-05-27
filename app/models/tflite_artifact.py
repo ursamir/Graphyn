@@ -19,7 +19,7 @@ by AutoDiscovery. Migrated from examples/06_speech_commands_e2e/.
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()
 # when the module is loaded via importlib.
 
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from app.core.nodes.ports import PortDataType
 
@@ -39,7 +39,7 @@ class TFLiteArtifact(PortDataType):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     tflite_path: str = ""
-    labels: list = []
+    labels: list = Field(default_factory=list)
     quantisation: str = "float32"
     file_size_bytes: int = 0
 

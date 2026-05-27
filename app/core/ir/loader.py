@@ -9,7 +9,7 @@ Public Surface:   load_ir(dict) -> GraphIR, load_ir_from_file(path) -> GraphIR,
 Must NOT:         Import from app.core.nodes, app.core.orchestrator,
                   app.core.sdk, app.domain, or app.api.
                   Must remain pure — only pydantic, json, and stdlib.
-Dependencies:     pydantic, stdlib (json, warnings, pathlib),
+Dependencies:     pydantic, stdlib (json, os, tempfile, warnings, pathlib),
                   app.core.ir.models (GraphIR).
 Reason To Change: IR schema version bumps, new serialization format support,
                   or migration path changes.
@@ -17,6 +17,7 @@ Reason To Change: IR schema version bumps, new serialization format support,
 from __future__ import annotations
 
 import json
+import os
 import warnings
 from pathlib import Path
 from typing import Any
@@ -113,8 +114,9 @@ def load_ir(data: dict[str, Any]) -> GraphIR:
     """Validate and return a GraphIR from a JSON-compatible dict.
 
     Performs:
-    1. Pydantic schema validation (raises pydantic.ValidationError on failure)
-    2. Schema version check (raises IRVersionError on major mismatch)
+    1. Runtime type guard (raises TypeError if data is not a dict)
+    2. Pydantic schema validation (raises pydantic.ValidationError on failure)
+    3. Schema version check (raises IRVersionError on major mismatch)
 
     Args:
         data: A JSON-compatible dict, typically from json.loads() or yaml.safe_load().
@@ -123,11 +125,17 @@ def load_ir(data: dict[str, Any]) -> GraphIR:
         A validated GraphIR object.
 
     Raises:
+        TypeError: if data is not a dict (e.g. None or a list from an empty YAML file).
         pydantic.ValidationError: if the dict does not conform to the GraphIR schema.
         IRVersionError: if the major version is incompatible.
 
     Req 1.8.1
     """
+    if not isinstance(data, dict):
+        raise TypeError(
+            f"load_ir expects a dict, got {type(data).__name__!r}. "
+            "Ensure the source file is non-empty and contains a JSON object."
+        )
     graph = GraphIR.model_validate(data)
     _check_version(graph.schema_version)
     return graph
@@ -144,7 +152,11 @@ def load_ir_from_file(path: str) -> GraphIR:
 
     Raises:
         FileNotFoundError: if the file does not exist (Req 1.8.5).
+        PermissionError: if the file exists but cannot be read.
+        UnicodeDecodeError: if the file is not valid UTF-8.
+        OSError: if a low-level I/O error occurs (e.g. disk error).
         json.JSONDecodeError: if the file contains invalid JSON (Req 1.8.6).
+        TypeError: if the JSON root is not a dict (e.g. a JSON array or null).
         pydantic.ValidationError: if the JSON does not conform to GraphIR (Req 1.8.7).
         IRVersionError: if the major version is incompatible.
 
@@ -183,14 +195,34 @@ def dump_ir(graph: GraphIR) -> dict[str, Any]:
 def dump_ir_to_file(graph: GraphIR, path: str) -> None:
     """Write a GraphIR to a JSON file with 2-space indentation.
 
+    Uses an atomic write (write to a sibling .tmp file, then os.replace) so
+    that a disk-full or serialization error mid-write never leaves the
+    destination file in a truncated or corrupt state.  Parent directories are
+    created automatically if they do not exist.
+
     Args:
         graph: A GraphIR object.
-        path: Destination file path. Parent directories must exist.
+        path: Destination file path.
+
+    Raises:
+        OSError: if the file cannot be written (e.g. permission denied,
+                 disk full after the rename, or path is a directory).
 
     Req 1.8.4
     """
     data = dump_ir(graph)
     p = Path(path)
-    with p.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")  # trailing newline for POSIX compliance
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")  # trailing newline for POSIX compliance
+        os.replace(tmp, p)
+    except BaseException:
+        # Clean up the temp file on any failure so we never leave debris.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise

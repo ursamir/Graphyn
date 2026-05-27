@@ -44,6 +44,13 @@ class SpeechEnhancerNode(Node):
             (default True — faster; False = non-stationary, slower but better)
         prop_decrease (float): noise reduction strength for spectral backend
             0.0 = no reduction, 1.0 = full reduction (default 0.75)
+
+    Note on ``dereverb``:
+        spectral backend: applies a 5-sample Wiener smoothing filter — this is
+        a noise-smoothing approximation, not a full WPE dereverberation algorithm.
+        For production-grade dereverberation consider: pip install nara-wpe
+        deepfilter backend: same Wiener post-processing step (DeepFilterNet's
+        enhance() does not perform dereverberation natively).
     """
 
     node_type: ClassVar[str] = "speech_enhancer"
@@ -157,8 +164,19 @@ class SpeechEnhancerNode(Node):
         output: list[AudioSample] = []
 
         for sample in samples:
+            if sample.data is None or sample.data.size == 0:
+                log.warning(
+                    "SpeechEnhancerNode: skipping zero-length sample %s",
+                    getattr(sample, "path", "<unknown>"),
+                )
+                output.append(sample)
+                continue
+
             new_sample = copy.deepcopy(sample)
             y = new_sample.data.astype(np.float32)
+            # Mix stereo/multi-channel to mono — all backends expect 1-D input
+            if y.ndim > 1:
+                y = y.mean(axis=1)
             sr = new_sample.sample_rate
 
             ops_applied: list[str] = []
@@ -235,7 +253,7 @@ class SpeechEnhancerNode(Node):
 
         audio_tensor = torch.from_numpy(y_in).unsqueeze(0)  # (1, N)
         enhanced = enhance(model, df_state, audio_tensor)
-        y_out = enhanced.squeeze(0).numpy()
+        y_out = enhanced.squeeze(0).detach().cpu().numpy()
 
         # Resample back to original sr if needed
         if sr != target_sr:
@@ -278,5 +296,12 @@ class SpeechEnhancerNode(Node):
         nyq = sr / 2.0
         low = 300.0 / nyq
         high = min(3400.0 / nyq, 0.999)
+        if low >= 1.0 or low >= high:
+            log.warning(
+                "SpeechEnhancerNode: sample rate %d Hz too low for telephony "
+                "bandpass (300–3400 Hz) — skipping filter",
+                sr,
+            )
+            return y
         sos = butter(4, [low, high], btype="band", output="sos")
         return sosfilt(sos, y).astype(np.float32)

@@ -156,9 +156,9 @@ class TestExplicitEdges:
         assert graph.edges[0].src_port == "output"
         assert graph.edges[0].dst_port == "input"
 
-    def test_explicit_empty_edges_list_falls_back_to_auto_chain(self):
-        # The shim uses `if raw_edges:` which is falsy for an empty list,
-        # so an empty explicit edges list triggers auto-chain (same as no edges key).
+    def test_explicit_empty_edges_list_produces_no_edges(self):
+        # An explicit `edges: []` means the user intends no edges (e.g. a
+        # single-source or disconnected graph). It must NOT trigger auto-chain.
         raw = _raw(
             nodes=[
                 {"type": "dataset_ingest", "id": "src"},
@@ -167,8 +167,8 @@ class TestExplicitEdges:
             edges=[],
         )
         graph = yaml_config_to_ir(raw)
-        # Empty list is falsy → auto-chain kicks in → 1 edge
-        assert len(graph.edges) == 1
+        # Explicit empty list → no edges (not auto-chained)
+        assert len(graph.edges) == 0
 
     def test_multiple_explicit_edges(self):
         raw = _raw(

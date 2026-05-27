@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -78,6 +79,9 @@ class PluginManager:
         self._installer = PluginInstaller(index_client=PluginIndexClient())
         from app.core.config import plugins_home as _plugins_home
         self._plugins_dir: str = str(_plugins_home())
+        # G4-LOCK: serialise all install/uninstall/enable/disable operations so
+        # concurrent API requests cannot corrupt the install directory or registry.
+        self._install_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # install
@@ -138,104 +142,137 @@ class PluginManager:
         # Step 1 — parse name from source (best-effort; authoritative name comes from manifest)
         _pre_name, _ver = self._installer._parse_name_version(source)
 
-        # Step 2 — pre-flight duplicate check using best-effort name (URL sources skip this;
-        # the authoritative check happens after the manifest is parsed — G4-01 fix)
-        existing: PluginRecord | None = None
-        try:
-            existing = self._store.get(_pre_name)
-        except PluginNotFoundError:
-            existing = None
+        # G4-LOCK: hold the install lock for the entire operation so concurrent
+        # calls cannot race on the same install_path or registry state.
+        with self._install_lock:
+            # Step 2 — pre-flight duplicate check using best-effort name (URL sources skip this;
+            # the authoritative check happens after the manifest is parsed — G4-01 fix)
+            existing: PluginRecord | None = None
+            try:
+                existing = self._store.get(_pre_name)
+            except PluginNotFoundError:
+                existing = None
 
-        if existing is not None and not upgrade:
-            raise PluginAlreadyInstalledError(
-                f"Plugin '{_pre_name}' is already installed (version {existing.version}). "
-                "Use upgrade=True to replace the existing installation."
-            )
+            if existing is not None and not upgrade:
+                raise PluginAlreadyInstalledError(
+                    f"Plugin '{_pre_name}' is already installed (version {existing.version}). "
+                    "Use upgrade=True to replace the existing installation."
+                )
 
-        # Step 3 — upgrade: uninstall existing first (best-effort name)
-        if existing is not None and upgrade:
-            log.info("Upgrading plugin '%s': uninstalling existing version %s.", _pre_name, existing.version)
-            self.uninstall(_pre_name)
+            # Step 3 — upgrade: uninstall existing first (best-effort name)
+            if existing is not None and upgrade:
+                log.info("Upgrading plugin '%s': uninstalling existing version %s.", _pre_name, existing.version)
+                self._do_uninstall(_pre_name)
 
-        # Step 4 — resolve source to a temp directory
-        resolved_dir: Path = self._installer.resolve(source, expected_sha256=expected_sha256)
-        # The resolved_dir lives inside a tmpdir created by the installer.
-        # We must clean it up after copying to the final install location (PL-07 fix).
-        resolved_tmpdir: Path = resolved_dir.parent
-        install_path: Path | None = None  # set inside try block; used after finally
+            # Step 4 — resolve source to a temp directory
+            resolved_dir: Path = self._installer.resolve(source, expected_sha256=expected_sha256)
+            # The resolved_dir lives inside a tmpdir created by the installer.
+            # For git sources where the manifest is nested 2 levels deep,
+            # resolved_dir.parent is NOT the root tmpdir — use the _installer_tmpdir
+            # attribute attached by _resolve_git() when present (G4-tmpdir fix).
+            resolved_tmpdir: Path = getattr(resolved_dir, "_installer_tmpdir", resolved_dir.parent)
+            install_path: Path | None = None  # set inside try block; used after finally
 
-        # Steps 5–8 wrapped in try/finally so the tmpdir is always cleaned up,
-        # even if load_manifest() or any subsequent step raises (G4-02 fix).
-        try:
-            # Step 5 — parse manifest from resolved dir (authoritative name)
-            manifest = load_manifest(resolved_dir)
+            # Steps 5–8 wrapped in try/finally so the tmpdir is always cleaned up,
+            # even if load_manifest() or any subsequent step raises (G4-02 fix).
+            backup_path: Path | None = None  # set during authoritative upgrade; used in except/finally
+            try:
+                # Step 5 — parse manifest from resolved dir (authoritative name)
+                manifest = load_manifest(resolved_dir)
 
-            # G4-01 fix: authoritative duplicate check using manifest.name
-            # (covers URL/path sources where _pre_name was the raw URL string)
-            if manifest.name != _pre_name:
-                try:
-                    auth_existing = self._store.get(manifest.name)
-                except PluginNotFoundError:
-                    auth_existing = None
-                if auth_existing is not None and not upgrade:
-                    raise PluginAlreadyInstalledError(
-                        f"Plugin '{manifest.name}' is already installed "
-                        f"(version {auth_existing.version}). "
-                        "Use upgrade=True to replace the existing installation."
-                    )
-                if auth_existing is not None and upgrade:
-                    log.info(
-                        "Upgrading plugin '%s': uninstalling existing version %s.",
-                        manifest.name, auth_existing.version,
-                    )
-                    self.uninstall(manifest.name)
+                # G4-01 fix: authoritative duplicate check using manifest.name
+                # (covers URL/path sources where _pre_name was the raw URL string)
+                if manifest.name != _pre_name:
+                    try:
+                        auth_existing = self._store.get(manifest.name)
+                    except PluginNotFoundError:
+                        auth_existing = None
+                    if auth_existing is not None and not upgrade:
+                        raise PluginAlreadyInstalledError(
+                            f"Plugin '{manifest.name}' is already installed "
+                            f"(version {auth_existing.version}). "
+                            "Use upgrade=True to replace the existing installation."
+                        )
+                    if auth_existing is not None and upgrade:
+                        # G4-UPGRADE fix: back up the old install dir before uninstalling
+                        # so we can restore it if the new copy or load fails.
+                        old_install_path = Path(auth_existing.install_path)
+                        backup_path = old_install_path.parent / (old_install_path.name + ".__backup__")
+                        if old_install_path.exists():
+                            shutil.copytree(str(old_install_path), str(backup_path))
+                        try:
+                            log.info(
+                                "Upgrading plugin '%s': uninstalling existing version %s.",
+                                manifest.name, auth_existing.version,
+                            )
+                            self._do_uninstall(manifest.name)
+                        except Exception:
+                            # Restore backup if uninstall itself fails
+                            if backup_path.exists():
+                                shutil.rmtree(str(old_install_path), ignore_errors=True)
+                                shutil.move(str(backup_path), str(old_install_path))
+                            backup_path = None  # already cleaned up
+                            raise
 
-            # Step 6 — copy resolved dir to final install location
-            plugins_dir = Path(self._plugins_dir)
-            install_path = plugins_dir / manifest.name
-            # Remove any stale directory at the target location
-            if install_path.exists():
+                # Step 6 — copy resolved dir to final install location
+                plugins_dir = Path(self._plugins_dir)
+                install_path = plugins_dir / manifest.name
+                # Remove any stale directory at the target location
+                if install_path.exists():
+                    shutil.rmtree(install_path, ignore_errors=True)
+                plugins_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(str(resolved_dir), str(install_path))
+
+            except Exception:
+                # If copy failed during an upgrade, restore the backup so the old
+                # plugin is not permanently lost (G4-UPGRADE fix).
+                if backup_path is not None and backup_path.exists():
+                    _target = Path(self._plugins_dir) / backup_path.name.replace(".__backup__", "")
+                    shutil.rmtree(str(_target), ignore_errors=True)
+                    shutil.move(str(backup_path), str(_target))
+                    backup_path = None  # restored; don't delete in finally
+                raise
+            finally:
+                # Always clean up the installer's temp directory (G4-02 fix).
+                if resolved_tmpdir.name.startswith("kiro_plugin_"):
+                    shutil.rmtree(str(resolved_tmpdir), ignore_errors=True)
+                # Clean up backup dir on success (backup_path is None on failure
+                # because the except block either restored it or it was never set).
+                if backup_path is not None and backup_path.exists():
+                    shutil.rmtree(str(backup_path), ignore_errors=True)
+
+            # Steps 7–8 — load plugin and persist record.
+            # If either step fails, remove the install directory so the next
+            # install() call starts clean (PL-01 fix: atomic install).
+            try:
+                # Step 7 — load the plugin (validates compat, deps, registers nodes)
+                node_types = self._loader.load(install_path)
+                log.info(
+                    "Installed plugin '%s' v%s from '%s' — registered node types: %s",
+                    manifest.name,
+                    manifest.version,
+                    source,
+                    node_types,
+                )
+
+                # Step 8 — create and persist PluginRecord
+                record = PluginRecord(
+                    name=manifest.name,
+                    version=manifest.version,
+                    source=source,
+                    install_path=str(install_path.resolve()),
+                    enabled=True,
+                    installed_at=datetime.now(UTC).isoformat(),
+                    manifest=manifest.model_dump(),
+                )
+                self._store.save(record)
+            except Exception:
+                # Clean up the install directory so the registry stays consistent
                 shutil.rmtree(install_path, ignore_errors=True)
-            plugins_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(str(resolved_dir), str(install_path))
+                raise
 
-        finally:
-            # Always clean up the installer's temp directory (G4-02 fix).
-            if resolved_tmpdir.name.startswith("kiro_plugin_"):
-                shutil.rmtree(str(resolved_tmpdir), ignore_errors=True)
-
-        # Steps 7–8 — load plugin and persist record.
-        # If either step fails, remove the install directory so the next
-        # install() call starts clean (PL-01 fix: atomic install).
-        try:
-            # Step 7 — load the plugin (validates compat, deps, registers nodes)
-            node_types = self._loader.load(install_path)
-            log.info(
-                "Installed plugin '%s' v%s from '%s' — registered node types: %s",
-                manifest.name,
-                manifest.version,
-                source,
-                node_types,
-            )
-
-            # Step 8 — create and persist PluginRecord
-            record = PluginRecord(
-                name=manifest.name,
-                version=manifest.version,
-                source=source,
-                install_path=str(install_path.resolve()),
-                enabled=True,
-                installed_at=datetime.now(UTC).isoformat(),
-                manifest=manifest.model_dump(),
-            )
-            self._store.save(record)
-        except Exception:
-            # Clean up the install directory so the registry stays consistent
-            shutil.rmtree(install_path, ignore_errors=True)
-            raise
-
-        # Step 9 — return the record
-        return record
+            # Step 9 — return the record
+            return record
 
     # ------------------------------------------------------------------
     # uninstall
@@ -262,6 +299,11 @@ class PluginManager:
         PluginNotFoundError
             If no plugin with *name* is installed.
         """
+        with self._install_lock:
+            self._do_uninstall(name)
+
+    def _do_uninstall(self, name: str) -> None:
+        """Internal uninstall steps — caller must hold ``self._install_lock``."""
         # Step 1 — get record (raises PluginNotFoundError if not found)
         record = self._store.get(name)
 
@@ -284,26 +326,23 @@ class PluginManager:
         record = self._store.get(name)
         if not record.enabled:
             install_path = Path(record.install_path)
-            # PL-03 fix: only load if the plugin's node types are not already
-            # in the registry (e.g. loaded at startup). Check by inspecting
-            # the manifest's entry points for already-registered node types.
-            try:
-                from app.core.plugins.manifest import load_manifest
-                manifest = load_manifest(install_path)
-                # Snapshot before to detect if anything new would be added
-                before = set(self._registry._classes.keys())
-                self._loader.load(install_path)
-                after = set(self._registry._classes.keys())
-                if after == before:
-                    log.debug(
-                        "Plugin '%s' node types already in registry — skipped reload.",
-                        name,
+            with self._install_lock:
+                try:
+                    # Check whether the plugin's node types are already in the registry
+                    # by comparing the registry snapshot before and after load().
+                    before = set(self._registry._classes.keys())
+                    self._loader.load(install_path)
+                    after = set(self._registry._classes.keys())
+                    if after == before:
+                        log.debug(
+                            "Plugin '%s' node types already in registry — skipped reload.",
+                            name,
+                        )
+                except Exception as exc:
+                    log.warning(
+                        "Failed to reload plugin '%s' during enable: %s", name, exc
                     )
-            except Exception as exc:
-                log.warning(
-                    "Failed to reload plugin '%s' during enable: %s", name, exc
-                )
-                raise
+                    raise
         updated = self._store.update_enabled(name, enabled=True)
         log.info("Enabled plugin '%s'.", name)
         return updated
@@ -328,7 +367,8 @@ class PluginManager:
         """
         record = self._store.get(name)
         if record.enabled:
-            self._unload_node_types(record)
+            with self._install_lock:
+                self._unload_node_types(record)
         updated = self._store.update_enabled(name, enabled=False)
         log.info("Disabled plugin '%s'.", name)
         return updated
@@ -372,7 +412,13 @@ class PluginManager:
 
         Requirements: req-03 §4.8
         """
-        records = self._store.list()
+        try:
+            records = self._store.list()
+        except Exception as exc:
+            log.warning(
+                "Startup: failed to read plugin registry: %s", exc, exc_info=True
+            )
+            return
         for record in records:
             if not record.enabled:
                 continue
@@ -435,7 +481,16 @@ class PluginManager:
                 to_unregister,
             )
             for node_type in to_unregister:
-                self._registry.unregister(node_type)
+                try:
+                    self._registry.unregister(node_type)
+                except Exception as exc:
+                    # Already unregistered (e.g. concurrent uninstall) — log and continue
+                    # so the remaining node types are still cleaned up and _store.delete
+                    # is reached (G4-MEDIUM fix).
+                    log.debug(
+                        "Could not unregister node type '%s' from plugin '%s': %s",
+                        node_type, record.name, exc,
+                    )
         else:
             log.debug(
                 "No node types found for plugin '%s' in registry (install_path=%s).",

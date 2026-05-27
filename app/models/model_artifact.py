@@ -19,7 +19,7 @@ by AutoDiscovery. Migrated from examples/06_speech_commands_e2e/.
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()
 # when the module is loaded via importlib.
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from app.core.nodes.ports import PortDataType
 
@@ -42,6 +42,6 @@ class ModelArtifact(PortDataType):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     model_path: str = ""
-    labels: list = []
-    history: dict = {}
-    metrics: dict = {}
+    labels: list = Field(default_factory=list)
+    history: dict = Field(default_factory=dict)
+    metrics: dict = Field(default_factory=dict)

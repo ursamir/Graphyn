@@ -19,6 +19,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+from app.core.ir.yaml_shim import yaml_config_to_ir
+from app.core.ir.loader import dump_ir_to_file
+
 
 def migrate_yaml_to_ir_file(
     yaml_path: str,
@@ -35,12 +39,13 @@ def migrate_yaml_to_ir_file(
     Returns:
         The path of the written IR JSON file (Req 4.4.2).
 
+    Raises:
+        FileNotFoundError: If ``yaml_path`` does not exist.
+        ValueError: If the YAML file is empty, contains only comments, or
+            cannot be parsed as valid YAML.
+
     Req 4.4
     """
-    import yaml
-    from app.core.ir.yaml_shim import yaml_config_to_ir
-    from app.core.ir.loader import dump_ir_to_file
-
     yaml_p = Path(yaml_path)
 
     # Derive output path if not provided (Req 4.4.3)
@@ -49,11 +54,28 @@ def migrate_yaml_to_ir_file(
         stem = yaml_p.stem
         output_path = str(yaml_p.parent / f"{stem}.graph.json")
 
+    # Ensure the output parent directory exists
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
     # Read and convert (Req 4.4.4)
     with open(yaml_path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+        try:
+            raw = yaml.safe_load(f)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML in '{yaml_path}': {exc}") from exc
+
+    if raw is None:
+        raise ValueError(
+            f"YAML file '{yaml_path}' is empty or contains only comments."
+        )
 
     graph = yaml_config_to_ir(raw)
-    dump_ir_to_file(graph, output_path)  # Req 4.4.4
+
+    # Atomic-safe write: clean up partial output on failure (Req 4.4.4)
+    try:
+        dump_ir_to_file(graph, output_path)
+    except Exception:
+        Path(output_path).unlink(missing_ok=True)
+        raise
 
     return output_path

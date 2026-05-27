@@ -54,35 +54,54 @@ from app.core.nodes import initialize_registry as _init_registry
 _init_registry()
 
 
-def _list_runs():
-    """Return a list of run metadata dicts sorted by created_at descending."""
+def _list_runs(limit: int = 50):
+    """Return a list of run metadata dicts sorted by created_at descending.
+
+    Reads at most ``limit`` entries to avoid O(n) file reads on large workspaces.
+    Pass ``limit=0`` to read all entries.
+    """
     runs_dir_path = str(_runs_dir())
     if not os.path.isdir(runs_dir_path):
         return []
 
     runs = []
-    for run_id in os.listdir(runs_dir_path):
-        meta_path = os.path.join(runs_dir_path, run_id, "meta.json")
+    try:
+        entries = list(os.scandir(runs_dir_path))
+    except OSError:
+        return []
+
+    # Sort by mtime descending so we read the most recent entries first
+    entries.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+    if limit > 0:
+        entries = entries[:limit]
+
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        meta_path = os.path.join(entry.path, "meta.json")
         if not os.path.isfile(meta_path):
             continue
         try:
-            with open(meta_path, "r") as f:
+            with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
             runs.append(meta)
         except Exception:
-            runs.append({"run_id": run_id, "status": "unknown", "created_at": None, "duration_s": None})
+            runs.append({"run_id": entry.name, "status": "unknown", "created_at": None, "duration_s": None})
 
     runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     return runs
 
 
 def _load_logs(run_id):
-    """Return the log entries for a run, or None if not found."""
+    """Return the log entries for a run, or None if not found or corrupt."""
     logs_path = os.path.join(str(_runs_dir()), run_id, "logs.json")
     if not os.path.isfile(logs_path):
         return None
-    with open(logs_path, "r") as f:
-        return json.load(f)
+    try:
+        with open(logs_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None  # caller handles None gracefully
 
 
 def _make_stdout_logger(base_class):
@@ -275,6 +294,34 @@ def cmd_migrate(args):
 
 # ─── Subcommand: run ──────────────────────────────────────────────────────────
 
+def _run_with_seed(pipeline, seed, logger, **kwargs):
+    """Re-run a pipeline with a seed override via Pipeline._from_ir().
+
+    Builds a new GraphIR with the overridden seed and wraps it in a fresh
+    Pipeline so that Pipeline.run() creates a RunManager and persists the run
+    to the run journal (fixes the seeded-run invisibility bug).
+    """
+    from app.core.ir.models import GraphIR, IRMetadata
+    from app.core.sdk import Pipeline as _Pipeline
+
+    graph = pipeline.to_ir()
+    new_graph = GraphIR(
+        schema_version=graph.schema_version,
+        metadata=IRMetadata(
+            name=graph.metadata.name,
+            seed=seed,
+            description=graph.metadata.description,
+            created_at=graph.metadata.created_at,
+            tags=graph.metadata.tags,
+        ),
+        nodes=graph.nodes,
+        edges=graph.edges,
+        parameters=graph.parameters,
+    )
+    seeded_pipeline = _Pipeline._from_ir(new_graph)
+    seeded_pipeline.run(logger=logger, **kwargs)
+
+
 def cmd_run(args):
     """Execute a pipeline synchronously and print logs to stdout."""
     from app.core.logger import PipelineLogger
@@ -302,6 +349,14 @@ def cmd_run(args):
     include_nodes_list = [n.strip() for n in include_nodes_raw.split(",")] if include_nodes_raw else None
     exclude_nodes_list = [n.strip() for n in exclude_nodes_raw.split(",")] if exclude_nodes_raw else None
 
+    run_kwargs = dict(
+        parallel=parallel,
+        resume_run_id=resume_run_id,
+        include_nodes=include_nodes_list,
+        exclude_nodes=exclude_nodes_list,
+        event_driven=event_driven,
+    )
+
     StdoutLogger = _make_stdout_logger(PipelineLogger)
     logger = StdoutLogger()
 
@@ -318,51 +373,6 @@ def cmd_run(args):
             print(f"Error loading IR graph: {exc}", file=sys.stderr)
             sys.exit(1)
 
-        # Apply seed override (Req 4.5.7) — rebuild IR with new seed then run directly
-        if args.seed is not None:
-            from app.core.ir.models import GraphIR, IRMetadata
-            from app.core.runtime_backend import get_backend
-            graph = pipeline.to_ir()
-            new_graph = GraphIR(
-                schema_version=graph.schema_version,
-                metadata=IRMetadata(
-                    name=graph.metadata.name,
-                    seed=args.seed,
-                    description=graph.metadata.description,
-                    created_at=graph.metadata.created_at,
-                    tags=graph.metadata.tags,
-                ),
-                nodes=graph.nodes,
-                edges=graph.edges,
-                parameters=graph.parameters,
-            )
-            try:
-                get_backend().execute(
-                    new_graph,
-                    logger=logger,
-                    parallel=parallel,
-                    resume_run_id=resume_run_id,
-                    include_nodes=include_nodes_list,
-                    exclude_nodes=exclude_nodes_list,
-                    event_driven=event_driven,
-                )
-            except Exception as exc:
-                print(f"\nPipeline failed: {exc}", file=sys.stderr)
-                sys.exit(1)
-        else:
-            try:
-                pipeline.run(
-                    logger=logger,
-                    parallel=parallel,
-                    resume_run_id=resume_run_id,
-                    include_nodes=include_nodes_list,
-                    exclude_nodes=exclude_nodes_list,
-                    event_driven=event_driven,
-                )
-            except Exception as exc:
-                print(f"\nPipeline failed: {exc}", file=sys.stderr)
-                sys.exit(1)
-
     else:
         # YAML path (Req 4.5.4) — deprecated; use Pipeline.from_yaml (Req 2.9.1)
         config_path = args.config
@@ -376,50 +386,16 @@ def cmd_run(args):
             print(f"Error loading YAML config: {exc}", file=sys.stderr)
             sys.exit(1)
 
-        # Apply seed override (Req 4.5.7) — rebuild IR with new seed then run directly
+    # Apply seed override (Req 4.5.7) — rebuild IR with new seed via _run_with_seed
+    # so that Pipeline.run() is always used and the run is persisted to the journal.
+    try:
         if args.seed is not None:
-            from app.core.ir.models import GraphIR, IRMetadata
-            from app.core.runtime_backend import get_backend
-            graph = pipeline.to_ir()
-            new_graph = GraphIR(
-                schema_version=graph.schema_version,
-                metadata=IRMetadata(
-                    name=graph.metadata.name,
-                    seed=args.seed,
-                    description=graph.metadata.description,
-                    created_at=graph.metadata.created_at,
-                    tags=graph.metadata.tags,
-                ),
-                nodes=graph.nodes,
-                edges=graph.edges,
-                parameters=graph.parameters,
-            )
-            try:
-                get_backend().execute(
-                    new_graph,
-                    logger=logger,
-                    parallel=parallel,
-                    resume_run_id=resume_run_id,
-                    include_nodes=include_nodes_list,
-                    exclude_nodes=exclude_nodes_list,
-                    event_driven=event_driven,
-                )
-            except Exception as exc:
-                print(f"\nPipeline failed: {exc}", file=sys.stderr)
-                sys.exit(1)
+            _run_with_seed(pipeline, args.seed, logger, **run_kwargs)
         else:
-            try:
-                pipeline.run(
-                    logger=logger,
-                    parallel=parallel,
-                    resume_run_id=resume_run_id,
-                    include_nodes=include_nodes_list,
-                    exclude_nodes=exclude_nodes_list,
-                    event_driven=event_driven,
-                )
-            except Exception as exc:
-                print(f"\nPipeline failed: {exc}", file=sys.stderr)
-                sys.exit(1)
+            pipeline.run(logger=logger, **run_kwargs)
+    except Exception as exc:
+        print(f"\nPipeline failed: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     sys.exit(0)
 
@@ -515,6 +491,10 @@ def cmd_validate(args):
             dst_inst = node_instances.get(edge.dst_id)
 
             if src_inst is None or dst_inst is None:
+                errors.append(
+                    f"  ⚠ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                    f"skipped (node instantiation failed)"
+                )
                 continue  # node instantiation already failed — skip port check
 
             # Port existence
@@ -605,23 +585,117 @@ def cmd_validate(args):
         # Validate node types against the registry (unknown types → exit 1)
         try:
             registry = get_registry()
+            errors: list[str] = []
+            node_classes: dict[str, type] = {}
+
             for node in graph.nodes:
                 try:
                     node_class = registry.get_class(node.node_type)
+                    node_classes[node.id] = node_class
                 except Exception:
                     available = sorted(m.node_type for m in registry.list_nodes())
-                    raise ValueError(
-                        f"Unknown node type '{node.node_type}'. "
+                    errors.append(
+                        f"  ✗ [{node.id}] Unknown node type '{node.node_type}'. "
                         f"Available types: {', '.join(available)}"
                     )
+                    continue
                 # Also validate config against the node's Pydantic Config model
                 import pydantic
                 try:
                     node_class.Config.model_validate(dict(node.config))
                 except pydantic.ValidationError as exc:
-                    raise ValueError(
-                        f"Invalid config for node '{node.node_type}': {exc}"
-                    ) from exc
+                    for e in exc.errors():
+                        loc = ".".join(str(l) for l in e["loc"])
+                        errors.append(
+                            f"  ✗ [{node.id}] Config error at '{loc}': {e['msg']}"
+                        )
+
+            # ── Steps 5 & 6: port existence + type compatibility ──────────────
+            from app.core.nodes.compat import CompatibilityChecker
+            from app.core.nodes.errors import NodeTypeError
+            from app.core.utils.hash import stable_hash
+            import copy as _copy
+
+            node_instances: dict[str, object] = {}
+            for node in graph.nodes:
+                if node.id not in node_classes:
+                    continue
+                try:
+                    node_class = node_classes[node.id]
+                    node_seed = stable_hash(graph.metadata.seed, node.node_type, 0) % (2 ** 32)
+                    instance = node_class(
+                        config=_copy.deepcopy(dict(node.config)),
+                        seed=node_seed,
+                    )
+                    node_instances[node.id] = instance
+                except Exception as exc:
+                    errors.append(f"  ✗ [{node.id}] Failed to instantiate node: {exc}")
+
+            for edge in graph.edges:
+                src_inst = node_instances.get(edge.src_id)
+                dst_inst = node_instances.get(edge.dst_id)
+
+                if src_inst is None or dst_inst is None:
+                    errors.append(
+                        f"  ⚠ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                        f"skipped (node instantiation failed)"
+                    )
+                    continue
+
+                if edge.src_port not in src_inst.__class__.output_ports:
+                    available = sorted(src_inst.__class__.output_ports)
+                    errors.append(
+                        f"  ✗ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                        f"'{edge.src_id}' has no output port '{edge.src_port}'. "
+                        f"Available: {available}"
+                    )
+                    continue
+
+                if edge.dst_port not in dst_inst.__class__.input_ports:
+                    available = sorted(dst_inst.__class__.input_ports)
+                    errors.append(
+                        f"  ✗ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                        f"'{edge.dst_id}' has no input port '{edge.dst_port}'. "
+                        f"Available: {available}"
+                    )
+                    continue
+
+                try:
+                    CompatibilityChecker.check_connection(
+                        src_inst, edge.src_port, dst_inst, edge.dst_port
+                    )
+                except NodeTypeError as exc:
+                    errors.append(
+                        f"  ✗ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                        f"Type mismatch — {exc}"
+                    )
+
+            # ── Step 7: cycle detection ───────────────────────────────────────
+            from collections import defaultdict, deque as _deque
+            in_degree: dict[str, int] = {n.id: 0 for n in graph.nodes}
+            adjacency: dict[str, list[str]] = defaultdict(list)
+            for edge in graph.edges:
+                adjacency[edge.src_id].append(edge.dst_id)
+                in_degree[edge.dst_id] += 1
+            queue = _deque(nid for nid, deg in in_degree.items() if deg == 0)
+            visited = 0
+            while queue:
+                nid = queue.popleft()
+                visited += 1
+                for succ in adjacency[nid]:
+                    in_degree[succ] -= 1
+                    if in_degree[succ] == 0:
+                        queue.append(succ)
+            if visited != len(graph.nodes):
+                cycle_nodes = [n.id for n in graph.nodes if in_degree[n.id] > 0]
+                errors.append(f"  ✗ Cycle detected — nodes involved: {cycle_nodes}")
+
+            if errors:
+                print(f"✗ Validation failed — {len(errors)} error(s):", file=sys.stderr)
+                for e in errors:
+                    print(e, file=sys.stderr)
+                sys.exit(1)
+
             print(f"✓ Valid pipeline — {len(graph.nodes)} node(s):")
             for i, node in enumerate(graph.nodes):
                 print(f"  [{i}] {node.node_type}")
@@ -635,7 +709,8 @@ def cmd_validate(args):
 
 def cmd_runs_list(args):
     """Print a table of recent pipeline runs."""
-    runs = _list_runs()
+    limit = getattr(args, "limit", 50)
+    runs = _list_runs(limit=limit)
 
     if not runs:
         print("No runs found.")
@@ -691,16 +766,18 @@ def cmd_runs_logs(args):
     runs_dir_path = str(_runs_dir())
 
     if not os.path.isdir(os.path.join(runs_dir_path, run_id)):
-        if os.path.isdir(runs_dir_path):
-            matches = [d for d in os.listdir(runs_dir_path) if d.startswith(run_id)]
-            if len(matches) == 1:
-                run_id = matches[0]
-            elif len(matches) > 1:
-                print(f"Ambiguous run ID prefix '{run_id}': {', '.join(matches)}", file=sys.stderr)
-                sys.exit(1)
-            else:
-                print(f"Run not found: {run_id}", file=sys.stderr)
-                sys.exit(1)
+        if not os.path.isdir(runs_dir_path):
+            print(f"Error: runs directory not found: {runs_dir_path}", file=sys.stderr)
+            sys.exit(1)
+        matches = [d for d in os.listdir(runs_dir_path) if d.startswith(run_id)]
+        if len(matches) == 1:
+            run_id = matches[0]
+        elif len(matches) > 1:
+            print(f"Ambiguous run ID prefix '{run_id}': {', '.join(matches)}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(f"Run not found: {run_id}", file=sys.stderr)
+            sys.exit(1)
 
     logs = _load_logs(run_id)
     if logs is None:
@@ -843,11 +920,29 @@ def cmd_artifacts_replay(args):
     from app.core.run_journal import RunManager
     from app.core.orchestrator import run_pipeline_ir
 
-    graph_path = os.path.join(str(_runs_dir()), args.run_id, "graph.json")
+    run_id = args.run_id
+    runs_dir_path = str(_runs_dir())
+
+    # Apply the same prefix-matching logic as cmd_runs_logs for consistency.
+    if not os.path.isdir(os.path.join(runs_dir_path, run_id)):
+        if not os.path.isdir(runs_dir_path):
+            print(f"Error: runs directory not found: {runs_dir_path}", file=sys.stderr)
+            sys.exit(1)
+        matches = [d for d in os.listdir(runs_dir_path) if d.startswith(run_id)]
+        if len(matches) == 1:
+            run_id = matches[0]
+        elif len(matches) > 1:
+            print(f"Ambiguous run ID prefix '{run_id}': {', '.join(matches)}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(f"Run not found: {run_id}", file=sys.stderr)
+            sys.exit(1)
+
+    graph_path = os.path.join(runs_dir_path, run_id, "graph.json")
 
     if not os.path.isfile(graph_path):
         print(
-            f"Error: graph.json not found for run {args.run_id!r}: {graph_path}",
+            f"Error: graph.json not found for run {run_id!r}: {graph_path}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1209,6 +1304,13 @@ def build_parser():
         "list",
         help="Print a table of recent runs",
     )
+    runs_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Maximum number of runs to show (default: 50; 0 = all)",
+    )
     runs_list_parser.set_defaults(func=cmd_runs_list)
 
     runs_logs_parser = runs_subparsers.add_parser(
@@ -1406,7 +1508,11 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        sys.exit(130)
 
 
 if __name__ == "__main__":

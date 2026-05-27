@@ -138,7 +138,13 @@ class DatasetIngestNode(Node):
     # ── filesystem ────────────────────────────────────────────────────────────
 
     def _load_filesystem(self, path: str) -> list[AudioSample]:
-        """Walk directory tree; subdirectory names become labels."""
+        """Walk directory tree; subdirectory names become labels.
+
+        Limit semantics:
+          recursive=True  — ``limit`` is applied **per label** (per subdirectory).
+          recursive=False — ``limit`` is applied to the **total** number of files
+                            loaded from the flat directory.
+        """
         root_path = Path(path)
         if not root_path.exists():
             raise ValueError(f"DatasetIngestNode: path does not exist: {root_path}")
@@ -150,6 +156,14 @@ class DatasetIngestNode(Node):
 
         samples: list[AudioSample] = []
         label_counts: dict[str, int] = {}
+        # Batch checkpoint writes to avoid O(N) file-open overhead on large datasets.
+        _CHECKPOINT_BATCH = 100
+        checkpoint_buffer: list[str] = []
+
+        def _flush_checkpoint_buffer() -> None:
+            if checkpoint_buffer:
+                self._flush_checkpoint(checkpoint_buffer)
+                checkpoint_buffer.clear()
 
         if self.config.recursive:
             for dirpath, dirnames, filenames in os.walk(root_path):
@@ -182,9 +196,12 @@ class DatasetIngestNode(Node):
                     if sample is not None:
                         samples.append(sample)
                         label_counts[dir_label] = label_counts.get(dir_label, 0) + 1
-                        self._append_checkpoint(file_path)
+                        checkpoint_buffer.append(file_path)
+                        if len(checkpoint_buffer) >= _CHECKPOINT_BATCH:
+                            _flush_checkpoint_buffer()
         else:
-            # Non-recursive: only files directly in root_path
+            # Non-recursive: only files directly in root_path.
+            # limit applies to the total number of files (not per-label).
             label = (
                 self.config.label_override
                 if self.config.label_override
@@ -206,7 +223,12 @@ class DatasetIngestNode(Node):
                 sample = self._load_file(file_path, label, {})
                 if sample is not None:
                     samples.append(sample)
-                    self._append_checkpoint(file_path)
+                    checkpoint_buffer.append(file_path)
+                    if len(checkpoint_buffer) >= _CHECKPOINT_BATCH:
+                        _flush_checkpoint_buffer()
+
+        # Flush any remaining buffered paths
+        _flush_checkpoint_buffer()
 
         return samples
 
@@ -358,6 +380,11 @@ class DatasetIngestNode(Node):
                         samples.append(sample)
                         count += 1
                         self._append_checkpoint(s3_path)
+                except Exception as exc:
+                    log.warning(
+                        "DatasetIngestNode: failed to download/load S3 key '%s': %s — skipping",
+                        key, exc,
+                    )
                 finally:
                     try:
                         os.unlink(tmp_path)
@@ -369,7 +396,12 @@ class DatasetIngestNode(Node):
     # ── zip ───────────────────────────────────────────────────────────────────
 
     def _load_zip(self, zip_path: str) -> list[AudioSample]:
-        """Extract ZIP to a temp directory, then scan as filesystem."""
+        """Extract ZIP to a temp directory, then scan as filesystem.
+
+        After loading, each sample's path is rewritten to ``zip_path::member``
+        so that downstream nodes receive a stable, non-dangling reference even
+        after the temp directory is cleaned up.
+        """
         import zipfile
 
         zip_path_obj = Path(zip_path)
@@ -381,6 +413,10 @@ class DatasetIngestNode(Node):
             with zipfile.ZipFile(zip_path, "r") as zf:
                 zf.extractall(tmp_dir)
             samples = self._load_filesystem(tmp_dir)
+            # Rewrite paths before tmp_dir is deleted
+            for s in samples:
+                rel = os.path.relpath(s.path, tmp_dir)
+                s.path = f"{zip_path}::{rel}"
 
         return samples
 
@@ -391,6 +427,10 @@ class DatasetIngestNode(Node):
 
         Uses a safe member filter to prevent path traversal attacks
         (CVE-2007-4559 pattern).
+
+        After loading, each sample's path is rewritten to ``tar_path::member``
+        so that downstream nodes receive a stable, non-dangling reference even
+        after the temp directory is cleaned up.
         """
         import tarfile
 
@@ -415,6 +455,10 @@ class DatasetIngestNode(Node):
             with tarfile.open(tar_path, "r:*") as tf:
                 tf.extractall(tmp_dir, members=_safe_members(tf, tmp_dir))
             samples = self._load_filesystem(tmp_dir)
+            # Rewrite paths before tmp_dir is deleted
+            for s in samples:
+                rel = os.path.relpath(s.path, tmp_dir)
+                s.path = f"{tar_path}::{rel}"
 
         return samples
 
@@ -439,7 +483,7 @@ class DatasetIngestNode(Node):
                     "DatasetIngestNode: JSON manifest must be a list of {path, label} dicts"
                 )
         elif suffix == ".csv":
-            with open(manifest_path, "r", encoding="utf-8", newline="") as f:
+            with open(manifest_path, "r", encoding="utf-8-sig", newline="") as f:
                 reader = csv.DictReader(f)
                 entries = list(reader)
         else:
@@ -450,6 +494,8 @@ class DatasetIngestNode(Node):
         already_processed = self._load_checkpoint()
         samples: list[AudioSample] = []
         count = 0
+        _CHECKPOINT_BATCH = 100
+        checkpoint_buffer: list[str] = []
 
         for entry in entries:
             if self.config.limit > 0 and count >= self.config.limit:
@@ -470,8 +516,12 @@ class DatasetIngestNode(Node):
             if sample is not None:
                 samples.append(sample)
                 count += 1
-                self._append_checkpoint(file_path)
+                checkpoint_buffer.append(file_path)
+                if len(checkpoint_buffer) >= _CHECKPOINT_BATCH:
+                    self._flush_checkpoint(checkpoint_buffer)
+                    checkpoint_buffer.clear()
 
+        self._flush_checkpoint(checkpoint_buffer)
         return samples
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -537,15 +587,18 @@ class DatasetIngestNode(Node):
         )
 
     def _deduplicate(self, samples: list[AudioSample]) -> list[AudioSample]:
-        """Remove duplicate waveforms using an MD5 hash of the data bytes.
+        """Remove duplicate waveforms using a SHA-256 hash of the first 64 KB of data bytes.
 
-        Stores only 32-byte hex strings instead of full waveform arrays,
-        avoiding OOM on large datasets.
+        Hashing only the first 64 KB plus the total byte length avoids materialising
+        the full waveform for large files while still providing a strong dedup key.
         """
         seen: set[str] = set()
         unique: list[AudioSample] = []
         for s in samples:
-            key = hashlib.md5(s.data.tobytes()).hexdigest()
+            data_bytes = s.data.tobytes()
+            key = hashlib.sha256(
+                data_bytes[:65536] + str(len(data_bytes)).encode()
+            ).hexdigest()
             if key not in seen:
                 seen.add(key)
                 unique.append(s)
@@ -591,5 +644,24 @@ class DatasetIngestNode(Node):
         except OSError as exc:
             log.warning(
                 "DatasetIngestNode: failed to append checkpoint '%s': %s",
+                checkpoint_path, exc,
+            )
+
+    def _flush_checkpoint(self, file_paths: list[str]) -> None:
+        """Append a batch of processed paths to the checkpoint file in one open/write/close.
+
+        Reduces file-system overhead from O(N) opens to O(N/batch_size) opens
+        on large datasets.  Does nothing if resume_from is not configured or
+        the list is empty.
+        """
+        if not self.config.resume_from or not file_paths:
+            return
+        checkpoint_path = Path(self.config.resume_from)
+        try:
+            with open(checkpoint_path, "a", encoding="utf-8") as f:
+                f.write("\n".join(file_paths) + "\n")
+        except OSError as exc:
+            log.warning(
+                "DatasetIngestNode: failed to flush checkpoint batch to '%s': %s",
                 checkpoint_path, exc,
             )

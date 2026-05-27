@@ -15,6 +15,8 @@ import copy
 import logging
 from typing import ClassVar
 
+from pydantic import Field
+
 import numpy as np
 
 from app.core.nodes.base import Node
@@ -90,9 +92,10 @@ class SpeakerSeparatorNode(Node):
         min_speakers: int = 1
         max_speakers: int = 10
         output_mode: str = "per_speaker"  # "per_speaker" | "diarization_only"
-        auth_token: str = ""            # HuggingFace token for pyannote
-        # WARNING: do not store auth_token in saved pipeline files — use the
-        # HUGGINGFACE_TOKEN environment variable instead to avoid secret leakage.
+        auth_token: str = Field(default="", exclude=True)
+        # auth_token is excluded from serialisation to prevent secret leakage.
+        # Use the HUGGINGFACE_TOKEN environment variable instead of embedding
+        # the token in saved pipeline files.
         min_segment_s: float = 0.5      # discard segments shorter than this
 
     # ── setup ─────────────────────────────────────────────────────────────────
@@ -109,25 +112,23 @@ class SpeakerSeparatorNode(Node):
         token = self.config.auth_token or os.environ.get("HUGGINGFACE_TOKEN", "")
 
         if self._resolved_backend == "pyannote":
-            try:
-                from pyannote.audio import Pipeline as PyannotePipeline  # type: ignore
-                self._pyannote_pipeline = PyannotePipeline.from_pretrained(
-                    "pyannote/speaker-diarization-3.1",
-                    use_auth_token=token or None,
-                )
-                log.info("SpeakerSeparatorNode: pyannote pipeline loaded")
-            except ImportError:
-                pass  # handled by _resolve_backend
+            # _resolve_backend() already verified the import succeeds; any
+            # exception here (network, bad token, model not found) should
+            # propagate so setup() fails loudly rather than silently leaving
+            # _pyannote_pipeline=None and causing per-call model reloads.
+            from pyannote.audio import Pipeline as PyannotePipeline  # type: ignore
+            self._pyannote_pipeline = PyannotePipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=token or None,
+            )
+            log.info("SpeakerSeparatorNode: pyannote pipeline loaded")
         elif self._resolved_backend == "speechbrain":
-            try:
-                from speechbrain.inference.separation import SepformerSeparation  # type: ignore
-                self._sepformer_model = SepformerSeparation.from_hparams(
-                    source="speechbrain/sepformer-wsj02mix",
-                    savedir="pretrained_models/sepformer-wsj02mix",
-                )
-                log.info("SpeakerSeparatorNode: SepFormer model loaded")
-            except ImportError:
-                pass  # handled by _resolve_backend
+            from speechbrain.inference.separation import SepformerSeparation  # type: ignore
+            self._sepformer_model = SepformerSeparation.from_hparams(
+                source="speechbrain/sepformer-wsj02mix",
+                savedir="pretrained_models/sepformer-wsj02mix",
+            )
+            log.info("SpeakerSeparatorNode: SepFormer model loaded")
 
     def _resolve_backend(self) -> str:
         if self.config.backend == "pyannote":
@@ -182,6 +183,11 @@ class SpeakerSeparatorNode(Node):
         output: list[AudioSample] = []
 
         for sample in samples:
+            if sample.data is None or len(sample.data) == 0:
+                log.warning(
+                    "SpeakerSeparatorNode: skipping zero-length sample %s", sample.path
+                )
+                continue
             if backend == "pyannote":
                 results = self._separate_pyannote(sample)
             else:
@@ -209,6 +215,8 @@ class SpeakerSeparatorNode(Node):
             )
 
         y = sample.data.astype(np.float32)
+        if y.ndim > 1:
+            y = y.mean(axis=1)  # mix stereo/multi-channel to mono
         sr = sample.sample_rate
 
         # pyannote expects a file path or waveform dict
@@ -272,6 +280,8 @@ class SpeakerSeparatorNode(Node):
             )
 
         y = sample.data.astype(np.float32)
+        if y.ndim > 1:
+            y = y.mean(axis=1)  # mix stereo/multi-channel to mono; SepFormer expects 1D
         sr = sample.sample_rate
 
         # SepFormer expects 8kHz mono
@@ -290,7 +300,7 @@ class SpeakerSeparatorNode(Node):
         results: list[AudioSample] = []
 
         for i in range(num_sources):
-            src = est_sources[0, :, i].numpy()
+            src = est_sources[0, :, i].detach().cpu().numpy()
             # Resample back to original sr
             if in_sr != sr:
                 import librosa  # type: ignore

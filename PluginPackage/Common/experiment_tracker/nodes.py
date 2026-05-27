@@ -107,7 +107,15 @@ class ExperimentTrackerNode(Node):
         env_meta = getattr(self, "_env_meta", None) or self._capture_env()
 
         if self.config.backend == "mlflow":
-            self._log_mlflow(run_id, params, metrics, artifact_paths)
+            try:
+                self._log_mlflow(run_id, params, metrics, artifact_paths)
+            except Exception as exc:
+                log.warning(
+                    "ExperimentTrackerNode: MLflow logging failed (%s). "
+                    "Falling back to JSON backend.",
+                    exc,
+                )
+                self._log_json(run_id, params, metrics, artifact_paths, env_meta)
         else:
             self._log_json(run_id, params, metrics, artifact_paths, env_meta)
 
@@ -184,7 +192,12 @@ class ExperimentTrackerNode(Node):
         env_meta: dict,
     ) -> None:
         run_dir = Path(self.config.output_dir) / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise OSError(
+                f"ExperimentTrackerNode: cannot create run directory '{run_dir}': {e}"
+            ) from e
         record = {
             "run_id": run_id,
             "experiment_name": self.config.experiment_name,
@@ -234,6 +247,12 @@ class ExperimentTrackerNode(Node):
                 elif isinstance(v, list) and all(isinstance(x, (int, float)) for x in v):
                     for step, val in enumerate(v):
                         mlflow.log_metric(k, float(val), step=step)
+                else:
+                    log.debug(
+                        "ExperimentTrackerNode: skipping non-numeric metric '%s' (type=%s) "
+                        "from MLflow — present in JSON backend only",
+                        k, type(v).__name__,
+                    )
 
             # Log artifacts
             if self.config.log_artifacts:
@@ -260,7 +279,7 @@ class ExperimentTrackerNode(Node):
             git_hash = subprocess.check_output(
                 ["git", "rev-parse", "--short", "HEAD"],
                 stderr=subprocess.DEVNULL,
-                timeout=5,
+                timeout=1,
             ).decode().strip()
             env["git_hash"] = git_hash
         except Exception:

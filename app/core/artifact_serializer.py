@@ -129,7 +129,11 @@ class ArtifactSerializerRegistry:
         """
         with self._lock:
             if artifact_type not in self._handlers:
-                self._ordered.append(handler)
+                # Only append if this handler object is not already in _ordered.
+                # The same handler instance may be registered for multiple types;
+                # appending it again would cause infer_type() to call it twice.
+                if handler not in self._ordered:
+                    self._ordered.append(handler)
             else:
                 # Replace in-place in the ordered list
                 old = self._handlers[artifact_type]
@@ -147,6 +151,9 @@ class ArtifactSerializerRegistry:
         Returns the first non-None result, or ``None`` if no handler
         recognises the value.
         """
+        # Fast-path: primitives are never artifacts — skip all handlers.
+        if isinstance(value, (int, float, str, bool, type(None))):
+            return None
         with self._lock:
             handlers = list(self._ordered)
         for handler in handlers:

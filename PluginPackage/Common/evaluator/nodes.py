@@ -269,15 +269,21 @@ class EvaluatorNode(Node):
         if model_path and model_path.lower().endswith((".pt", ".pth")):
             try:
                 import torch  # type: ignore
-                state_dict = torch.load(model_path, map_location="cpu")
-                log.info("EvaluatorNode: loaded PyTorch state dict from %s", model_path)
-                # Return the state dict — caller must handle inference
-                return state_dict
             except ImportError:
                 raise ImportError(
                     "EvaluatorNode: 'torch' required to load PyTorch model. "
                     "Install with: pip install torch>=2.0"
                 )
+            # Try TorchScript first (torch.jit.save), then plain state dict
+            try:
+                model = torch.jit.load(model_path, map_location="cpu")
+                model.eval()
+                log.info("EvaluatorNode: loaded TorchScript model from %s", model_path)
+                return model
+            except Exception:
+                state_dict = torch.load(model_path, map_location="cpu")
+                log.info("EvaluatorNode: loaded PyTorch state dict from %s", model_path)
+                return state_dict
 
         # Fall back to Keras SavedModel
         try:
@@ -428,6 +434,16 @@ class EvaluatorNode(Node):
 
         log.info("EvaluatorNode: evaluating on %d test samples...", len(X_test))
 
+        # Guard: empty test set
+        if X_test is None or len(X_test) == 0:
+            log.warning("EvaluatorNode: test set is empty — skipping evaluation")
+            return {"output": ModelArtifact(
+                model_path=artifact.model_path,
+                labels=labels,
+                history=artifact.history,
+                metrics={"error": "empty test set"},
+            )}
+
         # ── Predict ───────────────────────────────────────────────────────────
         if is_pytorch_state_dict:
             # Cannot run inference without the model architecture — return empty metrics
@@ -440,6 +456,14 @@ class EvaluatorNode(Node):
 
         y_pred_probs = model.predict(X_test, verbose=0)
         y_pred = np.argmax(y_pred_probs, axis=1)
+
+        # Guard: model output dimension must match label count
+        K = y_pred_probs.shape[1] if y_pred_probs.ndim > 1 else 1
+        if K != n_classes:
+            raise ValueError(
+                f"EvaluatorNode: model output dimension {K} != n_classes {n_classes}. "
+                "Ensure the model and dataset are compatible."
+            )
 
         # ── Core metrics ──────────────────────────────────────────────────────
         test_acc = float(np.mean(y_pred == y_test))

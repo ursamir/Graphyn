@@ -321,14 +321,17 @@ class RealtimeInferenceNode(Node):
             streaming_asr   — buffer frames, emit when buffer full (CTC-style)
 
         Adaptive frame-skipping:
-            When adaptive=True, skips every Nth frame based on adaptive_skip_ratio
-            to reduce CPU load in real-time scenarios.
+            When adaptive=True, skips frames probabilistically based on
+            adaptive_skip_ratio (fraction of frames to skip, 0.0–1.0).
         """
         import time
 
         results = []
         frame_count = 0
-        skip_interval = max(2, int(1.0 / max(0.01, 1.0 - self.config.adaptive_skip_ratio)))
+
+        # Clear stale ASR buffer if mode is no longer streaming_asr
+        if self.config.mode != "streaming_asr" and hasattr(self, "_asr_buffer"):
+            self._asr_buffer.clear()
 
         # Streaming ASR buffer (initialised in setup())
         if not hasattr(self, "_asr_buffer"):
@@ -337,13 +340,20 @@ class RealtimeInferenceNode(Node):
         for f in features:
             frame_count += 1
 
-            # Adaptive frame-skipping: skip every Nth frame under load
-            if self.config.adaptive and frame_count % skip_interval == 0:
-                log.debug("RealtimeInferenceNode: adaptive skip frame %d", frame_count)
-                continue
+            # Adaptive frame-skipping: probabilistic skip based on adaptive_skip_ratio
+            if self.config.adaptive:
+                import random as _random
+                if _random.random() < self.config.adaptive_skip_ratio:
+                    log.debug("RealtimeInferenceNode: adaptive skip frame %d", frame_count)
+                    continue
 
-            # Reshape to [1, T, F, 1]
-            inp = f.data[np.newaxis, ..., np.newaxis].astype(np.float32)
+            # Normalise feature data to 2-D (T, F) before adding batch/channel dims
+            data = f.data
+            if data.ndim == 1:
+                data = data[:, np.newaxis]   # (N,) → (N, 1)
+            elif data.ndim > 2:
+                data = data.reshape(data.shape[0], -1)  # flatten extra dims
+            inp = data[np.newaxis, ..., np.newaxis].astype(np.float32)  # (1, T, F, 1)
 
             t0 = time.monotonic()
             if self._backend == "tflite":
@@ -399,17 +409,9 @@ class RealtimeInferenceNode(Node):
                 metadata=dict(f.metadata),
             ))
 
-        # Emit any remaining partial ASR buffer so no frames are dropped at end of stream
-        if self.config.mode == "streaming_asr" and self._asr_buffer:
-            all_probs = np.mean([p for _, p in self._asr_buffer], axis=0)
-            best_idx = int(np.argmax(all_probs))
-            best_label = self._labels[best_idx] if best_idx < len(self._labels) else f"class_{best_idx}"
-            results.append(PredictionResult(
-                source_path=self._asr_buffer[0][0].source_path,
-                predicted_label=best_label,
-                probabilities={self._labels[i]: float(all_probs[i]) for i in range(len(self._labels))},
-                metadata={"mode": "streaming_asr", "frames_aggregated": len(self._asr_buffer), "partial": True},
-            ))
-            self._asr_buffer.clear()
+        # Note: the _asr_buffer intentionally persists across process() calls so
+        # that streaming_buffer_size is respected across chunk boundaries.
+        # Callers that need to flush remaining frames should call setup() to reset,
+        # or check for a partial result by inspecting _asr_buffer directly.
 
         return results

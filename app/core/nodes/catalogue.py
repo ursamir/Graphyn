@@ -39,14 +39,32 @@ class TypeCatalogue:
         """Register a PortDataType subclass.
 
         Raises:
-            TypeError: if type_class is not a subclass of PortDataType.
-            DuplicatePortTypeError: if the fully-qualified name is already registered.
+            TypeError: if type_class is not a concrete subclass of PortDataType
+                       (the base class itself is rejected).
+            DuplicatePortTypeError: if the fully-qualified name is already
+                       registered by a *different* class object.  If the same
+                       class object is already registered under any FQN (e.g.
+                       re-imported under a shorter module path), the call is a
+                       silent no-op so that plugin loaders can safely call
+                       register() without tracking which types they have already
+                       catalogued.
         """
         with self._lock:
-            if not (isinstance(type_class, type) and issubclass(type_class, PortDataType)):
+            # F2 fix: reject the abstract base class itself
+            if not (
+                isinstance(type_class, type)
+                and issubclass(type_class, PortDataType)
+                and type_class is not PortDataType
+            ):
                 raise TypeError(
-                    f"{type_class!r} is not a subclass of PortDataType"
+                    f"{type_class!r} is not a concrete subclass of PortDataType"
                 )
+            # F1 fix: if the same class object is already registered under any
+            # FQN (e.g. loaded via two different import paths), skip silently
+            # rather than creating a duplicate entry.
+            for existing_cls in self._types.values():
+                if existing_cls is type_class:
+                    return
             name = _fqn(type_class)
             if name in self._types:
                 raise DuplicatePortTypeError(
@@ -63,9 +81,18 @@ class TypeCatalogue:
         """
         with self._lock:
             if type_name not in self._types:
+                # F3 fix: cap the sample list so the error message stays
+                # readable even when hundreds of types are registered.
+                all_types = sorted(self._types)
+                sample = all_types[:10]
+                suffix = (
+                    f" … and {len(all_types) - 10} more"
+                    if len(all_types) > 10
+                    else ""
+                )
                 raise PortTypeNotFoundError(
                     f"Port type '{type_name}' is not registered in TypeCatalogue. "
-                    f"Registered types: {sorted(self._types)}"
+                    f"Known types (sample): {sample}{suffix}"
                 )
             return self._types[type_name]
 

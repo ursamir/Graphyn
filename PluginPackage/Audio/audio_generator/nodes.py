@@ -8,9 +8,12 @@ Backends:
 from __future__ import annotations
 
 import logging
+import threading
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
+from pydantic import field_validator
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -87,10 +90,47 @@ class AudioGeneratorNode(Node):
         top_k: int = 250
         guidance_scale: float = 3.0
 
+        @field_validator("model_size")
+        @classmethod
+        def _validate_model_size(cls, v: str) -> str:
+            allowed = {"small", "medium", "large"}
+            if v not in allowed:
+                raise ValueError(f"model_size must be one of {sorted(allowed)}, got '{v}'")
+            return v
+
+        @field_validator("duration_s")
+        @classmethod
+        def _validate_duration_s(cls, v: float) -> float:
+            if v <= 0:
+                raise ValueError(f"duration_s must be > 0, got {v}")
+            return v
+
+        @field_validator("temperature")
+        @classmethod
+        def _validate_temperature(cls, v: float) -> float:
+            if v <= 0:
+                raise ValueError(f"temperature must be > 0, got {v}")
+            return v
+
+        @field_validator("top_k")
+        @classmethod
+        def _validate_top_k(cls, v: int) -> int:
+            if v <= 0:
+                raise ValueError(f"top_k must be > 0, got {v}")
+            return v
+
+        @field_validator("guidance_scale")
+        @classmethod
+        def _validate_guidance_scale(cls, v: float) -> float:
+            if v <= 0:
+                raise ValueError(f"guidance_scale must be > 0, got {v}")
+            return v
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def setup(self) -> None:
         """Warn if no GPU is available — AudioCraft is very slow on CPU."""
+        self._model_lock = threading.Lock()
         try:
             import torch  # type: ignore
             if not torch.cuda.is_available():
@@ -102,13 +142,38 @@ class AudioGeneratorNode(Node):
         except ImportError:
             pass  # torch not installed yet — will raise at generation time
 
+    def teardown(self) -> None:
+        """Release model weights from GPU/CPU memory."""
+        for attr in ("_musicgen_model", "_audiogen_model"):
+            if hasattr(self, attr):
+                try:
+                    import torch  # type: ignore
+                    model = getattr(self, attr)
+                    if hasattr(model, "lm"):
+                        model.lm.cpu()
+                    del model
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                try:
+                    delattr(self, attr)
+                except AttributeError:
+                    pass
+
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, prompts: list) -> list[AudioSample]:
         backend = self._resolve_backend()
 
-        # Resolve prompts
-        text_prompts = [str(p) for p in prompts if str(p).strip()] if prompts else []
+        # Resolve prompts — require str elements
+        text_prompts: list[str] = []
+        for p in (prompts or []):
+            if not isinstance(p, str):
+                raise TypeError(
+                    f"AudioGeneratorNode: each prompt must be a str, got {type(p).__name__}"
+                )
+            if p.strip():
+                text_prompts.append(p)
         if not text_prompts:
             if self.config.prompt.strip():
                 text_prompts = [self.config.prompt]
@@ -163,33 +228,40 @@ class AudioGeneratorNode(Node):
             self._musicgen_model = MusicGen.get_pretrained(model_name)
 
         model = self._musicgen_model
-        model.set_generation_params(
-            duration=self.config.duration_s,
-            temperature=self.config.temperature,
-            top_k=self.config.top_k,
-            cfg_coef=self.config.guidance_scale,
-        )
 
-        # Melody conditioning
+        # Melody conditioning — raise early if file is configured but missing
         melody_wavs = None
+        mel_sr: int | None = None
         if self.config.conditioning_audio:
-            from pathlib import Path
-            if Path(self.config.conditioning_audio).exists():
-                try:
-                    import soundfile as sf  # type: ignore
-                except ImportError:
-                    raise ImportError(
-                        "AudioGeneratorNode: 'soundfile' required for conditioning_audio. "
-                        "Install with: pip install soundfile>=0.12"
-                    )
-                mel_data, mel_sr = sf.read(self.config.conditioning_audio, dtype="float32")
-                melody_wavs = torch.from_numpy(mel_data).unsqueeze(0).unsqueeze(0)
+            p = Path(self.config.conditioning_audio)
+            if not p.exists():
+                raise FileNotFoundError(
+                    f"AudioGeneratorNode: conditioning_audio '{p}' not found"
+                )
+            try:
+                import soundfile as sf  # type: ignore
+            except ImportError:
+                raise ImportError(
+                    "AudioGeneratorNode: 'soundfile' required for conditioning_audio. "
+                    "Install with: pip install soundfile>=0.12"
+                )
+            mel_data, mel_sr = sf.read(str(p), dtype="float32")
+            melody_wavs = torch.from_numpy(mel_data).unsqueeze(0).unsqueeze(0)
 
-        with torch.no_grad():
-            if melody_wavs is not None:
-                wav = model.generate_with_chroma(prompts, melody_wavs, mel_sr)
-            else:
-                wav = model.generate(prompts)
+        # Serialise set_generation_params + generate to prevent concurrent
+        # calls from overwriting each other's parameters on the shared model.
+        with self._model_lock:
+            model.set_generation_params(
+                duration=self.config.duration_s,
+                temperature=self.config.temperature,
+                top_k=self.config.top_k,
+                cfg_coef=self.config.guidance_scale,
+            )
+            with torch.no_grad():
+                if melody_wavs is not None:
+                    wav = model.generate_with_chroma(prompts, melody_wavs, mel_sr)
+                else:
+                    wav = model.generate(prompts)
 
         sr = model.sample_rate
         return self._tensors_to_samples(wav, sr, prompts)
@@ -211,15 +283,18 @@ class AudioGeneratorNode(Node):
             self._audiogen_model = AudioGen.get_pretrained(model_name)
 
         model = self._audiogen_model
-        model.set_generation_params(
-            duration=self.config.duration_s,
-            temperature=self.config.temperature,
-            top_k=self.config.top_k,
-            cfg_coef=self.config.guidance_scale,
-        )
 
-        with torch.no_grad():
-            wav = model.generate(prompts)
+        # Serialise set_generation_params + generate to prevent concurrent
+        # calls from overwriting each other's parameters on the shared model.
+        with self._model_lock:
+            model.set_generation_params(
+                duration=self.config.duration_s,
+                temperature=self.config.temperature,
+                top_k=self.config.top_k,
+                cfg_coef=self.config.guidance_scale,
+            )
+            with torch.no_grad():
+                wav = model.generate(prompts)
 
         sr = model.sample_rate
         return self._tensors_to_samples(wav, sr, prompts)
@@ -231,6 +306,9 @@ class AudioGeneratorNode(Node):
         results: list[AudioSample] = []
         for i, audio in enumerate(wav):
             y = audio.squeeze().cpu().numpy().astype(np.float32)
+            # AudioCraft may return stereo (2, N); mix down to mono (N,)
+            if y.ndim > 1:
+                y = y.mean(axis=0)
             prompt_text = prompts[i] if i < len(prompts) else ""
             results.append(AudioSample(
                 path=f"generated_{i}.wav",

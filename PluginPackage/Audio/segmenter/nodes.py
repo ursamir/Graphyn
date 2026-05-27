@@ -139,6 +139,11 @@ class SegmenterNode(Node):
         out: list[AudioSample] = []
 
         for s in samples:
+            if s.data is None or len(s.data) == 0:
+                log.warning(
+                    "SegmenterNode: skipping zero-length sample %s", s.path
+                )
+                continue
             if mode == "fixed":
                 segments = self._segment_fixed(s)
             elif mode == "silence":
@@ -203,6 +208,10 @@ class SegmenterNode(Node):
         For silence/VAD modes the segment length is content-driven, so overlap
         is computed as a fraction of each segment's actual length rather than
         using the fixed window_ms (which is only meaningful in fixed mode).
+
+        Note: adjacent intervals may overlap after extension, resulting in
+        duplicate audio data in the extracted segments. This is intentional
+        for overlap-add use cases. Callers clamp the extended end to len(y).
         """
         if self.config.overlap <= 0.0:
             return intervals
@@ -221,6 +230,14 @@ class SegmenterNode(Node):
 
         window_size = int(sr * self.config.window_ms / 1000)
         step = max(1, int(window_size * (1.0 - self.config.overlap)))
+
+        if len(y) < window_size:
+            log.warning(
+                "SegmenterNode: sample %s (%d samples) shorter than window "
+                "(%d samples) — no segments produced",
+                s.path, len(y), window_size,
+            )
+            return []
 
         segments: list[AudioSample] = []
         seg_id = 0
@@ -285,6 +302,8 @@ class SegmenterNode(Node):
         vad = webrtcvad.Vad(self.config.vad_aggressiveness)
         frame_ms = 30
         frame_samples = int(vad_sr * frame_ms / 1000)
+        if y_vad.ndim > 1:
+            y_vad = y_vad.mean(axis=1)  # mix stereo/multi-channel to mono for VAD
         y_int16 = np.clip(y_vad * 32767, -32768, 32767).astype(np.int16)
         pcm_bytes = y_int16.tobytes()
         frame_bytes = frame_samples * 2
@@ -351,6 +370,14 @@ class SegmenterNode(Node):
 
         # RMS energy per frame
         rms = librosa.feature.rms(y=y, frame_length=frame_len, hop_length=hop)[0]
+
+        if np.max(rms) < 1e-10:
+            log.debug(
+                "SegmenterNode: silence-only audio in event mode for %s — no events detected",
+                s.path,
+            )
+            return []
+
         rms_db = librosa.amplitude_to_db(rms, ref=np.max)
 
         threshold_db = self.config.event_threshold_db

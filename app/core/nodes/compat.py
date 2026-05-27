@@ -60,9 +60,16 @@ class CompatibilityChecker:
             except TypeError:
                 return False
 
-        # Rule 3b: input is plain `list` (no type args) — accept any list[X] output
-        if in_origin is None and input_type is list and out_origin is list:
-            return True
+        # Rule 3b: input is a plain (unparameterized) generic type — accept any
+        # parameterized version of the same type.  E.g. tuple[str, int] → tuple,
+        # list[str] → list, dict[str, int] → dict.  We check issubclass(out_origin,
+        # input_type) to also handle subclass relationships (e.g. MyList → list).
+        if in_origin is None and out_origin is not None:
+            try:
+                if issubclass(out_origin, input_type):
+                    return True
+            except TypeError:
+                pass
 
         # Rule 3c: input is `object` — accepts anything (universal sink)
         if in_origin is None and input_type is object:
@@ -79,6 +86,10 @@ class CompatibilityChecker:
         if out_origin is Union and in_origin is Union:
             out_args = get_args(output_type)
             in_args = get_args(input_type)
+            # Guard: bare Union with no args (programmatically constructed) —
+            # vacuous all() would return True, which is wrong.
+            if not out_args or not in_args:
+                return False
             return all(
                 any(CompatibilityChecker.are_compatible(oa, ia) for ia in in_args)
                 for oa in out_args
@@ -136,6 +147,16 @@ class CompatibilityChecker:
         Raises:
             NodeTypeError: If the port does not exist or types are incompatible.
         """
+        if not hasattr(src_node, "output_ports"):
+            raise NodeTypeError(
+                f"src_node {src_node!r} has no 'output_ports' attribute — "
+                f"expected a Node instance"
+            )
+        if not hasattr(dst_node, "input_ports"):
+            raise NodeTypeError(
+                f"dst_node {dst_node!r} has no 'input_ports' attribute — "
+                f"expected a Node instance"
+            )
         if src_port not in src_node.output_ports:
             raise NodeTypeError(
                 f"Node '{type(src_node).__name__}' has no output port '{src_port}'. "
@@ -177,6 +198,12 @@ def _type_to_schema(t: type | None) -> dict[str, Any] | None:
     """
     if t is None:
         return None
+
+    from typing import Any as TypingAny
+
+    # typing.Any has no constraints — correct JSON Schema is {} (no restrictions)
+    if t is TypingAny:
+        return {}
 
     from pydantic import BaseModel as PydanticBaseModel
 

@@ -101,24 +101,43 @@ class LoggingObserver(NodeObserver):
         input_counts: dict[str, int],
         output_counts: dict[str, int],
     ) -> None:
-        self._log.info(json.dumps({
-            "event": "node_end",
-            "node_type": node_type,
-            "run_id": run_id,
-            "duration_s": duration_s,
-            "input_counts": input_counts,
-            "output_counts": output_counts,
-        }))
+        try:
+            self._log.info(json.dumps({
+                "event": "node_end",
+                "node_type": node_type,
+                "run_id": run_id,
+                "duration_s": duration_s,
+                "input_counts": input_counts,
+                "output_counts": output_counts,
+            }))
+        except (TypeError, ValueError) as _e:
+            # Counts may contain non-JSON-serialisable values (e.g. numpy int64).
+            # Fall back to a plain-text log rather than crashing the executor.
+            self._log.info(
+                "node_end event (serialization failed: %s) node=%s run=%s duration=%.3fs",
+                _e, node_type, run_id, duration_s,
+            )
 
     def on_node_error(self, node_type: str, run_id: str, exc: Exception) -> None:
-        self._log.error(json.dumps({
-            "event": "node_error",
-            "node_type": node_type,
-            "run_id": run_id,
-            "error": str(exc),
-            "error_type": type(exc).__name__,
-            "traceback": _traceback.format_exc(),
-        }))
+        # Use format_exception() to extract the traceback from the exception
+        # object directly, independent of the current thread exception context.
+        # format_exc() returns "NoneType: None\n" when called outside an active
+        # except block, which silently produces useless error logs.
+        tb = "".join(_traceback.format_exception(type(exc), exc, exc.__traceback__))
+        try:
+            self._log.error(json.dumps({
+                "event": "node_error",
+                "node_type": node_type,
+                "run_id": run_id,
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "traceback": tb,
+            }))
+        except (TypeError, ValueError) as _e:
+            self._log.error(
+                "node_error event (serialization failed: %s) node=%s run=%s error=%s",
+                _e, node_type, run_id, str(exc),
+            )
 
 
 class CompositeObserver(NodeObserver):
@@ -138,6 +157,11 @@ class CompositeObserver(NodeObserver):
     """
 
     def __init__(self, observers: list[NodeObserver]) -> None:
+        # Shallow copy of the list — the list itself is not shared, but the
+        # observer objects inside are held by reference. Mutations to a child
+        # observer's internal state (e.g. counters) are visible here and to
+        # any other holder of the same observer reference. This is intentional
+        # and expected Python reference semantics.
         self._observers = list(observers)
         self._log = logging.getLogger(__name__)
 

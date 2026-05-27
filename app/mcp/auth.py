@@ -14,6 +14,7 @@ Reason To Change: Auth scheme changes (e.g. JWT, OAuth), or token location
 """
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
 from app.core.config import api_token as _api_token
@@ -40,7 +41,7 @@ def check_auth(arguments: dict[str, Any]) -> dict[str, Any] | None:
         return None  # auth not configured — allow all
 
     provided = (arguments or {}).get("_meta", {}).get("auth_token", "")
-    if provided != token:
+    if not hmac.compare_digest(provided, token):
         return {
             "error": True,
             "error_type": "unauthorized",

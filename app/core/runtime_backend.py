@@ -10,7 +10,7 @@ Owns:             RuntimeBackend (ABC), LocalPythonBackend, backend registry
                   (_BACKEND_REGISTRY, _BACKEND_INSTANCES), register_backend(),
                   get_backend(), list_backends().
 Public Surface:   RuntimeBackend, LocalPythonBackend, get_backend(),
-                  register_backend(), list_backends()
+                  register_backend(), list_backends(), _reset_backend_registry()
 Must NOT:         Import from app.domain or app.api at module level.
                   LocalPythonBackend imports orchestrator lazily inside execute()
                   to avoid circular imports.
@@ -181,9 +181,10 @@ def register_backend(backend_id: str, backend_class: type[RuntimeBackend]) -> No
         raise TypeError(
             f"backend_class must be a subclass of RuntimeBackend, got {backend_class!r}"
         )
-    _BACKEND_REGISTRY[backend_id] = backend_class
-    # Invalidate any cached instance so the new class is used on next get_backend()
+    # Perform registry write and cache invalidation atomically under the lock
+    # so a concurrent get_backend() cannot return a stale instance of the old class.
     with _BACKEND_INSTANCES_LOCK:
+        _BACKEND_REGISTRY[backend_id] = backend_class
         _BACKEND_INSTANCES.pop(backend_id, None)
 
 
@@ -205,7 +206,7 @@ def get_backend(backend_id: str = "local_python") -> RuntimeBackend:
     """
     if backend_id not in _BACKEND_REGISTRY:
         available = sorted(_BACKEND_REGISTRY)
-        raise KeyError(
+        raise ValueError(
             f"Unknown runtime backend '{backend_id}'. "
             f"Available backends: {available}"
         )
@@ -218,3 +219,16 @@ def get_backend(backend_id: str = "local_python") -> RuntimeBackend:
 def list_backends() -> list[str]:
     """Return a sorted list of all registered backend IDs."""
     return sorted(_BACKEND_REGISTRY)
+
+
+def _reset_backend_registry() -> None:
+    """Reset the backend registry and instance cache to their initial state.
+
+    Intended for test teardown only — restores ``_BACKEND_REGISTRY`` to the
+    default ``{"local_python": LocalPythonBackend}`` and clears all cached
+    instances.  Do not call in production code.
+    """
+    with _BACKEND_INSTANCES_LOCK:
+        _BACKEND_REGISTRY.clear()
+        _BACKEND_REGISTRY["local_python"] = LocalPythonBackend
+        _BACKEND_INSTANCES.clear()

@@ -17,9 +17,12 @@ Reason To Change: Provenance tool schemas change, or replay strategy changes.
 """
 from __future__ import annotations
 
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from app.core.runtime_backend import get_backend as _get_backend  # module-level — patchable in tests
 
@@ -49,6 +52,11 @@ LIST_ARTIFACTS_SCHEMA = {
         "artifact_type": {
             "type": "string",
             "description": "Filter artifacts by artifact type (e.g. 'audio_samples', 'model_artifact').",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum number of artifacts to return. Defaults to 200.",
         },
         "_meta": {
             "type": "object",
@@ -111,6 +119,7 @@ def list_artifacts_handler(arguments: dict[str, Any]) -> dict:
     """List artifacts with optional filters (Req 6 §1).
 
     Returns {"artifacts": [...], "count": N} or an error dict.
+    Accepts an optional ``limit`` (default 200) to cap response size.
     """
     try:
         from app.core.artifact_store import ArtifactStore
@@ -118,9 +127,11 @@ def list_artifacts_handler(arguments: dict[str, Any]) -> dict:
         run_id = arguments.get("run_id")
         node_type = arguments.get("node_type")
         artifact_type = arguments.get("artifact_type")
+        limit: int = int(arguments.get("limit") or 200)
 
         store = ArtifactStore()
         records = store.list(run_id=run_id, node_type=node_type, artifact_type=artifact_type)
+        records = records[:limit]
         return {
             "artifacts": [r.model_dump(mode="json") for r in records],
             "count": len(records),
@@ -147,6 +158,12 @@ def get_artifact_lineage_handler(arguments: dict[str, Any]) -> dict:
 
         store = ProvenanceStore()
         lineage = store.get_lineage(artifact_id)
+        if lineage is None:
+            return {
+                "error": True,
+                "error_type": "artifact_not_found",
+                "message": f"No lineage found for artifact '{artifact_id}'",
+            }
         return lineage
     except Exception as e:
         return {"error": True, "error_type": "store_error", "message": str(e)}
@@ -193,8 +210,34 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
         graph = load_ir_from_file(str(graph_path))
         new_run_manager = RunManager()
 
-        # NEW-7 fix: use module-level shared executor instead of per-call pool.
-        _REPLAY_EXECUTOR.submit(_get_backend().execute, graph, run_manager=new_run_manager)
+        # CRITICAL fix: attach done-callback so background exceptions mark the
+        # run as failed instead of being silently swallowed (discarded Future).
+        def _on_replay_done(fut, _rm=new_run_manager):
+            exc = fut.exception()
+            if exc:
+                log.error(
+                    "Replay execution failed for run %s: %s",
+                    _rm.run_id, exc, exc_info=exc,
+                )
+                try:
+                    _rm.mark_failed(str(exc))
+                except Exception:
+                    pass
+
+        # MEDIUM fix: wrap submit() so an executor-shutdown error orphans the
+        # RunManager with a proper failed status rather than "running" forever.
+        try:
+            future = _REPLAY_EXECUTOR.submit(
+                _get_backend().execute, graph, run_manager=new_run_manager
+            )
+            future.add_done_callback(_on_replay_done)
+        except Exception as submit_exc:
+            new_run_manager.mark_failed(str(submit_exc))
+            return {
+                "error": True,
+                "error_type": "replay_error",
+                "message": str(submit_exc),
+            }
 
         return {"run_id": new_run_manager.run_id, "status": "started"}
     except Exception as e:

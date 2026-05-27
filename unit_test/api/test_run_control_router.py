@@ -28,18 +28,31 @@ class TestPauseRun:
         assert body["run_id"] == "run-abc"
         assert body["status"] == "paused"
 
-    def test_pause_inactive_run_returns_404(self, api_client):
+    def test_pause_inactive_run_returns_404(self, api_client, tmp_path):
         """POST /api/v1/runs/{run_id}/pause with no active run returns 404 with error.
+
+        When the run directory exists (run completed) → "run_not_active".
+        When the run directory does not exist → "run_not_found".
 
         Validates: Req 24 criteria 2
         """
-        with patch("app.api.routers.run_control.get_active_run", return_value=None):
+        # Case 1: run directory exists → run completed, not active
+        run_dir = tmp_path / "run-xyz"
+        run_dir.mkdir()
+        with patch("app.api.routers.run_control.get_active_run", return_value=None), \
+             patch("app.api.routers.run_control._runs_dir", return_value=tmp_path):
             resp = api_client.post("/api/v1/runs/run-xyz/pause")
         assert resp.status_code == 404
-        body = resp.json()
-        # FastAPI wraps the detail in {"detail": ...}
-        detail = body.get("detail", body)
+        detail = resp.json().get("detail", resp.json())
         assert detail.get("error") == "run_not_active"
+
+        # Case 2: run directory does not exist → run never existed
+        with patch("app.api.routers.run_control.get_active_run", return_value=None), \
+             patch("app.api.routers.run_control._runs_dir", return_value=tmp_path):
+            resp = api_client.post("/api/v1/runs/run-never/pause")
+        assert resp.status_code == 404
+        detail = resp.json().get("detail", resp.json())
+        assert detail.get("error") == "run_not_found"
 
     def test_pause_calls_run_pause(self, api_client):
         """POST /api/v1/runs/{run_id}/pause calls run.pause()."""

@@ -50,6 +50,7 @@ class ParallelExecutor:
         # Created lazily on first use and reused for every subsequent wave,
         # avoiding repeated pool creation/teardown overhead for multi-wave pipelines.
         self._pool: ThreadPoolExecutor | None = None
+        self._shutdown_lock = threading.Lock()
 
     def _get_pool(self) -> ThreadPoolExecutor:
         """Return the shared thread pool, creating it on first call."""
@@ -58,10 +59,15 @@ class ParallelExecutor:
         return self._pool
 
     def shutdown(self) -> None:
-        """Shut down the shared thread pool. Call once after all waves complete."""
-        if self._pool is not None:
-            self._pool.shutdown(wait=True)
-            self._pool = None
+        """Shut down the shared thread pool. Call once after all waves complete.
+
+        Thread-safe: uses a lock to prevent double-shutdown races when called
+        concurrently from multiple threads.
+        """
+        with self._shutdown_lock:
+            if self._pool is not None:
+                self._pool.shutdown(wait=True)
+                self._pool = None
 
     async def run_wave(
         self,
@@ -214,12 +220,16 @@ class ParallelExecutor:
                 try:
                     passes = evaluate_condition(condition, src_outputs)
                 except ConditionEvaluationError:
-                    passes = False
+                    # Re-raise so the orchestrator sees a clear error, consistent
+                    # with the sequential path in orchestrator.py. Silently treating
+                    # a broken condition as "not met" would route None to downstream
+                    # nodes without any indication that the condition was malformed.
+                    raise
                 if not passes:
                     inputs[dst_port] = None
                     continue
 
-            upstream_outputs = node_outputs[src_id]
+            upstream_outputs = node_outputs.get(src_id, {})
             value = upstream_outputs.get(src_port)
             port = node.input_ports.get(dst_port)
             if port and port.cardinality == "multi":
@@ -264,6 +274,10 @@ class ParallelExecutor:
                     )
             except Exception as exc:
                 logger.node_error(node_type, idx, exc)
+                # Emit node_end so logging/metrics systems see a matched span
+                # even for failed nodes (Finding 4 fix).
+                node_duration = time.time() - node_start_time
+                logger.node_end(node_type, idx, node_duration, output_count=0)
                 raise
 
             node_outputs[node_id] = outputs

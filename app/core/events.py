@@ -41,13 +41,18 @@ class FileWatcherSource(EventSource):
     """Watches a directory for new or modified files.
 
     Config keys:
-      - path (str): Directory to watch.
+      - path (str): Directory to watch. Must exist and be a directory when
+        ``watch()`` is called.
       - pattern (str): Glob pattern for filenames (default "*").
       - poll_interval_s (float): Polling interval in seconds when ``watchfiles``
         is not installed (default 1.0). For high-frequency file events (e.g.
         streaming audio chunks) reduce this value via ``source_config``.
 
     Yields: {"path": "<absolute_file_path>", "event": "created"|"modified"}
+
+    Performance note: The polling fallback calls ``os.listdir`` + one
+    ``stat()`` per file on every interval. For directories with thousands of
+    files, install ``watchfiles`` for production use.
 
     Req 6.9
     """
@@ -57,22 +62,45 @@ class FileWatcherSource(EventSource):
         self.pattern = pattern
         self.poll_interval_s = poll_interval_s
         self._stop_event: asyncio.Event | None = None
+        # Tracks whether close() was called before watch() started so that
+        # watch() exits immediately rather than running forever.
+        self._closed: bool = False
 
     async def watch(self) -> AsyncGenerator[dict, None]:
+        # Finding 3 fix: honour a close() that arrived before watch() started.
+        if self._closed:
+            return
+
+        # Finding 2 fix: validate path before entering the watch loop so
+        # callers get a clear error instead of a silent no-op.
+        if not os.path.isdir(self.path):
+            raise FileNotFoundError(
+                f"FileWatcherSource: path '{self.path}' does not exist or is not a directory"
+            )
+
         self._stop_event = asyncio.Event()
         try:
             import watchfiles
-            async for changes in watchfiles.awatch(self.path, stop_event=self._stop_event):
-                for change_type, file_path in changes:
-                    if fnmatch.fnmatch(os.path.basename(file_path), self.pattern):
-                        event_type = (
-                            "created"
-                            if change_type == watchfiles.Change.added
-                            else "modified"
-                        )
-                        yield {"path": file_path, "event": event_type}
+            # Finding 1 fix: catch non-ImportError backend errors and re-raise
+            # with context so the caller (and asyncio.gather) sees a meaningful
+            # exception rather than silently losing the event source.
+            try:
+                async for changes in watchfiles.awatch(self.path, stop_event=self._stop_event):
+                    for change_type, file_path in changes:
+                        if fnmatch.fnmatch(os.path.basename(file_path), self.pattern):
+                            event_type = (
+                                "created"
+                                if change_type == watchfiles.Change.added
+                                else "modified"
+                            )
+                            yield {"path": file_path, "event": event_type}
+            except (OSError, RuntimeError) as exc:
+                raise RuntimeError(
+                    f"FileWatcherSource: watchfiles backend failed for path "
+                    f"'{self.path}': {exc}"
+                ) from exc
         except ImportError:
-            # Polling fallback when watchfiles is not installed
+            # Polling fallback when watchfiles is not installed.
             seen: dict[str, float] = {}
             while not (self._stop_event and self._stop_event.is_set()):
                 await asyncio.sleep(self.poll_interval_s)
@@ -88,11 +116,18 @@ class FileWatcherSource(EventSource):
                         elif seen[fpath] != mtime:
                             seen[fpath] = mtime
                             yield {"path": fpath, "event": "modified"}
-                except OSError:
-                    pass
+                except OSError as exc:
+                    # Directory was deleted or became inaccessible — surface
+                    # the error instead of silently looping forever.
+                    raise RuntimeError(
+                        f"FileWatcherSource: directory '{self.path}' is no longer "
+                        f"accessible: {exc}"
+                    ) from exc
 
     async def close(self) -> None:
         """Signal the watcher to stop and wait briefly for the Rust thread to exit."""
+        # Finding 3 fix: set _closed so a subsequent watch() call exits immediately.
+        self._closed = True
         if self._stop_event is not None:
             self._stop_event.set()
         # Give watchfiles' background thread time to wind down cleanly
@@ -107,6 +142,10 @@ class TimerSource(EventSource):
 
     Yields: {"tick": <int>, "timestamp": "<ISO 8601>"}
 
+    ``tick`` is a monotonic counter that is NOT reset between ``watch()``
+    calls on the same instance. Consumers that need to detect a restart
+    should compare timestamps rather than checking ``tick == 1``.
+
     Req 6.10
     """
 
@@ -114,8 +153,13 @@ class TimerSource(EventSource):
         self.interval_s = interval_s
         self._tick = 0
         self._stop_event: asyncio.Event | None = None
+        # Tracks whether close() was called before watch() started.
+        self._closed: bool = False
 
     async def watch(self) -> AsyncGenerator[dict, None]:
+        # Finding 3 fix: honour a close() that arrived before watch() started.
+        if self._closed:
+            return
         self._stop_event = asyncio.Event()
         while not self._stop_event.is_set():
             try:
@@ -134,6 +178,8 @@ class TimerSource(EventSource):
 
     async def close(self) -> None:
         """Signal the timer to stop after the current interval."""
+        # Finding 3 fix: set _closed so a subsequent watch() call exits immediately.
+        self._closed = True
         if self._stop_event is not None:
             self._stop_event.set()
 
@@ -145,14 +191,25 @@ class QueueSource(EventSource):
 
     Yields: whatever dict is put into the queue.
 
+    **Construction note:** ``QueueSource`` requires a live ``asyncio.Queue``
+    object and therefore CANNOT be instantiated via ``create_event_source()``
+    from an IR ``event_trigger`` config (which is JSON-deserialized). Always
+    construct ``QueueSource`` directly in Python code and pass it to the
+    orchestrator programmatically.
+
     Req 6.1
     """
 
     def __init__(self, queue: asyncio.Queue) -> None:
         self._queue = queue
         self._stop_event: asyncio.Event | None = None
+        # Tracks whether close() was called before watch() started.
+        self._closed: bool = False
 
     async def watch(self) -> AsyncGenerator[dict, None]:
+        # Finding 3 fix: honour a close() that arrived before watch() started.
+        if self._closed:
+            return
         self._stop_event = asyncio.Event()
         while not self._stop_event.is_set():
             try:
@@ -164,6 +221,8 @@ class QueueSource(EventSource):
 
     async def close(self) -> None:
         """Signal the queue reader to stop."""
+        # Finding 3 fix: set _closed so a subsequent watch() call exits immediately.
+        self._closed = True
         if self._stop_event is not None:
             self._stop_event.set()
 
@@ -171,7 +230,9 @@ class QueueSource(EventSource):
 _SOURCE_REGISTRY: dict[str, type[EventSource]] = {
     "file_watcher": FileWatcherSource,
     "timer": TimerSource,
-    "queue": QueueSource,
+    # QueueSource is intentionally excluded: it requires a live asyncio.Queue
+    # object that cannot be represented in a JSON IR source_config.
+    # Construct QueueSource directly in Python code.
 }
 
 

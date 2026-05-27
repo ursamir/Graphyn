@@ -85,8 +85,21 @@ class Node(Generic[InputT, OutputT]):
         elif isinstance(config, self.Config):
             self.config = config
         else:
-            # Accept any NodeConfig subclass (e.g. when called from tests)
-            self.config = self.Config.model_validate(config.model_dump())
+            # Accept any NodeConfig subclass (e.g. when called from tests).
+            # Only fields declared on self.Config are accepted; extra fields on
+            # the passed config raise ValidationError (extra="forbid" is the
+            # Pydantic default for NodeConfig).  Re-raise with a clear message
+            # so callers understand the type mismatch rather than seeing a raw
+            # Pydantic field error.
+            try:
+                self.config = self.Config.model_validate(config.model_dump())
+            except Exception as exc:
+                raise TypeError(
+                    f"{type(self).__name__} expects config type "
+                    f"{self.Config.__name__!r}, got {type(config).__name__!r}. "
+                    f"Ensure the passed config has no extra fields relative to "
+                    f"{self.Config.__name__!r}."
+                ) from exc
         self.seed = seed
         self.observer = observer
         self._run_id: str = ""  # set by pipeline executor per execution
@@ -199,10 +212,17 @@ class Node(Generic[InputT, OutputT]):
         means CPU-bound ``process()`` implementations do NOT get true parallelism
         here. If your node is CPU-bound, override ``process_stream`` and submit
         work to a ``concurrent.futures.ProcessPoolExecutor`` instead.
+
+        Note: if a subclass overrides ``process`` as ``async def``, it is awaited
+        directly rather than submitted to a thread pool (submitting a coroutine
+        to ``run_in_executor`` would return the coroutine object unawaited).
         """
         import asyncio as _asyncio
         loop = _asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, self.process, inputs)
+        if inspect.iscoroutinefunction(self.process):
+            result = await self.process(inputs)
+        else:
+            result = await loop.run_in_executor(None, self.process, inputs)
         yield result
 
     # ── lifecycle hooks (no-op defaults) ─────────────────────────────────────
@@ -220,7 +240,7 @@ class Node(Generic[InputT, OutputT]):
                 self.observer.on_node_start(
                     node_type=getattr(self.metadata, "node_type", type(self).__name__)
                     if hasattr(self, "metadata") else type(self).__name__,
-                    run_id=getattr(self, "_current_run_id", ""),
+                    run_id=self._run_id,
                 )
             except Exception:
                 pass  # observer failures must never crash the node
@@ -232,7 +252,7 @@ class Node(Generic[InputT, OutputT]):
                 self.observer.on_node_end(
                     node_type=getattr(self.metadata, "node_type", type(self).__name__)
                     if hasattr(self, "metadata") else type(self).__name__,
-                    run_id=getattr(self, "_current_run_id", ""),
+                    run_id=self._run_id,
                     duration_s=getattr(self, "_last_duration", 0.0),
                     input_counts=getattr(self, "_last_input_counts", {}),
                     output_counts=getattr(self, "_last_output_counts", {}),
@@ -247,7 +267,7 @@ class Node(Generic[InputT, OutputT]):
                 self.observer.on_node_error(
                     node_type=getattr(self.metadata, "node_type", type(self).__name__)
                     if hasattr(self, "metadata") else type(self).__name__,
-                    run_id=getattr(self, "_current_run_id", ""),
+                    run_id=self._run_id,
                     exc=exc,
                 )
             except Exception:
@@ -318,7 +338,24 @@ def _maybe_wrap_siso(cls: type) -> None:
 
 
 def _install_siso_wrapper(cls: type, raw_process) -> None:
-    """Install the SISO dict-unpacking wrapper on cls.process."""
+    """Install the SISO dict-unpacking wrapper on cls.process.
+
+    Raises:
+        TypeError: if ``_siso = True`` is set explicitly on a node that declares
+            more than one output port.  A SISO wrapper on a multi-output node
+            would silently double-wrap any partial return dict.
+    """
+    # Guard: _siso=True on a multi-output node is a contract violation.
+    # The wrapper's pass-through guard (set(result.keys()) == set(output_ports.keys()))
+    # only fires when ALL output port keys are present.  A partial return dict
+    # (e.g. only "output" when ports are {"output", "aux"}) would be double-wrapped
+    # as {"output": {"output": ...}}.  Catch this at class-definition time.
+    if len(cls.output_ports) > 1:
+        raise TypeError(
+            f"{cls.__name__}: _siso=True is not valid for nodes with more than "
+            f"one output port (found: {sorted(cls.output_ports.keys())}). "
+            "Remove _siso=True or reduce output_ports to a single 'output' port."
+        )
     def _siso_process(
         self: "Node",
         inputs: dict[str, Any],

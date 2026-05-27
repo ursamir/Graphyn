@@ -138,7 +138,7 @@ class ProvenanceStore:
         )
 
         with self._lock:
-            # Write {artifact_id}.json (warn if overwriting an existing record)
+            # Write {artifact_id}.json atomically
             record_path = self.base / f"{artifact_id}.json"
             if record_path.exists():
                 logger.warning(
@@ -146,11 +146,13 @@ class ProvenanceStore:
                     "(run_id=%s, node_id=%s)",
                     artifact_id, run_id, node_id,
                 )
-            record_path.write_text(
+            tmp_record = record_path.with_suffix(".json.tmp")
+            tmp_record.write_text(
                 json.dumps(prov.model_dump(mode="json"), indent=2), encoding="utf-8"
             )
+            tmp_record.replace(record_path)
 
-            # Append artifact_id to by_run/{run_id}.json (no duplicates)
+            # Append artifact_id to by_run/{run_id}.json atomically (no duplicates)
             by_run_path = self.base / "by_run" / f"{run_id}.json"
             if by_run_path.exists():
                 try:
@@ -165,7 +167,9 @@ class ProvenanceStore:
             if artifact_id not in existing:
                 existing.append(artifact_id)
 
-            by_run_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+            tmp_by_run = by_run_path.with_suffix(".json.tmp")
+            tmp_by_run.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+            tmp_by_run.replace(by_run_path)
 
             # NEW-11 fix: use the full graph_hash as the index filename instead
             # of truncating to 16 chars. Truncation caused two graphs sharing
@@ -184,7 +188,9 @@ class ProvenanceStore:
                     hash_ids = []
                 if artifact_id not in hash_ids:
                     hash_ids.append(artifact_id)
-                by_hash_path.write_text(json.dumps(hash_ids, indent=2), encoding="utf-8")
+                tmp_by_hash = by_hash_path.with_suffix(".json.tmp")
+                tmp_by_hash.write_text(json.dumps(hash_ids, indent=2), encoding="utf-8")
+                tmp_by_hash.replace(by_hash_path)
 
         return prov
 
@@ -193,7 +199,7 @@ class ProvenanceStore:
     # ------------------------------------------------------------------
 
     def get_lineage(
-        self, artifact_id: str, _visited: set[str] | None = None
+        self, artifact_id: str, max_depth: int = 100
     ) -> dict:
         """Return the full upstream lineage tree rooted at ``artifact_id``.
 
@@ -201,13 +207,22 @@ class ProvenanceStore:
         Each call tracks its own ``ancestors`` set (the path from root to
         current node), so sibling branches don't share ancestor state.
 
-        Never raises — returns error nodes for missing records or cycles.
+        Args:
+            artifact_id: Root artifact to build lineage for.
+            max_depth: Maximum recursion depth. Nodes beyond this depth are
+                       returned with ``error: "max_depth_exceeded"`` rather
+                       than being traversed. Default: 100.
+
+        Never raises — returns error nodes for missing records, cycles, or
+        depth limit exceeded.
 
         Requirements: req-02 §4
         """
-        return self._build_lineage_node(artifact_id, frozenset())
+        return self._build_lineage_node(artifact_id, frozenset(), max_depth=max_depth, depth=0)
 
-    def _build_lineage_node(self, artifact_id: str, ancestors: frozenset) -> dict:
+    def _build_lineage_node(
+        self, artifact_id: str, ancestors: frozenset, max_depth: int, depth: int
+    ) -> dict:
         """Build one lineage node, recursing into inputs.
 
         ``ancestors`` is the set of artifact IDs on the current path from the
@@ -215,6 +230,14 @@ class ProvenanceStore:
         call gets its own copy — siblings don't share ancestor state, so a
         node that appears in two branches is not falsely flagged as a cycle.
         """
+        # Depth limit: prevent unbounded recursion on very deep lineage trees
+        if depth >= max_depth:
+            logger.warning(
+                "ProvenanceStore.get_lineage: max_depth=%d reached at artifact %s — truncating",
+                max_depth, artifact_id,
+            )
+            return {"artifact_id": artifact_id, "inputs": [], "error": "max_depth_exceeded"}
+
         # Cycle detection: this artifact is its own ancestor
         if artifact_id in ancestors:
             return {"artifact_id": artifact_id, "inputs": [], "error": "cycle_detected"}
@@ -237,7 +260,7 @@ class ProvenanceStore:
         new_ancestors = ancestors | {artifact_id}
 
         inputs = [
-            self._build_lineage_node(input_id, new_ancestors)
+            self._build_lineage_node(input_id, new_ancestors, max_depth=max_depth, depth=depth + 1)
             for input_id in prov.input_artifact_ids
         ]
 
@@ -312,8 +335,18 @@ class ProvenanceStore:
         when the index file is missing (e.g. for records written before the
         index was introduced).
 
+        Args:
+            graph_hash: The graph hash to search for. An empty string is not
+                        a supported query — returns [] immediately.
+
         Requirements: req-02 §6
         """
+        if not graph_hash:
+            # Empty graph_hash is not a meaningful query — runs that failed
+            # before save_graph_ir() was called all share graph_hash="" and
+            # a full scan would return all of them.
+            return []
+
         if not self.base.is_dir():
             return []
 
@@ -330,7 +363,7 @@ class ProvenanceStore:
                     "ProvenanceStore: failed to read by_graph_hash index (%s) — falling back to full scan",
                     exc,
                 )
-                artifact_ids = None  # type: ignore[assignment]
+                # Fall through to slow path below
             else:
                 records: list[ProvenanceRecord] = []
                 for aid in artifact_ids:
@@ -349,7 +382,7 @@ class ProvenanceStore:
                         )
                 return records
 
-        # Slow path: full directory scan (for legacy records without index)
+        # Slow path: full directory scan (for records written before the index existed)
         records = []
         for entry in self.base.iterdir():
             if not entry.is_file() or entry.suffix != ".json":

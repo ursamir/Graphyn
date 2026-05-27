@@ -131,7 +131,7 @@ class StreamIngestNode(Node):
             device=device,
             dtype="float32",
         )
-        sd.wait()
+        sd.wait(timeout=duration + 5.0)
 
         # Convert to mono if needed
         if channels > 1:
@@ -186,6 +186,14 @@ class StreamIngestNode(Node):
 
         chunk_samples = int(sr * self.config.chunk_ms / 1000)
         chunks: list[AudioSample] = []
+
+        if len(y) < chunk_samples:
+            log.warning(
+                "StreamIngestNode: file '%s' (%d samples) shorter than "
+                "chunk_ms=%d (%d samples) — no chunks produced",
+                file_path, len(y), self.config.chunk_ms, chunk_samples,
+            )
+            return []
 
         for i in range(0, len(y) - chunk_samples + 1, chunk_samples):
             chunk = y[i:i + chunk_samples]
@@ -248,6 +256,13 @@ class StreamIngestNode(Node):
 
                     # Decode raw float32 PCM bytes
                     if isinstance(message, bytes):
+                        if len(message) % 4 != 0:
+                            log.warning(
+                                "StreamIngestNode: WebSocket message length %d not a "
+                                "multiple of 4 — skipping malformed frame",
+                                len(message),
+                            )
+                            continue
                         data = np.frombuffer(message, dtype=np.float32).copy()
                     else:
                         # Text frame — try to parse as comma-separated floats
@@ -277,4 +292,14 @@ class StreamIngestNode(Node):
                     ))
             return chunks
 
-        return asyncio.run(_receive())
+        # If called from within a running event loop (FastAPI, async executor,
+        # Jupyter), asyncio.run() raises RuntimeError. Run in a thread instead.
+        try:
+            asyncio.get_running_loop()
+            # Already inside an event loop — delegate to a worker thread.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, _receive()).result()
+        except RuntimeError:
+            # No running loop — safe to call asyncio.run() directly.
+            return asyncio.run(_receive())

@@ -97,22 +97,20 @@ class DatasetVersionerNode(Node):
         out_dir = Path(self.config.output_dir) / version
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write manifest CSV
+        # Write manifest CSV, lineage JSON, and optional snapshot.
+        # Clean up the output directory on any failure to avoid partial state.
         manifest_path = out_dir / "manifest.csv"
-        self._write_manifest(dataset, manifest_path, dataset_hash)
-
-        # Write lineage JSON
         lineage_path = out_dir / "lineage.json"
-        self._write_lineage(dataset, lineage_path, version, dataset_hash)
+        try:
+            self._write_manifest(dataset, manifest_path, dataset_hash)
+            self._write_lineage(dataset, lineage_path, version, dataset_hash)
+            if self.config.create_snapshot:
+                snapshot_path = out_dir / "dataset.npz"
+                self._write_snapshot(dataset, snapshot_path)
+        except Exception:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise
 
-        # Optional snapshot
-        if self.config.create_snapshot:
-            snapshot_path = out_dir / "dataset.npz"
-            self._write_snapshot(dataset, snapshot_path)
-
-        result.version = version
-        result.content_hash = dataset_hash
-        result.manifest_path = str(manifest_path)
         result.metadata["versioner"] = {
             "version": version,
             "content_hash": dataset_hash,
@@ -120,6 +118,19 @@ class DatasetVersionerNode(Node):
             "lineage_path": str(lineage_path),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+        # Set version/hash/manifest_path on the result.
+        # Use model_copy() for Pydantic models; fall back to direct setattr.
+        versioner_fields = {
+            "version": version,
+            "content_hash": dataset_hash,
+            "manifest_path": str(manifest_path),
+        }
+        for field, value in versioner_fields.items():
+            try:
+                object.__setattr__(result, field, value)
+            except (TypeError, AttributeError):
+                pass  # field not present on this DatasetArtifact variant
 
         log.info(
             "DatasetVersionerNode: version=%s hash=%s manifest=%s",
@@ -144,6 +155,10 @@ class DatasetVersionerNode(Node):
 
     def _write_manifest(self, dataset, path: Path, dataset_hash: str) -> None:
         labels = dataset.labels or []
+        if not labels:
+            log.warning(
+                "DatasetVersionerNode: labels list is empty — manifest will use numeric class indices"
+            )
         rows: list[dict] = []
         idx = 0
 

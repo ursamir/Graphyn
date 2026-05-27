@@ -180,27 +180,15 @@ class EdgeOptimizerNode(Node):
             if repr_path.exists():
                 X_repr = np.load(str(repr_path))
             else:
-                # Fallback: create dummy data using the converter's expected input shape
-                log.warning("EdgeOptimizerNode: X_train_repr.npy not found, using dummy calibration data")
-                try:
-                    # Infer shape from the converter's input signature
-                    converter_tmp = tf.lite.TFLiteConverter.from_saved_model(artifact.model_path)
-                    converter_tmp.optimizations = [tf.lite.Optimize.DEFAULT]
-                    # Build a minimal model to get input shape
-                    import tempfile as _tf_tmp
-                    _dummy_tflite = converter_tmp.convert()
-                    _interp = tf.lite.Interpreter(model_content=_dummy_tflite)
-                    _interp.allocate_tensors()
-                    _inp_shape = _interp.get_input_details()[0]["shape"]
-                    X_repr = np.zeros((100, *_inp_shape[1:]), dtype=np.float32)
-                except Exception:
-                    # Last resort: use a generic shape and warn
-                    log.warning(
-                        "EdgeOptimizerNode: could not infer input shape for INT8 calibration. "
-                        "Using generic shape (100, 101, 40, 1). "
-                        "Provide X_train_repr.npy for accurate calibration."
-                    )
-                    X_repr = np.zeros((100, 101, 40, 1), dtype=np.float32)
+                # No representative data available — INT8 calibration requires it.
+                # Silently using wrong-shape zeros would produce a model with
+                # incorrect quantization parameters and silent accuracy degradation.
+                raise ValueError(
+                    f"EdgeOptimizerNode: INT8 quantization requires a representative "
+                    f"dataset at '{repr_path}'. TrainerNode saves this file automatically. "
+                    "Cannot proceed with INT8 calibration without representative data. "
+                    "Use quantization='float32' or 'float16' to skip calibration."
+                )
 
             n_samples = min(self.config.representative_samples, len(X_repr))
             indices = np.linspace(0, len(X_repr) - 1, n_samples, dtype=int)
@@ -261,8 +249,19 @@ class EdgeOptimizerNode(Node):
             log.info("EdgeOptimizerNode: exporting PyTorch model to ONNX...")
             model = torch.jit.load(model_path, map_location="cpu")
             model.eval()
-            # Use a dummy input — shape inferred from model if possible
-            dummy_input = torch.zeros(1, 101, 40, 1)
+            # Use input_shape from artifact if available; fall back to a 4-D shape
+            # that the caller must verify matches the model's expected input.
+            raw_shape = getattr(artifact, "input_shape", None)
+            if raw_shape and len(raw_shape) >= 3:
+                # input_shape is typically (T, F, C) without batch dim
+                dummy_input = torch.zeros(1, *raw_shape)
+            else:
+                log.warning(
+                    "EdgeOptimizerNode: artifact.input_shape not set — "
+                    "cannot determine PyTorch model input shape for ONNX export. "
+                    "Set artifact.input_shape on the ModelArtifact for correct export."
+                )
+                dummy_input = torch.zeros(1, 101, 40, 1)
             torch.onnx.export(
                 model,
                 dummy_input,
@@ -333,6 +332,11 @@ class EdgeOptimizerNode(Node):
             log.warning(
                 "EdgeOptimizerNode: prune=True is set but pruning is not yet "
                 "implemented. Proceeding without pruning."
+            )
+
+        if not artifact.model_path or not Path(artifact.model_path).exists():
+            raise FileNotFoundError(
+                f"EdgeOptimizerNode: model not found at '{artifact.model_path}'"
             )
 
         out_path = Path(self.config.output_path)

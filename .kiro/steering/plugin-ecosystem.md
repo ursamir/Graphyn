@@ -73,3 +73,4 @@ PluginError
 | `GRAPHYN_PLUGIN_INDEX_URL` | `""` | Remote index URL |
 | `GRAPHYN_HOME` | `~/.graphyn/` | `PluginStore` writes to `{GRAPHYN_HOME}/plugins/` |
 | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | `""` | Comma-separated URL prefixes; empty = allow all. When set, remote sources not matching any prefix are rejected with `PluginInstallError` (SEC-6 fix) |
+| `GRAPHYN_STRICT_COMPAT` | `""` | `"1"` or `"true"` to raise `PluginCompatibilityError` when `app.__version__` is unset (instead of skipping the platform version check with a WARNING) |

@@ -8,7 +8,7 @@ Owns:             FeatureArray Pydantic model — data (float32 [T,F]), label,
 Public Surface:   FeatureArray
 Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
                   Must not contain feature extraction logic.
-Dependencies:     pydantic (PortDataType base), numpy.
+Dependencies:     pydantic (PortDataType base), numpy, typing.
 Reason To Change: FeatureArray schema gains new fields, or feature_type
                   enum values change.
 
@@ -18,6 +18,8 @@ by AutoDiscovery. Migrated from examples/06_speech_commands_e2e/.
 # NOTE: Do NOT use `from __future__ import annotations` here — it turns all
 # annotations into strings (PEP 563), which breaks Pydantic v2 model_rebuild()
 # when the module is loaded via importlib.
+
+from typing import Any, Optional
 
 import numpy as np
 from pydantic import ConfigDict, Field, field_validator
@@ -45,22 +47,28 @@ class FeatureArray(PortDataType):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    data: np.ndarray = Field(default=None)      # float32, shape [T, F]
+    data: Optional[Any] = None              # numpy.ndarray | None; coerced to float32 [T,F] by validator
     label: str = ""
     sample_rate: int = 16000
     source_path: str = ""
     feature_type: str = ""
-    metadata: dict = {}
+    metadata: dict[str, Any] = Field(default_factory=dict)  # Field(default_factory=dict) prevents shared mutable default with model_construct()
 
     @field_validator("data", mode="before")
     @classmethod
-    def _coerce_float32(cls, v):
+    def _coerce_float32(cls, v: Any) -> Any:
         """Coerce data to float32 ndarray; None → empty 2-D array."""
         if v is None:
             return np.zeros((0, 0), dtype=np.float32)
         return np.asarray(v, dtype=np.float32)
 
-    def model_post_init(self, __context):
-        """Ensure data is always a float32 array even when using default."""
+    def model_post_init(self, __context: Any) -> None:
+        """Safety net for model_construct() callers that bypass validators.
+
+        _coerce_float32 (mode="before") handles None during normal __init__.
+        This guard covers model_construct() which skips field validators,
+        ensuring self.data is always a float32 ndarray regardless of how the
+        instance was created.
+        """
         if self.data is None:
-            object.__setattr__(self, 'data', np.zeros((0, 0), dtype=np.float32))
+            object.__setattr__(self, "data", np.zeros((0, 0), dtype=np.float32))

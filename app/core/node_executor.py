@@ -73,6 +73,7 @@ class NodeExecutor:
     def teardown(self) -> None:
         """Call node.teardown() to release resources."""
         self._node.teardown()
+        self._setup_done = False
 
     def execute(self, inputs: dict[str, Any]) -> dict[str, Any]:
         """Execute the node synchronously with full lifecycle + retry.
@@ -86,6 +87,11 @@ class NodeExecutor:
         Raises:
             Exception: The last exception raised by process() after all retry
                        attempts are exhausted.
+
+        Warning:
+            Must not be called directly from a coroutine — use
+            ``loop.run_in_executor()`` to avoid blocking the event loop during
+            retry back-off (``time.sleep()`` is used for back-off delays).
         """
         node = self._node
         policy: RetryPolicy | None = node.retry_policy
@@ -114,24 +120,35 @@ class NodeExecutor:
             t0 = time.perf_counter()
             try:
                 outputs = node.process(inputs)
+                # Guard: a node that forgets to return its outputs dict would
+                # cause an AttributeError on outputs.items() below, which would
+                # bypass on_error() and the retry loop entirely.  Treat None as
+                # an empty dict so the lifecycle completes cleanly.
+                if outputs is None:
+                    outputs = {}
+                duration = time.perf_counter() - t0
+
+                # on_end() calls observer.on_node_end() internally.
+                # SA-NE2: pass duration and port counts via the node's _last_duration/
+                # _last_counts attributes so base.py can forward them to the observer.
+                # These are side-channel attributes on a foreign object — a known
+                # quality issue (SA-NE2). The proper fix is to add explicit parameters
+                # to on_end(duration, input_counts, output_counts) in a future refactor.
+                node._last_duration = duration  # type: ignore[attr-defined]
+                node._last_input_counts = {k: _count_port_items(v) for k, v in inputs.items()}  # type: ignore[attr-defined]
+                node._last_output_counts = {k: _count_port_items(v) for k, v in outputs.items()}  # type: ignore[attr-defined]
+                node.on_end()
             except Exception as exc:
                 # on_error() calls observer.on_node_error() internally.
                 node.on_error(exc)
                 last_exc = exc
+                # SA-NE4: if the policy marks this exception as non-retryable,
+                # surface it immediately without consuming remaining attempts.
+                if policy and not policy.is_retryable(exc):
+                    if self._setup_done:
+                        self.teardown()
+                    raise
                 continue
-
-            duration = time.perf_counter() - t0
-
-            # on_end() calls observer.on_node_end() internally.
-            # SA-NE2: pass duration and port counts via the node's _last_duration/
-            # _last_counts attributes so base.py can forward them to the observer.
-            # These are side-channel attributes on a foreign object — a known
-            # quality issue (SA-NE2). The proper fix is to add explicit parameters
-            # to on_end(duration, input_counts, output_counts) in a future refactor.
-            node._last_duration = duration  # type: ignore[attr-defined]
-            node._last_input_counts = {k: _count_port_items(v) for k, v in inputs.items()}  # type: ignore[attr-defined]
-            node._last_output_counts = {k: _count_port_items(v) for k, v in outputs.items()}  # type: ignore[attr-defined]
-            node.on_end()
 
             if attempt > 0:
                 log.info("Node '%s' succeeded after %d attempt(s).", node_type, attempt + 1)
@@ -166,12 +183,15 @@ class NodeExecutor:
         """
         node = self._node
         node._current_run_id = self._run_id  # type: ignore[attr-defined]
-        node.on_start()
+        started = False
         try:
+            node.on_start()
+            started = True
             async for item in node.process_stream(inputs):
                 yield item
         except Exception as exc:
             node.on_error(exc)
             raise
         finally:
-            node.on_end()
+            if started:
+                node.on_end()

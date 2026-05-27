@@ -197,6 +197,12 @@ def generate_graph_handler(arguments: dict[str, Any]) -> Any:
     # Req 3.4: return error on first unknown node_type, before construction.
     for spec in node_specs:
         node_type = spec.get("node_type")
+        if not node_type:
+            return {
+                "error": True,
+                "error_type": "missing_argument",
+                "message": "Each node specification must include a 'node_type' field.",
+            }
         if node_type not in registry:
             return {
                 "error": True,
@@ -240,9 +246,13 @@ def generate_graph_handler(arguments: dict[str, Any]) -> Any:
     )
 
     # ── Step 4: Handle explicit edges ─────────────────────────────────────────
-    # Req 3.1: if edges provided, replace auto-chained edges with explicit ones.
-    # Req 3.2: if no edges, auto-chaining is already done by Pipeline._build_ir().
-    if edges is not None:
+    # Req 3.1: if edges provided (non-empty list), replace auto-chained edges.
+    # Req 3.2: if no edges (None or []), auto-chaining is done by Pipeline._build_ir().
+    # Note: edges=[] is treated the same as edges=None (auto-chain), because an
+    # empty list most likely means the caller omitted edges rather than intending
+    # a disconnected graph. Callers that genuinely want a disconnected graph must
+    # pass at least one edge and then remove connections at the IR level.
+    if edges:
         graph = pipeline.to_ir()
         ir_edges = [
             IREdge(
@@ -416,6 +426,7 @@ def get_graph_capability_summary_handler(arguments: dict[str, Any]) -> Any:
                         f"Node type '{ir_node.node_type}' is not registered."
                     ),
                     "node_type": ir_node.node_type,
+                    "node_id": ir_node.id,
                 }
         capabilities.append(cap)
 

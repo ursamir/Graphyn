@@ -20,9 +20,8 @@ Requirements: req-07 §8.1–§8.10
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -41,8 +40,11 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 
-# Shared executor for async (remote) installs
-_install_executor = ThreadPoolExecutor(max_workers=4)
+# In-process job tracker for background (remote) installs.
+# Maps plugin name → {"status": "installing"|"installed"|"failed", "error": str|None}
+# Entries are written by _bg_install() and read by get_plugin().
+_install_jobs: dict[str, dict[str, Any]] = {}
+_install_jobs_lock = threading.Lock()
 
 # ── Remote-source detection ───────────────────────────────────────────────────
 
@@ -62,8 +64,16 @@ def _parse_name_from_source(source: str) -> str:
     """
     from app.core.plugins.installer import PluginInstaller  # local import
 
-    installer = PluginInstaller()
-    name, _ = installer._parse_name_version(source)
+    try:
+        installer = PluginInstaller()
+        name, _ = installer._parse_name_version(source)
+    except Exception:
+        # Best-effort fallback: last path segment without query/fragment/extension
+        name = source.split("?")[0].split("#")[0].rstrip("/").rsplit("/", 1)[-1]
+        for suffix in (".git", ".zip", ".tar.gz", ".tgz"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
     # For remote URLs _parse_name_version returns the full URL as the name;
     # extract the last meaningful path segment in that case.
     if source.startswith(_REMOTE_PREFIXES):
@@ -191,6 +201,8 @@ def install_plugin(
                 mgr = PluginManager()
                 mgr.install(source, upgrade=upgrade, expected_sha256=expected_sha256)
                 log.info("Background install of '%s' completed.", parsed_name)
+                with _install_jobs_lock:
+                    _install_jobs[parsed_name] = {"status": "installed", "error": None}
             except Exception as exc:
                 log.error(
                     "Background install of '%s' failed: %s",
@@ -198,8 +210,15 @@ def install_plugin(
                     exc,
                     exc_info=True,
                 )
+                with _install_jobs_lock:
+                    _install_jobs[parsed_name] = {
+                        "status": "failed",
+                        "error": str(exc),
+                    }
 
         background_tasks.add_task(_bg_install)
+        with _install_jobs_lock:
+            _install_jobs[parsed_name] = {"status": "installing", "error": None}
         return {"status": "installing", "name": parsed_name}
 
     # Synchronous path — local source
@@ -215,6 +234,11 @@ def install_plugin(
         PluginIndexError,
     ) as exc:
         raise _plugin_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "UnexpectedError", "detail": str(exc)},
+        ) from exc
 
     return {"name": record.name, "version": record.version, "status": "installed"}
 
@@ -235,7 +259,7 @@ def enable_plugin(name: str) -> dict[str, Any]:
         record = manager.enable(name)
     except PluginNotFoundError as exc:
         raise _plugin_http_error(exc) from exc
-    except (PluginCompatibilityError, PluginDependencyError) as exc:
+    except (PluginCompatibilityError, PluginDependencyError, PluginInstallError) as exc:
         raise _plugin_http_error(exc) from exc
 
     return {"name": record.name, "enabled": record.enabled}
@@ -288,6 +312,11 @@ def uninstall_plugin(name: str) -> dict[str, Any]:
 def get_plugin(name: str) -> dict[str, Any]:
     """Return the full PluginRecord for the installed plugin named *name*.
 
+    For plugins currently being installed via a background task, returns
+    ``{"name": ..., "status": "installing"}`` (HTTP 200).  If the background
+    install failed, returns ``{"name": ..., "status": "failed", "error": ...}``
+    (HTTP 200) so callers can distinguish failure from "still running".
+
     Requirements: req-07 §8.7
     """
     from app.core.plugins.manager import PluginManager
@@ -295,7 +324,12 @@ def get_plugin(name: str) -> dict[str, Any]:
     manager = PluginManager()
     try:
         record = manager.get(name)
-    except PluginNotFoundError as exc:
-        raise _plugin_http_error(exc) from exc
+    except PluginNotFoundError:
+        # Check whether a background install is tracked for this name
+        with _install_jobs_lock:
+            job = _install_jobs.get(name)
+        if job is not None:
+            return {"name": name, **job}
+        raise _plugin_http_error(PluginNotFoundError(name)) from None
 
     return record.model_dump()

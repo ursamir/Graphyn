@@ -17,6 +17,7 @@ import logging
 from typing import ClassVar
 
 import numpy as np
+import pydantic
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -126,6 +127,17 @@ class EnvironmentSimulatorNode(Node):
         max_rir_length_ms: float = 500.0            # truncate RIR to this length
         preserve_length: bool = False               # if True, trim output to original length
 
+        @pydantic.field_validator("room_dimensions", "mic_position", "source_position")
+        @classmethod
+        def _three_positive_floats(cls, v: list) -> list:
+            if len(v) != 3:
+                raise ValueError(
+                    f"Must be a 3-element list [x, y, z], got {len(v)} elements"
+                )
+            if any(float(x) <= 0 for x in v):
+                raise ValueError(f"All values must be positive, got {v}")
+            return [float(x) for x in v]
+
     # ── setup: check pyroomacoustics once ─────────────────────────────────────
 
     def setup(self) -> None:
@@ -176,12 +188,26 @@ class EnvironmentSimulatorNode(Node):
         y = sample.data.astype(np.float32)
         sr = sample.sample_rate
 
-        # Clamp positions to be inside room
-        mic_pos = [min(mic_pos[i], dims[i] - 0.1) for i in range(3)]
-        src_pos = [min(src_pos[i], dims[i] - 0.1) for i in range(3)]
+        # Guard: skip zero-length audio (pyroomacoustics raises on empty signal)
+        if len(y) == 0:
+            log.warning(
+                "EnvironmentSimulatorNode: skipping zero-length sample %s", sample.path
+            )
+            return copy.deepcopy(sample)
 
-        # Build room and compute RIR
-        e_absorption, max_order = pra.inverse_sabine(rt60, dims)
+        # Clamp positions to be strictly inside room (both lower and upper bounds)
+        mic_pos = [max(0.05, min(mic_pos[i], dims[i] - 0.05)) for i in range(3)]
+        src_pos = [max(0.05, min(src_pos[i], dims[i] - 0.05)) for i in range(3)]
+
+        # Build room and compute RIR.
+        # For very low RT60 values (e.g. outdoor preset rt60=0.05 with large room),
+        # pra.inverse_sabine produces absorption > 1.0 which is physically impossible
+        # and raises ValueError. Use near-anechoic absorption directly in that case.
+        if rt60 <= 0.1:
+            e_absorption = 0.99
+            max_order = 1
+        else:
+            e_absorption, max_order = pra.inverse_sabine(rt60, dims)
         room = pra.ShoeBox(
             dims,
             fs=sr,
@@ -209,6 +235,11 @@ class EnvironmentSimulatorNode(Node):
         peak = np.max(np.abs(y_sim))
         if peak > 1e-6:
             y_sim = y_sim / peak * np.max(np.abs(y))
+        else:
+            log.warning(
+                "EnvironmentSimulatorNode: simulated signal is near-silent "
+                "(peak=%.2e) — RIR convolution may have failed", peak
+            )
 
         # Add Gaussian noise at specified SNR
         if self.config.snr_db > 0:

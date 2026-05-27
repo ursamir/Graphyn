@@ -27,7 +27,9 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,7 +39,7 @@ from packaging.version import Version
 from app.core.nodes.discovery import AutoDiscovery
 from app.core.nodes.errors import DuplicateNodeTypeError
 from app.core.plugins.dependencies import DependencyChecker
-from app.core.plugins.errors import PluginCompatibilityError
+from app.core.plugins.errors import PluginCompatibilityError, PluginInstallError
 from app.core.plugins.manifest import PluginManifest, load_manifest
 
 if TYPE_CHECKING:
@@ -83,6 +85,10 @@ class PluginLoader:
 
     def __init__(self, registry: "NodeRegistry") -> None:
         self._registry = registry
+        # Serializes concurrent _import_entry_points calls on the same loader
+        # instance so that the before/after registry snapshots cannot interleave
+        # with a parallel install (Finding 1 fix).
+        self._load_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -168,12 +174,19 @@ class PluginLoader:
         """
         platform_ver = _get_platform_version()
         if platform_ver is None:
-            log.warning(
+            msg = (
                 "PluginLoader: platform version unknown (app.__version__ not set) — "
                 "skipping platform_version check for plugin '%s'. "
-                "Set app.__version__ to enforce compatibility checks.",
-                manifest.name,
+                "Set app.__version__ to enforce compatibility checks."
             )
+            if os.environ.get("GRAPHYN_STRICT_COMPAT", "").lower() in ("1", "true"):
+                raise PluginCompatibilityError(
+                    f"Plugin '{manifest.name}' requires platform "
+                    f"{manifest.platform_version} but the platform version is "
+                    "unknown (app.__version__ not set). Set app.__version__ or "
+                    "unset GRAPHYN_STRICT_COMPAT to allow loading."
+                )
+            log.warning(msg, manifest.name)
             return
         specifier = SpecifierSet(manifest.platform_version)
         if Version(platform_ver) not in specifier:
@@ -242,6 +255,10 @@ class PluginLoader:
         Individual entry-point failures are logged as WARNING and skipped;
         they do not abort loading of the remaining entry points.
 
+        Thread safety: ``_load_lock`` serializes concurrent calls on the same
+        loader instance so that the ``before``/``after`` snapshots cannot
+        interleave with a parallel install (Finding 1 fix).
+
         Parameters
         ----------
         plugin_dir:
@@ -253,39 +270,71 @@ class PluginLoader:
         -------
         list[str]
             Sorted list of node_type strings that were newly registered.
+
+        Raises
+        ------
+        PluginInstallError
+            If ``manifest.entry_points`` is non-empty but no node types were
+            registered (all entry points failed).
         """
         discovery = AutoDiscovery(self._registry)
 
-        # Snapshot of node_types already registered before this plugin loads
-        before: set[str] = set(self._registry._classes.keys())
+        with self._load_lock:
+            # Snapshot of node_types already registered before this plugin loads.
+            # Held under _load_lock to prevent concurrent loaders from
+            # interleaving their before/after snapshots (Finding 1 fix).
+            before: set[str] = set(self._registry._classes.keys())
 
-        for entry_point in manifest.entry_points:
-            path = plugin_dir / entry_point
-            try:
-                module = discovery._import_file(path, package_prefix=None)
-                discovery._process_module(module)
-            except DuplicateNodeTypeError as exc:
-                # PL-06 fix: surface the duplicate node type name explicitly
-                log.warning(
-                    "PluginLoader: duplicate node type detected while loading "
-                    "entry point '%s' from plugin '%s': %s — "
-                    "the first registration is kept.",
-                    entry_point,
-                    manifest.name,
-                    exc,
-                )
-                continue
-            except Exception as exc:
-                log.warning(
-                    "PluginLoader: failed to load entry point '%s' from plugin '%s': %s",
-                    entry_point,
-                    manifest.name,
-                    exc,
-                    exc_info=True,
-                )
-                continue
+            for entry_point in manifest.entry_points:
+                path = plugin_dir / entry_point
+                try:
+                    module = discovery._import_file(path, package_prefix=None)
+                    discovery._process_module(module)
+                except DuplicateNodeTypeError as exc:
+                    # PL-06 fix: surface the duplicate node type name explicitly
+                    log.warning(
+                        "PluginLoader: duplicate node type detected while loading "
+                        "entry point '%s' from plugin '%s': %s — "
+                        "the first registration is kept.",
+                        entry_point,
+                        manifest.name,
+                        exc,
+                    )
+                    continue
+                except KeyboardInterrupt:
+                    # Re-raise keyboard interrupts — suppressing them would make
+                    # the process unresponsive to Ctrl-C (Finding 2 fix).
+                    log.warning(
+                        "PluginLoader: KeyboardInterrupt while loading entry point "
+                        "'%s' from plugin '%s' — aborting.",
+                        entry_point,
+                        manifest.name,
+                    )
+                    raise
+                except BaseException as exc:  # noqa: BLE001
+                    # Catches SystemExit and other BaseException subclasses that
+                    # would otherwise abort the load sequence silently (Finding 2 fix).
+                    log.warning(
+                        "PluginLoader: failed to load entry point '%s' from plugin '%s': %s",
+                        entry_point,
+                        manifest.name,
+                        exc,
+                        exc_info=True,
+                    )
+                    continue
 
-        # Compute newly registered node_types
-        after: set[str] = set(self._registry._classes.keys())
-        new_types = sorted(after - before)
+            # Compute newly registered node_types
+            after: set[str] = set(self._registry._classes.keys())
+            new_types = sorted(after - before)
+
+        # Finding 3 fix: if the manifest declared entry points but none registered
+        # any node types, the plugin is non-functional — raise rather than silently
+        # returning an empty list.
+        if manifest.entry_points and not new_types:
+            raise PluginInstallError(
+                f"Plugin '{manifest.name}' declared {len(manifest.entry_points)} "
+                "entry point(s) but no node types were registered. "
+                "Check the plugin's entry point files for errors (see WARNING logs above)."
+            )
+
         return new_types

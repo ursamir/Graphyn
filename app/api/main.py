@@ -53,7 +53,14 @@ _reg_audio()
 # domain serializer is registered (above) so AutoDiscovery can import node
 # modules that reference AudioSample without triggering a missing-handler warning.
 from app.core.nodes import initialize_registry as _init_registry
-_init_registry()
+try:
+    _init_registry()
+except Exception as exc:
+    _logger.error(
+        "Registry initialization failed — server will start with empty/partial registry: %s",
+        exc,
+        exc_info=True,
+    )
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -68,10 +75,16 @@ def _auth_dep(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
     token = api_token()  # read on every call
     if not token:
         return  # auth not configured — allow all
-    if credentials is None or credentials.credentials != token:
+    if credentials is None:
         raise HTTPException(
             status_code=401,
-            detail="Invalid or missing Bearer token",
+            detail="Missing Bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if credentials.credentials != token:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -124,6 +137,13 @@ _RUNS_ROOT   = runs_dir().resolve()
 _OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 _INPUT_ROOT.mkdir(parents=True, exist_ok=True)
 _RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+
+_logger.info(
+    "Static mounts resolved — /files → %s | /input-files → %s | /run-files → %s",
+    _OUTPUT_ROOT,
+    _INPUT_ROOT,
+    _RUNS_ROOT,
+)
 
 app.mount("/files",       StaticFiles(directory=str(_OUTPUT_ROOT)), name="files")
 app.mount("/input-files", StaticFiles(directory=str(_INPUT_ROOT)),  name="input-files")

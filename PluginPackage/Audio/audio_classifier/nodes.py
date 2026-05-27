@@ -12,6 +12,7 @@ Produces list[PredictionResult].
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import ClassVar
 
@@ -87,13 +88,50 @@ class AudioClassifierNode(Node):
         top_k: int = 1
         sample_rate: int = 16000
 
+        from pydantic import field_validator
+
+        @field_validator("top_k")
+        @classmethod
+        def _top_k_positive(cls, v: int) -> int:
+            if v < 1:
+                raise ValueError("top_k must be >= 1")
+            return v
+
+        @field_validator("sample_rate")
+        @classmethod
+        def _sample_rate_positive(cls, v: int) -> int:
+            if v <= 0:
+                raise ValueError("sample_rate must be > 0")
+            return v
+
+        @field_validator("backend")
+        @classmethod
+        def _backend_valid(cls, v: str) -> str:
+            allowed = {"yamnet", "tflite", "pytorch", "auto"}
+            if v not in allowed:
+                raise ValueError(f"backend must be one of {sorted(allowed)}, got {v!r}")
+            return v
+
     # ── setup ─────────────────────────────────────────────────────────────────
 
     def setup(self) -> None:
         self._resolved_backend = self._resolve_backend()
         self._labels: list[str] = []
         self._model_obj = None
+        # Serialise TFLite set_tensor/invoke/get_tensor — Interpreter is not thread-safe.
+        self._tflite_lock = threading.Lock()
         log.debug("AudioClassifierNode: backend='%s'", self._resolved_backend)
+
+    def teardown(self) -> None:
+        """Release model resources held on this instance."""
+        if self._resolved_backend == "yamnet" and self._model_obj is not None:
+            try:
+                import tensorflow as tf  # type: ignore
+                tf.keras.backend.clear_session()
+            except Exception:
+                pass
+        self._model_obj = None
+        self._labels = []
 
     def _resolve_backend(self) -> str:
         if self.config.backend != "auto":
@@ -115,6 +153,10 @@ class AudioClassifierNode(Node):
                 "AudioClassifierNode.setup() must be called before process(). "
                 "The NodeExecutor calls setup() automatically — do not call process() directly."
             )
+        # Finding 1: guard None / empty input
+        if not inputs:
+            return []
+
         backend = self._resolved_backend
         results: list[PredictionResult] = []
 
@@ -128,14 +170,21 @@ class AudioClassifierNode(Node):
                 source_path = str(item.source_path)
                 meta = dict(item.metadata)
             else:
-                log.warning("AudioClassifierNode: unknown input type %s — skipping", type(item))
-                continue
+                # Finding 2: raise instead of silently skipping so callers detect type mismatches
+                raise TypeError(
+                    f"AudioClassifierNode: expected AudioSample or FeatureArray, "
+                    f"got {type(item).__name__!r}"
+                )
 
             top_k = min(self.config.top_k, len(probs))
             top_indices = np.argsort(probs)[::-1][:top_k]
-            predicted_label = labels[top_indices[0]] if labels else f"class_{top_indices[0]}"
+            # Finding 7: bounds-check label index against actual label list length
+            if labels and top_indices[0] < len(labels):
+                predicted_label = labels[top_indices[0]]
+            else:
+                predicted_label = f"class_{top_indices[0]}"
             # Only include top-k entries in probabilities dict to avoid 521-entry dicts
-            probabilities = {labels[i]: float(probs[i]) for i in top_indices} if labels else {}
+            probabilities = {labels[i]: float(probs[i]) for i in top_indices if i < len(labels)} if labels else {}
 
             results.append(PredictionResult(
                 source_path=source_path,
@@ -162,7 +211,10 @@ class AudioClassifierNode(Node):
             sr = self.config.sample_rate
 
         mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=512, hop_length=160, n_mels=40)
-        features = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
+        # Finding 3: guard against all-zeros mel (silent audio) which makes np.max(mel)=0
+        # and causes power_to_db to produce -inf/nan values fed to the model.
+        ref_val = max(float(np.max(mel)), 1e-10)
+        features = librosa.power_to_db(mel, ref=ref_val).astype(np.float32)
 
         if backend == "tflite":
             return self._tflite_classify(features)
@@ -275,13 +327,33 @@ class AudioClassifierNode(Node):
             labels_path = Path(self.config.model_path).parent / "labels.txt"
             self._labels = labels_path.read_text().strip().splitlines() if labels_path.exists() else []
 
-        inp_detail = self._model_obj.get_input_details()[0]
-        out_detail = self._model_obj.get_output_details()[0]
+        # Finding 4: TFLite Interpreter is not thread-safe — serialise all tensor ops.
+        with self._tflite_lock:
+            inp_detail = self._model_obj.get_input_details()[0]
+            out_detail = self._model_obj.get_output_details()[0]
 
-        inp = features[np.newaxis, ..., np.newaxis].astype(inp_detail["dtype"])
-        self._model_obj.set_tensor(inp_detail["index"], inp)
-        self._model_obj.invoke()
-        probs = self._model_obj.get_tensor(out_detail["index"])[0].astype(np.float32)
+            # Finding 5: validate and reshape features to match the model's expected input shape.
+            expected_shape = tuple(inp_detail["shape"])  # e.g. (1, 40, T, 1) or (1, 40*T)
+            # Build candidate: add batch + channel dims (common 4-D case)
+            inp_4d = features[np.newaxis, ..., np.newaxis].astype(inp_detail["dtype"])
+            if inp_4d.shape == expected_shape:
+                inp = inp_4d
+            else:
+                # Try flat reshape (e.g. model expects [1, N])
+                flat = features.flatten()
+                inp_flat = flat[np.newaxis, :].astype(inp_detail["dtype"])
+                if inp_flat.shape == expected_shape:
+                    inp = inp_flat
+                else:
+                    raise ValueError(
+                        f"AudioClassifierNode: TFLite model expects input shape {expected_shape} "
+                        f"but features shape {features.shape} cannot be reshaped to match. "
+                        f"Tried {inp_4d.shape} (4-D) and {inp_flat.shape} (flat)."
+                    )
+
+            self._model_obj.set_tensor(inp_detail["index"], inp)
+            self._model_obj.invoke()
+            probs = self._model_obj.get_tensor(out_detail["index"])[0].astype(np.float32)
         return probs, self._labels
 
     # ── PyTorch/ONNX backend ──────────────────────────────────────────────────

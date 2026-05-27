@@ -94,7 +94,13 @@ def find_compatible_nodes(
             ),
         )
 
-    nodes = registry.find_compatible_nodes(resolved, direction=direction)
+    try:
+        nodes = registry.find_compatible_nodes(resolved, direction=direction)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Compatibility check failed: {exc}",
+        )
     return [n.model_dump(mode="json") for n in nodes]
 
 
@@ -156,8 +162,12 @@ def validate_node_config(node_type: str, payload: ValidateConfigRequest):
     except NodeNotFoundError:
         raise HTTPException(status_code=404, detail=f"Node type '{node_type}' not found")
 
+    config_cls = getattr(node_class, "Config", None)
+    if config_cls is None:
+        # Node has no Config class — any config dict is trivially valid.
+        return {"valid": True, "errors": {}}
     try:
-        node_class.Config.model_validate(payload.config)
+        config_cls.model_validate(payload.config)
         return {"valid": True, "errors": {}}
     except pydantic.ValidationError as exc:
         errors = {}

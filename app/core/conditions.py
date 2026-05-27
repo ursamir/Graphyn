@@ -43,7 +43,11 @@ _ALLOWED_NODE_TYPES = frozenset({
     ast.Name,          # only "output" is allowed — checked separately
     ast.Constant,      # literals: int, float, str, bool, None
     ast.Load,
-})
+    # Python 3.8 wraps subscript slice values in ast.Index (removed in 3.9+).
+    # Including it here keeps output["key"] valid on 3.8 without any security
+    # impact — Index is a transparent wrapper with no callable behaviour.
+    getattr(ast, "Index", type(None)),
+} - {type(None)})
 
 
 def _ast_depth(node: ast.AST) -> int:
@@ -83,13 +87,17 @@ def _validate_ast(tree: ast.AST) -> None:
                 "Only comparisons, boolean operators, subscript access on 'output', "
                 "and len() calls are permitted."
             )
-        # Only allow len() function calls
+        # Only allow len() function calls with exactly one positional argument
         if isinstance(node, ast.Call):
             if not (isinstance(node.func, ast.Name) and node.func.id == "len"):
                 func_name = getattr(node.func, "id", repr(node.func))
                 raise ConditionEvaluationError(
                     f"Disallowed function call '{func_name}' in condition. "
                     "Only len() is permitted."
+                )
+            if len(node.args) != 1 or node.keywords:
+                raise ConditionEvaluationError(
+                    "len() requires exactly one positional argument."
                 )
         # Only allow 'output' or 'len' as Name references
         # ('len' appears as the function name in len() calls — it is safe)
@@ -145,6 +153,11 @@ def evaluate_condition(expression: str, output: dict[str, Any]) -> bool:
         return bool(result)
     except ConditionEvaluationError:
         raise
+    except KeyError as exc:
+        raise ConditionEvaluationError(
+            f"Condition '{expression}' references key {exc} which is not present "
+            f"in the output dict. Available keys: {sorted(output.keys())}"
+        ) from exc
     except Exception as exc:
         raise ConditionEvaluationError(
             f"Condition '{expression}' raised an error during evaluation: {exc}"

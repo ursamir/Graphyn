@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import mcp.server.stdio
@@ -38,6 +39,11 @@ _server = Server("graphyn-mcp")
 
 _TOOLS: dict[str, dict] = {}  # name → {description, inputSchema, handler}
 
+# Bounded executor for handler dispatch — prevents the default ThreadPoolExecutor
+# from growing unbounded under sustained MCP load (max_workers=8 matches the
+# number of concurrent pipeline slots in _PIPELINE_EXECUTOR).
+_HANDLER_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="mcp-handler")
+
 
 def _register(
     name: str,
@@ -46,6 +52,8 @@ def _register(
     handler,
 ) -> None:
     """Register a tool handler. Called by tool_registry.py at startup."""
+    if name in _TOOLS:
+        log.warning("Tool '%s' already registered — overwriting.", name)
     _TOOLS[name] = {
         "description": description,
         "inputSchema": input_schema,
@@ -95,7 +103,7 @@ async def handle_call_tool(
     handler = _TOOLS[name]["handler"]
     try:
         result = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: handler(arguments)
+            _HANDLER_EXECUTOR, lambda: handler(arguments)
         )
         log.info("tool=%s outcome=success", name)
         return [types.TextContent(type="text", text=json.dumps(result))]
@@ -164,7 +172,10 @@ def main() -> None:
         stream=sys.stderr,  # Req 1.11: log to stderr, not stdout (stdout = JSON-RPC)
     )
     _startup()
-    asyncio.run(_run_server())
+    try:
+        asyncio.run(_run_server())
+    finally:
+        _HANDLER_EXECUTOR.shutdown(wait=False)
 
 
 if __name__ == "__main__":

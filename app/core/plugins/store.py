@@ -31,7 +31,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from app.core.plugins.errors import PluginNotFoundError
+from app.core.plugins.errors import PluginManifestError, PluginNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +64,15 @@ class PluginRecord(BaseModel, frozen=True):
         Raises:
             PluginManifestError: if the stored manifest dict is invalid.
         """
-        from app.core.plugins.manifest import PluginManifest  # noqa: PLC0415
-        return PluginManifest.model_validate(self.manifest)
+        from app.core.plugins.manifest import (  # noqa: PLC0415
+            PluginManifest,
+            _rewrap_validation_error,
+        )
+        try:
+            return PluginManifest.model_validate(self.manifest)
+        except Exception as exc:
+            _rewrap_validation_error(exc, source=f"<stored record for {self.name!r}>")
+            raise  # unreachable; satisfies type checkers
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +116,7 @@ class PluginStore:
         try:
             text = self._registry_path.read_text(encoding="utf-8")
             return json.loads(text)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
             # Back up the corrupt file before treating as empty
             backup_path = self._registry_path.with_suffix(".json.corrupt")
             try:
@@ -143,8 +150,10 @@ class PluginStore:
         # Write to a temp file in the same directory so os.replace() is
         # guaranteed to be on the same filesystem (required for atomicity).
         fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        # Close the raw fd immediately so os.fdopen() failure cannot leak it.
+        os.close(fd)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
             os.replace(tmp_path, self._registry_path)
         except Exception:
@@ -169,13 +178,26 @@ class PluginStore:
             data = self._load()
         if name not in data:
             raise PluginNotFoundError(name)
-        return PluginRecord(**data[name])
+        try:
+            return PluginRecord(**data[name])
+        except Exception as exc:
+            raise PluginManifestError(
+                f"Corrupt record for plugin '{name}' in registry: {exc}"
+            ) from exc
 
     def list(self) -> list[PluginRecord]:
         """Return all installed plugins as a list of :class:`PluginRecord`."""
         with self._lock:
             data = self._load()
-        return [PluginRecord(**v) for v in data.values()]
+        records = []
+        for name, v in data.items():
+            try:
+                records.append(PluginRecord(**v))
+            except Exception as exc:
+                logger.warning(
+                    "PluginStore: skipping corrupt plugin record '%s': %s", name, exc
+                )
+        return records
 
     def save(self, record: PluginRecord) -> None:
         """Persist *record*, overwriting any existing entry with the same name."""
@@ -209,4 +231,9 @@ class PluginStore:
                 raise PluginNotFoundError(name)
             data[name] = {**data[name], "enabled": enabled}
             self._save(data)
-            return PluginRecord(**data[name])
+            try:
+                return PluginRecord(**data[name])
+            except Exception as exc:
+                raise PluginManifestError(
+                    f"Corrupt record for plugin '{name}' in registry: {exc}"
+                ) from exc

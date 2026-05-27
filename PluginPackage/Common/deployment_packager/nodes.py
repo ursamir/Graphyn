@@ -189,7 +189,7 @@ class DeploymentPackagerNode(Node):
         out_dir.mkdir(parents=True, exist_ok=True)
 
         model_path = Path(artifact.artifact_path) if artifact.artifact_path else None
-        labels = artifact.labels or []
+        labels = getattr(artifact, "labels", None) or []
         pkg_name = self.config.package_name or f"model_{target}"
 
         if target == "mobile":
@@ -256,25 +256,31 @@ class DeploymentPackagerNode(Node):
         if model_path and model_path.exists():
             model_bytes = model_path.read_bytes()
 
-        # Format as C byte array
-        hex_vals = ", ".join(f"0x{b:02x}" for b in model_bytes)
         label_strs = ", ".join(f'"{lbl}"' for lbl in labels)
+        model_name = model_path.name if model_path else "model"
 
-        header = f"""\
-/* Auto-generated MCU deployment header */
-#pragma once
-#include <stdint.h>
-
-/* Model: {model_path.name if model_path else 'model'} */
-/* Size: {len(model_bytes)} bytes */
-static const uint8_t g_model_data[] = {{{hex_vals}}};
-static const int g_model_data_len = {len(model_bytes)};
-
-/* Labels */
-static const char* g_labels[] = {{{label_strs}}};
-static const int g_num_labels = {len(labels)};
-"""
-        header_path.write_text(header)
+        # Write header incrementally to avoid building a ~50 MB string in RAM
+        # for large models (5–10 MB TFLite files → ~50 MB hex representation).
+        with open(header_path, "w") as fh:
+            fh.write(
+                f"/* Auto-generated MCU deployment header */\n"
+                f"#pragma once\n"
+                f"#include <stdint.h>\n\n"
+                f"/* Model: {model_name} */\n"
+                f"/* Size: {len(model_bytes)} bytes */\n"
+                f"static const uint8_t g_model_data[] = {{"
+            )
+            for i, b in enumerate(model_bytes):
+                fh.write(f"0x{b:02x}")
+                if i < len(model_bytes) - 1:
+                    fh.write(", ")
+            fh.write(
+                f"}};\n"
+                f"static const int g_model_data_len = {len(model_bytes)};\n\n"
+                f"/* Labels */\n"
+                f"static const char* g_labels[] = {{{label_strs}}};\n"
+                f"static const int g_num_labels = {len(labels)};\n"
+            )
         return header_path
 
     # ── Docker package ────────────────────────────────────────────────────────
@@ -304,10 +310,16 @@ static const int g_num_labels = {len(labels)};
                 }
                 (pkg_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
 
-            # Create TAR of the docker context
+            # Create TAR of the docker context — write to tmp then rename atomically
             tar_path = out_dir / f"{name}_docker.tar.gz"
-            with tarfile.open(tar_path, "w:gz") as tf:
-                tf.add(pkg_dir, arcname=name)
+            tmp_tar = tar_path.with_suffix(".tmp.tar.gz")
+            try:
+                with tarfile.open(tmp_tar, "w:gz") as tf:
+                    tf.add(pkg_dir, arcname=name)
+                os.replace(tmp_tar, tar_path)
+            finally:
+                if tmp_tar.exists():
+                    tmp_tar.unlink(missing_ok=True)
         finally:
             # Clean up the uncompressed staging directory
             shutil.rmtree(pkg_dir, ignore_errors=True)

@@ -52,7 +52,7 @@ class RunManager:
         if base_dir is None:
             base_dir = str(_project_dir() / "runs")
 
-        self.run_id = str(uuid.uuid4()).replace("-", "")[:16]
+        self.run_id = str(uuid.uuid4()).replace("-", "")
         self.base_path = os.path.join(base_dir, self.run_id)
         self._start_time = time.time()
 
@@ -120,7 +120,7 @@ class RunManager:
     def save_logs(self, logs) -> None:
         path = os.path.join(self.base_path, "logs.json")
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(list(logs), f, indent=2)
+            json.dump(list(logs), f, indent=2, default=str)
 
     def save_metadata(self, metadata: dict) -> None:
         duration = time.time() - self._start_time
@@ -136,9 +136,11 @@ class RunManager:
     def save_graph_ir(self, graph_data: dict) -> None:
         """Write graph.json and compute self._graph_hash."""
         path = os.path.join(self.base_path, "graph.json")
-        with open(path, "w", encoding="utf-8") as f:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(graph_data, f, indent=2, ensure_ascii=False)
             f.write("\n")
+        os.replace(tmp, path)
         self._graph_hash = hashlib.sha256(
             json.dumps(graph_data, sort_keys=True).encode()
         ).hexdigest()
@@ -216,8 +218,11 @@ class RunManager:
             "graph_hash": graph_hash,
         }
         path = os.path.join(self.base_path, "resume_state.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
+        with self._meta_lock:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+            os.replace(tmp, path)
 
     def update_resume_state(self, node_id: str) -> None:
         path = os.path.join(self.base_path, "resume_state.json")
@@ -241,8 +246,10 @@ class RunManager:
             if node_id not in completed:
                 completed.append(node_id)
             state["completed_nodes"] = completed
-            with open(path, "w", encoding="utf-8") as f:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
+            os.replace(tmp, path)
 
     def load_resume_state(self, run_id: str) -> dict:
         """Load resume_state.json from a prior run. Raises ResumeError on failure."""
@@ -318,14 +325,21 @@ class RunManager:
 
         _input_ids = input_artifact_ids or []
         if record.artifact_id not in _input_ids:
-            self._get_provenance_store().record(
-                artifact_id=record.artifact_id,
-                run_id=self.run_id,
-                node_id=node_id,
-                node_type=node_type,
-                graph_hash=self._graph_hash,
-                input_artifact_ids=_input_ids,
-            )
+            try:
+                self._get_provenance_store().record(
+                    artifact_id=record.artifact_id,
+                    run_id=self.run_id,
+                    node_id=node_id,
+                    node_type=node_type,
+                    graph_hash=self._graph_hash,
+                    input_artifact_ids=_input_ids,
+                )
+            except Exception as exc:
+                log.warning(
+                    "Failed to record provenance for artifact %s: %s",
+                    record.artifact_id,
+                    exc,
+                )
 
         with self._artifacts_lock:
             self._artifacts.append(record)

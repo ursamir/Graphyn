@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,26 +48,46 @@ INSPECT_RUN_SCHEMA = {
         },
         "logs": {
             "type": "boolean",
-            "description": "Return logs.json contents (requires run_id).",
+            "description": (
+                "Return logs.json contents (requires run_id). "
+                "Mutually exclusive with graph, checkpoints, node_id, and status_only — "
+                "only the first matching flag is evaluated."
+            ),
             "default": False,
         },
         "graph": {
             "type": "boolean",
-            "description": "Return graph.json contents (requires run_id).",
+            "description": (
+                "Return graph.json contents (requires run_id). "
+                "Mutually exclusive with logs, checkpoints, node_id, and status_only — "
+                "only the first matching flag is evaluated."
+            ),
             "default": False,
         },
         "checkpoints": {
             "type": "boolean",
-            "description": "Return list of node IDs with checkpoints (requires run_id).",
+            "description": (
+                "Return list of node IDs with checkpoints (requires run_id). "
+                "Mutually exclusive with logs, graph, node_id, and status_only — "
+                "only the first matching flag is evaluated."
+            ),
             "default": False,
         },
         "node_id": {
             "type": "string",
-            "description": "Return checkpoint manifest for this node (requires run_id).",
+            "description": (
+                "Return checkpoint manifest for this node (requires run_id). "
+                "Mutually exclusive with logs, graph, checkpoints, and status_only — "
+                "only the first matching flag is evaluated."
+            ),
         },
         "status_only": {
             "type": "boolean",
-            "description": "Return only the run status (requires run_id).",
+            "description": (
+                "Return only the run status (requires run_id). "
+                "Mutually exclusive with logs, graph, checkpoints, and node_id — "
+                "evaluated first when set."
+            ),
             "default": False,
         },
         "_meta": {
@@ -136,9 +157,20 @@ def inspect_run_handler(arguments: dict[str, Any]) -> Any:
                     "num_nodes": 0,
                 })
 
-        # NEW-15 fix: sort by created_at timestamp, not by directory name
-        # (which is a hex string and sorts lexicographically, not chronologically).
-        runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        # Req 5.1: sort newest-first by created_at.
+        # Parse ISO 8601 timestamps before comparing so that mixed "Z" and
+        # "+00:00" suffixes (both valid UTC representations) sort correctly.
+        # String comparison would place "Z" after "+" lexicographically,
+        # producing wrong order when the two suffix styles are mixed.
+        def _parse_ts(ts: str | None) -> datetime:
+            if not ts:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            try:
+                return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                return datetime.min.replace(tzinfo=timezone.utc)
+
+        runs.sort(key=lambda r: _parse_ts(r.get("created_at")), reverse=True)
         return {"runs": runs}
 
     # ── Single run inspection ──────────────────────────────────────────────────
@@ -220,7 +252,7 @@ def inspect_run_handler(arguments: dict[str, Any]) -> Any:
             return {"checkpoints": []}
         try:
             node_ids = [
-                d.name.replace("node_", "")
+                d.name[len("node_"):]  # strip prefix only, not all occurrences
                 for d in checkpoints_dir.iterdir()
                 if d.is_dir() and d.name.startswith("node_")
             ]

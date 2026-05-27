@@ -53,8 +53,21 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def _env(name: str, default: str = "") -> str:
-    """Return the value of env var *name*, stripped, or *default* if unset/empty."""
-    return os.environ.get(name, "").strip() or default
+    """Return the value of env var *name*, stripped, or *default* if unset/empty.
+
+    If the env var is set to a non-empty but whitespace-only string (e.g. ``"   "``),
+    a warning is emitted and *default* is returned.  This prevents silent
+    security bypasses such as a whitespace-only ``GRAPHYN_API_TOKEN`` silently
+    disabling authentication.
+    """
+    import logging
+    raw = os.environ.get(name, "")
+    stripped = raw.strip()
+    if raw and not stripped:
+        logging.getLogger(__name__).warning(
+            "Env var %s is set to whitespace-only; using default %r", name, default
+        )
+    return stripped or default
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +151,13 @@ def plugin_allowed_sources() -> list[str]:
     raw = _env("GRAPHYN_PLUGIN_ALLOWED_SOURCES")
     if not raw:
         return []
-    return [prefix.strip() for prefix in raw.split(",") if prefix.strip()]
+    result = [prefix.strip() for prefix in raw.split(",") if prefix.strip()]
+    if not result:
+        raise ValueError(
+            f"GRAPHYN_PLUGIN_ALLOWED_SOURCES={raw!r} parsed to an empty list; "
+            "check for stray commas. Set to empty string to allow all sources."
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -151,11 +170,14 @@ def project_dir() -> Path:
     Default: workspace/ (relative to CWD)
     Override: GRAPHYN_PROJECT_DIR env var.
 
-    The returned path is resolved to an absolute path so that ``..``
-    components and relative paths are normalised consistently regardless
-    of the current working directory.
+    The returned path is made absolute so that ``..`` components and relative
+    paths are normalised consistently regardless of the current working
+    directory.  ``.absolute()`` is used instead of ``.resolve()`` to avoid
+    an ``OSError`` on platforms where the process CWD has been deleted while
+    the server is running (``resolve()`` follows symlinks and stat()s the
+    path, which fails if CWD is gone).
     """
-    return Path(_env("GRAPHYN_PROJECT_DIR", default="workspace")).resolve()
+    return Path(_env("GRAPHYN_PROJECT_DIR", default="workspace")).absolute()
 
 
 def runs_dir() -> Path:

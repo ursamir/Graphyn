@@ -55,17 +55,46 @@ class TestTypeCatalogueRegisterAndResolve:
 
 
 class TestTypeCatalogueDuplicateRaises:
-    """Req 3.7 — register(cls) twice raises DuplicatePortTypeError."""
+    """Req 3.7 — duplicate registration behaviour."""
 
-    def test_register_same_class_twice_raises(self):
-        """Req 3.7: register(cls) twice raises DuplicatePortTypeError on second call."""
+    def test_register_same_class_twice_is_idempotent(self):
+        """Registering the same class object twice is a silent no-op (F1 fix).
+
+        Plugin loaders may call register() for a type that AutoDiscovery has
+        already catalogued.  The second call must not raise.
+        """
+        catalogue = TypeCatalogue()
+        catalogue.register(_TestPortType)
+        # Must not raise — same object, idempotent
+        catalogue.register(_TestPortType)
+        assert catalogue.resolve(_fqn(_TestPortType)) is _TestPortType
+
+    def test_register_different_class_same_fqn_raises(self):
+        """A *different* class object with the same FQN raises DuplicatePortTypeError."""
+        import types
+
+        # Dynamically create a second class with the same __module__ and __qualname__
+        # as _TestPortType so that _fqn() returns the same string.
+        DuplicateCls = types.new_class(
+            "_TestPortType",
+            bases=(PortDataType,),
+        )
+        DuplicateCls.__module__ = _TestPortType.__module__
+        DuplicateCls.__qualname__ = _TestPortType.__qualname__
+
         catalogue = TypeCatalogue()
         catalogue.register(_TestPortType)
         with pytest.raises(DuplicatePortTypeError):
-            catalogue.register(_TestPortType)
+            catalogue.register(DuplicateCls)
 
     def test_register_non_port_data_type_raises_type_error(self):
         """Registering a non-PortDataType subclass raises TypeError."""
         catalogue = TypeCatalogue()
         with pytest.raises(TypeError):
             catalogue.register(int)  # type: ignore[arg-type]
+
+    def test_register_base_class_itself_raises_type_error(self):
+        """Registering PortDataType itself (the abstract base) raises TypeError (F2 fix)."""
+        catalogue = TypeCatalogue()
+        with pytest.raises(TypeError):
+            catalogue.register(PortDataType)  # type: ignore[arg-type]

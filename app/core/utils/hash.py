@@ -24,6 +24,8 @@ def stable_hash(*args) -> int:
     Suitable for seeding random number generators and cache key derivation.
     Not suitable for security-sensitive purposes.
 
+    Returns a non-negative integer in the range [0, 2^128).
+
     Uses JSON encoding to avoid separator-collision bugs: previously
     ``stable_hash("a|b", "c")`` and ``stable_hash("a", "b|c")`` produced
     the same hash because ``"|".join(...)`` is ambiguous when args contain
@@ -31,6 +33,17 @@ def stable_hash(*args) -> int:
 
     ``None`` and ``"None"`` are also correctly distinguished because
     JSON encodes them as ``null`` and ``"None"`` respectively.
+
+    Argument ORDER matters: ``stable_hash("a", "b") != stable_hash("b", "a")``.
+    Dict KEY order within a single argument does NOT matter (``sort_keys=True``
+    normalises dict key order before hashing).
+
+    Only JSON-serialisable types are accepted (str, int, float, bool, None,
+    list, dict).  Passing a non-serialisable object raises ``TypeError`` —
+    this is intentional: ``default=str`` was removed because objects whose
+    ``str()`` representation includes a memory address (e.g. ``<Foo object at
+    0x7f...>``) would produce hashes that are NOT stable across process
+    restarts, silently violating the function's core guarantee.
     """
-    s = json.dumps(list(args), sort_keys=True, default=str)
+    s = json.dumps(list(args), sort_keys=True)
     return int(hashlib.md5(s.encode(), usedforsecurity=False).hexdigest(), 16)

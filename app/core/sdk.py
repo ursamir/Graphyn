@@ -91,8 +91,11 @@ class ArtifactCollection:
         Requirements: req-04 §4
         """
         from app.core.provenance import ProvenanceStore  # lazy — avoids circular dep
-        store = ProvenanceStore()
-        return store.get_lineage(artifact_id)
+        try:
+            store = ProvenanceStore()
+            return store.get_lineage(artifact_id)
+        except Exception as exc:
+            return {"error": str(exc), "artifact_id": artifact_id}
 
     # ------------------------------------------------------------------
     # Dict protocol (backward compatibility)  (req-04 §1.4)
@@ -218,6 +221,21 @@ class PipelineNode:
             config=self.config,
         )
 
+    @classmethod
+    def _make_shell(cls, ir_node: "IRNode") -> "PipelineNode":
+        """Construct a lightweight PipelineNode shell from an IRNode.
+
+        Bypasses ``__init__`` (no registry validation — IR is already valid).
+        This is the single source of truth for shell construction so that
+        ``_from_ir()`` does not need to duplicate the attribute list.  Any new
+        instance attribute added to ``__init__`` must also be added here.
+        """
+        pn = object.__new__(cls)
+        pn.node_type = ir_node.node_type
+        pn.config = dict(ir_node.config)
+        pn._ir_node = ir_node
+        return pn
+
     def to_dict(self) -> dict:
         """Return legacy dict representation."""
         return {"type": self.node_type, "config": dict(self.config)}
@@ -271,7 +289,18 @@ class Pipeline:
 
         ir_nodes = [node.to_ir_node(i) for i, node in enumerate(self.nodes)]
 
-        if self._explicit_edges is not None:
+        if self._explicit_edges:
+            # Validate indices before building edges so callers get a clear
+            # ValueError instead of a confusing IndexError from inside a list
+            # comprehension.
+            n = len(ir_nodes)
+            for edge in self._explicit_edges:
+                src_idx, src_port, dst_idx, dst_port = edge
+                if src_idx >= n or dst_idx >= n:
+                    raise ValueError(
+                        f"Edge ({src_idx}, {src_port!r}, {dst_idx}, {dst_port!r}): "
+                        f"node index out of range (pipeline has {n} node(s))"
+                    )
             ir_edges = [
                 IREdge(
                     src_id=ir_nodes[src_idx].id,
@@ -282,6 +311,10 @@ class Pipeline:
                 for src_idx, src_port, dst_idx, dst_port in self._explicit_edges
             ]
         else:
+            # edges=None OR edges=[] both fall through to auto-chain.
+            # Passing edges=[] is treated as "no explicit edges" (same as None)
+            # rather than "explicit empty edge list", to avoid silently producing
+            # a disconnected graph for multi-node pipelines.
             ir_edges = [
                 IREdge(
                     src_id=ir_nodes[i].id,
@@ -317,13 +350,10 @@ class Pipeline:
         """
         pipeline = object.__new__(cls)
         pipeline.nodes = [
-            PipelineNode.__new__(PipelineNode) for _ in graph.nodes
+            PipelineNode._make_shell(ir_node) for ir_node in graph.nodes
         ]
-        # Populate lightweight PipelineNode shells (no validation — IR is already valid)
-        for pn, ir_node in zip(pipeline.nodes, graph.nodes):
-            pn.node_type = ir_node.node_type
-            pn.config = dict(ir_node.config)
-            pn._ir_node = ir_node
+        # Shell nodes are fully populated by _make_shell() — no further
+        # attribute assignment needed here.
         pipeline.seed = graph.metadata.seed
         pipeline.name = graph.metadata.name
         pipeline.description = graph.metadata.description
@@ -391,23 +421,30 @@ class Pipeline:
 
         _logger = self._make_subscriber_logger(logger)
 
-        raw_outputs = get_backend().execute(
-            graph,
-            logger=_logger,
-            use_cache=use_cache,
-            checkpoint=checkpoint,
-            streaming=streaming,
-            parallel=parallel,
-            max_workers=max_workers,
-            resume_run_id=resume_run_id,
-            include_nodes=include_nodes,
-            exclude_nodes=exclude_nodes,
-            input_overrides=input_overrides,
-            event_driven=event_driven,
-            observer=observer,
-            run_manager=run_manager,
-        )
-        self._last_run_id = run_manager.run_id
+        # Reset before execute so that a failed run never leaves a stale run_id
+        # pointing at a previous successful run.  The finally block sets it to
+        # whatever run_manager.run_id is at that point (may still be None if
+        # RunManager never assigned one, e.g. the backend raised before init).
+        self._last_run_id = None
+        try:
+            raw_outputs = get_backend().execute(
+                graph,
+                logger=_logger,
+                use_cache=use_cache,
+                checkpoint=checkpoint,
+                streaming=streaming,
+                parallel=parallel,
+                max_workers=max_workers,
+                resume_run_id=resume_run_id,
+                include_nodes=include_nodes,
+                exclude_nodes=exclude_nodes,
+                input_overrides=input_overrides,
+                event_driven=event_driven,
+                observer=observer,
+                run_manager=run_manager,
+            )
+        finally:
+            self._last_run_id = getattr(run_manager, "run_id", None)
         return raw_outputs, run_manager
 
     # ------------------------------------------------------------------
@@ -556,11 +593,28 @@ class Pipeline:
         return cls._from_ir(graph)
 
     def to_yaml(self, path: str) -> None:
-        """Serialize the pipeline to a YAML file (Req 2.7.1)."""
+        """Serialize the pipeline to a YAML file (Req 2.7.1).
+
+        Writes atomically: serializes to a ``.tmp`` file first, then renames
+        it into place.  If ``yaml.dump()`` raises (e.g. a non-serializable
+        object in the config), the original file at ``path`` is left untouched
+        and the temporary file is cleaned up.
+        """
+        import os
         import yaml
+
         config = self._to_config_dict()
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, sort_keys=False)
+        tmp_path = path + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, sort_keys=False)
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def install_plugin(self, source: str, upgrade: bool = False) -> "PluginRecord":
         """Install a plugin and make its node types available immediately.
@@ -579,6 +633,13 @@ class Pipeline:
 
         Returns:
             An unsubscribe function. Call it to remove the callback.
+
+        Note:
+            Subscribing the same callback object more than once is not
+            supported.  Each call to the returned unsubscribe function removes
+            only the first occurrence; subsequent occurrences remain active.
+            Use distinct callable objects if independent subscriptions are
+            required.
 
         Example::
 
@@ -607,6 +668,12 @@ class Pipeline:
         validation: structural checks via load_ir() then topology checks
         via PipelineGraph. No longer round-trips through the deprecated
         YAML-format dict (G5-17 / SDK-validate fix).
+
+        Note: at most one error string is returned per validation phase
+        (structural IR check, then node-type/topology check).  The list
+        may therefore contain 0, 1, or 2 entries — not one entry per
+        individual error within a phase.  Fix the reported error and
+        re-validate to surface the next one.
 
         Returns:
             List of validation error strings. Empty list means valid.
@@ -638,6 +705,12 @@ class Pipeline:
 
         Requires a run to be in progress (started via run() or run_with_manager()).
         No-op if no run is active (G5-20 fix).
+
+        Note:
+            This method always returns ``None`` and does not indicate whether
+            the pause was applied.  If the run has already completed (or was
+            never started), the call is silently ignored.  Use
+            ``get_last_run_id()`` to check whether a run was ever started.
         """
         if self._last_run_id is None:
             return
@@ -650,6 +723,10 @@ class Pipeline:
         """Resume a paused pipeline run (G5-20 fix).
 
         No-op if no run is active or the run is not paused.
+
+        Note:
+            Returns ``None`` regardless of whether the resume was applied.
+            Silent no-op when the run has already completed or was never started.
         """
         if self._last_run_id is None:
             return
@@ -662,6 +739,10 @@ class Pipeline:
         """Cancel the currently running pipeline after the current node completes.
 
         No-op if no run is active (G5-20 fix).
+
+        Note:
+            Returns ``None`` regardless of whether the cancel was applied.
+            Silent no-op when the run has already completed or was never started.
         """
         if self._last_run_id is None:
             return

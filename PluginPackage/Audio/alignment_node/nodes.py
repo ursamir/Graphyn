@@ -121,6 +121,7 @@ class AlignmentNode(Node):
         """Pre-load the CTC model once so it is not reloaded on every process() call."""
         self._ctc_model = None
         self._ctc_tokenizer = None
+        self._ctc_device = self.config.device
         if self.config.backend in ("ctc", "auto"):
             try:
                 from ctc_forced_aligner import load_alignment_model  # type: ignore
@@ -133,7 +134,17 @@ class AlignmentNode(Node):
                 self._ctc_device = device
                 log.info("AlignmentNode: CTC model loaded from '%s' on %s", model_path, device)
             except ImportError:
-                pass  # ctc-forced-aligner not installed — will raise at align time if needed
+                if self.config.backend == "ctc":
+                    raise ImportError(
+                        "AlignmentNode: 'ctc-forced-aligner' required for backend='ctc'. "
+                        "Install with: pip install ctc-forced-aligner>=2.0"
+                    )
+                # backend="auto" — ok to defer; will try mfa at align time
+
+    def teardown(self) -> None:
+        """Release CTC model weights and free GPU memory."""
+        self._ctc_model = None
+        self._ctc_tokenizer = None
 
     # ── multi-port process ────────────────────────────────────────────────────
 
@@ -242,6 +253,12 @@ class AlignmentNode(Node):
                 device=device,
             )
 
+        # Validate audio before any processing
+        if sample.data is None or len(sample.data) == 0:
+            raise ValueError(
+                f"AlignmentNode: empty audio for sample '{sample.path}'"
+            )
+
         # Prepare audio tensor — CTC aligner expects float32 mono at 16kHz
         y = sample.data.astype(np.float32)
         sr = sample.sample_rate
@@ -250,13 +267,6 @@ class AlignmentNode(Node):
             y = librosa.resample(y=y, orig_sr=sr, target_sr=16000)
 
         audio_tensor = torch.from_numpy(y).unsqueeze(0).to(device)
-
-        # Preprocess text
-        text_preprocessed = preprocess_text(
-            text,
-            language=language,
-            split_size=self.config.level,
-        )
 
         # Generate emissions
         emissions, stride = generate_emissions(
@@ -287,7 +297,7 @@ class AlignmentNode(Node):
         words = []
         for entry in word_timestamps:
             words.append({
-                "word": entry.get("label", ""),
+                "word": entry.get("label") or entry.get("text", ""),
                 "start": float(entry.get("start", 0.0)),
                 "end": float(entry.get("end", 0.0)),
                 "score": float(entry.get("score", 1.0)),
@@ -319,9 +329,9 @@ class AlignmentNode(Node):
             )
             if result.returncode != 0:
                 raise FileNotFoundError("mfa returned non-zero exit code")
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             raise ImportError(
-                "AlignmentNode: Montreal Forced Aligner (mfa) not found. "
+                "AlignmentNode: Montreal Forced Aligner (mfa) not found or unresponsive. "
                 "Install with: conda install -c conda-forge montreal-forced-aligner"
             ) from exc
 
@@ -408,6 +418,9 @@ class AlignmentNode(Node):
                     if f'name = "{candidate}"' in line:
                         in_tier = True
                         break
+            elif line.startswith('name = "') and in_tier:
+                # Entered a different tier — stop parsing
+                in_tier = False
             if not in_tier:
                 continue
             if line.startswith("xmin ="):

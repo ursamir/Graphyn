@@ -182,6 +182,10 @@ class PluginManifest(BaseModel):
                 raise ValueError(
                     f"Entry points must use forward slashes only, not backslashes (got {item!r})"
                 )
+            if ".." in Path(item).parts:
+                raise ValueError(
+                    f"Entry point {item!r} contains path traversal sequence '..' — not allowed"
+                )
         return v
 
     @field_validator("dependencies")
@@ -287,8 +291,10 @@ def load_manifest(plugin_dir: Path) -> PluginManifest:
     data: dict[str, Any]
 
     if toml_path.exists():
+        source_path = toml_path
         data = _load_toml(toml_path)
     elif json_path.exists():
+        source_path = json_path
         data = _load_json(json_path)
     else:
         raise PluginManifestError(
@@ -296,7 +302,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest:
             "Expected 'plugin.toml' or 'plugin.json'."
         )
 
-    return _parse_manifest_dict(data, source=str(toml_path if toml_path.exists() else json_path))
+    return _parse_manifest_dict(data, source=str(source_path))
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +324,12 @@ def _load_toml(path: Path) -> dict[str, Any]:
         ) from exc
 
     # Support [plugin] section (canonical) or flat top-level keys
-    if "plugin" in raw and isinstance(raw["plugin"], dict):
+    if "plugin" in raw:
+        if not isinstance(raw["plugin"], dict):
+            raise PluginManifestError(
+                f"'plugin' key in {path!r} must be a TOML table, "
+                f"not {type(raw['plugin']).__name__}"
+            )
         return raw["plugin"]
     return raw
 

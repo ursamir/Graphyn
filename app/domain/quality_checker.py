@@ -75,114 +75,152 @@ class QualityChecker:
         project_dir = self.BASE / project
         version_dir = project_dir / version
 
-        # Load contract if not supplied
-        if contract is None:
-            contract = self._load_json(project_dir / "contract.json", {})
+        try:
+            # Load contract if not supplied
+            if contract is None:
+                contract = self._load_json(project_dir / "contract.json", {})
 
-        # Collect all WAV files
-        wav_files = sorted(version_dir.rglob("*.wav")) if version_dir.exists() else []
-
-        if not wav_files:
-            logger.warning(
-                "QualityChecker: no WAV files found in %s/%s", project, version
+            # Collect all WAV files — guard against version_dir being a file
+            wav_files = (
+                sorted(version_dir.rglob("*.wav"))
+                if version_dir.exists() and version_dir.is_dir()
+                else []
             )
-            self._persist(project_dir, findings)
-            return findings
 
-        # Per-sample data collected for outlier detection
-        durations: list[float] = []
-        peak_amplitudes: list[float] = []
-        centroids: list[float] = []
-        sample_paths: list[str] = []
-        label_counts: dict[str, int] = {}
+            if not wav_files:
+                logger.warning(
+                    "QualityChecker: no WAV files found in %s/%s", project, version
+                )
+                self._persist(project_dir, findings)
+                return findings
 
-        # Fingerprint map for duplicate detection: hash → first path
-        fingerprints: dict[str, str] = {}
+            # Per-sample data collected for outlier detection
+            durations: list[float] = []
+            peak_amplitudes: list[float] = []
+            centroids: list[float] = []
+            centroid_failures: int = 0
+            sample_paths: list[str] = []
+            label_counts: dict[str, int] = {}
 
-        for wav_path in wav_files:
-            rel_path = str(wav_path.relative_to(project_dir))
+            # Fingerprint map for duplicate detection: hash → first path
+            fingerprints: dict[str, str] = {}
 
-            # Infer label from directory structure: split/label/file.wav
-            parts = wav_path.relative_to(version_dir).parts
-            label = parts[-2] if len(parts) >= 2 else "unknown"
-            label_counts[label] = label_counts.get(label, 0) + 1
+            for wav_path in wav_files:
+                rel_path = str(wav_path.relative_to(project_dir))
 
-            # ---- metadata-only checks (no full audio load needed) ------
-            # Use soundfile.info() to read duration and sample rate cheaply.
-            wav_info = self._wav_info(wav_path)
-            if wav_info is not None:
-                duration_ms, sr_meta = wav_info
+                # Infer label from directory structure: split/label/file.wav
+                parts = wav_path.relative_to(version_dir).parts
+                label = parts[-2] if len(parts) >= 2 else "unknown"
+                label_counts[label] = label_counts.get(label, 0) + 1
 
-                # ---- duration_range ------------------------------------
+                # ---- metadata-only checks (no full audio load needed) ------
+                # Use soundfile.info() to read duration and sample rate cheaply.
+                wav_info = self._wav_info(wav_path)
+                if wav_info is not None:
+                    duration_ms, sr_meta = wav_info
+
+                    # ---- duration_range ------------------------------------
+                    findings.extend(
+                        self._check_duration_range(rel_path, duration_ms, contract)
+                    )
+
+                    # ---- sample_rate ---------------------------------------
+                    findings.extend(
+                        self._check_sample_rate(rel_path, sr_meta, contract)
+                    )
+                else:
+                    # Could not read metadata — fall through to full load for error reporting
+                    duration_ms = 0.0
+                    sr_meta = 0
+
+                # ---- checks that require full audio data -------------------
+                audio_data, sr = self._load_audio(wav_path)
+                if audio_data is None:
+                    findings.append(
+                        self._finding(
+                            rel_path,
+                            "load_error",
+                            "error",
+                            f"Failed to load audio file: {wav_path.name}",
+                        )
+                    )
+                    continue
+
+                # Use loaded sr if metadata read failed
+                if wav_info is None:
+                    import numpy as np  # type: ignore
+                    n_samples = len(audio_data)
+                    duration_ms = (n_samples / sr * 1000.0) if sr > 0 else 0.0
+                    findings.extend(self._check_duration_range(rel_path, duration_ms, contract))
+                    findings.extend(self._check_sample_rate(rel_path, sr, contract))
+
+                # ---- clipping ----------------------------------------------
+                findings.extend(self._check_clipping(rel_path, audio_data))
+
+                # ---- dc_offset ---------------------------------------------
+                findings.extend(self._check_dc_offset(rel_path, audio_data))
+
+                # ---- snr ---------------------------------------------------
                 findings.extend(
-                    self._check_duration_range(rel_path, duration_ms, contract)
+                    self._check_snr(rel_path, audio_data, sr, contract)
                 )
 
-                # ---- sample_rate ---------------------------------------
+                # ---- duplicates --------------------------------------------
                 findings.extend(
-                    self._check_sample_rate(rel_path, sr_meta, contract)
+                    self._check_duplicate(rel_path, audio_data, sr, fingerprints)
                 )
-            else:
-                # Could not read metadata — fall through to full load for error reporting
-                duration_ms = 0.0
-                sr_meta = 0
 
-            # ---- checks that require full audio data -------------------
-            audio_data, sr = self._load_audio(wav_path)
-            if audio_data is None:
+                # Accumulate stats for outlier detection
+                peak = float(_safe_max_abs(audio_data))
+                centroid = self._spectral_centroid(audio_data, sr)
+                if centroid == 0.0:
+                    centroid_failures += 1
+
+                durations.append(duration_ms)
+                peak_amplitudes.append(peak)
+                centroids.append(centroid)
+                sample_paths.append(rel_path)
+
+            # ---- outliers --------------------------------------------------
+            # Warn if centroid computation failed for every file (librosa unavailable)
+            if sample_paths and centroid_failures == len(sample_paths):
+                logger.warning(
+                    "QualityChecker: spectral centroid computation failed for all %d files "
+                    "— centroid outlier check skipped (librosa unavailable or failed)",
+                    len(sample_paths),
+                )
                 findings.append(
                     self._finding(
-                        rel_path,
-                        "load_error",
-                        "error",
-                        f"Failed to load audio file: {wav_path.name}",
+                        project,
+                        "centroid_check_skipped",
+                        "warning",
+                        "Spectral centroid outlier check was skipped because centroid "
+                        "computation failed for all files (librosa unavailable or failed).",
                     )
                 )
-                continue
-
-            # Use loaded sr if metadata read failed
-            if wav_info is None:
-                import numpy as np  # type: ignore
-                n_samples = len(audio_data)
-                duration_ms = (n_samples / sr * 1000.0) if sr > 0 else 0.0
-                findings.extend(self._check_duration_range(rel_path, duration_ms, contract))
-                findings.extend(self._check_sample_rate(rel_path, sr, contract))
-
-            # ---- clipping ----------------------------------------------
-            findings.extend(self._check_clipping(rel_path, audio_data))
-
-            # ---- dc_offset ---------------------------------------------
-            findings.extend(self._check_dc_offset(rel_path, audio_data))
-
-            # ---- snr ---------------------------------------------------
             findings.extend(
-                self._check_snr(rel_path, audio_data, sr, contract)
+                self._check_outliers(sample_paths, durations, peak_amplitudes, centroids)
             )
 
-            # ---- duplicates --------------------------------------------
-            findings.extend(
-                self._check_duplicate(rel_path, audio_data, sr, fingerprints)
+            # ---- class_imbalance -------------------------------------------
+            findings.extend(self._check_class_imbalance(label_counts))
+
+        except Exception as exc:
+            logger.error(
+                "QualityChecker.run raised an unexpected exception for %s/%s: %s",
+                project, version, exc, exc_info=True,
             )
-
-            # Accumulate stats for outlier detection
-            peak = float(_safe_max_abs(audio_data))
-            centroid = self._spectral_centroid(audio_data, sr)
-
-            durations.append(duration_ms)
-            peak_amplitudes.append(peak)
-            centroids.append(centroid)
-            sample_paths.append(rel_path)
-
-        # ---- outliers --------------------------------------------------
-        findings.extend(
-            self._check_outliers(sample_paths, durations, peak_amplitudes, centroids)
-        )
-
-        # ---- class_imbalance -------------------------------------------
-        findings.extend(self._check_class_imbalance(label_counts))
+            findings.append(
+                self._finding(
+                    f"{project}/{version}",
+                    "internal_error",
+                    "error",
+                    f"Quality check aborted due to unexpected error: {exc}",
+                )
+            )
 
         # Persist and return
-        report_saved = self._persist(project_dir, findings)
+        self._persist(project_dir, findings)
         return findings
 
     # ------------------------------------------------------------------ #
@@ -238,6 +276,8 @@ class QualityChecker:
         try:
             import numpy as np  # type: ignore
 
+            if len(audio_data) == 0:
+                return []
             peak = float(np.abs(audio_data).max())
             if peak > 0.999:
                 return [
@@ -257,6 +297,8 @@ class QualityChecker:
         try:
             import numpy as np  # type: ignore
 
+            if len(audio_data) == 0:
+                return []
             mean_val = float(np.mean(audio_data))
             if abs(mean_val) > 0.01:
                 return [
@@ -280,8 +322,8 @@ class QualityChecker:
     ) -> list[dict]:
         """
         Estimate SNR using the first noise_profile_ms ms as the noise estimate.
-        signal_power = mean of squared non-silent frames
-        noise_power  = mean of squared first noise_profile_ms frames
+        signal_power = mean squared power of the non-noise portion (audio_data[noise_samples:])
+        noise_power  = mean squared power of the first noise_profile_ms frames
         SNR_dB = 10 * log10(signal_power / noise_power)
 
         Limitation: this method assumes the first noise_profile_ms milliseconds
@@ -292,6 +334,9 @@ class QualityChecker:
         """
         try:
             import numpy as np  # type: ignore
+
+            if len(audio_data) == 0:
+                return []
 
             noise_profile_ms = contract.get(
                 "noise_profile_ms", QualityChecker.DEFAULT_NOISE_PROFILE_MS
@@ -308,8 +353,11 @@ class QualityChecker:
                 # Cannot estimate SNR — skip
                 return []
 
-            # Signal power from non-silent frames (above noise floor)
-            signal_power = float(np.mean(audio_data ** 2))
+            # Signal power from the non-noise portion only (exclude the noise window)
+            signal_frames = audio_data[noise_samples:]
+            if len(signal_frames) == 0:
+                return []
+            signal_power = float(np.mean(signal_frames ** 2))
 
             if signal_power <= 0:
                 return [
@@ -345,6 +393,8 @@ class QualityChecker:
     ) -> list[dict]:
         """
         Compute SHA-256 of raw float32 PCM bytes after resampling to 16 kHz mono.
+        Only the first 30 seconds are used to cap memory usage for large files;
+        this is sufficient to detect near-duplicate audio with high confidence.
         Flag pairs with identical fingerprints.
         """
         try:
@@ -353,6 +403,11 @@ class QualityChecker:
             # Resample to 16 kHz mono for comparison
             target_sr = 16000
             mono = _to_mono(audio_data)
+
+            # Cap at first 30 seconds to avoid materialising huge buffers
+            max_samples = sr * 30
+            if len(mono) > max_samples:
+                mono = mono[:max_samples]
 
             if sr != target_sr:
                 try:

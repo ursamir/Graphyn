@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import ClassVar
 
@@ -87,6 +88,30 @@ class SpeechSynthesizerNode(Node):
         sample_rate: int = 22050
         speed: float = 1.0
 
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def setup(self) -> None:
+        """Pre-load the Coqui TTS model at setup time (not lazily in process).
+
+        Uses a threading.Lock so concurrent calls to process() on the same
+        node instance cannot race to load the model simultaneously.
+        """
+        self._tts_lock: threading.Lock = threading.Lock()
+        backend = self._resolve_backend()
+        if backend == "coqui":
+            try:
+                from TTS.api import TTS  # type: ignore
+            except ImportError:
+                raise ImportError(
+                    "SpeechSynthesizerNode: 'TTS' (Coqui) required for backend='coqui'. "
+                    "Install with: pip install TTS>=0.22"
+                )
+            self._tts_model = TTS(model_name=self.config.model_name, progress_bar=False)
+
+    def teardown(self) -> None:
+        """Release the Coqui TTS model to free GPU/CPU memory."""
+        self._tts_model = None  # type: ignore[assignment]
+
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, texts: list) -> list[AudioSample]:
@@ -94,7 +119,13 @@ class SpeechSynthesizerNode(Node):
         output: list[AudioSample] = []
 
         for i, text in enumerate(texts):
-            text_str = str(text).strip()
+            if not isinstance(text, str):
+                log.warning(
+                    "SpeechSynthesizerNode: non-string input at index %d (%r) — skipping",
+                    i, text,
+                )
+                continue
+            text_str = text.strip()
             if not text_str:
                 continue
 
@@ -155,8 +186,14 @@ class SpeechSynthesizerNode(Node):
                 "Install with: pip install TTS>=0.22"
             )
 
-        if not hasattr(self, "_tts_model"):
-            self._tts_model = TTS(model_name=self.config.model_name, progress_bar=False)
+        # Model is pre-loaded in setup(); acquire lock for thread safety.
+        lock: threading.Lock = getattr(self, "_tts_lock", threading.Lock())
+        if not hasattr(self, "_tts_model") or self._tts_model is None:
+            with lock:
+                if not hasattr(self, "_tts_model") or self._tts_model is None:
+                    self._tts_model = TTS(
+                        model_name=self.config.model_name, progress_bar=False
+                    )
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             out_path = f.name
@@ -169,7 +206,8 @@ class SpeechSynthesizerNode(Node):
                 kwargs["speaker_wav"] = self.config.reference_audio
                 kwargs["language"] = self.config.language
 
-            self._tts_model.tts_to_file(**kwargs)
+            with lock:
+                self._tts_model.tts_to_file(**kwargs)
 
             import soundfile as sf  # type: ignore
             audio_data, sr = sf.read(out_path, dtype="float32")
@@ -196,18 +234,22 @@ class SpeechSynthesizerNode(Node):
             text,
         ]
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            out_path = f.name
-
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode != 0:
                 raise RuntimeError(f"eSpeak NG failed: {result.stderr}")
         except FileNotFoundError:
+            Path(out_path).unlink(missing_ok=True)
             raise ImportError(
                 "SpeechSynthesizerNode: 'espeak-ng' not found. "
                 "Install with: sudo apt-get install espeak-ng  "
                 "or: brew install espeak"
+            )
+        except subprocess.TimeoutExpired:
+            Path(out_path).unlink(missing_ok=True)
+            raise RuntimeError(
+                f"SpeechSynthesizerNode: eSpeak NG timed out after 30s "
+                f"for text: {text[:50]!r}"
             )
 
         try:

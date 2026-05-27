@@ -89,3 +89,83 @@ class TestRetryPolicyMonotonicity:
             backoff_multiplier=multiplier,
         )
         assert policy.wait_before_attempt(attempt) >= policy.wait_before_attempt(attempt - 1)
+
+
+class TestRetryPolicyMaxWait:
+    """max_wait_seconds caps the computed wait time (LOW finding fix)."""
+
+    def test_max_wait_caps_large_exponent(self):
+        """With large attempt index, wait is capped at max_wait_seconds."""
+        policy = RetryPolicy(
+            max_attempts=50,
+            backoff_seconds=1.0,
+            backoff_multiplier=2.0,
+            max_wait_seconds=30.0,
+        )
+        assert policy.wait_before_attempt(49) == pytest.approx(30.0)
+
+    def test_max_wait_not_applied_when_below_cap(self):
+        """Small exponent: raw value is below cap, so cap has no effect."""
+        policy = RetryPolicy(
+            max_attempts=3,
+            backoff_seconds=1.0,
+            backoff_multiplier=2.0,
+            max_wait_seconds=60.0,
+        )
+        assert policy.wait_before_attempt(2) == pytest.approx(4.0)
+
+    def test_max_wait_negative_raises(self):
+        """max_wait_seconds < 0 raises ValidationError."""
+        with pytest.raises(pydantic.ValidationError):
+            RetryPolicy(max_wait_seconds=-1.0)
+
+    def test_default_max_wait_is_60(self):
+        """Default max_wait_seconds is 60.0."""
+        policy = RetryPolicy()
+        assert policy.max_wait_seconds == pytest.approx(60.0)
+
+
+class TestRetryPolicyIsRetryable:
+    """is_retryable() correctly filters non-retryable exceptions (MEDIUM finding fix)."""
+
+    def test_empty_list_always_retryable(self):
+        """Default empty non_retryable_exceptions: all exceptions are retryable."""
+        policy = RetryPolicy(max_attempts=3)
+        assert policy.is_retryable(FileNotFoundError("missing")) is True
+        assert policy.is_retryable(ValueError("bad")) is True
+        assert policy.is_retryable(RuntimeError("oops")) is True
+
+    def test_exact_class_name_not_retryable(self):
+        """Exception whose class name is in the list is not retryable."""
+        policy = RetryPolicy(
+            max_attempts=3,
+            non_retryable_exceptions=["FileNotFoundError"],
+        )
+        assert policy.is_retryable(FileNotFoundError("missing")) is False
+
+    def test_other_exception_still_retryable(self):
+        """Exception not in the list is still retryable."""
+        policy = RetryPolicy(
+            max_attempts=3,
+            non_retryable_exceptions=["FileNotFoundError"],
+        )
+        assert policy.is_retryable(ConnectionError("timeout")) is True
+
+    def test_base_class_name_blocks_subclass(self):
+        """Listing a base class name blocks subclasses via MRO matching."""
+        policy = RetryPolicy(
+            max_attempts=3,
+            non_retryable_exceptions=["OSError"],
+        )
+        # FileNotFoundError is a subclass of OSError
+        assert policy.is_retryable(FileNotFoundError("missing")) is False
+
+    def test_multiple_entries(self):
+        """Multiple entries: any match makes the exception non-retryable."""
+        policy = RetryPolicy(
+            max_attempts=3,
+            non_retryable_exceptions=["FileNotFoundError", "ValueError"],
+        )
+        assert policy.is_retryable(FileNotFoundError("x")) is False
+        assert policy.is_retryable(ValueError("x")) is False
+        assert policy.is_retryable(RuntimeError("x")) is True

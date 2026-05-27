@@ -93,11 +93,29 @@ class AudioExporterNode(Node):
 
     # ── SISO process ──────────────────────────────────────────────────────────
 
+    # Maximum filename-collision retries before raising
+    _MAX_COLLISION_RETRIES: ClassVar[int] = 9999
+
     def process(self, samples: list[AudioSample]) -> list[AudioSample]:
         import soundfile as sf  # type: ignore
 
+        # LOW: None/empty guard — return early rather than crashing on enumerate
+        if not samples:
+            return []
+
         cfg = self.config
         out_root = Path(cfg.output_dir) / cfg.version_tag
+
+        # CRITICAL: validate output_dir is inside the workspace root to prevent
+        # shutil.rmtree from deleting arbitrary filesystem directories.
+        out_root_resolved = out_root.resolve()
+        workspace_root = Path.cwd().resolve()
+        if not str(out_root_resolved).startswith(str(workspace_root)):
+            raise ValueError(
+                f"AudioExporterNode: output_dir '{cfg.output_dir}' resolves to "
+                f"'{out_root_resolved}' which is outside the workspace root "
+                f"'{workspace_root}'. Refusing to proceed."
+            )
 
         if not cfg.append and out_root.exists():
             import shutil
@@ -108,6 +126,12 @@ class AudioExporterNode(Node):
         rng = random.Random(cfg.random_seed)
         splits = list(cfg.split_ratios.keys())
         weights = list(cfg.split_ratios.values())
+
+        # HIGH: guard against empty split_ratios before rng.choices
+        if not splits:
+            raise ValueError(
+                "AudioExporterNode: split_ratios must not be empty"
+            )
 
         # Validate ratios
         total = sum(weights)
@@ -121,61 +145,108 @@ class AudioExporterNode(Node):
         rows: list[dict] = []
         meta_entries: list[dict] = []
 
-        for idx, sample in enumerate(samples):
-            # Use pre-assigned split if available
-            split = sample.metadata.get("split")
-            if split not in splits:
-                split = rng.choices(splits, weights=weights, k=1)[0]
+        try:
+            for idx, sample in enumerate(samples):
+                # MEDIUM: skip samples with invalid sample_rate before sf.write
+                if not sample.sample_rate or sample.sample_rate <= 0:
+                    log.warning(
+                        "AudioExporterNode: sample %d has invalid sample_rate (%s), skipping",
+                        idx,
+                        sample.sample_rate,
+                    )
+                    continue
 
-            label = sample.label or "unknown"
-            label_dir = out_root / split / label
-            label_dir.mkdir(parents=True, exist_ok=True)
+                # Use pre-assigned split if available
+                split = sample.metadata.get("split")
+                if split not in splits:
+                    split = rng.choices(splits, weights=weights, k=1)[0]
 
-            # Build filename
-            stem = Path(str(sample.path)).stem if sample.path else f"sample_{idx:06d}"
-            wav_path = label_dir / f"{stem}.wav"
+                label = sample.label or "unknown"
+                label_dir = out_root / split / label
+                label_dir.mkdir(parents=True, exist_ok=True)
 
-            # Avoid collisions
-            counter = 0
-            while wav_path.exists():
-                counter += 1
-                wav_path = label_dir / f"{stem}_{counter:03d}.wav"
+                # Build filename
+                stem = Path(str(sample.path)).stem if sample.path else f"sample_{idx:06d}"
+                wav_path = label_dir / f"{stem}.wav"
 
-            # Write WAV
-            data = sample.data
-            if data is not None and len(data) > 0:
-                sf.write(str(wav_path), data, sample.sample_rate)
-            else:
-                log.warning("AudioExporterNode: sample %d has no data, skipping", idx)
-                continue
+                # Avoid collisions — bounded to prevent infinite loop
+                counter = 0
+                while wav_path.exists():
+                    counter += 1
+                    if counter > self._MAX_COLLISION_RETRIES:
+                        raise RuntimeError(
+                            f"AudioExporterNode: too many filename collisions for stem '{stem}' "
+                            f"(>{self._MAX_COLLISION_RETRIES})"
+                        )
+                    wav_path = label_dir / f"{stem}_{counter:03d}.wav"
 
-            rel_path = str(wav_path.relative_to(out_root.parent))
-            rows.append({
-                "id": idx,
-                "path": rel_path,
-                "label": label,
-                "split": split,
-            })
-            meta_entries.append({
-                "id": idx,
-                "path": rel_path,
-                "label": label,
-                "split": split,
-                "sample_rate": sample.sample_rate,
-                "duration_s": round(len(data) / sample.sample_rate, 4) if sample.sample_rate else 0,
-                "metadata": sample.metadata,
-            })
+                # Write WAV
+                data = sample.data
+                if data is not None and len(data) > 0:
+                    sf.write(str(wav_path), data, sample.sample_rate)
+                else:
+                    log.warning("AudioExporterNode: sample %d has no data, skipping", idx)
+                    continue
 
+                rel_path = str(wav_path.relative_to(out_root.parent))
+                rows.append({
+                    "id": idx,
+                    "path": rel_path,
+                    "label": label,
+                    "split": split,
+                })
+                meta_entries.append({
+                    "id": idx,
+                    "path": rel_path,
+                    "label": label,
+                    "split": split,
+                    "sample_rate": sample.sample_rate,
+                    "duration_s": round(len(data) / sample.sample_rate, 4),
+                    "metadata": sample.metadata,
+                })
+        finally:
+            # HIGH: write partial manifest even if the loop raises mid-batch,
+            # so successfully written WAV files are not orphaned.
+            if rows or meta_entries:
+                self._write_manifests(cfg, out_root, rows, meta_entries)
+
+        # Count by split for logging (uses the rows already written)
+        split_counts: dict[str, int] = {}
+        for r in rows:
+            split_counts[r["split"]] = split_counts.get(r["split"], 0) + 1
+
+        log.info(
+            "AudioExporterNode: wrote %d WAV files to %s — splits: %s",
+            len(rows),
+            out_root,
+            split_counts,
+        )
+
+        return samples
+
+    def _write_manifests(
+        self,
+        cfg: "AudioExporterNode.Config",
+        out_root: Path,
+        rows: list[dict],
+        meta_entries: list[dict],
+    ) -> None:
+        """Write (or merge) labels.csv and metadata.json.
+
+        Called from the try/finally block so a partial batch still produces
+        a manifest for the WAV files that were successfully written.
+        """
         # Write labels.csv (append mode: merge with existing)
         labels_csv = out_root / "labels.csv"
         existing_rows: list[dict] = []
         if cfg.append and labels_csv.exists():
             with open(labels_csv, newline="") as f:
                 existing_rows = list(csv.DictReader(f))
-            # Re-index
+            # MEDIUM: re-index both rows and meta_entries consistently
             offset = len(existing_rows)
-            for r in rows:
+            for r, m in zip(rows, meta_entries):
                 r["id"] = r["id"] + offset
+                m["id"] = m["id"] + offset
 
         all_rows = existing_rows + rows
         with open(labels_csv, "w", newline="") as f:
@@ -193,17 +264,3 @@ class AudioExporterNode(Node):
         all_meta = existing_meta + meta_entries
         with open(meta_json, "w") as f:
             json.dump(all_meta, f, indent=2, default=str)
-
-        # Count by split
-        split_counts: dict[str, int] = {}
-        for r in all_rows:
-            split_counts[r["split"]] = split_counts.get(r["split"], 0) + 1
-
-        log.info(
-            "AudioExporterNode: wrote %d WAV files to %s — splits: %s",
-            len(rows),
-            out_root,
-            split_counts,
-        )
-
-        return samples

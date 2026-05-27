@@ -200,7 +200,7 @@ def _register_job(job: "IngestionJob") -> None:
     with _jobs_lock:
         _jobs[job.job_id] = job
         # Evict oldest completed/failed jobs when over the limit
-        if len(_jobs) > _MAX_COMPLETED_JOBS:
+        if len(_jobs) >= _MAX_COMPLETED_JOBS:
             to_remove = [
                 jid for jid, j in _jobs.items()
                 if j.status in ("completed", "failed") and jid != job.job_id
@@ -260,10 +260,23 @@ class IngestionService:
         label_distribution: dict[str, int] = {}
 
         for url in urls:
-            # Validate extension before downloading
+            # Validate extension before downloading.
+            # Primary: use the URL path component's suffix.
+            # Fallback: scan query-string values for a recognisable extension
+            # (handles CDN URLs like ?key=speech.wav&token=abc).
             parsed = urlparse(url)
             url_path = parsed.path
             suffix = Path(url_path).suffix.lower()
+
+            if suffix not in SUPPORTED_EXTENSIONS:
+                # Fallback: check each query-string value for a known extension
+                from urllib.parse import parse_qs  # noqa: PLC0415
+                qs_values = [v for vals in parse_qs(parsed.query).values() for v in vals]
+                for qs_val in qs_values:
+                    candidate = Path(qs_val).suffix.lower()
+                    if candidate in SUPPORTED_EXTENSIONS:
+                        suffix = candidate
+                        break
 
             if suffix not in SUPPORTED_EXTENSIONS:
                 job.append_progress({
@@ -291,17 +304,23 @@ class IngestionService:
                     with client.stream("GET", url) as response:
                         response.raise_for_status()
                         total_bytes = 0
+                        size_exceeded = False
                         with open(dest_path, "wb") as out_f:
                             for chunk in response.iter_bytes(chunk_size=65536):
                                 total_bytes += len(chunk)
                                 if total_bytes > _MAX_DOWNLOAD_BYTES:
-                                    out_f.close()
-                                    dest_path.unlink(missing_ok=True)
-                                    raise ValueError(
-                                        f"Download exceeds size limit of "
-                                        f"{_MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB"
-                                    )
+                                    size_exceeded = True
+                                    break
                                 out_f.write(chunk)
+                        # Unlink and raise outside the `with open` block so the
+                        # file handle is fully closed before unlink (safe on all
+                        # platforms, including Windows).
+                        if size_exceeded:
+                            dest_path.unlink(missing_ok=True)
+                            raise ValueError(
+                                f"Download exceeds size limit of "
+                                f"{_MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB"
+                            )
             except Exception as exc:
                 job.append_progress({
                     "type": "progress",
@@ -462,7 +481,24 @@ class IngestionService:
                 # Get duration
                 duration = _get_audio_duration(str(saved_path))
                 if duration is None:
-                    duration = 0.0
+                    # File saved but could not be decoded — warn, do not count as success
+                    logger.warning(
+                        "ingestion: HF sample %d saved to %s but audio library "
+                        "could not decode it; skipping from success count.",
+                        i,
+                        saved_path,
+                    )
+                    job.append_progress({
+                        "type": "progress",
+                        "url": f"sample_{i}",
+                        "status": "warning",
+                        "message": (
+                            f"Saved to {saved_path} but could not be decoded "
+                            f"(label={label}); excluded from success count"
+                        ),
+                    })
+                    files_failed += 1
+                    continue
 
                 total_files += 1
                 total_duration += duration
@@ -525,11 +561,18 @@ class IngestionService:
 
         Polls job.progress with a short sleep until the job is no longer running.
         Uses read_progress() for thread-safe snapshot reads.
+
+        Redis path: re-fetches the job from Redis on every iteration so that
+        cross-worker streaming sees live status and events rather than a frozen
+        snapshot (fixes HIGH: premature exit + MEDIUM: infinite spin).
+        In-process path: the same re-fetch is a cheap dict lookup and is safe.
         """
-        job = self.get_job(job_id)
         cursor = 0
 
         while True:
+            # Re-fetch each iteration so Redis-backed jobs see live state.
+            job = self.get_job(job_id)
+
             # Take a thread-safe snapshot of current events
             current_events = job.read_progress()
             while cursor < len(current_events):
@@ -596,7 +639,7 @@ def _save_hf_audio_sample(audio_data: dict, dest_dir: Path, index: int) -> Optio
 
         # Determine output filename
         if original_path:
-            stem = Path(original_path).stem
+            stem = _sanitize_label(Path(original_path).stem)
             filename = f"{stem}.wav"
         else:
             filename = f"sample_{index:06d}.wav"

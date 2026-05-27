@@ -2,14 +2,22 @@
 
 Backends:
     yamnet   — YAMNet 521-class detection (tensorflow_hub, no custom model needed)
-    tflite   — custom TFLite model
-    pytorch  — custom PyTorch model
+    tflite   — custom TFLite model (clip-level only — no temporal windowing)
+    pytorch  — custom PyTorch model (clip-level only — no temporal windowing)
     auto     — yamnet if TF available, else tflite if model_path set, else error
+
+Temporal resolution note:
+    Only the ``yamnet`` backend provides true frame-level onset/offset timestamps.
+    The ``tflite`` and ``pytorch`` backends treat the entire audio clip as a single
+    frame and report ``start=0.0, end=<clip_duration>`` for every detected event.
+    If per-event timestamps are required, use ``backend="yamnet"`` or implement
+    frame-level windowing in a custom subclass.
 """
 from __future__ import annotations
 
 import copy
 import logging
+import threading
 from typing import ClassVar
 
 import numpy as np
@@ -94,11 +102,17 @@ class AudioEventDetectorNode(Node):
         event_types: list = []          # empty = all events
         min_event_duration_ms: float = 100.0
         frame_hop_ms: float = 480.0     # YAMNet default: 0.48s hop
+        merge_tolerance_ms: float = 10.0  # consecutive-event merge gap tolerance
 
     # ── multi-port process ────────────────────────────────────────────────────
 
     def process(self, inputs: dict) -> dict:
-        samples: list[AudioSample] = inputs.get("input") or []
+        if isinstance(inputs, list):
+            samples: list[AudioSample] = inputs
+        elif isinstance(inputs, dict):
+            samples = inputs.get("input") or []
+        else:
+            samples = []
         backend = self._resolve_backend()
 
         output_samples: list[AudioSample] = []
@@ -170,6 +184,9 @@ class AudioEventDetectorNode(Node):
             y = librosa.resample(y=y, orig_sr=sr, target_sr=16000)
             sr = 16000
 
+        if len(y) == 0:
+            return []
+
         scores, embeddings, spectrogram = self._yamnet_model(y)
         scores_np = scores.numpy()  # (N_frames, 521)
 
@@ -201,6 +218,13 @@ class AudioEventDetectorNode(Node):
     # ── TFLite detection ──────────────────────────────────────────────────────
 
     def _detect_tflite(self, sample: AudioSample) -> list[dict]:
+        """Run TFLite inference on an audio sample.
+
+        Note: This backend performs clip-level classification only.
+        All detected events are assigned ``start=0.0`` and
+        ``end=<clip_duration>`` — no temporal windowing is performed.
+        Use ``backend="yamnet"`` for frame-level onset/offset timestamps.
+        """
         try:
             import tflite_runtime.interpreter as tflite  # type: ignore
         except ImportError:
@@ -212,38 +236,49 @@ class AudioEventDetectorNode(Node):
                     "Install with: pip install tflite-runtime>=2.14"
                 )
 
+        # Cache interpreter — load model once per node instance, not per sample.
+        if not hasattr(self, "_tflite_interp"):
+            self._tflite_interp = tflite.Interpreter(model_path=self.config.model_path)
+            self._tflite_interp.allocate_tensors()
+            self._tflite_lock = threading.Lock()
+
         from pathlib import Path
-        interp = tflite.Interpreter(model_path=self.config.model_path)
-        interp.allocate_tensors()
-        inp_detail = interp.get_input_details()[0]
-        out_detail = interp.get_output_details()[0]
+        with self._tflite_lock:
+            interp = self._tflite_interp
+            inp_detail = interp.get_input_details()[0]
+            out_detail = interp.get_output_details()[0]
 
-        y = sample.data.astype(np.float32)
-        expected_len = int(np.prod(inp_detail["shape"]))
+            y = sample.data.astype(np.float32)
+            expected_len = int(np.prod(inp_detail["shape"]))
 
-        # Pad or truncate to match the model's expected input length
-        if len(y) < expected_len:
-            log.warning(
-                "AudioEventDetectorNode: audio length %d < model input %d — zero-padding",
-                len(y), expected_len,
-            )
-            y = np.pad(y, (0, expected_len - len(y)))
-        elif len(y) > expected_len:
-            log.warning(
-                "AudioEventDetectorNode: audio length %d > model input %d — truncating",
-                len(y), expected_len,
-            )
-            y = y[:expected_len]
+            # Pad or truncate to match the model's expected input length
+            if len(y) < expected_len:
+                log.warning(
+                    "AudioEventDetectorNode: audio length %d < model input %d — zero-padding",
+                    len(y), expected_len,
+                )
+                y = np.pad(y, (0, expected_len - len(y)))
+            elif len(y) > expected_len:
+                log.warning(
+                    "AudioEventDetectorNode: audio length %d > model input %d — truncating",
+                    len(y), expected_len,
+                )
+                y = y[:expected_len]
 
-        input_data = y.reshape(inp_detail["shape"]).astype(inp_detail["dtype"])
-        interp.set_tensor(inp_detail["index"], input_data)
-        interp.invoke()
-        probs = interp.get_tensor(out_detail["index"])[0]
+            input_data = y.reshape(inp_detail["shape"]).astype(inp_detail["dtype"])
+            interp.set_tensor(inp_detail["index"], input_data)
+            interp.invoke()
+            probs = interp.get_tensor(out_detail["index"])[0]
 
         # Load labels
         labels_path = Path(self.config.model_path).parent / "labels.txt"
         labels = labels_path.read_text().strip().splitlines() if labels_path.exists() else [f"class_{i}" for i in range(len(probs))]
 
+        clip_duration = float(len(sample.data) / sample.sample_rate)
+        log.debug(
+            "AudioEventDetectorNode (tflite): clip-level detection only — "
+            "all events will have start=0.0, end=%.3f", clip_duration,
+        )
         events: list[dict] = []
         for i, conf in enumerate(probs):
             if float(conf) >= self.config.threshold:
@@ -251,7 +286,7 @@ class AudioEventDetectorNode(Node):
                 events.append({
                     "event": label,
                     "start": 0.0,
-                    "end": float(len(y) / sample.sample_rate),
+                    "end": round(clip_duration, 3),
                     "confidence": round(float(conf), 4),
                 })
         return events
@@ -259,6 +294,13 @@ class AudioEventDetectorNode(Node):
     # ── PyTorch detection ─────────────────────────────────────────────────────
 
     def _detect_pytorch(self, sample: AudioSample) -> list[dict]:
+        """Run PyTorch inference on an audio sample.
+
+        Note: This backend performs clip-level classification only.
+        All detected events are assigned ``start=0.0`` and
+        ``end=<clip_duration>`` — no temporal windowing is performed.
+        Use ``backend="yamnet"`` for frame-level onset/offset timestamps.
+        """
         try:
             import torch  # type: ignore
         except ImportError:
@@ -267,17 +309,26 @@ class AudioEventDetectorNode(Node):
                 "Install with: pip install torch>=2.0"
             )
 
-        from pathlib import Path
-        model = torch.jit.load(self.config.model_path, map_location="cpu")
-        model.eval()
+        # Cache model — load once per node instance, not per sample.
+        if not hasattr(self, "_pytorch_model"):
+            self._pytorch_model = torch.jit.load(self.config.model_path, map_location="cpu")
+            self._pytorch_model.eval()
+            self._pytorch_lock = threading.Lock()
 
-        y = torch.from_numpy(sample.data.astype(np.float32)).unsqueeze(0)
-        with torch.no_grad():
-            probs = torch.softmax(model(y), dim=-1)[0].numpy()
+        from pathlib import Path
+        with self._pytorch_lock:
+            y = torch.from_numpy(sample.data.astype(np.float32)).unsqueeze(0)
+            with torch.no_grad():
+                probs = torch.softmax(self._pytorch_model(y), dim=-1)[0].numpy()
 
         labels_path = Path(self.config.model_path).parent / "labels.txt"
         labels = labels_path.read_text().strip().splitlines() if labels_path.exists() else [f"class_{i}" for i in range(len(probs))]
 
+        clip_duration = float(len(sample.data) / sample.sample_rate)
+        log.debug(
+            "AudioEventDetectorNode (pytorch): clip-level detection only — "
+            "all events will have start=0.0, end=%.3f", clip_duration,
+        )
         events: list[dict] = []
         for i, conf in enumerate(probs):
             if float(conf) >= self.config.threshold:
@@ -285,7 +336,7 @@ class AudioEventDetectorNode(Node):
                 events.append({
                     "event": label,
                     "start": 0.0,
-                    "end": float(len(sample.data) / sample.sample_rate),
+                    "end": round(clip_duration, 3),
                     "confidence": round(float(conf), 4),
                 })
         return events
@@ -343,11 +394,12 @@ class AudioEventDetectorNode(Node):
         if not events:
             return []
 
+        merge_tol_s = self.config.merge_tolerance_ms / 1000.0
         merged: list[dict] = []
         current = dict(events[0])
 
         for ev in events[1:]:
-            if ev["event"] == current["event"] and ev["start"] <= current["end"] + 0.01:
+            if ev["event"] == current["event"] and ev["start"] <= current["end"] + merge_tol_s:
                 current["end"] = max(current["end"], ev["end"])
                 current["confidence"] = max(current["confidence"], ev["confidence"])
             else:

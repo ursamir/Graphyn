@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import ClassVar
 
 import librosa
 import numpy as np
+from pydantic import field_validator
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -11,6 +13,8 @@ from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
 from app.models.audio_sample import AudioSample
 from app.models.feature_array import FeatureArray
+
+log = logging.getLogger(__name__)
 
 
 class FeatureFrontendNode(Node):
@@ -75,10 +79,43 @@ class FeatureFrontendNode(Node):
         )
     }
 
+    _VALID_FEATURE_TYPES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "log_mel",
+            "mfcc",
+            "spectrogram",
+            "chroma",
+            "zcr",
+            "spectral_centroid",
+            "spectral_rolloff",
+            "raw",
+        }
+    )
+
     class Config(NodeConfig):
         feature_type: str = "log_mel"
         # Supported: "log_mel" | "mfcc" | "spectrogram" | "chroma"
         #            | "zcr" | "spectral_centroid" | "spectral_rolloff" | "raw"
+
+        @field_validator("feature_type")
+        @classmethod
+        def _check_feature_type(cls, v: str) -> str:
+            normalized = v.lower()
+            valid = {
+                "log_mel",
+                "mfcc",
+                "spectrogram",
+                "chroma",
+                "zcr",
+                "spectral_centroid",
+                "spectral_rolloff",
+                "raw",
+            }
+            if normalized not in valid:
+                raise ValueError(
+                    f"feature_type must be one of {sorted(valid)}, got '{v}'"
+                )
+            return normalized
 
         sample_rate: int = 16000
 
@@ -156,16 +193,21 @@ class FeatureFrontendNode(Node):
     def _append_deltas(self, features: np.ndarray) -> np.ndarray:
         """Stack delta and/or delta-delta onto the feature matrix (axis 0).
 
-        delta=True  only  → appends delta1
-        delta_delta=True only → appends delta2 (without delta1)
-        both True          → appends delta1 then delta2
+        delta=True  only       → appends delta1
+        delta_delta=True only  → appends delta2 (without delta1)
+        both True              → appends delta1 then delta2
+
+        delta2 is always computed as delta(delta1), i.e. the standard
+        delta-delta definition, NOT librosa.feature.delta(features, order=2).
         """
         parts = [features]
+        # Always compute d1 when delta_delta is requested (needed as input to d2)
+        d1 = librosa.feature.delta(features).astype(np.float32)
         if self.config.delta:
-            d1 = librosa.feature.delta(features).astype(np.float32)
             parts.append(d1)
         if self.config.delta_delta:
-            d2 = librosa.feature.delta(features, order=2).astype(np.float32)
+            # Standard delta-delta: delta of delta (not second-order of original)
+            d2 = librosa.feature.delta(d1).astype(np.float32)
             parts.append(d2)
         return np.concatenate(parts, axis=0)
 
@@ -235,8 +277,22 @@ class FeatureFrontendNode(Node):
         outputs: list[FeatureArray] = []
 
         for sample in samples:
+            # Finding 1: guard against None or empty data
+            if sample.data is None or len(sample.data) == 0:
+                log.warning(
+                    "FeatureFrontendNode: skipping sample with empty/None data: %s",
+                    sample.path,
+                )
+                continue
+
             y = sample.data.astype(np.float32)
             sr = sample.sample_rate
+
+            # Finding 2: guard against invalid sample_rate before librosa.resample
+            if not sr or sr <= 0:
+                raise ValueError(
+                    f"FeatureFrontendNode: invalid sample_rate={sr} for sample '{sample.path}'"
+                )
 
             if sr != self.config.sample_rate:
                 y = librosa.resample(
@@ -273,6 +329,13 @@ class FeatureFrontendNode(Node):
 
             if self.config.normalize and feature_type != "raw":
                 features = self._normalize(features)
+
+            # Track whether normalization was actually applied (std > 1e-8)
+            actually_normalized = (
+                self.config.normalize
+                and feature_type != "raw"
+                and np.std(features) > 1e-8
+            )
 
             # Transpose from (F, T) → (T, F) for downstream compatibility
             # librosa returns (n_features, T); dataset_builder expects (T, n_features)
@@ -311,7 +374,7 @@ class FeatureFrontendNode(Node):
                     "n_fft": self.config.n_fft,
                     "hop_length": self.config.hop_length,
                     "win_length": self.config.win_length,
-                    "normalized": self.config.normalize,
+                    "normalized": actually_normalized,
                     "delta": self.config.delta,
                     "delta_delta": self.config.delta_delta,
                 },

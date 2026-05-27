@@ -10,7 +10,7 @@ Public Surface:   NodeRegistry (all public methods above).
 Must NOT:         Import from app.domain, app.api, app.core.orchestrator,
                   app.core.planner, or any BC4/BC5/BC6 module.
 Dependencies:     BC2 (nodes.catalogue, nodes.compat, nodes.errors,
-                  nodes.metadata), stdlib (json, threading).
+                  nodes.metadata, nodes.ports), stdlib (json, threading).
 Reason To Change: Registry query API changes, new introspection methods are
                   added, or thread-safety strategy evolves.
 """
@@ -26,6 +26,7 @@ from app.core.nodes.catalogue import TypeCatalogue
 from app.core.nodes.compat import CompatibilityChecker
 from app.core.nodes.errors import NodeNotFoundError
 from app.core.nodes.metadata import NodeMetadata
+from app.core.nodes.ports import PortDataType
 
 
 class NodeRegistry:
@@ -54,10 +55,38 @@ class NodeRegistry:
         node_class: type,
         metadata: NodeMetadata,
     ) -> None:
-        """Register a node class under node_type."""
+        """Register a node class under node_type.
+
+        Also registers any PortDataType subclasses used by the node's input
+        and output ports into ``type_catalogue``.  This ensures that port
+        types are resolvable via ``type_catalogue.resolve()`` even when a
+        node is registered directly (bypassing AutoDiscovery).
+
+        The catalogue registration is idempotent: types already catalogued
+        (e.g. by AutoDiscovery) are silently skipped because
+        ``TypeCatalogue.register()`` performs an identity check and returns
+        early for already-registered class objects.
+        """
         with self._lock:
             self._classes[node_type] = node_class
             self._metadata[node_type] = metadata
+            # F4 fix: auto-register port data types so that catalogue.resolve()
+            # works for nodes registered outside of AutoDiscovery._register_node.
+            for port in (
+                *node_class.input_ports.values(),
+                *node_class.output_ports.values(),
+            ):
+                dt = port.data_type
+                if (
+                    isinstance(dt, type)
+                    and issubclass(dt, PortDataType)
+                    and dt is not PortDataType
+                ):
+                    # TypeCatalogue.register() is idempotent for the same class
+                    # object (returns early); DuplicatePortTypeError is only
+                    # raised for a *different* class with the same FQN, which
+                    # we propagate so the caller knows about the conflict.
+                    self.type_catalogue.register(dt)
 
     def unregister(self, node_type: str) -> None:
         """Remove a node type from the registry (no-op if not registered)."""
@@ -95,12 +124,18 @@ class NodeRegistry:
             return self._metadata[node_type]
 
     def list_nodes(self, category: str | None = None) -> list[NodeMetadata]:
-        """Return metadata for all registered nodes, optionally filtered by category."""
+        """Return metadata for all registered nodes, optionally filtered by category.
+
+        Returns shallow copies of each ``NodeMetadata`` so that callers cannot
+        mutate the live registry entries.
+        """
         with self._lock:
             all_meta = list(self._metadata.values())
-        if category is None:
-            return all_meta
-        return [m for m in all_meta if m.category == category]
+        return [
+            m.model_copy()
+            for m in all_meta
+            if category is None or m.category == category
+        ]
 
     # ── reverse discovery ─────────────────────────────────────────────────────
 
@@ -169,6 +204,10 @@ class NodeRegistry:
             raw = json.loads(json_str)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON: {exc}") from exc
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"Expected a JSON array, got {type(raw).__name__}"
+            )
         return [NodeMetadata.model_validate(item) for item in raw]
 
     # Keep old name as an alias for backward compatibility
@@ -180,14 +219,34 @@ class NodeRegistry:
     # ── schema export ─────────────────────────────────────────────────────────
 
     def get_config_schema(self, node_type: str) -> dict[str, Any]:
-        """Return the JSON Schema for the node's Config Pydantic model."""
+        """Return the JSON Schema for the node's Config Pydantic model.
+
+        Raises:
+            NodeNotFoundError: if node_type is not registered or has no
+                Pydantic Config class.
+        """
         node_class = self.get_class(node_type)
-        return node_class.Config.model_json_schema()
+        cfg = getattr(node_class, "Config", None)
+        if cfg is None or not hasattr(cfg, "model_json_schema"):
+            raise NodeNotFoundError(
+                f"Node '{node_type}' has no Pydantic Config class."
+            )
+        return cfg.model_json_schema()
 
     def get_port_schema(self, node_type: str) -> dict[str, Any]:
-        """Return the port schema dict (inputs + outputs) for the node."""
+        """Return the port schema dict (inputs + outputs) for the node.
+
+        Raises:
+            NodeNotFoundError: if node_type is not registered or does not
+                expose a callable ``port_schemas`` method.
+        """
         node_class = self.get_class(node_type)
-        return node_class.port_schemas()
+        port_schemas_fn = getattr(node_class, "port_schemas", None)
+        if not callable(port_schemas_fn):
+            raise NodeNotFoundError(
+                f"Node '{node_type}' does not expose a callable 'port_schemas' method."
+            )
+        return port_schemas_fn()
 
     # ── introspection ─────────────────────────────────────────────────────────
 

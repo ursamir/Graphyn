@@ -5,29 +5,30 @@ Responsibility:   Content-keyed cache for node outputs. Avoids re-executing
                   nodes whose inputs and config have not changed.
 Owns:             PipelineCache class — key derivation, load, save, clear.
 Public Surface:   PipelineCache().key(), .input_hash(), .load(), .save(), .clear()
-Must NOT:         Import app.models at module level (RULE 1 — platform must not
-                  depend on domain models at import time). AudioSample is
-                  never imported here — WAV I/O is delegated to
-                  AudioSampleHandler via ArtifactSerializerRegistry.
+Must NOT:         Import app.models at module level or reference any artifact
+                  type string by name (e.g. "audio_samples"). All type
+                  inference is done via ArtifactSerializerRegistry.infer_type().
                   Must not share its base directory with ArtifactStore (SA-PC4).
 Dependencies:     stdlib, pydantic (lazy), app.core.config (cache_dir),
                   app.core.artifact_serializer (registry — no domain knowledge).
 Reason To Change: Cache storage format evolves, new cacheable output types
                   are added, or cache key derivation strategy changes.
 
-## ARCH-1 + ARCH-2 fix
+## Storage formats (current — no legacy support)
 
-All WAV I/O and AudioSample construction previously inline in load()/save()
-has been removed. The cache now delegates to ArtifactSerializerRegistry:
+``outputs.json``
+    Generic JSON-serializable outputs dict. Written for ports whose type is
+    not recognised by ArtifactSerializerRegistry.
 
-    registry = get_serializer_registry()
-    handler  = registry.get("audio_samples")   # None if not registered
-    if handler:
-        handler.serialize(samples, port_dir)
-        samples = handler.deserialize(port_dir)
+``manifest.json`` + ``port_<name>/``
+    Written for ports whose type IS recognised by ArtifactSerializerRegistry.
+    manifest.json contains ``cached_ports`` (list) and ``port_types``
+    (port_name → type_key). Both fields are required; manifests missing
+    either field are treated as unreadable (node re-executes).
 
-AudioSample detection also uses registry.infer_type() instead of duck-typing
-(ARCH-1/ARCH-2 follow-up fix) — pipeline_cache.py contains zero domain knowledge.
+Both files are written atomically via tmp + os.replace.
+All I/O is delegated to ArtifactSerializerRegistry handlers — this file
+contains zero domain-model knowledge.
 """
 import hashlib
 import json
@@ -126,7 +127,7 @@ class PipelineCache:
         - list of Pydantic models — hashed via model_dump JSON
         - numpy ndarray — hashed via raw bytes (stable across runs)
         - JSON-serializable dicts/lists — hashed via sorted JSON
-        - Fallback — hashed via repr() (stable within a process only)
+        - Fallback — returns empty string (forces cache miss; logs warning)
         """
         if isinstance(inputs, list) and len(inputs) > 0:
             first = inputs[0]
@@ -134,7 +135,8 @@ class PipelineCache:
                 # AudioSample list (original behaviour)
                 parts = []
                 for sample in inputs:
-                    shape = sample.data.shape if sample.data is not None else ()
+                    # Guard: sample.data may be bytes, list, or any object without .shape
+                    shape = getattr(sample.data, "shape", ()) if sample.data is not None else ()
                     path = getattr(sample, "path", None) or getattr(sample, "source_path", str(id(sample)))
                     sr = getattr(sample, "sample_rate", 0)
                     parts.append(f"{path}:{sr}:{shape}")
@@ -222,10 +224,13 @@ class PipelineCache:
         """Load cached node outputs.
 
         Supports two storage formats:
-        - ``outputs.json`` — generic JSON-serializable outputs dict (new)
-        - ``manifest.json`` — legacy AudioSample WAV cache (original)
+        - ``outputs.json`` — generic JSON-serializable outputs dict
+        - ``manifest.json`` with ``cached_ports`` — multi-port serialized format
 
-        Returns the outputs dict on success, or None on failure.
+        Manifests without a ``cached_ports`` key are treated as unreadable
+        (no legacy single-port format support — clean migration only).
+
+        Returns the outputs dict on success, or None on failure (cache miss).
         """
         cache_dir = self._cache_dir(cache_key)
 
@@ -242,88 +247,75 @@ class PipelineCache:
                 )
                 return None
 
-        # ── Multi-port AudioSample format (port_<name>/ subdirectories) ─────────
-        # Introduced by G2-17: each AudioSample port is stored in its own
-        # subdirectory named port_<port_name>/ containing manifest.json + wavs.
-        # SA-PC3 fix: prefer the top-level manifest.json (written by save() since
-        # this fix) to discover port names reliably. Fall back to directory scan
-        # for cache entries written before this fix was applied.
+        # ── Multi-port serialized format ───────────────────────────────────────
         top_manifest_path = cache_dir / "manifest.json"
-        if top_manifest_path.exists():
-            try:
-                with open(top_manifest_path, "r", encoding="utf-8") as f:
-                    top_manifest_data = json.load(f)
-                cached_ports = top_manifest_data.get("cached_ports")
-                if cached_ports is not None:
-                    # New format written by the SA-PC3 fix
-                    port_dirs = [cache_dir / f"port_{p}" for p in cached_ports]
-                else:
-                    # Legacy flat manifest.json (original single-port format) —
-                    # fall through to the legacy handler below.
-                    port_dirs = []
-            except Exception:
-                port_dirs = []
-        else:
-            port_dirs = [
-                d for d in cache_dir.iterdir()
-                if d.is_dir() and d.name.startswith("port_")
-            ] if cache_dir.is_dir() else []
-
-        if port_dirs:
-            try:
-                from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
-                handler = get_serializer_registry().get("audio_samples")
-                if handler is None:
-                    logger.warning(
-                        "Cache read (port subdirs): no handler registered for 'audio_samples' — "
-                        "will re-execute. Call register_audio_serializer() at startup.",
-                    )
-                    return None
-                result: dict = {}
-                for port_dir in port_dirs:
-                    port_name = port_dir.name[len("port_"):]
-                    samples = handler.deserialize(port_dir)
-                    if samples is None:
-                        logger.warning(
-                            "Cache read (port subdirs) failed for key %s port %s — will re-execute",
-                            cache_key, port_name,
-                        )
-                        return None
-                    result[port_name] = samples
-                if result:
-                    return result
-            except Exception as exc:
-                logger.warning(
-                    "Cache read (port subdirs) failed for key %s (%s) — will re-execute",
-                    cache_key, exc,
-                )
-                return None
-
-        # ── Legacy AudioSample format (flat manifest.json at cache root) ────────
-        # Written by versions prior to G2-17. Only a single "output" port was
-        # stored. Kept for backward compatibility with existing cache entries.
-        manifest_path = cache_dir / "manifest.json"
-        if not manifest_path.exists():
+        if not top_manifest_path.exists():
             return None
 
         try:
-            from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
-            handler = get_serializer_registry().get("audio_samples")
-            if handler is None:
-                logger.warning(
-                    "Cache read (manifest.json): no handler registered for 'audio_samples' — "
-                    "will re-execute. Call register_audio_serializer() at startup.",
-                )
-                return None
-            samples = handler.deserialize(cache_dir)
-            if samples is None:
-                return None
-            # Return in the standard outputs-dict shape
-            return {"output": samples}
-
+            with open(top_manifest_path, "r", encoding="utf-8") as f:
+                top_manifest_data = json.load(f)
         except Exception as exc:
             logger.warning(
                 "Cache read (manifest.json) failed for key %s (%s) — will re-execute",
+                cache_key, exc,
+            )
+            return None
+
+        cached_ports = top_manifest_data.get("cached_ports")
+        port_types: dict[str, str] = top_manifest_data.get("port_types", {})
+
+        if cached_ports is None:
+            # Manifest exists but has no cached_ports key — unreadable format.
+            logger.warning(
+                "Cache at '%s' has manifest.json without 'cached_ports' key — "
+                "unreadable format, will re-execute.",
+                cache_dir,
+            )
+            return None
+
+        # Valid new-format entry with zero ports — return empty dict (cache hit).
+        if cached_ports == []:
+            return {}
+
+        try:
+            from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+            _ser_registry = get_serializer_registry()
+            result: dict = {}
+            for port_name in cached_ports:
+                port_dir = cache_dir / f"port_{port_name}"
+                if not port_dir.exists():
+                    logger.warning(
+                        "Cache read: port dir missing for '%s' in key %s — will re-execute",
+                        port_name, cache_key,
+                    )
+                    return None
+                type_key = port_types.get(port_name)
+                if type_key is None:
+                    logger.warning(
+                        "Cache manifest for key %s has no type_key for port '%s' — will re-execute",
+                        cache_key, port_name,
+                    )
+                    return None
+                handler = _ser_registry.get(type_key)
+                if handler is None:
+                    logger.warning(
+                        "Cache read: no handler for type '%s' (port '%s', key %s) — will re-execute",
+                        type_key, port_name, cache_key,
+                    )
+                    return None
+                value = handler.deserialize(port_dir)
+                if value is None:
+                    logger.warning(
+                        "Cache read: deserialize returned None for port '%s' key %s — will re-execute",
+                        port_name, cache_key,
+                    )
+                    return None
+                result[port_name] = value
+            return result
+        except Exception as exc:
+            logger.warning(
+                "Cache read (port subdirs) failed for key %s (%s) — will re-execute",
                 cache_key, exc,
             )
             return None
@@ -333,11 +325,17 @@ class PipelineCache:
 
         ``outputs`` may be:
         - A dict mapping port names to values (standard node output shape)
-        - A list[AudioSample] (legacy call-site compatibility)
+        - A list (normalised to ``{"output": outputs}``)
 
         Storage strategy:
-        - If the outputs dict contains an AudioSample list on any port → WAV + manifest.json
-        - Otherwise → outputs.json (JSON-serializable values only; skips non-serializable)
+        - Ports whose type is recognised by ArtifactSerializerRegistry →
+          written to ``port_<name>/`` subdirectories; manifest.json records
+          port names and type keys.
+        - All other ports → ``outputs.json`` (JSON-serializable values only).
+
+        Both manifest.json and outputs.json are written atomically via a
+        temporary file + os.replace so a crash mid-write never leaves a
+        partial cache entry that can be loaded as a wrong result.
         """
         cache_dir = self._cache_dir(cache_key)
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -350,57 +348,61 @@ class PipelineCache:
             logger.debug("Cache.save: outputs is not a dict — skipping cache write")
             return
 
-        # ── Check for AudioSample list on any port ─────────────────────────────
-        # Collect ALL ports that carry AudioSample data so none are dropped.
-        # ARCH-1/ARCH-2 follow-up: use registry.infer_type() instead of
-        # duck-typing so pipeline_cache.py contains zero domain knowledge.
         from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
         _ser_registry = get_serializer_registry()
-        audio_ports: dict[str, list] = {
-            port_name: value
-            for port_name, value in outputs.items()
-            if _ser_registry.infer_type(value) == "audio_samples"
-        }
 
-        if audio_ports:
-            from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
-            handler = get_serializer_registry().get("audio_samples")
-            if handler is None:
-                logger.warning(
-                    "Cache.save: no handler registered for 'audio_samples' — "
-                    "skipping audio port cache write. Call register_audio_serializer() at startup.",
-                )
-                return
-            # Write each AudioSample port to its own named subdirectory so that
-            # all ports are preserved (previously only the first port was saved).
-            for port_name, audio_samples in audio_ports.items():
+        # Partition ports: serializable via registry vs JSON-only
+        registry_ports: dict[str, tuple[str, Any]] = {}  # port_name → (type_key, value)
+        json_ports: dict[str, Any] = {}
+
+        for port_name, value in outputs.items():
+            type_key = _ser_registry.infer_type(value)
+            if type_key is not None and _ser_registry.get(type_key) is not None:
+                registry_ports[port_name] = (type_key, value)
+            else:
+                json_ports[port_name] = value
+
+        # ── Registry-typed ports → port_<name>/ subdirectories ────────────────
+        if registry_ports:
+            port_manifest: dict[str, str] = {}
+            for port_name, (type_key, value) in registry_ports.items():
+                handler = _ser_registry.get(type_key)
                 port_dir = cache_dir / f"port_{port_name}"
                 port_dir.mkdir(parents=True, exist_ok=True)
                 try:
-                    handler.serialize(audio_samples, port_dir)
+                    handler.serialize(value, port_dir)
+                    port_manifest[port_name] = type_key
                 except Exception as exc:
                     logger.warning(
-                        "Cache.save: failed to serialize audio port '%s' (%s) — skipping",
-                        port_name, exc,
+                        "Cache.save: failed to serialize port '%s' (type '%s'): %s — skipping",
+                        port_name, type_key, exc,
                     )
                     return
 
-            # SA-PC3 fix: write a top-level manifest.json listing all port names
-            # so load() can discover ports reliably without scanning for port_*
-            # directories (which would misread any unrelated dir starting with port_).
+            # Write manifest atomically so a crash between the last serialize
+            # and the manifest write never leaves a partial entry that loads
+            # as an incomplete (wrong) cache hit.
             top_manifest_path = cache_dir / "manifest.json"
-            with open(top_manifest_path, "w", encoding="utf-8") as f:
-                json.dump({"cached_ports": sorted(audio_ports.keys())}, f, indent=2)
+            tmp_manifest = cache_dir / "manifest.json.tmp"
+            with open(tmp_manifest, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "cached_ports": sorted(port_manifest.keys()),
+                        "port_types": port_manifest,
+                    },
+                    f,
+                    indent=2,
+                )
+            tmp_manifest.replace(top_manifest_path)
             return
 
-        # ── Generic JSON format for all other output types ─────────────────────
+        # ── JSON-only ports → outputs.json ─────────────────────────────────────
         serializable: dict = {}
         skipped_ports: list[str] = []
-        for port_name, value in outputs.items():
+        for port_name, value in json_ports.items():
             if _is_json_serializable(value):
                 serializable[port_name] = value
             elif hasattr(value, "model_dump"):
-                # Pydantic model
                 try:
                     serializable[port_name] = value.model_dump(mode="json")
                 except Exception:
@@ -423,8 +425,10 @@ class PipelineCache:
             return
 
         outputs_path = cache_dir / "outputs.json"
-        with open(outputs_path, "w", encoding="utf-8") as f:
+        tmp_outputs = cache_dir / "outputs.json.tmp"
+        with open(tmp_outputs, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2)
+        tmp_outputs.replace(outputs_path)
 
     def clear(self) -> dict:
         """Delete all cache entries. Returns {entries_deleted, bytes_freed}.
@@ -446,7 +450,13 @@ class PipelineCache:
                 for file in entry.rglob("*"):
                     if file.is_file():
                         bytes_freed += file.stat().st_size
-                shutil.rmtree(entry)
-                entries_deleted += 1
+                try:
+                    shutil.rmtree(entry)
+                    entries_deleted += 1
+                except Exception as exc:
+                    logger.warning(
+                        "Cache.clear: failed to remove entry '%s' (%s) — skipping",
+                        entry, exc,
+                    )
 
         return {"entries_deleted": entries_deleted, "bytes_freed": bytes_freed}

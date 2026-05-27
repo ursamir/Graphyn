@@ -12,9 +12,13 @@ Reason To Change: Port descriptor fields change (new cardinality options,
 """
 from __future__ import annotations
 
-from typing import Any, Literal, get_origin
+import types as _types
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+# Origins that are not valid port data types even though get_origin() is not None.
+_REJECTED_ORIGINS = {Annotated, Literal}
 
 
 class PortDataType(BaseModel):
@@ -58,11 +62,52 @@ class InputPort(BaseModel):
     @classmethod
     def _must_be_type_or_none(cls, v: Any) -> Any:
         """Reject non-type values early so errors surface at port declaration time."""
-        if v is not None and not isinstance(v, type) and get_origin(v) is None:
-            raise ValueError(
-                f"data_type must be a Python type or generic alias (e.g. list[str]), got {v!r}"
-            )
+        if v is not None:
+            origin = get_origin(v)
+            if origin in _REJECTED_ORIGINS:
+                raise ValueError(
+                    f"data_type must not use Annotated or Literal, got {v!r}"
+                )
+            if not isinstance(v, type) and origin is None:
+                raise ValueError(
+                    f"data_type must be a Python type or generic alias (e.g. list[str]), got {v!r}"
+                )
         return v
+
+    @model_validator(mode="after")
+    def _optional_port_must_accept_none(self) -> "InputPort":
+        """Warn early when required=False but data_type cannot receive None.
+
+        A required=False port will receive None at runtime when unconnected.
+        If data_type is not Optional/None-accepting the node's process() will
+        crash with a confusing AttributeError deep in its logic.
+        """
+        if not self.required and self.data_type is not None:
+            origin = get_origin(self.data_type)
+            # typing.Optional[X] / typing.Union[X, None]
+            if origin is Union:
+                if type(None) not in get_args(self.data_type):
+                    raise ValueError(
+                        f"InputPort '{self.name}': required=False but data_type "
+                        f"{self.data_type!r} does not accept None. "
+                        "Use Optional[...] or include None in the Union."
+                    )
+            # Python 3.10+ X | None  (types.UnionType)
+            elif isinstance(self.data_type, _types.UnionType):
+                if type(None) not in get_args(self.data_type):
+                    raise ValueError(
+                        f"InputPort '{self.name}': required=False but data_type "
+                        f"{self.data_type!r} does not accept None. "
+                        "Use X | None to allow optional values."
+                    )
+            else:
+                # Plain type or generic alias — neither accepts None
+                raise ValueError(
+                    f"InputPort '{self.name}': required=False but data_type "
+                    f"{self.data_type!r} does not accept None. "
+                    "Use Optional[...] or X | None."
+                )
+        return self
 
 
 class OutputPort(BaseModel):
@@ -84,8 +129,14 @@ class OutputPort(BaseModel):
     @classmethod
     def _must_be_type_or_none(cls, v: Any) -> Any:
         """Reject non-type values early so errors surface at port declaration time."""
-        if v is not None and not isinstance(v, type) and get_origin(v) is None:
-            raise ValueError(
-                f"data_type must be a Python type or generic alias (e.g. list[str]), got {v!r}"
-            )
+        if v is not None:
+            origin = get_origin(v)
+            if origin in _REJECTED_ORIGINS:
+                raise ValueError(
+                    f"data_type must not use Annotated or Literal, got {v!r}"
+                )
+            if not isinstance(v, type) and origin is None:
+                raise ValueError(
+                    f"data_type must be a Python type or generic alias (e.g. list[str]), got {v!r}"
+                )
         return v

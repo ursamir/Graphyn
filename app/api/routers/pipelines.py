@@ -138,7 +138,7 @@ def validate_pipeline_config(payload: dict = Body(...)):
             return {"valid": False, "error": str(exc)}
 
         headers = {"X-Deprecation-Warning": "YAML pipeline input is deprecated. Use IR JSON format."}
-        return JSONResponse(content={"valid": True}, headers=headers)
+        return JSONResponse(content={"valid": True, "node_count": len(config.get("pipeline", {}).get("nodes", []))}, headers=headers)
 
 
 # ── Run (streaming) ───────────────────────────────────────────────────────────
@@ -185,7 +185,11 @@ def run_pipeline_stream(payload: dict = Body(...)):
             item = queue.get()
             if item is None:
                 break
-            yield json.dumps(item) + "\n"
+            try:
+                yield json.dumps(item) + "\n"
+            except (TypeError, ValueError) as exc:
+                yield json.dumps({"type": "error", "message": f"Serialization error: {exc}"}) + "\n"
+                break
 
     headers = {}
     if deprecation_header:
@@ -256,7 +260,10 @@ def get_template(name: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Template not found")
     import json as _json
-    return {"name": name, "graph": _json.loads(path.read_text(encoding="utf-8"))}
+    try:
+        return {"name": name, "graph": _json.loads(path.read_text(encoding="utf-8"))}
+    except _json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"Template file is corrupted: {exc}")
 
 
 @router.post("/templates", summary="Save a pipeline template")

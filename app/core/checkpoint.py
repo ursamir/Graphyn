@@ -4,34 +4,39 @@ Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Serialize and deserialize per-node outputs to disk for
                   resumable pipeline execution.
 Owns:             _write_checkpoint(), _load_checkpoint_outputs(),
-                  _find_latest_checkpoint()
+                  _find_latest_checkpoint(), _update_checkpoint_index()
 Public Surface:   _write_checkpoint(run_base_path, node_id, outputs, logger)
                   _load_checkpoint_outputs(checkpoint_dir) -> dict | None
                   _find_latest_checkpoint(node_id) -> dict | None
-Must NOT:         Import app.models at module level (RULE 1 — platform must
-                  not depend on domain models at import time). AudioSample is
-                  never imported here — WAV I/O is delegated to
-                  AudioSampleHandler via ArtifactSerializerRegistry.
-                  Must not understand pipeline execution order or node logic.
+Must NOT:         Import app.models, app.domain, or any domain type at module
+                  level or inline. Must not reference any artifact_type string
+                  by name (e.g. "audio_samples") — all type discovery is done
+                  via ArtifactSerializerRegistry.infer_type(). Must not
+                  understand pipeline execution order or node logic.
 Dependencies:     stdlib (json, os, logging),
-                  app.core.artifact_serializer (registry — no domain knowledge).
+                  app.core.artifact_serializer (registry — no domain knowledge),
+                  app.core.config (runs_dir — lazy import only).
 Reason To Change: Checkpoint storage format evolves, or new port data types
                   need serialization support.
 
-## ARCH-3 fix
+## Manifest format (current — no legacy support)
 
-All WAV I/O and AudioSample construction previously inline in
-_write_checkpoint() and _load_checkpoint_outputs() has been removed.
-Both functions now delegate to ArtifactSerializerRegistry:
+Every checkpoint directory written by this module contains:
 
-    registry = get_serializer_registry()
-    handler  = registry.get("audio_samples")   # None if not registered
-    if handler:
-        handler.serialize(samples, port_dir)
-        samples = handler.deserialize(port_dir)
+    manifest.json
+        {
+          "checkpointed_ports": ["port_a", "port_b"],
+          "port_types":         {"port_a": "<type_key>", "port_b": "<type_key>"}
+        }
 
-AudioSample detection also uses registry.infer_type() instead of duck-typing
-(ARCH-3 follow-up fix) — checkpoint.py contains zero domain-model knowledge.
+    port_<name>/          ← one subdirectory per port
+        <handler-specific files>
+
+Both fields are required. Manifests missing either field are treated as
+unreadable and the node re-executes. No legacy single-port format is supported.
+
+All I/O is delegated to ArtifactSerializerRegistry handlers — this file
+contains zero domain-model knowledge.
 """
 from __future__ import annotations
 
@@ -50,14 +55,18 @@ def _write_checkpoint(
     outputs: dict,
     logger: Any = None,
 ) -> None:
-    """Write a node's outputs to a checkpoint directory as WAV files + manifest.json.
+    """Write a node's outputs to a checkpoint directory.
 
-    Each list-of-AudioSample port is written to its own ``port_<name>/``
+    Each serializable port is written to its own ``port_<name>/``
     subdirectory so that all ports are preserved on resume (ARCH-4 fix —
     previously only the first list port was saved).
 
-    ARCH-3 fix: WAV I/O delegated to AudioSampleHandler via
-    ArtifactSerializerRegistry. No domain-model imports in this function.
+    Supports all port types registered in ArtifactSerializerRegistry, not
+    only AudioSample ports. Ports whose type has no registered handler are
+    skipped with a warning (they will re-execute on resume).
+
+    ARCH-3 fix: all I/O delegated to handlers via ArtifactSerializerRegistry.
+    No domain-model imports in this function.
 
     Args:
         run_base_path: Base path of the current run directory.
@@ -67,6 +76,14 @@ def _write_checkpoint(
     """
     try:
         from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        # SEC: reject null bytes before any path construction — CPython raises
+        # ValueError from open() but os.makedirs may succeed first on some OSes.
+        if "\x00" in node_id:
+            raise ValueError(
+                f"node_id '{node_id!r}' contains a null byte — rejected."
+            )
 
         checkpoint_dir = os.path.join(run_base_path, "checkpoints", f"node_{node_id}")
 
@@ -83,49 +100,62 @@ def _write_checkpoint(
             )
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-        # Collect ALL ports that carry AudioSample-like lists so none are dropped.
+        # Collect ALL ports that have a registered serializer handler.
         # ARCH-3 fix: use the serializer registry's infer_type() instead of
-        # duck-typing for AudioSample attributes. This removes domain knowledge
-        # from platform infrastructure.
-        from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
+        # duck-typing. This removes domain knowledge from platform infrastructure.
+        # Unlike the previous audio-only approach, any registered type is
+        # checkpointed so non-audio nodes (trainers, feature extractors, etc.)
+        # are not silently skipped on resume.
         _ser_registry = get_serializer_registry()
-        audio_ports: dict[str, list] = {
-            port_name: value
-            for port_name, value in outputs.items()
-            if isinstance(value, list) and value
-            and _ser_registry.infer_type(value) == "audio_samples"
-        }
+        serializable_ports: dict[str, tuple[str, Any]] = {}  # port_name → (type_key, value)
+        for port_name, value in outputs.items():
+            if not isinstance(value, list) or not value:
+                continue
+            type_key = _ser_registry.infer_type(value)
+            if type_key is None:
+                continue
+            handler = _ser_registry.get(type_key)
+            if handler is None:
+                continue
+            serializable_ports[port_name] = (type_key, value)
 
-        if not audio_ports:
-            # SA-C2 fix: warn when a node has no audio outputs so users know
-            # it will re-execute on resume rather than being silently skipped.
+        if not serializable_ports:
             log.warning(
-                "Node '%s' has no AudioSample outputs — checkpoint not written; "
+                "Node '%s' has no serializable outputs — checkpoint not written; "
                 "node will re-execute on resume.",
                 node_id,
             )
             return
 
-        handler = get_serializer_registry().get("audio_samples")
-        if handler is None:
-            log.warning(
-                "Node '%s': no handler registered for 'audio_samples' — checkpoint not written; "
-                "node will re-execute on resume. Call register_audio_serializer() at startup.",
-                node_id,
-            )
-            return
-
-        # Write each port to its own named subdirectory (matches pipeline_cache.py format).
-        for port_name, samples in audio_ports.items():
+        # Write each port to its own named subdirectory.
+        port_manifest: dict[str, str] = {}  # port_name → type_key
+        for port_name, (type_key, value) in serializable_ports.items():
+            handler = _ser_registry.get(type_key)
             port_dir = os.path.join(checkpoint_dir, f"port_{port_name}")
             os.makedirs(port_dir, exist_ok=True)
-            from pathlib import Path as _Path  # noqa: PLC0415
-            handler.serialize(samples, _Path(port_dir))
+            handler.serialize(value, _Path(port_dir))
+            port_manifest[port_name] = type_key
 
-        # Write a top-level manifest listing which ports were checkpointed.
+        # Write a top-level manifest atomically (tmp + os.replace) so a crash
+        # between the last port write and the manifest write does not leave a
+        # partial checkpoint that is silently discarded on resume — the manifest
+        # is either fully written or absent, never half-written.
         top_manifest_path = os.path.join(checkpoint_dir, "manifest.json")
-        with open(top_manifest_path, "w", encoding="utf-8") as f:
-            json.dump({"checkpointed_ports": sorted(audio_ports.keys())}, f, indent=2)
+        tmp_manifest_path = top_manifest_path + ".tmp"
+        with open(tmp_manifest_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "checkpointed_ports": sorted(port_manifest.keys()),
+                    "port_types": port_manifest,
+                },
+                f,
+                indent=2,
+            )
+        os.replace(tmp_manifest_path, top_manifest_path)
+
+        # Update the per-node O(1) lookup index so _find_latest_checkpoint
+        # does not need to scan all run directories.
+        _update_checkpoint_index(run_base_path, node_id)
 
     except Exception as exc:
         log.warning("Checkpoint write failed for node '%s': %s", node_id, exc)
@@ -145,8 +175,38 @@ def _write_checkpoint(
                 pass
 
 
+def _update_checkpoint_index(run_base_path: str, node_id: str) -> None:
+    """Update the per-node checkpoint index for O(1) latest-checkpoint lookup.
+
+    Writes ``<runs_dir>/checkpoints/node_<id>/latest_run`` containing the
+    run_base_path of the most recently written checkpoint. This allows
+    _find_latest_checkpoint() to skip the O(N) full-run-directory scan.
+
+    The index file is written atomically (tmp + os.replace).
+    """
+    try:
+        from app.core.config import runs_dir as _runs_dir  # noqa: PLC0415
+
+        runs_dir_path = str(_runs_dir())
+        index_dir = os.path.join(runs_dir_path, "checkpoints", f"node_{node_id}")
+        os.makedirs(index_dir, exist_ok=True)
+        index_path = os.path.join(index_dir, "latest_run")
+        tmp_index_path = index_path + ".tmp"
+        with open(tmp_index_path, "w", encoding="utf-8") as f:
+            f.write(run_base_path)
+        os.replace(tmp_index_path, index_path)
+    except Exception as exc:
+        # Index update failure is non-fatal — _find_latest_checkpoint falls
+        # back to the full scan if the index is absent or stale.
+        log.debug("Checkpoint index update failed for node '%s': %s", node_id, exc)
+
+
 def _find_latest_checkpoint(node_id: str) -> dict | None:
     """Search runs/ for the most recent checkpoint for node_id.
+
+    Uses an O(1) per-node index file written by _update_checkpoint_index()
+    on every successful checkpoint write. Falls back to the O(N) full-scan
+    only when the index is absent or points to a stale/missing checkpoint.
 
     Extracted from RunManager (SA-RJ-ARCH fix): checkpoint discovery is a
     storage query that belongs in checkpoint.py, not in the run lifecycle
@@ -164,6 +224,36 @@ def _find_latest_checkpoint(node_id: str) -> dict | None:
     if not os.path.exists(runs_dir_path):
         return None
 
+    # ── Fast path: O(1) index lookup ─────────────────────────────────────────
+    index_path = os.path.join(
+        runs_dir_path, "checkpoints", f"node_{node_id}", "latest_run"
+    )
+    if os.path.exists(index_path):
+        try:
+            with open(index_path, "r", encoding="utf-8") as f:
+                indexed_run_base = f.read().strip()
+            checkpoint_dir = os.path.join(
+                indexed_run_base, "checkpoints", f"node_{node_id}"
+            )
+            manifest_path = os.path.join(checkpoint_dir, "manifest.json")
+            if os.path.exists(manifest_path):
+                result = _load_checkpoint_outputs(checkpoint_dir)
+                if result is not None:
+                    return result
+                # Index points to a corrupt/partial checkpoint — fall through
+                # to full scan to find the next best candidate.
+                log.debug(
+                    "Checkpoint index for node '%s' pointed to an unloadable "
+                    "checkpoint at '%s' — falling back to full scan.",
+                    node_id, checkpoint_dir,
+                )
+        except Exception as exc:
+            log.debug(
+                "Checkpoint index read failed for node '%s': %s — falling back to full scan.",
+                node_id, exc,
+            )
+
+    # ── Slow path: O(N) full scan (index absent or stale) ────────────────────
     candidates = []
     for run_dir_name in os.listdir(runs_dir_path):
         runs_dir_resolved = str(Path(runs_dir_path).resolve())
@@ -217,15 +307,15 @@ def _find_latest_checkpoint(node_id: str) -> dict | None:
 def _load_checkpoint_outputs(checkpoint_dir: str) -> dict | None:
     """Load checkpoint outputs from a prior run's checkpoint directory.
 
-    Supports two formats:
-    - New multi-port format: ``port_<name>/manifest.json`` per port
-    - Legacy single-port format: flat ``manifest.json`` at checkpoint root
+    Expects the current manifest format: ``manifest.json`` at the checkpoint
+    root containing both ``checkpointed_ports`` (list of port names) and
+    ``port_types`` (mapping of port name → artifact_type key).
 
-    ARCH-3 fix: AudioSample construction delegated to AudioSampleHandler via
-    ArtifactSerializerRegistry. No domain-model imports in this function.
+    Manifests that do not contain these fields are treated as unreadable and
+    the node will re-execute. No legacy format support — clean migration only.
 
-    Returns a dict mapping port names to lists of AudioSample objects on
-    success, or None on failure.
+    Returns a dict mapping port names to deserialized values on success,
+    or None on failure (node will re-execute).
     """
     try:
         from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
@@ -238,44 +328,50 @@ def _load_checkpoint_outputs(checkpoint_dir: str) -> dict | None:
         with open(top_manifest_path, "r", encoding="utf-8") as f:
             top_manifest = json.load(f)
 
-        handler = get_serializer_registry().get("audio_samples")
-        if handler is None:
+        checkpointed_ports = top_manifest.get("checkpointed_ports")
+        port_types: dict[str, str] | None = top_manifest.get("port_types")
+
+        if checkpointed_ports is None or port_types is None:
             log.warning(
-                "Checkpoint load: no handler registered for 'audio_samples' — will re-execute. "
-                "Call register_audio_serializer() at startup.",
+                "Checkpoint at '%s' is missing 'checkpointed_ports' or 'port_types' "
+                "— unreadable format, will re-execute.",
+                checkpoint_dir,
             )
             return None
 
-        # ── New multi-port format ──────────────────────────────────────────────
-        checkpointed_ports = top_manifest.get("checkpointed_ports")
-        if checkpointed_ports is not None:
-            result: dict = {}
-            for port_name in checkpointed_ports:
-                port_dir = _Path(os.path.join(checkpoint_dir, f"port_{port_name}"))
-                if not port_dir.exists():
-                    log.warning(
-                        "Checkpoint port dir missing for '%s' in '%s' — will re-execute",
-                        port_name, checkpoint_dir,
-                    )
-                    return None
-                samples = handler.deserialize(port_dir)
-                if samples is None:
-                    log.warning(
-                        "Checkpoint load failed for node '%s' port '%s' — will re-execute",
-                        checkpoint_dir, port_name,
-                    )
-                    return None
-                result[port_name] = samples
-            return result
-
-        # ── Legacy single-port format (flat manifest.json) ────────────────────
-        # The top-level manifest.json IS the samples manifest in this format.
-        # Pass the checkpoint_dir itself as the src_dir so the handler can
-        # find the WAV files alongside the manifest.
-        samples = handler.deserialize(_Path(checkpoint_dir))
-        if samples is None:
-            return None
-        return {"output": samples}
+        _ser_registry = get_serializer_registry()
+        result: dict = {}
+        for port_name in checkpointed_ports:
+            port_dir = _Path(os.path.join(checkpoint_dir, f"port_{port_name}"))
+            if not port_dir.exists():
+                log.warning(
+                    "Checkpoint port dir missing for '%s' in '%s' — will re-execute",
+                    port_name, checkpoint_dir,
+                )
+                return None
+            type_key = port_types.get(port_name)
+            if type_key is None:
+                log.warning(
+                    "Checkpoint manifest at '%s' has no type_key for port '%s' — will re-execute",
+                    checkpoint_dir, port_name,
+                )
+                return None
+            handler = _ser_registry.get(type_key)
+            if handler is None:
+                log.warning(
+                    "Checkpoint load: no handler for type '%s' (port '%s') — will re-execute",
+                    type_key, port_name,
+                )
+                return None
+            value = handler.deserialize(port_dir)
+            if value is None:
+                log.warning(
+                    "Checkpoint load failed for node '%s' port '%s' — will re-execute",
+                    checkpoint_dir, port_name,
+                )
+                return None
+            result[port_name] = value
+        return result
 
     except Exception as exc:
         log.warning(

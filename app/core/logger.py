@@ -47,7 +47,12 @@ class PipelineLogger:
         else:
             _log.info(msg)
         if self.queue:
-            self.queue.put(entry)
+            try:
+                self.queue.put_nowait(entry)
+            except Exception:
+                # Queue full or closed — drop the entry rather than blocking
+                # the pipeline execution thread (bounded-queue / dead-consumer guard).
+                pass
 
     def _emit_structured(self, entry: dict):
         """Append a typed event to logs, put it on the queue, and write a
@@ -56,12 +61,19 @@ class PipelineLogger:
 
         Plain-text events (INFO/WARNING/ERROR) continue to go through
         ``_emit`` which writes at the appropriate level.
+
+        Queue delivery is best-effort: if the queue is full or closed the
+        entry is dropped rather than blocking the caller.
         """
         self.logs.append(entry)
         event_type = entry.get("type", "event")
         _log.debug("structured_event type=%s %s", event_type, entry)
         if self.queue:
-            self.queue.put(entry)
+            try:
+                self.queue.put_nowait(entry)
+            except Exception:
+                # Queue full or closed — drop rather than block.
+                pass
 
     def log(self, level, message):
         entry = {
@@ -103,7 +115,14 @@ class PipelineLogger:
         self._emit_structured(event)
 
     def node_end(self, node_type, index, duration, output_count: int = 0):
-        count_str = f" → {output_count} samples" if output_count else ""
+        """Emit a node_end event.
+
+        Args:
+            output_count: Total number of output items across all ports
+                          (sum of list lengths for list-typed ports, 1 for
+                          scalar ports). Not a port count.
+        """
+        count_str = f" → {output_count} output items" if output_count else ""
         self.info(f"[{index}] {node_type} — done in {duration:.3f}s{count_str}")
         # Use "duration_s" consistently across all events (B-10 fix)
         self._emit_structured({
@@ -238,10 +257,17 @@ class PipelineLogger:
         })
 
     def summary(self) -> None:
-        """Emit a plain-text completion line and a structured pipeline_summary event (B-11 fix)."""
+        """Emit a structured pipeline_summary event and write a plain-text
+        completion line to Python logging only (not the queue).
+
+        The queue receives exactly one entry: the structured ``pipeline_summary``
+        event. The plain-text line goes to the Python logging system so it
+        appears in log files without creating a duplicate queue entry.
+        """
         total = time.time() - self.start_time
-        self.info(f"Pipeline completed in {total:.3f}s")
-        # Also emit a structured event so queue consumers see the summary (B-11 fix)
+        # Write plain-text line directly to Python logging — not through _emit
+        # so it does not produce a second queue entry alongside the structured event.
+        _log.info("Pipeline completed in %.3fs", total)
         self._emit_structured({
             "type": "pipeline_summary",
             "duration_s": round(total, 3),

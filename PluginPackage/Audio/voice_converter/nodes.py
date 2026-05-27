@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import threading
 from pathlib import Path
 from typing import ClassVar
 
@@ -80,6 +81,28 @@ class VoiceConverterNode(Node):
         target_speaker: str = ""            # speaker ID or reference audio path
         pitch_shift_semitones: float = 0.0  # additional pitch shift
 
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def setup(self) -> None:
+        """Pre-load the SpeechBrain model at setup time (thread-safe)."""
+        self._vc_lock: threading.Lock = threading.Lock()
+        backend = self._resolve_backend()
+        if backend == "speechbrain":
+            try:
+                from speechbrain.inference.conversion import VoiceConversion  # type: ignore
+                self._vc_model = VoiceConversion.from_hparams(
+                    source="speechbrain/voice-conversion-vctk-coqui-tts",
+                    savedir="pretrained_models/voice_conversion",
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"VoiceConverterNode: failed to load SpeechBrain model: {exc}"
+                ) from exc
+
+    def teardown(self) -> None:
+        """Release model weights."""
+        self._vc_model = None  # type: ignore[assignment]
+
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, samples: list[AudioSample]) -> list[AudioSample]:
@@ -87,6 +110,14 @@ class VoiceConverterNode(Node):
         output: list[AudioSample] = []
 
         for sample in samples:
+            # Guard: skip zero-length or None data
+            if sample.data is None or len(sample.data) == 0:
+                log.warning(
+                    "VoiceConverterNode: skipping zero-length sample %s", sample.path
+                )
+                output.append(sample)
+                continue
+
             new_sample = copy.deepcopy(sample)
 
             if backend == "speechbrain":
@@ -94,6 +125,11 @@ class VoiceConverterNode(Node):
             elif backend == "knnvc":
                 new_sample = self._convert_knnvc(new_sample)
             else:
+                if abs(self.config.pitch_shift_semitones) < 0.01:
+                    log.warning(
+                        "VoiceConverterNode: no backend available and pitch_shift_semitones=0 "
+                        "— returning audio unchanged"
+                    )
                 new_sample = self._convert_pitch_only(new_sample)
 
             new_sample.metadata["voice_converter"] = {
@@ -133,21 +169,26 @@ class VoiceConverterNode(Node):
     def _convert_speechbrain(self, sample: AudioSample) -> AudioSample:
         try:
             import torch  # type: ignore
-            from speechbrain.inference.vocoders import HifiGanVocoder  # type: ignore
-            from speechbrain.inference.conversion import VoiceConversion  # type: ignore
+            from speechbrain.inference.vocoders import HifiGanVocoder  # type: ignore  # noqa: F401
+            from speechbrain.inference.conversion import VoiceConversion  # type: ignore  # noqa: F401
         except ImportError:
             raise ImportError(
                 "VoiceConverterNode: 'speechbrain' required for backend='speechbrain'. "
                 "Install with: pip install speechbrain>=0.5"
             )
 
-        if not hasattr(self, "_vc_model"):
+        # Ensure model is available (setup() pre-loads; guard for direct calls in tests)
+        if not hasattr(self, "_vc_model") or self._vc_model is None:
+            from speechbrain.inference.conversion import VoiceConversion  # type: ignore
             self._vc_model = VoiceConversion.from_hparams(
                 source="speechbrain/voice-conversion-vctk-coqui-tts",
                 savedir="pretrained_models/voice_conversion",
             )
 
         y = sample.data.astype(np.float32)
+        # Mono-mix stereo input — SpeechBrain expects (1, N)
+        if y.ndim > 1:
+            y = y.mean(axis=1)
         sr = sample.sample_rate
 
         # Resample to 16kHz for SpeechBrain
@@ -163,18 +204,24 @@ class VoiceConverterNode(Node):
         if self.config.target_speaker and Path(self.config.target_speaker).exists():
             import soundfile as sf  # type: ignore
             t_data, t_sr = sf.read(self.config.target_speaker, dtype="float32")
+            # Mono-mix stereo reference
+            if t_data.ndim > 1:
+                t_data = t_data.mean(axis=1)
             if t_sr != 16000:
                 import librosa  # type: ignore
                 t_data = librosa.resample(y=t_data, orig_sr=t_sr, target_sr=16000)
             target_wav = torch.from_numpy(t_data).unsqueeze(0)
 
         with torch.no_grad():
-            if target_wav is not None:
-                converted = self._vc_model.convert_voice(wav_tensor, target_wav)
-            else:
-                converted = self._vc_model.convert_voice(wav_tensor, wav_tensor)
+            lock: threading.Lock = getattr(self, "_vc_lock", threading.Lock())
+            with lock:
+                if target_wav is not None:
+                    converted = self._vc_model.convert_voice(wav_tensor, target_wav)
+                else:
+                    converted = self._vc_model.convert_voice(wav_tensor, wav_tensor)
 
-        y_out = converted.squeeze().numpy()
+        # .detach().cpu() ensures safe conversion from GPU tensors
+        y_out = converted.squeeze().detach().cpu().numpy()
 
         # Apply additional pitch shift if requested
         if abs(self.config.pitch_shift_semitones) > 0.01:
@@ -205,6 +252,13 @@ class VoiceConverterNode(Node):
             return self._convert_pitch_only(sample)
 
         y_out = knnvc.convert(y, sr, target_path)
+        # Guard: knnvc may return a PyTorch CUDA tensor on GPU systems
+        try:
+            import torch  # type: ignore
+            if isinstance(y_out, torch.Tensor):
+                y_out = y_out.detach().cpu().numpy()
+        except ImportError:
+            pass
         sample.data = np.asarray(y_out, dtype=np.float32)
         return sample
 

@@ -118,6 +118,8 @@ class AudioAnnotatorNode(Node):
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, samples: list[AudioSample]) -> list[AudioSample]:
+        if samples is None:
+            return []
         mode = self.config.annotation_mode
         output: list[AudioSample] = []
 
@@ -176,13 +178,24 @@ class AudioAnnotatorNode(Node):
                 matched_rule = rule
                 break
 
-        if matched_label is not None:
+        if matched_label is not None and matched_label != "":
             sample.label = matched_label
             sample.metadata["annotation"] = {
                 "mode": "auto",
                 "label": matched_label,
                 "confidence": matched_confidence,
                 "rule": matched_rule,
+            }
+        elif matched_label == "":
+            log.warning(
+                "AudioAnnotatorNode: rule matched but 'label' is empty — skipping label assignment"
+            )
+            sample.metadata["annotation"] = {
+                "mode": "auto",
+                "label": sample.label,
+                "confidence": matched_confidence,
+                "rule": matched_rule,
+                "note": "rule matched but label was empty string",
             }
         else:
             # No rule matched — keep existing label
@@ -198,7 +211,12 @@ class AudioAnnotatorNode(Node):
 
     def _rule_matches(self, rule: dict, sample: AudioSample) -> bool:
         """Evaluate a single rule against a sample. Returns True if it matches."""
-        field = rule.get("field", "")
+        field = rule.get("field")
+        if not field:
+            log.warning(
+                "AudioAnnotatorNode: rule missing 'field' key — skipping: %s", rule
+            )
+            return False
         op = rule.get("op", "==")
         value = rule.get("value")
 
@@ -304,14 +322,21 @@ class AudioAnnotatorNode(Node):
             all_weak.extend(per_sample)
 
         threshold = self.config.confidence_threshold
+
+        def _safe_confidence(w: dict) -> float:
+            try:
+                return float(w.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
         accepted = [
             w for w in all_weak
-            if float(w.get("confidence", 0.0)) >= threshold
+            if _safe_confidence(w) >= threshold
         ]
 
         if accepted:
             # Sort by confidence descending; pick top label
-            accepted.sort(key=lambda w: float(w.get("confidence", 0.0)), reverse=True)
+            accepted.sort(key=lambda w: _safe_confidence(w), reverse=True)
             best = accepted[0]
             sample.label = str(best.get("label", sample.label))
             sample.metadata["annotation"] = {

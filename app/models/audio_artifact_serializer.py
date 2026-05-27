@@ -60,30 +60,51 @@ class AudioSampleHandler:
     # ------------------------------------------------------------------
 
     def serialize(self, data: Any, dest_dir: Path) -> None:
-        """Write a list[AudioSample] to ``dest_dir`` as WAV + manifest.json."""
+        """Write a list[AudioSample] to ``dest_dir`` as WAV + manifest.json.
+
+        Writes to a temporary sibling directory first, then atomically renames
+        to ``dest_dir`` on success.  On failure the temp directory is cleaned
+        up so no orphaned partial WAV files are left on disk.
+        """
+        import shutil
+        import tempfile
+
         import numpy as np
         import soundfile as sf
 
-        manifest_entries = []
-        for i, sample in enumerate(data):
-            filename = f"{i}.wav"
-            wav_path = dest_dir / filename
-            sample_data = getattr(sample, "data", None)
-            sample_rate = getattr(sample, "sample_rate", 22050)
-            if sample_data is not None and len(sample_data) > 0:
-                sf.write(str(wav_path), sample_data, sample_rate)
-            else:
-                sf.write(str(wav_path), np.array([], dtype=np.float32), sample_rate)
-            manifest_entries.append({
-                "filename": filename,
-                "label": getattr(sample, "label", None),
-                "path": getattr(sample, "path", None) or getattr(sample, "source_path", ""),
-                "sample_rate": sample_rate,
-                "metadata": getattr(sample, "metadata", {}),
-            })
-        (dest_dir / "manifest.json").write_text(
-            json.dumps({"samples": manifest_entries}, indent=2), encoding="utf-8"
-        )
+        if not isinstance(data, list):
+            raise TypeError(f"Expected list[AudioSample], got {type(data).__name__}")
+
+        # Write to a temp dir so a mid-write failure leaves dest_dir untouched.
+        tmp_dir = Path(tempfile.mkdtemp(dir=dest_dir.parent, prefix=".tmp_audio_"))
+        try:
+            manifest_entries = []
+            for i, sample in enumerate(data):
+                filename = f"{i}.wav"
+                wav_path = tmp_dir / filename
+                sample_data = getattr(sample, "data", None)
+                sample_rate = getattr(sample, "sample_rate", 22050)
+                if sample_data is not None and len(sample_data) > 0:
+                    sf.write(str(wav_path), sample_data, sample_rate)
+                else:
+                    sf.write(str(wav_path), np.array([], dtype=np.float32), sample_rate)
+                manifest_entries.append({
+                    "filename": filename,
+                    "label": getattr(sample, "label", None),
+                    "path": getattr(sample, "path", None) or getattr(sample, "source_path", ""),
+                    "sample_rate": sample_rate,
+                    "metadata": getattr(sample, "metadata", {}),
+                })
+            (tmp_dir / "manifest.json").write_text(
+                json.dumps({"samples": manifest_entries}, indent=2), encoding="utf-8"
+            )
+            # Atomic promotion: remove dest_dir if it already exists, then rename.
+            if dest_dir.exists():
+                shutil.rmtree(dest_dir)
+            tmp_dir.rename(dest_dir)
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
 
     def deserialize(self, src_dir: Path) -> Any | None:
         """Read WAV + manifest.json from ``src_dir`` → list[AudioSample].
@@ -111,10 +132,10 @@ class AudioSampleHandler:
                 data, _sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
             except Exception as exc:
                 logger.warning(
-                    "AudioSampleHandler.deserialize: cannot read WAV %s (%s) — returning None",
+                    "AudioSampleHandler.deserialize: skipping corrupt WAV %s (%s)",
                     wav_path, exc,
                 )
-                return None
+                continue  # skip this sample; return the rest of the valid samples
             try:
                 sample = AudioSample.model_validate({
                     "path": entry["path"],
@@ -125,10 +146,10 @@ class AudioSampleHandler:
                 })
             except pydantic.ValidationError as exc:
                 logger.warning(
-                    "AudioSampleHandler.deserialize: validation failed for %s (%s) — returning None",
+                    "AudioSampleHandler.deserialize: skipping invalid entry %s (%s)",
                     wav_path, exc,
                 )
-                return None
+                continue  # skip this sample; return the rest of the valid samples
             samples.append(sample)
         return samples
 
@@ -145,7 +166,12 @@ class AudioSampleHandler:
             # metadata but different audio content (prevents false deduplication).
             if raw_data is not None and hasattr(raw_data, "tobytes"):
                 try:
-                    pcm_hash = hashlib.sha256(raw_data.tobytes()).hexdigest()[:16]
+                    # Hash only the first 1024 float32 values (4 KB) combined
+                    # with shape+dtype for a fast, stable fingerprint.  Hashing
+                    # the full array for large files (e.g. 10-min @ 44100 Hz =
+                    # ~106 MB) would materialise hundreds of MB per cache check.
+                    prefix = raw_data.flat[:1024].tobytes()
+                    pcm_hash = hashlib.sha256(prefix).hexdigest()[:16]
                 except Exception:
                     pcm_hash = ""
             else:

@@ -71,6 +71,7 @@ General-purpose AI/workflow execution platform. Four interfaces share `app/core/
 | `GRAPHYN_PLUGIN_AUTO_INSTALL` | `""` | `"1"` or `"true"` to auto-install missing plugin deps via pip |
 | `GRAPHYN_PLUGIN_INDEX_URL` | `""` | Remote plugin index URL |
 | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | `""` | Comma-separated URL prefixes; empty = allow all (SEC-6 fix) |
+| `GRAPHYN_STRICT_COMPAT` | `""` | `"1"` or `"true"` to raise `PluginCompatibilityError` when `app.__version__` is unset instead of skipping the check |
 | `GRAPHYN_REDIS_URL` | `""` | Redis connection URL; empty = use in-process store (SCALE-1/SCALE-2) |
 
 ## Run Commands
