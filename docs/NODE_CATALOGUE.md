@@ -1,6 +1,6 @@
 # Node Catalogue
 
-All 29 production nodes live in `PluginPackage/`. There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories have been removed.
+All 30 production nodes live in `PluginPackage/`. There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
 
 For full config fields, port specs, and capability details → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
@@ -30,11 +30,12 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `voice_converter` | Generation | optional: speechbrain, torch |
 | `audio_generator` | Generation | optional: audiocraft, torch |
 
-## Common Plugins — `PluginPackage/Common/` (11 nodes)
+## Common Plugins — `PluginPackage/Common/` (12 nodes)
 
 | node_type | Category | Key Dependencies |
 |---|---|---|
 | `dataset_builder` | ML | numpy, scikit-learn; optional: tensorflow, torch |
+| `model_builder` | ML | optional: tensorflow/keras, torch |
 | `trainer` | ML | optional: tensorflow/keras, torch |
 | `evaluator` | ML | scikit-learn, numpy; optional: matplotlib, seaborn |
 | `edge_optimizer` | ML | optional: tensorflow, onnx, tf2onnx |
@@ -69,6 +70,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `voice_converter` | Optional | No | No | Yes | No | No |
 | `audio_generator` | Yes | No | No | No | No | No |
 | `dataset_builder` | No | No | No | No | Yes | Yes |
+| `model_builder` | Optional | No | No | No | No | No |
 | `trainer` | Optional | No | No | No | No | No |
 | `evaluator` | No | No | No | No | Yes | No |
 | `edge_optimizer` | No | No | No | No | Yes | Yes |

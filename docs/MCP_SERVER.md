@@ -132,7 +132,7 @@ Returns the schema for all NDJSON event types emitted during execution. No argum
 
 ### `execute_pipeline`
 
-Execute a pipeline. Returns `run_id` within 500ms; execution proceeds asynchronously.
+Execute a pipeline. Returns `run_id` within 500ms; execution proceeds asynchronously in a background thread. If the background thread raises an unhandled exception, the run is marked failed in `meta.json`.
 
 **Arguments:** `graph` (required), `use_cache` (default `true`), `streaming` (default `false`).
 
@@ -162,7 +162,15 @@ Control an active run. Only works on currently running pipelines (same process).
 
 **Arguments:** `run_id` (required).
 
-**Returns:** `{"run_id": "...", "status": "paused|running|cancelled"}` or `{"error_type": "run_not_active"}`
+**`pause_run` returns:** `{"run_id": "...", "status": "pause_requested"}` — the run will pause at the next node boundary.
+
+**`resume_run` returns:** `{"run_id": "...", "status": "running"}`.
+
+**`cancel_run` returns:** `{"run_id": "...", "status": "cancel_requested"}`.
+
+**Error:** `{"error_type": "run_not_active"}` — distinguishes completed runs from runs that never existed.
+
+`OSError` during pause/resume (e.g. filesystem unavailable) is caught and returned as `{"error_type": "run_not_active"}`.
 
 ---
 
@@ -170,7 +178,7 @@ Control an active run. Only works on currently running pipelines (same process).
 
 Query the artifact store.
 
-**Arguments:** `run_id` (optional), `node_type` (optional), `artifact_type` (optional).
+**Arguments:** `run_id` (optional), `node_type` (optional), `artifact_type` (optional), `limit` (optional, default `200`).
 
 **Returns:** Array of `ArtifactRecord` objects.
 
@@ -202,7 +210,7 @@ Analyze a graph and return hardware placement recommendations and wave analysis.
 
 **Arguments:** `graph` (required).
 
-**Returns:** Wave analysis, capability hints, hardware placement recommendations.
+**Returns:** Wave analysis, capability hints, hardware placement recommendations. Includes `is_disconnected` field (true if the graph has no edges). Emits `unknown_capability_nodes` warning for node types not in the registry.
 
 ---
 
@@ -227,3 +235,4 @@ All handlers return structured JSON — never raw exceptions.
 | `graph_not_found` | `graph.json` missing for the run |
 | `store_error` | `ArtifactStore` or `ProvenanceStore` raised |
 | `replay_error` | Unexpected error during replay setup |
+| `registry_error` | `registry.list_nodes()` failed in discovery handler |

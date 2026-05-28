@@ -1,9 +1,5 @@
 # Graphyn Platform Documentation
 
-> **New comprehensive overview (source-of-truth, generated from code):** → **[OVERVIEW.md](OVERVIEW.md)**  
-> **Full node catalogue:** → **[NODE_CATALOGUE.md](NODE_CATALOGUE.md)**  
-> **Architecture diagrams:** → **[ARCHITECTURE.md](ARCHITECTURE.md)**
-
 This is a general-purpose AI/workflow execution platform. It exposes a REST API, a Python SDK, a CLI, and an MCP server for building, running, and managing data processing pipelines — primarily audio ML, but domain-agnostic via plugins.
 
 This index is the entry point for all documentation. Start here, then follow the links to the topic you need.
@@ -14,19 +10,20 @@ This index is the entry point for all documentation. Start here, then follow the
 
 | Document | What it covers |
 |---|---|
-| **[OVERVIEW.md](./OVERVIEW.md)** | **Complete platform overview with architecture diagrams — start here** |
-| **[NODE_CATALOGUE.md](./NODE_CATALOGUE.md)** | **All 33+ built-in nodes with ports, config fields, and capability flags** |
-| [USERGUIDE.md](./USERGUIDE.md) | Complete user guide — SDK, CLI, API, MCP, nodes, plugins, advanced runtime |
+| **[NODE_CATALOGUE.md](./NODE_CATALOGUE.md)** | **All 30 plugin nodes with ports, config fields, and capability flags** |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System layers, component dependency graph, data flows, phase history |
 | [NODE_SYSTEM.md](./NODE_SYSTEM.md) | Node base class, ports, config, metadata, capability fields, registry, AutoDiscovery |
 | [PIPELINE_EXECUTION.md](./PIPELINE_EXECUTION.md) | Graph IR, DAG executor, caching, checkpoints, all execution modes |
+| [BACKEND_CORE.md](./BACKEND_CORE.md) | RunJournal, RunControl, PipelineLogger, ArtifactSerializerRegistry, ArtifactStore, ProvenanceStore |
+| [DOMAIN_SERVICES.md](./DOMAIN_SERVICES.md) | IngestionService, ProjectManager, QualityChecker, AudioSampleHandler |
 | [API_REFERENCE.md](./API_REFERENCE.md) | All `/api/v1/` REST endpoints, request/response shapes, streaming protocol |
-| [BACKEND_CORE.md](./BACKEND_CORE.md) | RunManager, PipelineLogger, ArtifactStore, ProvenanceStore, PipelineCache |
-| [MCP_SERVER.md](./MCP_SERVER.md) | MCP server: all 14 tools, auth, tool registry, error contract |
-| [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md) | Writing and deploying plugins, manifest schema, lifecycle |
-| [SDK_AND_CLI.md](./SDK_AND_CLI.md) | Python SDK (Pipeline, PipelineNode, ArtifactCollection) and CLI reference |
-| [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port data types, workspace layout, artifact format |
-| [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Active and resolved issues |
+| [SDK_AND_CLI.md](./SDK_AND_CLI.md) | Python SDK (Pipeline, PipelineNode) and CLI reference |
+| [MCP_SERVER.md](./MCP_SERVER.md) | MCP server: all 15 tools, auth, tool registry, error contract |
+| [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md) | Writing and deploying plugins, manifest schema, lifecycle, quality checklist |
+| [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port data types, workspace layout, artifact format, streaming protocol |
+| [USERGUIDE.md](./USERGUIDE.md) | Complete user guide — SDK, CLI, API, MCP, nodes, plugins, advanced runtime |
+| [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Open issues and deferred items |
+| [MASTER_ISSUE_REGISTRY.md](./MASTER_ISSUE_REGISTRY.md) | Full issue history — open and resolved |
 
 ---
 
@@ -71,7 +68,7 @@ pipeline = Pipeline([
 pipeline.run()
 ```
 
-### Validate a pipeline YAML
+### Validate a pipeline
 
 ```bash
 venv/bin/python -m app.cli.main validate --graph my-pipeline.graph.json
@@ -83,97 +80,73 @@ venv/bin/python -m app.cli.main validate --graph my-pipeline.graph.json
 
 **Node** — a self-contained processing unit with typed input/output ports and a Pydantic config model. All nodes extend `app.core.nodes.base.Node`.
 
-**Pipeline** — a directed acyclic graph (DAG) of nodes. Defined in IR JSON (canonical) or YAML (deprecated) or via the Python SDK. Executed by `run_pipeline_ir()`.
+**Pipeline** — a directed acyclic graph (DAG) of nodes. Defined in IR JSON (canonical) or via the Python SDK. YAML is a deprecated serialization format — use `graphyn migrate` to convert.
 
-**Graph IR** — the canonical pipeline representation (`app/core/ir/`). Versioned, validated, runtime-agnostic JSON. All interfaces produce and consume `GraphIR` objects. YAML is a deprecated serialization format.
+**Graph IR** — the canonical pipeline representation (`app/core/ir/`). Versioned, validated, runtime-agnostic JSON. All interfaces produce and consume `GraphIR` objects.
 
-**IRCapabilityMetadata** — per-node capability hints embedded in a `GraphIR` (Phase 1). When set on an `IRNode`, overrides the node class's `NodeMetadata` capability fields for that instance.
+**RuntimeBackend** — the canonical execution entry point (`app/core/runtime_backend.py`). All interfaces call `get_backend().execute(graph)`. `LocalPythonBackend` (default) delegates to `orchestrator.run_pipeline_ir_async()`.
 
-**Registry** — a singleton `NodeRegistry` populated at startup by `AutoDiscovery`. Maps node type strings (e.g. `"audio_conditioner"`) to their Python classes and metadata.
+**Registry** — a singleton `NodeRegistry` populated at startup by `AutoDiscovery`. Maps node type strings to Python classes and metadata.
 
-**AutoDiscovery** — scans `app/core/nodes/` (framework files only), `app/models/`, and `plugins/` at import time. Any `.py` file in a plugin's entry points containing a `Node` subclass with a `metadata: ClassVar[NodeMetadata]` is registered automatically.
+**Plugin** — a manifest-based package in `PluginPackage/`. All 30 production nodes are plugins. `app/core/nodes/` contains only framework infrastructure.
 
-**Plugin** — a manifest-based package in `PluginPackage/` installed via `PluginManager`. All 29 production nodes are plugins. The `app/core/nodes/` directory contains only framework infrastructure — no node implementations.
+**PortDataType** — the base class for all data types that flow between node ports. Platform types live in `app/models/`. Plugin-domain types live in the plugin's `types.py`.
 
-**PortDataType** — the base class for all data types that flow between node ports. Subclass it to define domain-specific types. `AudioSample`, `DataSample`, `FeatureArray`, `ModelArtifact`, `TFLiteArtifact`, and `PredictionResult` are all `PortDataType` subclasses.
+**ArtifactSerializerRegistry** — pluggable serializer registry (`app/core/artifact_serializer.py`). Platform storage code calls it; domain code registers handlers at startup. Keeps platform infrastructure free of domain knowledge.
 
-**DataSample** — a domain-agnostic base data type (`id`, `source`, `metadata`). Subclass it for new domains (e.g. `TextSample`, `ImageSample`).
+**RunJournal / RunControl** — `run_journal.py` owns filesystem persistence for a single run; `run_control.py` owns the active run registry (in-process dict or Redis-backed). `run_manager.py` is a re-export shim for backward compatibility.
 
-**AudioSample** — the data type for audio clips (`path`, `sample_rate`, `data`, `label`, `metadata`). One example of a domain-specific `PortDataType`.
+**Domain Services** — `app/domain/` contains `IngestionService`, `ProjectManager`, and `QualityChecker`. Platform code never imports from `app/domain/`.
 
-**MCP Server** — interface at `app/mcp/`. Exposes 15 tools via the Model Context Protocol (stdio transport), enabling AI agents to discover nodes, generate graphs, validate, execute pipelines, inspect artifacts, and control runs.
-
----
-
-## Example Use Cases
-
-- **Audio dataset preparation** — load WAV files, clean, augment, segment, split, export
-- **ML training pipelines** — extract features, build datasets, train Keras models, export TFLite
-- **Speech command classification** — end-to-end from raw audio to deployed TFLite model
-- **Speaker verification** — annotate speaker identity metadata for contrastive learning
-- **Speech enhancement** — generate paired clean/degraded samples for training
-- **Data transformation** — any pipeline that reads, transforms, and writes structured data
+**MCP Server** — exposes 15 tools via the Model Context Protocol (stdio transport), enabling AI agents to discover nodes, generate graphs, validate, execute pipelines, inspect artifacts, and control runs.
 
 ---
 
 ## Architecture in One Diagram
 
 ```
-Browser / CLI / SDK / AI Agent
+CLI / SDK / API / MCP Agent
         │
         ▼
-FastAPI app  (app/api/main.py — thin factory)
+get_backend().execute(graph)          ← canonical entry point (runtime_backend.py)
         │
-        ├── /api/v1/nodes/*       → nodes.py router
-        ├── /api/v1/pipelines/*   → pipelines.py router
-        ├── /api/v1/runs/*        → runs.py router
-        ├── /api/v1/data/*        → data.py router
-        ├── /api/v1/system/*      → system.py router
-        ├── /api/v1/projects/*    → projects.py router
-        └── /api/v1/ingest/*      → ingest.py router
-
-MCP Server  (app/mcp/server.py — stdio transport)
-        │
-        ├── list_nodes            → handlers/discovery.py
-        ├── generate_graph        → handlers/graph.py
-        ├── validate_graph        → handlers/graph.py
-        ├── get_graph_schema      → handlers/graph.py
-        ├── get_graph_capability_summary → handlers/graph.py
-        ├── get_event_schema      → handlers/graph.py
-        ├── execute_pipeline      → handlers/execution.py
-        └── inspect_run           → handlers/artifacts.py
+        ▼
+LocalPythonBackend
+        └── orchestrator.run_pipeline_ir_async()
                 │
-                ▼
-        app/core/  (shared by all interfaces)
-        ├── nodes/          Node System (registry, discovery, base, ports…)
-        │   └── (no audio/ or ml/ subdirs — all nodes are plugins)
-        ├── ir/             Graph IR (models.py, loader.py, yaml_shim.py, migrate.py)
-        ├── pipeline.py     DAG executor (run_pipeline_ir)
-        ├── validation.py   Pipeline config validation
-        ├── run_manager.py  Per-run directory + metadata
-        ├── logger.py       Structured event logger
-        ├── ingestion.py    URL / HuggingFace ingestion
-        ├── pipeline_cache.py  WAV + manifest cache
-        └── sdk.py          PipelineNode / Pipeline SDK
+                ├── planner.py         PipelineGraph — DAG build + topo sort + waves
+                ├── node_executor.py   NodeExecutor — per-node lifecycle + retry
+                ├── executor.py        ParallelExecutor — wave-based asyncio + ThreadPool
+                ├── run_journal.py     RunManager — run dir + meta.json + resume state
+                ├── run_control.py     Active run registry (pause/resume/cancel)
+                ├── checkpoint.py      Per-node checkpoint read/write
+                ├── pipeline_cache.py  SHA-256 keyed output cache
+                └── artifact_store.py  Content-addressed artifact storage
+                        │
+                        └── artifact_serializer.py  ArtifactSerializerRegistry
+                                └── audio_artifact_serializer.py  AudioSampleHandler (domain)
+
+app/domain/                           ← domain services (never imported by platform)
+├── ingestion.py                      URL + HuggingFace ingestion
+├── project_manager.py                Project lifecycle
+└── quality_checker.py                Dataset quality analysis
+
+PluginPackage/
+├── Audio/   (18 nodes)
+└── Common/  (12 nodes)
 ```
 
 ---
 
-## What Changed in the Pydantic Migration
+## What Changed (Phase 9 — Post-Review Fix Pass)
 
 | Old | New |
 |---|---|
-| `register(registry)` in plugins | `AutoDiscovery` via `metadata: ClassVar[NodeMetadata]` |
-| `registry[node_type]["class"]` | `registry.get_class(node_type)` |
-| `registry[node_type]["schema"]` | `registry.get_config_schema(node_type)` |
-| `validate_node_config(config, schema)` | `NodeClass.Config.model_validate(config)` |
-| `datetime.utcnow()` | `datetime.now(timezone.utc)` |
-| `@dataclass` on `IngestionJob` | `class IngestionJob(BaseModel)` |
-| `AudioSample(path=...)` constructor | `AudioSample.model_validate({...})` |
-| 500-line `app/api/main.py` monolith | Thin factory + 7 focused routers |
-| Legacy root-path endpoints | All routes under `/api/v1/` only |
-| `Node` class in sdk.py | `PipelineNode` class |
-| Audio-specific first/last node rules in `validate_pipeline` | Generalized validation, no domain constraints, supports DAG format |
-| Node implementations in `app/core/nodes/*.py` (flat) | Node implementations in `PluginPackage/Audio/` and `PluginPackage/Common/` (plugins) |
-| ML nodes in `examples/06/plugins/` | ML nodes in `PluginPackage/Common/` (plugins) |
-| ML data types in `examples/06/plugins/data_types.py` | ML data types in `app/models/` (built-in) |
+| `app/core/pipeline.py` (primary executor) | Re-export shim only — logic split into `orchestrator.py`, `planner.py`, `node_executor.py`, `checkpoint.py`, `executor.py` |
+| `app/core/run_manager.py` (primary run service) | Re-export shim only — split into `run_journal.py` (persistence) + `run_control.py` (active registry) |
+| Domain services in `app/core/` | Moved to `app/domain/ingestion.py`, `project_manager.py`, `quality_checker.py` |
+| `AudioSample` imported directly by platform storage | `ArtifactSerializerRegistry` — platform calls registry; domain registers `AudioSampleHandler` at startup |
+| `run_pipeline_ir()` called directly by all interfaces | `get_backend().execute()` — `RuntimeBackend` ABC is the canonical entry point |
+| `_resolve_capability()` in `orchestrator.py` | Moved to `registry_runtime.py` (BC3) — shared by orchestrator and executor without circular coupling |
+| `run_id` as 8-char hex | Full 32-char UUID4 hex |
+| 29 plugin nodes | 30 plugin nodes (`model_builder` added to Common) |

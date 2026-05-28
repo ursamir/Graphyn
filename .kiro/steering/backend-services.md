@@ -12,9 +12,10 @@ fileMatchPattern: "app/core/run_journal.py,app/core/run_control.py,app/core/run_
 - **`run_control.py`** — in-process active run registry
 
 ```python
-from app.core.run_manager import RunManager   # shim — works fine
+from app.core.run_journal import RunManager   # canonical import
+# or: from app.core.run_manager import RunManager  # shim — backward compat
 run = RunManager()   # creates workspace/runs/{run_id}/, writes initial meta.json
-run.run_id           # 16-char hex
+run.run_id           # full 32-char UUID4 hex, e.g. "a1b2c3d4e5f6..."
 run.base_path        # "workspace/runs/{run_id}"
 ```
 
@@ -49,8 +50,6 @@ Returns `None` for unknown/completed/wrong-worker runs (ambiguity documented in 
 `resume_state.json` schema: `{"schema_version": "1.0", "run_id": "...", "completed_nodes": [...], "graph_hash": "..."}`.
 
 All timestamps: `datetime.now(timezone.utc).isoformat()`. Never use `datetime.utcnow()`.
-
-> ⚠️ **Open issues in this area:** BUG-4 (`find_latest_checkpoint` O(N) scan — full index deferred). See `docs/MASTER_ISSUE_REGISTRY.md`.
 
 ## `PipelineLogger` (`logger.py`)
 

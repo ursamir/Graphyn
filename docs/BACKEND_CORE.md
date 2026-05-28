@@ -2,74 +2,141 @@
 
 Supporting services used by the API routers and pipeline executor.
 
+**See also:** [ARCHITECTURE.md](./ARCHITECTURE.md) | [DOMAIN_SERVICES.md](./DOMAIN_SERVICES.md) | [PIPELINE_EXECUTION.md](./PIPELINE_EXECUTION.md)
+
 ---
 
-## `RunManager`
+## Table of Contents
 
-**File:** `app/core/run_manager.py`
+1. [RunJournal (RunManager)](#1-runjournal-runmanager)
+2. [RunControl](#2-runcontrol)
+3. [PipelineLogger](#3-pipelinelogger)
+4. [ArtifactSerializerRegistry](#4-artifactserializerregistry)
+5. [ArtifactStore](#5-artifactstore)
+6. [ProvenanceStore](#6-provenancestore)
+7. [PipelineCache](#7-pipelinecache)
+8. [WebhookService](#8-webhookservice)
+9. [stable_hash()](#9-stable_hash)
 
-Manages a per-run directory under `workspace/runs/{run_id}/`. Creates the directory and writes an initial `meta.json` on construction.
+---
+
+## 1. RunJournal (RunManager)
+
+**File:** `app/core/run_journal.py`  
+**Class:** `RunManager`
+
+Manages filesystem persistence for a single pipeline run. Creates the run directory on construction and writes an initial `meta.json` so the run appears in history even if the pipeline fails before completion.
 
 ```python
+from app.core.run_journal import RunManager
+
 run = RunManager()
-run.run_id      # 8-char hex string, e.g. "a1b2c3d4"
-run.base_path   # "workspace/runs/a1b2c3d4"
+run.run_id      # full 32-char UUID4 hex, e.g. "a1b2c3d4e5f6..."
+run.base_path   # "workspace/runs/{run_id}"
 ```
 
 ### Methods
 
 | Method | Description |
 |---|---|
-| `save_config(yaml_str)` | Write `config.yaml` to the run directory |
-| `save_logs(logs)` | Write `logs.json` (list of log entry dicts) |
-| `save_metadata(metadata)` | Merge caller metadata with run bookkeeping fields and write `meta.json` with `status: "completed"` |
-| `get_provenance_summary()` | **Phase 4** — returns `{"run_id", "graph_hash", "artifacts", "provenance_records"}` dict |
-| `save_graph_ir(data)` | Write `graph.json`; also computes and stores `self._graph_hash` (Phase 4) |
-| `compute_graph_hash(graph_ir)` | **Phase 4** — static method; returns SHA-256 hex of `dump_ir(graph_ir)` JSON |
-| `find_latest_checkpoint(node_id)` | Delegates to `checkpoint._find_latest_checkpoint()` — searches all runs for the most recent checkpoint for `node_id`; returns outputs dict or `None` |
-| `register_artifact(node_id, node_type, artifact_type, data, metadata=None, input_artifact_ids=None)` | **Phase 4** — stores artifact via `ArtifactStore`, records lineage via `ProvenanceStore`, returns `ArtifactRecord` |
+| `save_graph_ir(graph_data)` | Write `graph.json` atomically (tmp+rename). Computes and stores `self._graph_hash`. |
+| `save_config(yaml_str)` | Write `config.yaml` to the run directory. |
+| `save_logs(logs)` | Write `logs.json` (list of log entry dicts). |
+| `save_metadata(metadata)` | Merge caller metadata with run bookkeeping fields; write `meta.json` with `status: "completed"`. |
+| `mark_failed(error)` | Update `meta.json` with `status: "failed"` and `error` field. Thread-safe. |
+| `mark_cancelled()` | Update `meta.json` with `status: "cancelled"`. Thread-safe. |
+| `pause()` | Clear pause event; write `status: "paused"` to `meta.json`. |
+| `resume()` | Set pause event; write `status: "running"` to `meta.json`. |
+| `cancel()` | Set cancel event; unblock if paused. |
+| `wait_if_paused()` | Block until pause event is set (called by executor between nodes). |
+| `is_paused` | `bool` property. |
+| `is_cancelled` | `bool` property. |
+| `init_resume_state(graph_hash)` | Write `resume_state.json` with empty `completed_nodes` list. |
+| `update_resume_state(node_id)` | Append `node_id` to `completed_nodes` in `resume_state.json`. Warns if file missing. |
+| `load_resume_state(run_id)` | Load `resume_state.json` from a prior run. Raises `ResumeError` on failure. |
+| `find_latest_checkpoint(node_id)` | Delegates to `checkpoint._find_latest_checkpoint()`. Returns outputs dict or `None`. |
+| `register_artifact(node_id, node_type, artifact_type, data, metadata=None, input_artifact_ids=None, name=None)` | Store artifact via `ArtifactStore`, record lineage via `ProvenanceStore`. Returns `ArtifactRecord`. |
+| `artifacts` | Thread-safe snapshot of registered `ArtifactRecord` list. |
+| `get_provenance_summary()` | Returns `{"run_id", "graph_hash", "artifacts", "provenance_records"}`. |
+| `compute_graph_hash(graph_ir)` | Static method. SHA-256 of `dump_ir(graph_ir)` JSON. |
 
 ### `meta.json` structure
 
-Written immediately on construction (status `"running"`), updated on completion or failure:
+Written immediately on construction (`status: "running"`), updated on completion or failure:
 
 ```json
 {
-  "run_id": "a1b2c3d4",
-  "created_at": "2024-01-01T00:00:00+00:00",
+  "run_id": "a1b2c3d4e5f6...",
+  "created_at": "2026-05-28T12:00:00+00:00",
   "status": "completed",
   "duration_s": 1.234,
   "num_nodes": 5,
   "node_stats": [
-    {"node_id": "input_0", "node_type": "InputNode", "node_index": 0, "duration_s": 0.1}
+    {"node_id": "cond_0", "node_type": "AudioConditionerNode", "node_index": 0, "duration_s": 0.1}
   ]
 }
 ```
 
-All timestamps are UTC-aware ISO 8601 strings (`datetime.now(timezone.utc).isoformat()`), ending in `+00:00`.
+All timestamps are UTC-aware ISO 8601 strings. All writes are atomic (tmp+rename on POSIX). All meta.json updates are protected by `_meta_lock` to prevent concurrent write loss.
 
 ### Run directory layout
 
 ```
 workspace/runs/{run_id}/
-├── meta.json       # run metadata (status, timing, node stats)
-├── config.yaml     # pipeline YAML that was executed (only when run via YAML path)
-├── logs.json       # all log entries
-├── graph.json      # GraphIR JSON (always written — Phase 1)
-└── checkpoints/    # only when checkpoint=True
+├── meta.json           # run metadata (status, timing, node stats)
+├── logs.json           # all log entries
+├── graph.json          # GraphIR JSON (always written)
+├── resume_state.json   # written when checkpoint=True
+└── checkpoints/        # only when checkpoint=True
     └── node_{node_id}/
-        ├── 0.wav
-        ├── 1.wav
+        ├── port_{name}/
+        │   ├── *.wav
+        │   └── manifest.json
         └── manifest.json
 ```
 
-`graph.json` is written by `RunManager.save_graph_ir()` immediately after execution starts. It is the canonical record of what graph was executed and is exposed by the MCP `inspect_run` tool. In Phase 4, `save_graph_ir()` also computes `self._graph_hash` (SHA-256 of the canonical JSON) for use in provenance records.
+---
 
-**Phase 4 artifact storage** lives outside the run directory, under `workspace/artifacts/{artifact_id}/` and `workspace/provenance/`. Use `register_artifact()` to write artifacts and `get_provenance_summary()` to retrieve the full run summary.
+## 2. RunControl
+
+**File:** `app/core/run_control.py`
+
+Active run registry. Maps `run_id → RunManager` for pause/resume/cancel signal delivery. Separate from `RunJournal` — this module owns the in-memory (or Redis-backed) registry of currently executing runs; `RunJournal` owns filesystem persistence.
+
+`app/core/run_manager.py` is a **re-export shim** for backward compatibility. New code should import `RunManager` from `run_journal` and control functions from `run_control` directly.
+
+### Public API
+
+```python
+from app.core.run_control import (
+    register_active_run,
+    get_active_run,
+    deregister_active_run,
+    is_active_on_another_worker,
+)
+
+register_active_run(run)          # called by orchestrator at execution start
+run = get_active_run(run_id)      # returns RunManager or None
+deregister_active_run(run_id)     # called in finally block after execution
+on_another = is_active_on_another_worker(run_id)  # True only in Redis mode
+```
+
+| Function | Description |
+|---|---|
+| `register_active_run(run)` | Store `RunManager` in in-process dict. In Redis mode, also writes `graphyn:active_run:{run_id}` with 24h TTL. |
+| `get_active_run(run_id)` | Return `RunManager` from in-process dict, or `None`. In Redis mode, logs a debug note if the run is active on another worker. |
+| `deregister_active_run(run_id)` | Remove from in-process dict and Redis. Called in `finally` block. |
+| `is_active_on_another_worker(run_id)` | Returns `True` if run is in Redis but not in this process. Always `False` in single-worker mode. |
+
+### Scalability
+
+When `GRAPHYN_REDIS_URL` is set, run registrations are stored in Redis so any worker can distinguish "run is on another worker" (return 503) from "run does not exist" (return 404). The `RunManager` object itself is always in the in-process dict — control signals cannot be routed cross-process from here.
+
+In single-worker mode (default), the in-process dict is used — identical behavior to a simple dict.
 
 ---
 
-## `PipelineLogger`
+## 3. PipelineLogger
 
 **File:** `app/core/logger.py`
 
@@ -81,113 +148,35 @@ queue = Queue()
 logger = PipelineLogger(queue=queue)   # queue is optional; used for streaming
 ```
 
-When a `queue` is provided, every event is also put onto the queue for streaming to the frontend via `POST /api/v1/pipelines/run`.
+When a `queue` is provided, every event is put onto the queue via `put_nowait()` (non-blocking) for streaming to API consumers. A full queue drops the event rather than blocking execution.
 
 ### Methods
 
 | Method | Emits |
 |---|---|
-| `pipeline_start(total_nodes)` | Plain log + `{"type": "pipeline_start", "total_nodes": N, "timestamp": "..."}` |
-| `node_start(node_type, index, total_nodes)` | Plain log + `{"type": "node_start", "node_type": "...", "node_index": N, "total_nodes": N, "timestamp": "..."}` |
-| `node_end(node_type, index, duration, output_count)` | Plain log + `{"type": "node_end", "node_type": "...", "node_index": N, "duration": 0.123, "output_count": 42, "timestamp": "..."}` |
-| `node_error(node_type, index, error)` | Plain log + `{"type": "node_error", "node_type": "...", "node_index": N, "error_message": "...", "error_type": "ValueError", "timestamp": "..."}` |
-| `pipeline_done(run_id, duration)` | `{"type": "done", "run_id": "...", "duration_s": 0.123, "timestamp": "..."}` — Phase 2 MCP terminal event |
-| `pipeline_error(message)` | `{"type": "error", "message": "...", "timestamp": "..."}` — Phase 2 MCP terminal event |
-| `pipeline_summary(stats_dict)` | `{"type": "pipeline_summary", ...stats_dict, "timestamp": "..."}` |
-| `summary()` | Plain log only (total duration) |
+| `pipeline_start(total_nodes, partial, included_nodes)` | `{"type": "pipeline_start", "total_nodes": N, ...}` |
+| `node_start(node_type, index, total_nodes)` | `{"type": "node_start", "node_type": "...", "node_index": N, ...}` |
+| `node_end(node_type, index, duration, output_count)` | `{"type": "node_end", "duration": 0.123, "output_count": 42, ...}` |
+| `node_error(node_type, index, error)` | `{"type": "node_error", "error_message": "...", "error_type": "ValueError", ...}` |
+| `node_skip(node_id, node_type, reason)` | `{"type": "node_skip", "reason": "resumed_from_checkpoint" \| "excluded_from_partial_execution" \| "condition_false", ...}` |
+| `wave_start(wave_idx, wave)` | `{"type": "wave_start", "wave_index": N, "node_ids": [...], ...}` |
+| `wave_end(wave_idx, wave, duration)` | `{"type": "wave_end", ...}` |
+| `pipeline_cancelled(run_id, completed, remaining)` | `{"type": "pipeline_cancelled", ...}` |
+| `event_received(source_type, node_id, payload_keys)` | `{"type": "event_received", ...}` |
+| `pipeline_done(run_id, duration)` | `{"type": "done", "run_id": "...", "duration_s": 0.123, ...}` — MCP terminal event |
+| `pipeline_error(message)` | `{"type": "error", "message": "...", ...}` — MCP terminal event |
 | `info(msg)` | Plain log at INFO level |
 | `error(msg)` | Plain log at ERROR level |
 
-All entries are appended to `logger.logs` (a list). After the run, `run.save_logs(logger.logs)` persists them to `logs.json`.
+All entries are appended to `logger.logs`. After the run, `run.save_logs(logger.logs)` persists them to `logs.json`.
 
 ---
 
-## `IngestionService` and `IngestionJob`
-
-**File:** `app/core/ingestion.py`
-
-Handles background audio ingestion from URLs or HuggingFace datasets.
-
-### `IngestionJob`
-
-```python
-class IngestionJob(BaseModel):
-    job_id: str
-    status: str   # "running" | "completed" | "failed"
-    progress: list[dict] = []
-```
-
-`IngestionJob` is a Pydantic `BaseModel` (not a dataclass). Jobs are stored in a module-level dict `_jobs`.
-
-### `IngestionService`
-
-```python
-svc = IngestionService()
-
-# URL ingestion
-job_id = svc.start_url_job(urls=["https://..."], label="speech")
-
-# HuggingFace ingestion
-job_id = svc.start_hf_job(
-    repo_id="mozilla-foundation/common_voice_11_0",
-    split="train",
-    audio_col="audio",
-    label_col="sentence",
-    label_override=None,
-)
-
-# Access job
-job = svc.get_job(job_id)   # raises KeyError if not found
-
-# Stream progress events
-for event in svc.stream_job(job_id):
-    print(event)
-```
-
-Both `start_url_job` and `start_hf_job` return a `job_id` immediately and run the download in a background daemon thread.
-
-### Progress event types
-
-```json
-{"type": "progress", "url": "https://...", "status": "success", "message": "Downloaded to ..."}
-{"type": "progress", "url": "https://...", "status": "error", "message": "Download failed: ..."}
-{"type": "error", "message": "httpx is not installed"}
-{"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "label_distribution": {"speech": 3}}
-```
-
-### URL ingestion details
-
-- Downloads each URL using `httpx` with `follow_redirects=True`, `timeout=60s`
-- Validates file extension before downloading (`.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`)
-- Saves to `workspace/datasets/input/{label}/{uuid8}_{filename}`
-- Validates audio integrity via `soundfile.info()` or `librosa.get_duration()`; corrupted files are deleted
-- Filename is sanitized to prevent path traversal
-- `label` is sanitized via `_sanitize_label()` before use as a directory name (G3-23)
-
-### HuggingFace ingestion details
-
-- Streams the dataset using `datasets.load_dataset(..., streaming=True)`
-- Saves each sample as a WAV file using `soundfile.write()`
-- Label is determined by `label_override` → `label_col` → `"default"` (in priority order)
-- Both `label_override` and `label_col` values are sanitized via `_sanitize_label()` before use as a directory name (G3-23)
-- A `Path.is_relative_to(BASE_INPUT)` boundary check provides defence-in-depth against path traversal
-- Saves to `workspace/datasets/input/{label}/{stem}.wav`
-
----
-
-## `PipelineCache`
-
-**File:** `app/core/pipeline_cache.py`
-
-See [PIPELINE_EXECUTION.md](./PIPELINE_EXECUTION.md#pipelinecache) for full details.
-
----
-
-## `ArtifactSerializerRegistry`
+## 4. ArtifactSerializerRegistry
 
 **File:** `app/core/artifact_serializer.py`
 
-Pluggable serializer registry that decouples platform storage infrastructure from domain-specific serialization logic (ARCH-2 fix). Platform code calls the registry; domain code registers handlers at startup.
+Pluggable serializer registry that decouples platform storage infrastructure from domain-specific serialization logic. Platform code calls the registry; domain code registers handlers at startup.
 
 ```python
 # Domain registration — call once at each entry point startup
@@ -200,63 +189,144 @@ registry = get_serializer_registry()
 handler = registry.get("audio_samples")   # None if not registered
 ```
 
-**`ArtifactTypeHandler` ABC** — implement to add a new serializable type:
+### `ArtifactTypeHandler` ABC
+
+Implement to add a new serializable type:
 
 | Method | Description |
 |---|---|
-| `serialize(data, dest_dir)` | Write data to dest_dir (guaranteed to exist) |
-| `deserialize(src_dir) → Any \| None` | Read data from src_dir; return None on miss |
-| `compute_content_hash_input(data) → str` | Stable string for SHA-256 deduplication |
-| `infer_type(value) → str \| None` | Return artifact_type string if value matches; None otherwise |
+| `serialize(data, dest_dir)` | Write data to `dest_dir` (guaranteed to exist). Raise on failure. |
+| `deserialize(src_dir) → Any \| None` | Read data from `src_dir`. Return `None` on miss (cache/checkpoint miss). |
+| `compute_content_hash_input(data) → str` | Stable string for SHA-256 deduplication. Must be deterministic across process restarts. |
+| `infer_type(value) → str \| None` | Return artifact_type string if value matches; `None` otherwise. |
 
-**`AudioSampleHandler`** (`app/models/audio_artifact_serializer.py`) — domain-side implementation for `audio_samples`. Owns WAV I/O (soundfile), manifest.json format, and AudioSample construction. Registered via `register_audio_serializer()`.
+### `ArtifactSerializerRegistry` methods
 
-**Fail-open design:** if no handler is registered for a type, `artifact_store` falls back to JSON serialization; `pipeline_cache` and `checkpoint` log a warning and treat it as a miss (node re-executes).
+| Method | Description |
+|---|---|
+| `register(artifact_type, handler)` | Register handler. Thread-safe. Replaces existing handler for same type. |
+| `get(artifact_type) → handler \| None` | Return handler or `None`. |
+| `infer_type(value) → str \| None` | Ask each handler in registration order. Returns first non-None result. Primitives fast-path to `None`. |
+| `registered_types() → list[str]` | Sorted list of registered type strings. |
 
----
+### Fail-open design
 
-## `ProjectManager`
+If no handler is registered for a type:
+- `artifact_store` falls back to JSON serialization
+- `pipeline_cache` and `checkpoint` log a warning and treat it as a miss (node re-executes)
 
-**File:** `app/core/project_manager.py`
+The platform works without any domain handlers installed — it just cannot serialize domain-specific types.
 
-Manages the full project lifecycle: create, read, update, delete, clone, list versions, manage taxonomy, contract, spec, annotations, quality reports, and snapshots. Projects are stored under `workspace/datasets/output/{project_name}/`.
-
-Used by `app/api/routers/projects.py` and `app/api/routers/system.py`.
-
----
-
-## `QualityChecker`
-
-**File:** `app/core/quality_checker.py`
-
-Runs quality checks against a dataset version. Checks are defined in the project's `contract.json`. Results are written to `quality_report.json`.
+**See also:** [DOMAIN_SERVICES.md — AudioSampleHandler](./DOMAIN_SERVICES.md#4-audiosamplehandler)
 
 ---
 
-## `WebhookService`
+## 5. ArtifactStore
+
+**File:** `app/core/artifact_store.py`
+
+Content-addressed artifact storage under `workspace/artifacts/`.
+
+```python
+from app.core.artifact_store import ArtifactStore
+
+store = ArtifactStore()
+record = store.register(
+    run_id="...", node_id="...", node_type="...",
+    artifact_type="audio_samples", data=samples,
+    metadata={"port": "output"}, name=None,
+)
+# record.artifact_id, record.content_hash, record.data_path
+
+records = store.list(run_id="...", limit=200)
+record = store.get(artifact_id="...")
+data = store.load(artifact_id="...")
+```
+
+### Storage layout
+
+```
+workspace/artifacts/{artifact_id}/
+├── record.json    # ArtifactRecord (id, run_id, node_id, type, content_hash, ...)
+└── data/
+    ├── manifest.json   # for registered types (e.g. audio_samples)
+    └── *.wav           # or data.json for unregistered types
+```
+
+`workspace/artifacts/index.json` — flat index for fast listing and deduplication by `content_hash`.
+
+---
+
+## 6. ProvenanceStore
+
+**File:** `app/core/provenance.py`
+
+Lineage tracking for artifacts.
+
+```python
+from app.core.provenance import ProvenanceStore
+
+store = ProvenanceStore()
+store.record(
+    artifact_id="...", run_id="...", node_id="...", node_type="...",
+    graph_hash="...", input_artifact_ids=["..."],
+)
+lineage = store.get_lineage(artifact_id="...")  # recursive tree dict
+records = store.find_by_run(run_id="...")
+```
+
+### Storage layout
+
+```
+workspace/provenance/{artifact_id}.json   # ProvenanceRecord
+workspace/provenance/by_run/{run_id}.json # list of artifact_ids for this run
+```
+
+`get_lineage()` never raises — missing records produce error nodes in the tree.
+
+---
+
+## 7. PipelineCache
+
+**File:** `app/core/pipeline_cache.py`
+
+See [PIPELINE_EXECUTION.md — PipelineCache](./PIPELINE_EXECUTION.md#pipelinecache) for full details.
+
+---
+
+## 8. WebhookService
 
 **File:** `app/core/webhook.py`
 
-Manages webhook configuration and notifications.
+Manages webhook configuration and outbound notifications.
 
 ```python
+from app.core.webhook import WebhookService
+
 svc = WebhookService()
 config = svc.load()                          # {"url": "...", "events": [...]}
 svc.save(url="https://...", events=["..."])  # writes workspace/webhooks.json
 svc.notify("pipeline_complete", {"run_id": "..."})  # fires HTTP POST
 ```
 
-Webhook config is stored in `workspace/webhooks.json`.
+Webhook config is stored in `workspace/webhooks.json`. DNS is resolved once per notification; the connection is made directly to the resolved IP with the original `Host` header (DNS rebinding fix).
 
 ---
 
-## `stable_hash()`
+## 9. stable_hash()
 
 **File:** `app/core/utils/hash.py`
 
-Deterministic hash function used for:
-- Node seeds: `stable_hash(pipeline_seed, node_type, node_index) % 2**32`
-- Export file IDs: `stable_hash(path, len(data), label, start, end, augmented, augmentation_id)`
-- Split group ordering: `stable_hash(seed, group_key)`
+Deterministic hash function used for node seeds and export file IDs.
 
-Returns a stable integer. The same inputs always produce the same output across Python runs (unlike Python's built-in `hash()` which is randomized).
+```python
+from app.core.utils.hash import stable_hash
+
+# Node seed
+node_seed = stable_hash(pipeline_seed, node_type, node_index, config_str) % 2**32
+
+# Export file ID
+file_id = stable_hash(path, len(data), label, start, end, augmented, augmentation_id)
+```
+
+Returns a stable integer. The same inputs always produce the same output across Python runs (unlike Python's built-in `hash()` which is randomized per process). Non-serializable objects raise `TypeError` — they are not silently converted to memory-address strings.

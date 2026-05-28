@@ -20,7 +20,7 @@ General-purpose AI/workflow execution platform. Four interfaces share `app/core/
 - **Graph IR** — versioned, validated JSON schema (`app/core/ir/`). All interfaces produce/consume `GraphIR`.
 - **Registry** — singleton `NodeRegistry` populated at startup by `AutoDiscovery`. Maps `node_type` string → class.
 - **PortDataType** — base class for all inter-port data types (`AudioSample`, `FeatureArray`, etc.).
-- **Plugin** — self-contained node package. All 29 nodes live in `PluginPackage/`. All phases complete.
+- **Plugin** — self-contained node package. All 30 nodes live in `PluginPackage/`. All phases complete.
 
 ## File Map
 
@@ -28,7 +28,7 @@ General-purpose AI/workflow execution platform. Four interfaces share `app/core/
 |---|---|
 | Node base, lifecycle, ports | `app/core/nodes/base.py`, `ports.py`, `config.py`, `retry.py`, `metadata.py` |
 | Plugin nodes — Audio (18) | `PluginPackage/Audio/` |
-| Plugin nodes — Common (11) | `PluginPackage/Common/` |
+| Plugin nodes — Common (12) | `PluginPackage/Common/` |
 | Plugin docs | `PluginPackage/ARCHITECTURE.md`, `PluginPackage/NODES.md` |
 | Registry + AutoDiscovery | `app/core/nodes/registry.py`, `discovery.py` |
 | DAG orchestrator | `app/core/orchestrator.py` |

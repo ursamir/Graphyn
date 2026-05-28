@@ -5,14 +5,14 @@ fileMatchPattern: "plugins/**,app/core/plugins/**,PluginPackage/**"
 
 # Plugin Development
 
-All 29 plugins are complete. For node specs and capabilities → `PluginPackage/NODES.md`. For architecture and data flow → `PluginPackage/ARCHITECTURE.md`.
+All 30 plugins are complete. For node specs and capabilities → `PluginPackage/NODES.md`. For architecture and data flow → `PluginPackage/ARCHITECTURE.md`.
 
 ## Locations
 
 | Location | Purpose |
 |---|---|
 | `PluginPackage/Audio/` | 18 audio-domain plugins — develop here |
-| `PluginPackage/Common/` | 11 cross-domain plugins — develop here |
+| `PluginPackage/Common/` | 12 cross-domain plugins — develop here |
 | `plugins/` | Install target — managed by `PluginManager`, never edit directly |
 
 ## Plugin Structure
@@ -186,11 +186,12 @@ Reference: `PluginPackage/Audio/demo.py`
 | `voice_converter` | `voice-converter` | Generation | v1.0.0 |
 | `audio_generator` | `audio-generator` | Generation | v1.0.0 |
 
-### Common (`PluginPackage/Common/`) — 11 nodes
+### Common (`PluginPackage/Common/`) — 12 nodes
 
 | node_type | Plugin Name | Category | Version |
 |---|---|---|---|
 | `dataset_builder` | `dataset-builder` | ML | v1.0.0 |
+| `model_builder` | `model-builder` | ML | v1.0.0 |
 | `trainer` | `trainer` | ML | v1.0.0 |
 | `evaluator` | `evaluator` | ML | v1.0.0 |
 | `edge_optimizer` | `edge-optimizer` | ML | v1.0.0 |

@@ -81,7 +81,7 @@ Wave 0 = source nodes; each subsequent wave = nodes whose predecessors are all i
 
 **Runtime control**: `RunManager.pause()` / `resume()` / `cancel()` — checked between nodes. Active runs tracked in `_ACTIVE_RUNS` registry.
 
-**Unified `run_id`**: `run_pipeline_ir_async` uses `run.run_id` (the 16-char hex string from `RunManager`) as the single `run_id` passed to every `NodeExecutor`. Observer callbacks (`on_node_start`, `on_node_end`, `on_node_error`) and `meta.json` both carry the same value — they are always correlated.
+**Unified `run_id`**: `run_pipeline_ir_async` uses `run.run_id` (the full 32-char UUID4 hex from `RunManager`) as the single `run_id` passed to every `NodeExecutor`. Observer callbacks (`on_node_start`, `on_node_end`, `on_node_error`) and `meta.json` both carry the same value — they are always correlated.
 
 ## `PipelineCache`
 

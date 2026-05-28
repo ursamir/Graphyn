@@ -216,15 +216,15 @@ Start a pipeline run in a background thread and return the `run_id` immediately.
 
 **Request body:**
 ```json
-{"yaml": "pipeline:\n  seed: 42\n  nodes:\n    ..."}
+{"graph": {...}}
 ```
 
 **Response:**
 ```json
-{"run_id": "a1b2c3d4"}
+{"run_id": "a1b2c3d4e5f6..."}
 ```
 
-Poll `GET /api/v1/runs/{run_id}/status` to check progress.
+`run_id` is a full 32-char UUID4 hex string. Poll `GET /api/v1/runs/{run_id}/status` to check progress. Status is read from `meta.json` on disk — not from an in-memory dict.
 
 ---
 
@@ -280,6 +280,26 @@ Delete a named template.
 ```
 
 **Errors:** `400` invalid name. `404` not found.
+
+---
+
+### `GET /api/v1/artifacts/{artifact_id}/lineage`
+
+Get the upstream lineage tree for a specific artifact.
+
+**Response:** Lineage tree dict. Never raises — returns error nodes for missing provenance records.
+
+```json
+{
+  "artifact_id": "abc123",
+  "node_id": "cond_0",
+  "node_type": "AudioConditionerNode",
+  "run_id": "...",
+  "inputs": [...]
+}
+```
+
+**Errors:** `404` if artifact not found.
 
 ---
 
@@ -341,7 +361,9 @@ Get the current status of a run.
 }
 ```
 
-`status` values: `"running"`, `"completed"`, `"failed"`, `"unknown"`
+`status` values: `"running"`, `"completed"`, `"failed"`, `"cancelled"`, `"unknown"`
+
+`progress_pct` is `null` when `num_nodes` is absent from `meta.json` (e.g. run failed before metadata was written).
 
 ---
 
@@ -714,7 +736,7 @@ Plugin lifecycle management. All operations delegate to `PluginManager`. Error r
 | GET | `/api/v1/plugins` | List all installed plugins → JSON array of `PluginRecord` |
 | POST | `/api/v1/plugins/install` | Install a plugin; body: `{"source": str, "upgrade": bool, "expected_sha256": str\|null}` |
 | GET | `/api/v1/plugins/search` | Search plugin index; `?q=<query>` → JSON array of index entries |
-| GET | `/api/v1/plugins/{name}` | Get full `PluginRecord` for an installed plugin |
+| GET | `/api/v1/plugins/{name}` | Get full `PluginRecord` for an installed plugin. Surfaces `installing`/`failed`/`installed` states for async installs. |
 | POST | `/api/v1/plugins/{name}/enable` | Enable plugin → `{"name": ..., "enabled": true}` |
 | POST | `/api/v1/plugins/{name}/disable` | Disable plugin → `{"name": ..., "enabled": false}` |
 | DELETE | `/api/v1/plugins/{name}` | Uninstall plugin → `{"name": ..., "status": "uninstalled"}` |

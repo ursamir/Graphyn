@@ -1,7 +1,7 @@
 # Architecture
 
 > Source of truth: `app/` source code.  
-> Back to → [OVERVIEW.md](OVERVIEW.md)
+> Back to → [README.md](README.md)
 
 ---
 
@@ -29,7 +29,7 @@
 │                                                                     │
 │  app/api/          app/core/sdk.py    app/cli/      app/mcp/        │
 │  FastAPI REST       Pipeline class    argparse CLI  stdio JSON-RPC  │
-│  10 routers         PipelineNode      14 commands   14 tools        │
+│  10 routers         PipelineNode      14 commands   15 tools        │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │ all call get_backend().execute()
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -47,14 +47,14 @@
 │                                                                     │
 │  app/core/orchestrator.py                                           │
 │  ├── run_pipeline_ir()        synchronous shim                      │
-│  ├── run_pipeline_ir_async()  async implementation                  │
+│  └── run_pipeline_ir_async()  async implementation                  │
 │                                                                     │
 │  app/core/planner.py                                                │
 │  ├── PipelineGraph            DAG builder + topo sort + waves       │
 │  └── _ir_to_pipeline_config() IR → PipelineConfig conversion        │
 │                                                                     │
 │  app/core/node_executor.py                                          │
-│  └── NodeExecutor             per-node lifecycle driver             │
+│  └── NodeExecutor             per-node lifecycle driver + retry     │
 │                                                                     │
 │  app/core/executor.py                                               │
 │  └── ParallelExecutor         wave-based asyncio + ThreadPool       │
@@ -77,9 +77,10 @@
 │  app/core/nodes/catalogue.py  TypeCatalogue (FQN → type)            │
 │  app/core/nodes/compat.py     CompatibilityChecker                  │
 │  app/core/nodes/errors.py     Exception hierarchy                   │
+│  app/core/registry_runtime.py get_registry(), resolve_capability()  │
 │                                                                     │
 │  PluginPackage/Audio/         18 audio plugin nodes                 │
-│  PluginPackage/Common/        11 common plugin nodes                │
+│  PluginPackage/Common/        12 common plugin nodes                │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -87,24 +88,32 @@
 │                                                                     │
 │  app/core/ir/models.py        GraphIR, IRNode, IREdge, IRMetadata   │
 │  app/core/ir/loader.py        load_ir(), dump_ir(), version check   │
-│  app/core/ir/yaml_shim.py     YAML → GraphIR conversion             │
+│  app/core/ir/yaml_shim.py     YAML → GraphIR (deprecated path)      │
 │  app/core/ir/migrate.py       YAML file → .graph.json file          │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  BACKEND SERVICES LAYER                                             │
 │                                                                     │
-│  app/core/run_manager.py      RunManager: lifecycle + control       │
+│  app/core/run_journal.py      RunManager: run dir + persistence     │
+│  app/core/run_control.py      Active run registry (in-proc/Redis)   │
+│  app/core/run_manager.py      Re-export shim (backward compat only) │
 │  app/core/logger.py           PipelineLogger: structured events     │
 │  app/core/pipeline_cache.py   PipelineCache: SHA-256 keyed          │
 │  app/core/artifact_store.py   ArtifactStore: content-addressed      │
 │  app/core/artifact_serializer.py  ArtifactSerializerRegistry:       │
 │                               pluggable type handler interface       │
+│  app/core/checkpoint.py       Per-node checkpoint read/write        │
 │  app/core/provenance.py       ProvenanceStore: lineage tracking     │
-│  app/core/ingestion.py        URL + HuggingFace ingestion           │
-│  app/core/project_manager.py  Project lifecycle                     │
-│  app/core/quality_checker.py  Dataset quality analysis              │
 │  app/core/webhook.py          Outbound webhook delivery             │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+┌──────────────────────────────▼──────────────────────────────────────┐
+│  DOMAIN SERVICES LAYER                                              │
+│                                                                     │
+│  app/domain/ingestion.py      URL + HuggingFace ingestion           │
+│  app/domain/project_manager.py  Project lifecycle                   │
+│  app/domain/quality_checker.py  Dataset quality analysis            │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -159,27 +168,31 @@ sdk.py
               ├── run_journal.py (RunManager)
               │     ├── artifact_store.py (ArtifactStore)
               │     └── provenance.py (ProvenanceStore)
-              ├── run_control.py (_ACTIVE_RUNS registry)
+              ├── run_control.py (active run registry)
+              ├── checkpoint.py (per-node checkpoint read/write)
               ├── logger.py (PipelineLogger)
               ├── conditions.py (evaluate_condition)
               └── events.py (EventSource subclasses)
 
 api/main.py
   ├── initialize_registry()              ← explicit startup call
+  ├── register_audio_serializer()        ← domain serializer registration
   └── api/routers/*.py
         └── sdk.py (Pipeline, PipelineNode)
 
 mcp/server.py
-  ├── initialize_registry()              ← explicit startup call (in _startup())
+  ├── initialize_registry()              ← explicit startup call
+  ├── register_audio_serializer()        ← domain serializer registration
   └── mcp/tool_registry.py
         └── mcp/handlers/*.py
               └── runtime_backend.py (get_backend().execute())
               └── registry_runtime.py (resolve_capability)  ← optimization handler
 
 cli/main.py
-  ├── initialize_registry()              ← explicit startup call (module level)
+  ├── initialize_registry()              ← explicit startup call
+  ├── register_audio_serializer()        ← domain serializer registration
   └── sdk.py (Pipeline.from_json, Pipeline.from_yaml)
-  └── runtime_backend.py (get_backend().execute())  ← seed-override paths
+  └── runtime_backend.py (get_backend().execute())
   └── registry_runtime.py (resolve_capability)  ← inspect command
 
 plugins/manager.py
@@ -190,19 +203,29 @@ plugins/manager.py
   └── plugins/index.py
 ```
 
-**Key dependency rule:** `executor.py` and all MCP/CLI callers import `resolve_capability` from `registry_runtime`, NOT from `orchestrator`. This prevents intra-BC5 circular coupling and keeps capability resolution in BC3 where it belongs.
+**Key dependency rules:**
+- `executor.py` and all MCP/CLI callers import `resolve_capability` from `registry_runtime`, not from `orchestrator`. This prevents intra-BC5 circular coupling.
+- Platform code (`artifact_store`, `pipeline_cache`, `checkpoint`) never imports `AudioSample` directly — all type-specific logic goes through `ArtifactSerializerRegistry`.
+- Platform code never imports from `app/domain/` — domain code registers into platform registries at startup.
 
 ---
 
 ## 3. Data Flow: Pipeline Execution
 
 ```
-User Input (IR JSON / YAML / SDK nodes)
+User Input (IR JSON / SDK nodes)
          │
          ▼
     load_ir(data)                    ← validates GraphIR schema + version
          │
          ▼
+    get_backend().execute(graph)     ← canonical entry point (all interfaces)
+         │
+         ▼
+    LocalPythonBackend.execute()
+         └── orchestrator.run_pipeline_ir_async(graph, ...)
+                  │
+                  ▼
     _ir_to_pipeline_config(graph)    ← GraphIR → PipelineConfig (NodeSpec + EdgeSpec)
          │
          ▼
@@ -215,7 +238,7 @@ User Input (IR JSON / YAML / SDK nodes)
          ▼
     RunManager()                     ← creates run directory, writes meta.json
     run.save_graph_ir(dump_ir(graph))← writes graph.json, computes graph_hash
-    register_active_run(run)         ← enables pause/resume/cancel via API
+    register_active_run(run)         ← run_control.py — enables pause/resume/cancel
          │
          ▼
     For each wave (parallel) or node (sequential):
@@ -230,15 +253,12 @@ User Input (IR JSON / YAML / SDK nodes)
     │              ├── node.on_end()
     │              └── retry on failure (RetryPolicy)
     ├── save to PipelineCache (if cacheable=True)
-    ├── write checkpoint (if checkpoint=True)
+    ├── write checkpoint via checkpoint.py (if checkpoint=True)
     └── update resume_state.json
          │
          ▼
     run.save_metadata(stats)         ← writes final meta.json (status=completed)
-    deregister_active_run(run_id)
-         │
-         ▼
-    ArtifactCollection(artifacts, run_id, raw_outputs)
+    deregister_active_run(run_id)    ← run_control.py
 ```
 
 ---
@@ -255,11 +275,11 @@ Node produces output
          │
          ├── ArtifactStore.register()
          │   ├── compute SHA-256 content_hash
-         │   │   └── handler.compute_content_hash_input()  ← via registry
+         │   │   └── handler.compute_content_hash_input()  ← via ArtifactSerializerRegistry
          │   ├── check index.json for deduplication
          │   ├── serialize data to artifacts/{id}/data/
-         │   │   ├── registered type → handler.serialize()  ← via registry
-         │   │   │   (e.g. audio_samples → AudioSampleHandler → WAV + manifest)
+         │   │   ├── registered type → handler.serialize()  ← via ArtifactSerializerRegistry
+         │   │   │   (e.g. "audio_samples" → AudioSampleHandler → WAV + manifest.json)
          │   │   └── unregistered type → data.json (JSON fallback)
          │   ├── write artifacts/{id}/record.json (ArtifactRecord)
          │   └── update artifacts/index.json
@@ -279,6 +299,8 @@ Node produces output
     └── return tree dict (never raises — error nodes for missing records)
 ```
 
+**ArtifactSerializerRegistry** is the indirection layer that keeps platform infrastructure free of domain knowledge. At startup, `register_audio_serializer()` registers `AudioSampleHandler` for `"audio_samples"`. The registry is fail-open: unregistered types fall back to JSON serialization.
+
 ---
 
 ## 5. Node Lifecycle
@@ -293,19 +315,17 @@ Pipeline execution (per node):
   └── node.setup()                    ← one-time init (load models, open files)
 
   For each execution (with retry):
-  ├── node.on_start()
-  ├── observer.on_node_start(node_type, run_id)
+  ├── node.on_start()                 ← calls observer.on_node_start() internally
   ├── node.process(inputs)            ← or process_stream() for streaming
-  ├── node.on_end()
-  └── observer.on_node_end(node_type, run_id, duration, counts)
+  ├── node.on_end()                   ← calls observer.on_node_end() internally
+  └── retry on failure (RetryPolicy.wait_before_attempt(i))
 
   On failure:
-  ├── node.on_error(exc)
-  ├── observer.on_node_error(node_type, run_id, exc)
-  └── retry if attempts remaining (RetryPolicy.wait_before_attempt(i))
+  ├── node.on_error(exc)              ← calls observer.on_node_error() internally
+  └── retry if attempts remaining
 
   NodeExecutor.teardown()
-  └── node.teardown()                 ← release resources
+  └── node.teardown()                 ← release resources, reset setup state
 
 SISO shorthand (auto-detected by __init_subclass__):
   process(self, data)                 ← single-value signature
@@ -320,24 +340,26 @@ SISO shorthand (auto-detected by __init_subclass__):
 ```
 Application startup (API / CLI / MCP)
          │
-         ▼
-    initialize_registry()              ← explicit call from each entry point
-    (app/core/nodes/__init__.py)       ← idempotent; no-op on second call
+         ├── initialize_registry()              ← idempotent; no-op on second call
+         │   (app/core/nodes/__init__.py)
+         │   ├── PluginManager.load_enabled_plugins()
+         │   └── AutoDiscovery.run(
+         │           nodes_dir="app/core/nodes",
+         │           plugins_dir=plugins_home(),
+         │           models_dir="app/models"
+         │       )
+         │       ├── scan app/core/nodes/*.py           ← framework files only
+         │       ├── scan app/models/*.py               ← PortDataType → TypeCatalogue
+         │       └── scan plugins/{name}/               ← manifest-based plugins
+         │           └── PluginLoader.load(plugin_dir)
+         │               ├── load_manifest()
+         │               ├── check platform_version / min_python
+         │               ├── DependencyChecker.verify()
+         │               └── import entry_points → register node types
          │
-         ├── PluginManager.load_enabled_plugins()   ← load enabled plugins first
-         └── AutoDiscovery.run(
-                 nodes_dir="app/core/nodes",
-                 plugins_dir=plugins_home(),   ← None if PluginManager loaded them
-                 models_dir="app/models"
-             )
-             ├── scan app/core/nodes/*.py           ← framework files only
-             ├── scan app/models/*.py               ← PortDataType → TypeCatalogue
-             └── scan plugins/{name}/               ← manifest-based plugins
-                 └── PluginLoader.load(plugin_dir)
-                     ├── load_manifest()
-                     ├── check platform_version / min_python
-                     ├── DependencyChecker.verify()
-                     └── import entry_points → register node types
+         └── register_audio_serializer()        ← domain serializer registration
+             (app/models/audio_artifact_serializer.py)
+             └── ArtifactSerializerRegistry.register("audio_samples", AudioSampleHandler())
 
     For each Node subclass found:
     ├── derive node_type (explicit or PascalCase → snake_case)
@@ -347,7 +369,6 @@ Application startup (API / CLI / MCP)
     └── NodeRegistry.register(node_type, cls, metadata)
 
     Test isolation: GRAPHYN_SKIP_PLUGIN_LOAD=1 skips plugin loading.
-    Do NOT call initialize_registry() in tests needing an empty registry.
 ```
 
 ---
@@ -371,7 +392,7 @@ PluginManager.install(source)
     └── PluginManifest.model_validate(data)
          │
          ▼
-    copy resolved_dir → {plugins_dir}/{manifest.name}/
+    copy resolved_dir → {plugins_home()}/{manifest.name}/
          │
          ▼
     PluginLoader.load(install_path)
@@ -396,14 +417,15 @@ PluginManager.install(source)
 ## 8. Execution Modes
 
 ```
-run_pipeline_ir_async(graph, ...)
+get_backend().execute(graph, ...)
+  └── LocalPythonBackend → orchestrator.run_pipeline_ir_async(graph, ...)
          │
          ├── parallel=False (default)
          │   Sequential execution:
          │   for node_id in topo_order:
          │   ├── skip if in completed_nodes (resume)
          │   ├── skip if not in active_nodes (partial)
-         │   ├── check pause/cancel (run_manager.wait_if_paused)
+         │   ├── check pause/cancel (run.wait_if_paused)
          │   ├── assemble inputs + check conditions
          │   ├── cache check
          │   └── NodeExecutor.execute(inputs)
@@ -413,21 +435,23 @@ run_pipeline_ir_async(graph, ...)
          │   for wave in execution_waves:
          │   └── ParallelExecutor.run_wave(wave, ...)
          │       └── asyncio.gather(*[_run_node(id) for id in wave])
-         │           └── sync nodes → loop.run_in_executor(ThreadPool)
+         │           └── sync nodes → loop.run_in_executor(shared ThreadPool)
          │               streaming nodes → await execute_stream()
          │
          ├── streaming=True
-         │   Streaming nodes use process_stream() async generator
-         │   Results collected into lists via _collect_stream_parallel()
+         │   Streaming nodes use process_stream() async generator.
+         │   Results collected into lists via _collect_stream().
          │
          ├── event_driven=True
-         │   Source nodes have event_trigger in IRNode
-         │   EventSource.watch() yields payloads
-         │   Pipeline re-executes on each event
+         │   Source nodes have event_trigger in IRNode.
+         │   EventSource.watch() yields payloads.
+         │   Pipeline re-executes on each event.
+         │   (Mutually exclusive with parallel=True)
          │
          └── resume_run_id=X
-             Load resume_state.json from prior run
-             Skip completed_nodes, load their outputs from checkpoints
+             Load resume_state.json from prior run.
+             Validate graph_hash matches — raises ResumeError if changed.
+             Skip completed_nodes, load their outputs from checkpoints.
 ```
 
 ---
@@ -442,7 +466,7 @@ run_pipeline_ir_async(graph, ...)
 **Rules:**
 - Major version mismatch → `IRVersionError` (hard fail)
 - Minor version > supported → `UserWarning` (soft warn, continue)
-- YAML input → `DeprecationWarning` + auto-convert via `yaml_shim.py`
+- YAML input → `DeprecationWarning` + auto-convert via `yaml_shim.py`. Use `graphyn migrate` to convert YAML files to `.graph.json`.
 
 ---
 
@@ -455,12 +479,15 @@ run_pipeline_ir_async(graph, ...)
 | `ExportNode.project` / `version` | Must match `^[a-zA-Z0-9_\-]+$` |
 | API path components | `_safe_child()` on all user-supplied path segments |
 | Template names | `^[A-Za-z0-9_-]+$` |
-| Run IDs | Alphanumeric only |
+| Run IDs | ASCII alphanumeric only (regex validated) |
 | Upload filenames | Replaced with timestamped names |
 | Artifact IDs | `^[A-Za-z0-9_-]+$` |
 | Condition expressions | AST whitelist: comparisons, boolean ops, `len()`, `output["key"]` only |
 | API auth | Optional Bearer token via `GRAPHYN_API_TOKEN` |
 | MCP auth | Token at `arguments._meta.auth_token` |
+| Plugin sources | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated URL prefix allowlist; empty = allow all |
+| Checkpoint node IDs | Null byte rejection + path traversal guard via `os.path.abspath` prefix check |
+| Webhook DNS | Resolves once, connects to IP directly with `Host` header (DNS rebinding fix) |
 
 ---
 
@@ -471,6 +498,7 @@ run_pipeline_ir_async(graph, ...)
 | Phase 1 | Node base system, typed ports, NodeRegistry, AutoDiscovery, SISO wrapper |
 | Phase 2 | Graph IR (v1.0), IR loader/validator, YAML shim + migration, SDK, CLI |
 | Phase 3 | Parallel executor (wave-based), streaming nodes, event-driven execution, conditional edges, partial execution, resumable pipelines, runtime control (pause/resume/cancel) |
-| Phase 4 | ArtifactStore (content-addressed), ProvenanceStore (lineage), ArtifactCollection, `run_with_manager()`, artifact replay |
+| Phase 4 | ArtifactStore (content-addressed), ProvenanceStore (lineage), ArtifactCollection, artifact replay |
 | Phase 5 | Plugin ecosystem: PluginManager, PluginInstaller, PluginLoader, PluginStore, PluginIndexClient, manifest-based packages, `plugin.toml` schema |
-| Phase 6–8 | 29 plugin nodes across `PluginPackage/Audio/` and `PluginPackage/Common/` — all phases complete |
+| Phase 6–8 | 30 plugin nodes across `PluginPackage/Audio/` (18) and `PluginPackage/Common/` (12) — all phases complete |
+| Phase 9 | Post-review fix pass — 104 files reviewed, all confirmed bugs fixed. Architecture splits: `pipeline.py` → `orchestrator.py` / `planner.py` / `node_executor.py` / `checkpoint.py` / `executor.py`; `run_manager.py` → `run_journal.py` / `run_control.py`; domain services → `app/domain/`; `ArtifactSerializerRegistry` added; `RuntimeBackend` ABC added; `registry_runtime.py` added. |

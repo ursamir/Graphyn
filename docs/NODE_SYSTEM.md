@@ -20,9 +20,11 @@ app/core/nodes/
 ├── ports.py         ← InputPort, OutputPort, PortDataType
 ├── registry.py      ← NodeRegistry singleton
 └── retry.py         ← RetryPolicy
+
+app/core/registry_runtime.py  ← get_registry(), resolve_capability()
 ```
 
-All production node implementations live in `PluginPackage/`. There are no `audio/` or `ml/` subdirectories — those have been removed. Nodes are registered via the plugin system.
+All production node implementations live in `PluginPackage/`. There are no `audio/` or `ml/` subdirectories. Nodes are registered via the plugin system.
 
 ---
 
@@ -137,7 +139,7 @@ RetryPolicy(max_attempts=3, backoff_seconds=1.0, backoff_multiplier=2.0)
 
 ---
 
-## `NodeRegistry`
+## `NodeRegistry` and `registry_runtime`
 
 ```python
 from app.core.nodes import registry
@@ -145,10 +147,12 @@ from app.core.nodes import registry
 from app.core.registry_runtime import get_registry
 registry = get_registry()
 
-# Capability resolution — canonical location (NOT orchestrator._resolve_capability)
+# Capability resolution — canonical location in registry_runtime (BC3)
+# Both orchestrator and executor import from here; never from each other.
 from app.core.registry_runtime import resolve_capability
 cap = resolve_capability(ir_node, registry)
 # Returns IRCapabilityMetadata. Precedence: IRNode.capability_metadata > NodeMetadata fields.
+# Falls back to IRCapabilityMetadata() defaults for unknown node types.
 ```
 
 | Method | Description |

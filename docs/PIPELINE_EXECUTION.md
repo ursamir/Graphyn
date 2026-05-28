@@ -13,17 +13,25 @@ IR JSON file  (or YAML — deprecated)
 load_ir() / yaml_shim          → GraphIR object
     │
     ▼
-_ir_to_pipeline_config()       → PipelineConfig (nodes + edges)
+get_backend().execute(graph)   → canonical entry point (all interfaces)
     │
     ▼
-PipelineGraph()                → instantiates nodes, validates edges, topological sort
-    │
-    ▼
-run_pipeline_ir()              → executes nodes in topo order via NodeExecutor
-    │
+LocalPythonBackend.execute()
+    └── orchestrator.run_pipeline_ir_async(graph, ...)
+              │
+              ▼
+    _ir_to_pipeline_config()   → PipelineConfig (nodes + edges)
+              │
+              ▼
+    PipelineGraph()            → instantiates nodes, validates edges, topological sort
+              │
+              ▼
+    NodeExecutor per node      → setup → process → teardown
+              │
     ├── PipelineCache          → skip re-execution on cache hit
     ├── PipelineLogger         → emit structured events
-    └── RunManager             → persist meta.json, graph.json, logs.json
+    ├── RunManager (run_journal.py) → persist meta.json, graph.json, logs.json
+    └── checkpoint.py          → per-node checkpoint read/write
 ```
 
 ---
@@ -90,7 +98,7 @@ Migration: `graphyn migrate --config pipeline.yaml` → `pipeline.graph.json`.
 
 ## Data Structures
 
-**File:** `app/core/pipeline.py`
+**File:** `app/core/planner.py`
 
 ```python
 @dataclass
@@ -105,6 +113,7 @@ class EdgeSpec:
     src_port: str      # output port name on source
     dst_id: str        # destination node ID
     dst_port: str      # input port name on destination
+    condition: str | None = None  # optional condition expression
 
 @dataclass
 class PipelineConfig:
@@ -126,13 +135,15 @@ result = get_backend().execute(graph, logger=None, use_cache=True, checkpoint=Fa
     exclude_nodes=None, input_overrides=None, event_driven=False)
 
 # Direct orchestrator access (internal / backward compat only)
-from app.core.pipeline import run_pipeline_ir
+from app.core.orchestrator import run_pipeline_ir
 result = run_pipeline_ir(graph, ...)
 ```
 
-`RuntimeBackend` is the canonical execution entry point. `LocalPythonBackend` (the default) delegates to `run_pipeline_ir`. Custom backends can be registered via `register_backend(id, BackendClass)`. All interfaces (SDK, API, MCP, CLI) call `get_backend().execute()`.
+`RuntimeBackend` is the canonical execution entry point. `LocalPythonBackend` (the default) delegates to `orchestrator.run_pipeline_ir`. Custom backends can be registered via `register_backend(id, BackendClass)`. All interfaces (SDK, API, MCP, CLI) call `get_backend().execute()`.
 
-`run_pipeline(config_path)` is a **deprecated shim** — it reads the raw YAML for `save_config()`, then calls `load_yaml_with_deprecation(config_path)` (emitting a `DeprecationWarning` about YAML format), then calls `run_pipeline_ir`. Emits two `DeprecationWarning`s total.
+`run_pipeline()` is a **deprecated shim** — it reads raw YAML, emits `DeprecationWarning`, then calls `run_pipeline_ir`. Use `get_backend().execute()` for all new code.
+
+`app/core/pipeline.py` is a **re-export shim** for backward compatibility. It re-exports `run_pipeline_ir` from `orchestrator.py`. New code should import from `orchestrator` or use `get_backend().execute()` directly.
 
 ```yaml
 pipeline:
@@ -213,21 +224,27 @@ Parses a raw YAML dict into a `PipelineConfig`:
 
 ## `PipelineGraph`
 
+**File:** `app/core/planner.py`
+
 ```python
 graph = PipelineGraph(config, observer=None)
-graph.execution_order   # list[str] — node IDs in topological order
-graph.get_node(node_id) # → Node instance
+graph.execution_order    # list[str] — node IDs in topological order
+graph.execution_waves    # list[list[str]] — parallel wave groups
+graph.get_node(node_id)  # → Node instance
 ```
 
 ### Build steps
 
-1. **Instantiate nodes** — for each `NodeSpec`, calls `registry.get_class(node_type)` and constructs the node with `node_seed = stable_hash(seed, node_type, index) % 2**32`.
+1. **Instantiate nodes** — for each `NodeSpec`, calls `registry.get_class(node_type)` and constructs the node with `node_seed = stable_hash(seed, node_type, index, config_str) % 2**32`. Config is included in the seed so two pipelines with the same seed and node types but different configs produce distinct node seeds.
 2. **Validate edges** — calls `CompatibilityChecker.check_connection()` for each edge. Raises `PipelineGraphError` if a node ID is unknown or types are incompatible.
 3. **Topological sort** — Kahn's algorithm. Raises `PipelineGraphError` if a cycle is detected.
+4. **Compute waves** — level-based BFS in O(N). Empty pipeline returns `[]`.
 
 ---
 
 ## `NodeExecutor`
+
+**File:** `app/core/node_executor.py`
 
 ```python
 executor = NodeExecutor(node, run_id="run-abc")
@@ -317,11 +334,8 @@ Caches node outputs under `workspace/cache/{sha256}/`. Domain-agnostic — uses 
 ```python
 cache = PipelineCache()
 
-# Canonical key computation (preferred — shared by sequential and parallel executors)
+# Canonical key computation (shared by sequential and parallel executors)
 key = cache.compute_key(node_type, config_dict, inputs)
-
-# Or manually:
-key = cache.key(node_type, config_dict, cache.input_hash(value))
 
 # Load — treat None as a miss; never call has() first (TOCTOU hazard)
 cached = cache.load(key)   # returns outputs dict or None
@@ -353,15 +367,21 @@ workspace/cache/{sha256}/
 
 ## Checkpoints
 
-When `checkpoint=True`, after each node executes, `_write_checkpoint()` writes the node's list-valued output to:
+**File:** `app/core/checkpoint.py`
+
+When `checkpoint=True`, after each node executes, `_write_checkpoint()` writes the node's serializable output ports to:
 
 ```
 workspace/runs/{run_id}/checkpoints/node_{node_id}/
-├── 0.wav
-├── 1.wav
-├── ...
-└── manifest.json
+├── port_{name}/
+│   ├── 0.wav … N.wav
+│   └── manifest.json
+└── manifest.json    # {"checkpointed_ports": [...], "port_types": {...}}
 ```
+
+All I/O is delegated to `ArtifactSerializerRegistry` handlers — no domain-model knowledge in `checkpoint.py`. Ports with no registered handler are skipped with a warning (they re-execute on resume).
+
+A per-node O(1) index (`runs/checkpoints/node_{id}/latest_run`) is maintained for fast checkpoint lookup. Falls back to O(N) full-run-directory scan if the index is absent or stale.
 
 Checkpoints are accessible via `GET /api/v1/runs/{run_id}/checkpoints` and via the MCP `inspect_run` tool.
 
@@ -369,17 +389,19 @@ Checkpoints are accessible via `GET /api/v1/runs/{run_id}/checkpoints` and via t
 
 ```
 workspace/runs/{run_id}/
-├── meta.json        # Run metadata (status, timing, node_stats)
-├── logs.json        # NDJSON event log
-├── graph.json       # GraphIR JSON (always written — Phase 1)
-├── config.yaml      # YAML config (only when run via deprecated YAML path)
-└── checkpoints/     # Per-node checkpoints (when checkpoint=True)
+├── meta.json           # Run metadata (status, timing, node_stats)
+├── logs.json           # NDJSON event log
+├── graph.json          # GraphIR JSON (always written)
+├── resume_state.json   # written when checkpoint=True
+└── checkpoints/        # Per-node checkpoints (when checkpoint=True)
     └── node_{id}/
-        ├── *.wav
+        ├── port_{name}/
+        │   ├── *.wav
+        │   └── manifest.json
         └── manifest.json
 ```
 
-`graph.json` is written by `RunManager.save_graph_ir()` immediately after execution starts. It is the canonical record of what graph was executed and is exposed by the MCP `inspect_run` tool.
+`graph.json` is written by `RunManager.save_graph_ir()` immediately after execution starts. `resume_state.json` tracks completed node IDs and the graph hash — used to validate that the graph has not changed before resuming.
 
 ---
 

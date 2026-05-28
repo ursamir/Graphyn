@@ -5,27 +5,32 @@
 ## Pipeline Data Flow (End-to-End)
 
 ```
-User (Browser / CLI / SDK)
+User (CLI / SDK / API / MCP)
     │
-    │  1. Provide pipeline IR JSON (canvas, file, or code)
+    │  1. Provide pipeline IR JSON
     ▼
-POST /api/v1/pipelines/run  {IR JSON}
+get_backend().execute(graph, ...)   ← canonical entry point
     │
     ▼
-run_pipeline_ir(graph, logger, use_cache, checkpoint)
+LocalPythonBackend → orchestrator.run_pipeline_ir_async(graph, ...)
     │
     ├─ load_ir(data) → GraphIR
+    │
+    ├─ _ir_to_pipeline_config() → PipelineConfig
     │
     ├─ PipelineGraph(config)
     │      ├─ instantiate Node objects from registry
     │      ├─ validate edges (CompatibilityChecker)
-    │      └─ topological sort (Kahn's algorithm)
+    │      └─ topological sort + wave computation
     │
     ├─ RunManager() → workspace/runs/{run_id}/
     │      └─ writes meta.json (status: "running")
     │
+    ├─ register_active_run(run)   ← run_control.py
+    │
     ├─ For each node in topo order:
     │      ├─ assemble inputs from upstream outputs
+    │      ├─ evaluate edge conditions
     │      ├─ [cache check] → skip process() on hit
     │      ├─ NodeExecutor.execute(inputs)
     │      │      ├─ node.on_start()
@@ -36,11 +41,7 @@ run_pipeline_ir(graph, logger, use_cache, checkpoint)
     │
     ├─ RunManager.save_logs() → workspace/runs/{run_id}/logs.json
     ├─ RunManager.save_metadata() → workspace/runs/{run_id}/meta.json (status: "completed")
-    └─ logger.done() → NDJSON "done" event
-    │
-    │  2. NDJSON stream → client reads line-by-line
-    ▼
-Client updates UI / prints to stdout
+    └─ deregister_active_run(run_id)
 ```
 
 ---
@@ -65,8 +66,9 @@ dataset_ingest.process()
     └─ librosa.load(file) → AudioSample(path, sr, data, label, metadata={})
 
 audio_conditioner.process(samples)
-    └─ resample + normalize → AudioSample(same path, new sr, new data,
-                                          metadata={conditioned, conditioning})
+    └─ resample + normalize → sample.model_copy() + data.copy()
+                               (not deepcopy — performance fix)
+                               metadata={conditioned, conditioning, clipped}
 
 segmenter.process(samples)
     └─ slice data → AudioSample(same path, same sr, chunk, same label,
@@ -122,18 +124,31 @@ workspace/
 │               ├── metadata.json  # Full sample metadata
 │               └── pipeline.yaml  # Pipeline config snapshot (if pipeline_config set)
 ├── runs/
-│   └── {run_id}/              # 8-char hex string
+│   └── {run_id}/              # full 32-char UUID4 hex
 │       ├── meta.json          # {run_id, created_at, status, duration_s, num_nodes, node_stats}
-│       ├── config.yaml        # Pipeline YAML that was executed (only via deprecated YAML path)
 │       ├── logs.json          # All log entries
-│       ├── graph.json         # GraphIR JSON (always written — Phase 1)
+│       ├── graph.json         # GraphIR JSON (always written)
+│       ├── resume_state.json  # written when checkpoint=True
 │       └── checkpoints/       # Only when checkpoint=True
 │           └── node_{node_id}/
-│               ├── {0..n}.wav
+│               ├── port_{name}/
+│               │   ├── {0..n}.wav
+│               │   └── manifest.json
 │               └── manifest.json
+├── artifacts/
+│   └── {artifact_id}/
+│       ├── record.json
+│       └── data/
+│           ├── manifest.json
+│           └── *.wav
+├── provenance/
+│   ├── {artifact_id}.json
+│   └── by_run/{run_id}.json
 ├── cache/
 │   └── {sha256}/              # Cache key = SHA-256(node_type+config+input_hash)
-│       ├── {0..n}.wav
+│       ├── port_{name}/
+│       │   ├── {0..n}.wav
+│       │   └── manifest.json
 │       └── manifest.json
 ├── configs/
 │   └── templates/
@@ -233,3 +248,5 @@ data: {"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "lab
 - CORS is restricted to localhost origins only.
 - Uploaded filenames are replaced with timestamped names to prevent path injection.
 - Ingestion download filenames are prefixed with a UUID to prevent collisions and path traversal.
+- `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated URL prefix allowlist for plugin installs; empty = allow all.
+- Run IDs validated against ASCII-only alphanumeric regex before any filesystem access.

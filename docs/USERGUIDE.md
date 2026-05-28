@@ -793,8 +793,8 @@ graph = GraphIR(
     edges=[],
 )
 
-from app.core.pipeline import run_pipeline_ir
-run_pipeline_ir(graph, event_driven=True)
+from app.core.runtime_backend import get_backend
+get_backend().execute(graph, event_driven=True)
 ```
 
 Available event sources: `timer` (`interval_s`), `file_watcher` (`path`, `pattern`), `queue` (asyncio.Queue).

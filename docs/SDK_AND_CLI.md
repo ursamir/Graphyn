@@ -59,7 +59,7 @@ class Pipeline:
 
 #### `Pipeline.run()`
 
-Converts the pipeline to a `GraphIR` and calls `run_pipeline_ir()`. Returns the outputs dict of the final node.
+Converts the pipeline to a `GraphIR` and calls `get_backend().execute()`. Returns the outputs dict of the final node.
 
 ```python
 result = pipeline.run()
@@ -80,7 +80,7 @@ loaded = Pipeline.from_json("my-pipeline.graph.json")
 
 #### `Pipeline.to_yaml(path)` / `Pipeline.from_yaml(path)`
 
-YAML serialization (deprecated — emits `DeprecationWarning`). Use IR JSON instead.
+YAML serialization (deprecated — emits `DeprecationWarning`). Use IR JSON instead. To convert existing YAML files: `graphyn migrate --config pipeline.yaml`.
 
 ---
 
@@ -202,13 +202,20 @@ Commands:
 Execute a pipeline synchronously, printing structured logs to stdout.
 
 ```
-usage: graphyn run --graph PATH [--seed N]
+usage: graphyn run --graph PATH [--seed N] [--parallel] [--resume RUN_ID]
+                   [--include-nodes ID [ID ...]] [--exclude-nodes ID [ID ...]]
+                   [--event-driven]
        graphyn run --config PATH [--seed N]   (deprecated)
 
 options:
-  --graph PATH    Path to the IR JSON graph file (canonical)
-  --config PATH   Path to the pipeline YAML config file (deprecated)
-  --seed N        Override the pipeline seed (integer, optional)
+  --graph PATH              Path to the IR JSON graph file (canonical)
+  --config PATH             Path to the pipeline YAML config file (deprecated)
+  --seed N                  Override the pipeline seed (integer, optional)
+  --parallel                Enable parallel wave execution
+  --resume RUN_ID           Resume from a prior run's checkpoints
+  --include-nodes ID [...]  Execute only the specified node IDs
+  --exclude-nodes ID [...]  Skip the specified node IDs
+  --event-driven            Run in event-driven mode
 ```
 
 **Example:**
@@ -410,15 +417,40 @@ graphyn artifacts lineage abc12345
 
 Always exits 0 — returns a partial tree with `"error"` nodes for missing provenance records.
 
-#### `graphyn artifacts replay`
+#### `graphyn nodes`
 
-Re-execute a pipeline using the `graph.json` stored for a prior run. Runs synchronously (blocking).
+List registered node types.
+
+```
+usage: graphyn nodes [--category CATEGORY] [--capability KEY=VALUE]
+
+options:
+  --category CATEGORY       Filter by category string
+  --capability KEY=VALUE    Filter by capability flag (e.g. --capability requires_gpu=true)
+```
+
+### `graphyn inspect`
+
+Print a graph summary and capability report for a pipeline IR JSON file.
+
+```
+usage: graphyn inspect --graph PATH
+
+options:
+  --graph PATH    Path to the IR JSON graph file
+```
+
+Prints node list, edge list, execution waves, and per-node capability flags.
+
+### `graphyn artifacts replay`
+
+Re-execute a pipeline using the `graph.json` stored for a prior run. `run_id` prefix matching is supported.
 
 ```
 usage: graphyn artifacts replay RUN_ID
 
 positional arguments:
-  RUN_ID   The original run ID whose graph.json to replay
+  RUN_ID   The original run ID (or unique prefix) whose graph.json to replay
 ```
 
 **Example:**

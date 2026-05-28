@@ -1,6 +1,6 @@
 # Plugin Guide
 
-All 29 production nodes are implemented as plugins in `PluginPackage/`. This guide covers how to write new plugins, install them, and manage their lifecycle.
+All 30 production nodes are implemented as plugins in `PluginPackage/`. This guide covers how to write new plugins, install them, and manage their lifecycle.
 
 For the full node reference → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture and data flow → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
@@ -90,14 +90,26 @@ class MyNode(Node):
 
 ```python
 def setup(self):
+    # setup() MUST initialize all instance variables used by process()
+    # hasattr() guards in process() are a fallback, not a substitute.
+    self._model = None
+    self._backend = "cpu"
+
     if self.config.backend in ("gpu", "auto"):
         try:
             import torch
             self._backend = "pytorch"
+            self._model = load_model()
             return
         except ImportError:
             if self.config.backend == "gpu":
                 raise ImportError("PyTorch required. venv/bin/pip install torch")
+    # CPU fallback init here
+
+def teardown(self):
+    # teardown() MUST reset setup state so the node can be re-initialized
+    del self._model
+    self._model = None
     self._backend = "cpu"
 ```
 
@@ -129,10 +141,15 @@ from my_plugin.types import MyOutputType
 
 ```python
 def setup(self):
-    self.model = load_model()   # called once before first process()
+    # Called once before first process(). MUST initialize all instance
+    # variables that process() uses — hasattr() guards are a fallback only.
+    self._model = load_model()
 
 def teardown(self):
-    del self.model              # called once after last process()
+    # Called once after last process(). MUST reset setup state so the node
+    # can be re-initialized (e.g. in test suites or pipeline restarts).
+    del self._model
+    self._model = None
 ```
 
 ### Retry Policy
@@ -230,6 +247,12 @@ Via REST API:
 - [ ] Graceful `ImportError` with install hint when optional dep absent
 - [ ] `AudioSample.metadata` enriched
 - [ ] Installs and runs via `PluginManager.install()`
+- [ ] `setup()` initializes all instance variables used by `process()`
+- [ ] `teardown()` resets setup state so node can be re-initialized
+- [ ] Empty/None input guards at the top of `process()` — log warnings for skipped inputs, raise errors for invalid config
+- [ ] No silent failures — every error path either logs a warning or raises
+- [ ] Atomic file writes (write to tmp, then `os.replace()`) for any file output
+- [ ] Thread-safe model caching (cache keyed on model ID, not just `is None`)
 
 ---
 
@@ -264,12 +287,10 @@ node.teardown()
 
 ## Registered Plugins
 
-All 29 plugins are complete. See `plugin-development.md` steering file for the full table, or `PluginPackage/NODES.md` for config fields and capabilities.
+All 30 plugins are complete. See `plugin-development.md` steering file for the full table, or `PluginPackage/NODES.md` for config fields and capabilities.
 
 ### Audio (`PluginPackage/Audio/`) — 18 nodes
 `dataset_ingest`, `stream_ingest`, `audio_conditioner`, `audio_quality_gate`, `audio_annotator`, `alignment_node`, `segmenter`, `augmentation_pipeline`, `speech_enhancer`, `speaker_separator`, `environment_simulator`, `feature_frontend`, `stream_processor`, `audio_event_detector`, `audio_classifier`, `speech_synthesizer`, `voice_converter`, `audio_generator`
 
-### Common (`PluginPackage/Common/`) — 11 nodes
-`dataset_builder`, `trainer`, `evaluator`, `edge_optimizer`, `realtime_inference`, `dataset_balancer`, `dataset_versioner`, `experiment_tracker`, `deployment_packager`, `embedding_generator`, `multimodal_fusion`
-
-> **Note — examples 01–05:** These examples use `audio_exporter` as the pipeline sink (not `dataset_builder`/`dataset_versioner`). `audio_exporter` writes WAV files organised by split/label. `dataset_builder` and `dataset_versioner` are used in examples 06–21 where numpy feature arrays or versioned dataset artifacts are needed.
+### Common (`PluginPackage/Common/`) — 12 nodes
+`dataset_builder`, `model_builder`, `trainer`, `evaluator`, `edge_optimizer`, `realtime_inference`, `dataset_balancer`, `dataset_versioner`, `experiment_tracker`, `deployment_packager`, `embedding_generator`, `multimodal_fusion`
