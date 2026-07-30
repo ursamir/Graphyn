@@ -36,9 +36,19 @@ Output:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
+
+# TensorFlow: prefer GPU when available. Force CPU only if needed:
+#   GRAPHYN_TF_DEVICE=cpu
+# Do not hide GPUs by default — other apps (e.g. FaceRecognition) can keep using VRAM.
+os.environ.setdefault("TF_XLA_FLAGS", "--tf_xla_auto_jit=0")
+os.environ.setdefault("XLA_FLAGS", "--xla_gpu_enable_triton_gemm=false")
+os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
+if os.environ.get("GRAPHYN_TF_DEVICE", "").strip().lower() == "cpu":
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 
 WORKSPACE_ROOT = str(Path(__file__).parent.parent.parent)
 if WORKSPACE_ROOT not in sys.path:
@@ -201,8 +211,8 @@ def phase2_train() -> None:
             # [4] Train the model
             PipelineNode("trainer", {
                 "backend": "keras",
-                "epochs": 30,
-                "batch_size": 32,
+                "epochs": 3,
+                "batch_size": 8,
                 "output_path": str(OUTPUT_DIR),
                 "patience": 5,
             }),

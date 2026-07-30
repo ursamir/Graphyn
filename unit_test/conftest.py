@@ -15,6 +15,23 @@ from app.core.nodes.registry import NodeRegistry
 from app.models.audio_sample import AudioSample
 
 
+# ── Session bootstrap ─────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="session", autouse=True)
+def _bootstrap_node_registry() -> None:
+    """Load plugins into the NodeRegistry singleton once per test session.
+
+    Integration-style tests (validation, API) expect real node types such as
+    ``audio_conditioner``. Set ``GRAPHYN_SKIP_PLUGIN_LOAD=1`` to skip.
+    """
+    if os.environ.get("GRAPHYN_SKIP_PLUGIN_LOAD", "").strip().lower() in (
+        "1", "true", "yes",
+    ):
+        return
+    from app.core.nodes import initialize_registry
+    initialize_registry()
+
+
 # ── Registry isolation ────────────────────────────────────────────────────────
 
 @pytest.fixture

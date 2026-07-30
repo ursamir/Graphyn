@@ -338,6 +338,8 @@ class RealtimeInferenceNode(Node):
             self._asr_buffer = []
 
         for f in features:
+            if not isinstance(f, FeatureArray) or getattr(f, "data", None) is None:
+                continue
             frame_count += 1
 
             # Adaptive frame-skipping: probabilistic skip based on adaptive_skip_ratio

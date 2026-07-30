@@ -2,24 +2,18 @@
 """
 examples/prepare_real_data.py
 ==============================
-Copies real audio from the extracted Google Speech Commands v0.02 dataset
-into each example's own data/ directory. Examples are fully self-contained —
-no workspace/datasets/input/ involvement.
+Ensures Google Speech Commands v0.02 raw data is present, then copies real
+audio into each example's own data/ directory.
+
+Behavior:
+1) Download official archives to workspace/datasets/raw/ if missing.
+2) Extract into:
+   - workspace/datasets/raw/speech_commands_train/
+   - workspace/datasets/raw/speech_commands_test/
+3) Populate examples/*/data from those extracted directories.
 
 Usage:
     venv/bin/python examples/prepare_real_data.py
-
-Prerequisites:
-    Both tar files must already be extracted to workspace/datasets/raw/:
-        workspace/datasets/raw/speech_commands_train/   (speech_commands_v0.02.tar.gz)
-        workspace/datasets/raw/speech_commands_test/    (speech_commands_test_set_v0.02.tar.gz)
-
-    Extract commands (run once):
-        mkdir -p workspace/datasets/raw
-        tar -xzf speech_commands_v0.02.tar.gz \\
-            -C workspace/datasets/raw/ --transform 's|^\\./|speech_commands_train/|'
-        tar -xzf speech_commands_test_set_v0.02.tar.gz \\
-            -C workspace/datasets/raw/ --transform 's|^\\./|speech_commands_test/|'
 
 Data layout after running this script:
     examples/01_wake_word/data/
@@ -43,15 +37,21 @@ Data layout after running this script:
 """
 from __future__ import annotations
 
-import os
 import random
 import shutil
+import tarfile
+import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
 TRAIN_DIR = Path("workspace/datasets/raw/speech_commands_train")
 TEST_DIR  = Path("workspace/datasets/raw/speech_commands_test")
+RAW_ROOT  = Path("workspace/datasets/raw")
 EXAMPLES  = Path("examples")
+TRAIN_ARCHIVE = RAW_ROOT / "speech_commands_v0.02.tar.gz"
+TEST_ARCHIVE = RAW_ROOT / "speech_commands_test_set_v0.02.tar.gz"
+TRAIN_URL = "https://storage.googleapis.com/download.tensorflow.org/data/speech_commands_v0.02.tar.gz"
+TEST_URL = "https://storage.googleapis.com/download.tensorflow.org/data/speech_commands_test_set_v0.02.tar.gz"
 
 SEED = 42
 random.seed(SEED)
@@ -93,6 +93,47 @@ def check_prerequisites() -> bool:
               "-C workspace/datasets/raw/ --transform 's|^\\./|speech_commands_test/|'")
         ok = False
     return ok
+
+
+def _download_if_missing(url: str, dest: Path) -> None:
+    if dest.exists():
+        print(f"  ✓ Archive present: {dest}")
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"  ↓ Downloading: {url}")
+    urllib.request.urlretrieve(url, str(dest))
+    print(f"  ✓ Downloaded: {dest}")
+
+
+def _extract_archive_if_needed(archive: Path, target_dir: Path, prefix: str) -> None:
+    if target_dir.exists():
+        print(f"  ✓ Extracted directory present: {target_dir}")
+        return
+    print(f"  ↓ Extracting: {archive.name} → {target_dir}")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, mode="r:gz") as tf:
+        for member in tf.getmembers():
+            member_name = member.name
+            if member_name.startswith("./"):
+                member_name = member_name[2:]
+            if not member_name:
+                continue
+            member.name = f"{prefix}/{member_name}"
+            tf.extract(member, path=str(RAW_ROOT))
+    print(f"  ✓ Extracted: {target_dir}")
+
+
+def ensure_raw_data() -> bool:
+    """Ensure train/test archives and extracted directories are available."""
+    try:
+        _download_if_missing(TRAIN_URL, TRAIN_ARCHIVE)
+        _download_if_missing(TEST_URL, TEST_ARCHIVE)
+        _extract_archive_if_needed(TRAIN_ARCHIVE, TRAIN_DIR, "speech_commands_train")
+        _extract_archive_if_needed(TEST_ARCHIVE, TEST_DIR, "speech_commands_test")
+    except Exception as exc:
+        print(f"  ✗ Failed to prepare raw dataset: {exc}")
+        return False
+    return True
 
 
 # ── Example 01: Wake Word Detection ──────────────────────────────────────────
@@ -240,8 +281,13 @@ def main() -> None:
     print("Data will be copied into examples/{n}/data/ directories.")
     print("Examples are fully self-contained — no workspace pollution.")
 
+    print("\nEnsuring raw dataset is available...")
+    if not ensure_raw_data():
+        print("\n✗ Failed to prepare raw dataset. Aborting.")
+        return
+
     if not check_prerequisites():
-        print("\n✗ Prerequisites not met. Aborting.")
+        print("\n✗ Dataset preparation incomplete. Aborting.")
         return
 
     prepare_01_wake_word(limit=200)

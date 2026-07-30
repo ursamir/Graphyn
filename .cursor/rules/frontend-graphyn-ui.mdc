@@ -1,0 +1,18 @@
+---
+description: Graphyn UI React conventions (platform console)
+globs: "graphyn-ui/**/*.{ts,tsx,css}"
+alwaysApply: false
+---
+
+# graphyn-ui (Graphyn platform console)
+
+Stack: React + TypeScript + Vite + React Flow + Zustand + Tailwind.
+
+- Brand is **Graphyn** (domain-agnostic DAG platform), not an audio-only builder.
+- Graph IR is the only pipeline language in the UI (import/export `.graph.json`).
+- API base: `VITE_API_BASE_URL` or Vite proxy `/api/v1` → `http://127.0.0.1:8001`.
+- Static mounts: `/files`, `/input-files`, `/run-files` via `staticUrl()` (not under `/api/v1`).
+- Views map to backend surfaces: Builder, Runs, Artifacts, Plugins, Templates, Data, Projects, System.
+- Domain-specific UIs (audio annotation, quality gates) are optional future modules — do not re-center the product on audio.
+- Polling file watch is enabled in `vite.config.ts` for servers with low inotify limits.
+- Steering: `.kiro/steering/frontend-canvas.md`, `.kiro/steering/frontend-features.md`.

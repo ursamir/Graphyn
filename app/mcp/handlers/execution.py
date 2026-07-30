@@ -86,6 +86,8 @@ def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
         graph = load_ir(graph_dict)
     except Exception as exc:
         return {
+            "valid": False,
+            "errors": [str(exc)],
             "error": True,
             "error_type": "ir_validation_error",
             "message": str(exc),
@@ -123,7 +125,8 @@ def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
             streaming=streaming,
             run_manager=run_manager,
         )
-        future.add_done_callback(_on_done)
+        if future is not None and hasattr(future, "add_done_callback"):
+            future.add_done_callback(_on_done)
     except Exception as exc:
         run_manager.mark_failed(str(exc))
         return {

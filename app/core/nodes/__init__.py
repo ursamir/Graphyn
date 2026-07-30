@@ -83,6 +83,14 @@ def initialize_registry() -> None:
 
     if not _skip_plugin_load:
         try:
+            from app.core.tf_runtime import configure_tf_stable_defaults  # noqa: PLC0415
+
+            configure_tf_stable_defaults()
+        except Exception as exc:
+            _log.debug("TF runtime defaults skipped: %s", exc)
+
+    if not _skip_plugin_load:
+        try:
             from app.core.plugins.manager import PluginManager  # noqa: PLC0415
             PluginManager().load_enabled_plugins()
             _plugins_loaded_by_manager = True

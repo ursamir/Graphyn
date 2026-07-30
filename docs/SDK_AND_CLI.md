@@ -222,7 +222,9 @@ options:
 
 ```bash
 graphyn run --graph my-pipeline.graph.json
-graphyn run --config workspace/configs/templates/basic-wakeword.yaml  # deprecated — use .graph.json
+graphyn run --graph examples/templates/basic-wakeword.graph.json
+# deprecated YAML path (auto-converted):
+# graphyn run --config workspace/configs/templates/basic-wakeword.yaml
 graphyn run --graph my-pipeline.graph.json --seed 123
 ```
 

@@ -16,7 +16,7 @@ setup(
     description="Python SDK for the Graphyn AI/Workflow Pipeline Engine",
     long_description=open("README.md", encoding="utf-8").read() if __import__("os").path.exists("README.md") else "",
     long_description_content_type="text/markdown",
-    packages=find_packages(exclude=["tests*", "venv*", "audiobuilder*"]),
+    packages=find_packages(exclude=["tests*", "venv*", "graphyn-ui*", "audiobuilder*"]),
     python_requires=">=3.10",
     install_requires=[
         # Pinned to match requirements.txt — update both files together.

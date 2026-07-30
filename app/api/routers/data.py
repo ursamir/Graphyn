@@ -214,7 +214,7 @@ def merge_datasets(body: MergeRequest):
         raise HTTPException(status_code=422, detail="sources must not be empty")
 
     output_root = _output_root()
-    target_dir = output_root / body.target_project / body.target_version
+    target_dir = _safe_child(output_root, body.target_project, body.target_version)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     files_copied = 0
@@ -226,7 +226,11 @@ def merge_datasets(body: MergeRequest):
         if not src_project or not src_version:
             errors.append(f"Invalid source entry: {source}")
             continue
-        src_dir = output_root / src_project / src_version
+        try:
+            src_dir = _safe_child(output_root, src_project, src_version)
+        except HTTPException:
+            errors.append(f"Invalid source path: {src_project}/{src_version}")
+            continue
         if not src_dir.exists():
             errors.append(f"Source not found: {src_project}/{src_version}")
             continue

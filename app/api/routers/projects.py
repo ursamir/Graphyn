@@ -305,9 +305,7 @@ def get_quality_check_status(name: str, job_id: str):
 
     Stub: returns the persisted quality_report.json from the project directory.
     """
-    project_dir = ProjectManager.BASE / name
-    if not project_dir.exists():
-        raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+    project_dir = _handle(_pm._require_project, name)
 
     report_path = project_dir / "quality_report.json"
     if not report_path.exists():

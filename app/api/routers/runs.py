@@ -255,3 +255,52 @@ def get_run_provenance(run_id: str):
         "artifacts": [r.model_dump(mode="json") for r in artifacts],
         "provenance_records": [p.model_dump(mode="json") for p in provenance_records],
     }
+
+
+@router.get("/{run_id}/debug-report", summary="Get consolidated run debug report")
+def get_run_debug_report(run_id: str):
+    """Return a compact operator-focused debug report for one run."""
+    run_path = _run_dir(run_id)
+
+    status = get_run_status(run_id)
+    checkpoints = list_checkpoints(run_id)
+
+    logs_file = run_path / "logs.json"
+    log_entries: list[dict] = []
+    if logs_file.exists():
+        try:
+            parsed = json.loads(logs_file.read_text())
+            if isinstance(parsed, list):
+                log_entries = [e for e in parsed if isinstance(e, dict)]
+        except Exception:
+            log_entries = []
+
+    error_logs = [
+        e
+        for e in log_entries
+        if str(e.get("level", "")).upper() in {"ERROR", "CRITICAL"}
+        or "error" in str(e.get("message", "")).lower()
+    ]
+
+    from app.core.artifact_store import ArtifactStore
+    from app.core.provenance import ProvenanceStore
+
+    artifacts = ArtifactStore().list(run_id=run_id)
+    provenance_records = ProvenanceStore().find_by_run(run_id)
+
+    return {
+        "run_id": run_id,
+        "status": status,
+        "checkpoint_count": len(checkpoints),
+        "checkpoints": checkpoints[:50],
+        "artifact_count": len(artifacts),
+        "provenance_count": len(provenance_records),
+        "error_count": len(error_logs),
+        "recent_errors": error_logs[-10:],
+        "paths": {
+            "run_dir": str(run_path),
+            "meta_json": str(run_path / "meta.json"),
+            "logs_json": str(logs_file),
+            "checkpoints_dir": str(run_path / "checkpoints"),
+        },
+    }

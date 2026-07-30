@@ -54,14 +54,14 @@ Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`
 | `get_graph_schema` | `graph.py` | `GraphIR.model_json_schema()` |
 | `get_graph_capability_summary` | `graph.py` | registry + two-step resolution |
 | `get_event_schema` | `graph.py` | static dict |
-| `execute_pipeline` | `execution.py` | `run_pipeline_ir()`, `RunManager` |
+| `execute_pipeline` | `execution.py` | `get_backend().execute()`, `RunManager` |
 | `inspect_run` | `artifacts.py` | workspace filesystem |
 | `pause_run` | `run_control.py` | `get_active_run(run_id).pause()` |
 | `resume_run` | `run_control.py` | `get_active_run(run_id).resume()` |
 | `cancel_run` | `run_control.py` | `get_active_run(run_id).cancel()` |
 | `list_artifacts` | `provenance.py` | `ArtifactStore.list()` |
 | `get_artifact_lineage` | `provenance.py` | `ProvenanceStore.get_lineage()` |
-| `replay_run` | `provenance.py` | `load_ir_from_file()`, `run_pipeline_ir()`, `RunManager` |
+| `replay_run` | `provenance.py` | `load_ir_from_file()`, `get_backend().execute()`, `RunManager` |
 | `optimize_execution` | `optimization.py` | `PipelineGraph`, `_resolve_capability()` |
 
 ---
@@ -162,15 +162,15 @@ Control an active run. Only works on currently running pipelines (same process).
 
 **Arguments:** `run_id` (required).
 
-**`pause_run` returns:** `{"run_id": "...", "status": "pause_requested"}` — the run will pause at the next node boundary.
+**`pause_run` returns:** `{"run_id": "...", "status": "paused"}` — the run will pause at the next node boundary.
 
 **`resume_run` returns:** `{"run_id": "...", "status": "running"}`.
 
-**`cancel_run` returns:** `{"run_id": "...", "status": "cancel_requested"}`.
+**`cancel_run` returns:** `{"run_id": "...", "status": "cancelled"}`.
 
 **Error:** `{"error_type": "run_not_active"}` — distinguishes completed runs from runs that never existed.
 
-`OSError` during pause/resume (e.g. filesystem unavailable) is caught and returned as `{"error_type": "run_not_active"}`.
+`OSError` during pause/resume persistence is returned as `{"error_type": "run_control_error"}`.
 
 ---
 

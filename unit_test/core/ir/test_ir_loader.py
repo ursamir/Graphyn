@@ -128,5 +128,29 @@ class TestVersionValidation:
         restored = load_ir(data)
         assert isinstance(restored, GraphIR)
 
+    def test_migrates_parameters_ui_to_top_level_ui(self):
+        data = dump_ir(_minimal_graph())
+        data["parameters"] = {
+            "ui": {"positions": {"node_a": {"x": 10.0, "y": 20.0}}},
+        }
+        restored = load_ir(data)
+        assert restored.parameters == {}
+        assert restored.ui is not None
+        assert restored.ui.positions["node_a"].x == 10.0
+        assert restored.ui.positions["node_a"].y == 20.0
+
+    def test_ui_positions_round_trip(self):
+        from app.core.ir.models import IRUIPosition, IRUIState
+
+        graph = GraphIR(
+            schema_version="1.1",
+            metadata=IRMetadata(name="layout", seed=1),
+            nodes=[IRNode(id="a", node_type="dataset_ingest")],
+            ui=IRUIState(positions={"a": IRUIPosition(x=1.5, y=2.5)}),
+        )
+        restored = load_ir(dump_ir(graph))
+        assert restored.ui is not None
+        assert restored.ui.positions["a"].x == 1.5
+
     def test_ir_version_error_is_value_error_subclass(self):
         assert issubclass(IRVersionError, ValueError)

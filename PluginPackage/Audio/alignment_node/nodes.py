@@ -88,7 +88,7 @@ class AlignmentNode(Node):
         ),
         "transcripts": InputPort(
             name="transcripts",
-            data_type=list[dict],
+            data_type=list[dict] | None,
             cardinality="single",
             required=False,
             description=(

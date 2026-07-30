@@ -104,8 +104,13 @@ class StreamProcessorNode(Node):
         window_samples = int(sr * self.config.window_ms / 1000)
         hop_samples = int(sr * self.config.hop_ms / 1000)
 
+        valid_chunks = [
+            c for c in chunks
+            if isinstance(c, AudioSample) and getattr(c, "data", None) is not None
+        ]
+
         # Buffer health: drop oldest if over limit
-        for chunk in chunks:
+        for chunk in valid_chunks:
             if len(self._buffer) >= self.config.max_buffer_size:
                 dropped = self._buffer.popleft()
                 log.warning(

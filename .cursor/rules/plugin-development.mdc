@@ -1,0 +1,16 @@
+---
+description: PluginPackage authoring and PluginManager conventions
+globs: "PluginPackage/**/*,plugins/**/*,app/core/plugins/**/*.py"
+alwaysApply: false
+---
+
+# Plugin Development
+
+- **Develop in** `PluginPackage/Audio/` or `Common/` (also Video/WakeWord). **Never edit** `plugins/`.
+- Layout: `plugin.toml`, `__init__.py`, optional `types.py` then `nodes.py` in `entry_points` (types first).
+- Custom `PortDataType`s stay in plugin `types.py`, not `app/models/`.
+- Heavy deps (torch/tf) → `optional_dependencies` + graceful degrade; core deps pinned, no open ranges.
+- Install: `PluginManager.install(..., upgrade=True)` or `graphyn plugin install ...`.
+- Propagate `AudioSample.metadata` keys on transforms.
+- After new nodes: update steering tables + `PluginPackage/NODES.md` + `docs/PLUGIN_GUIDE.md`.
+- Detail: `.kiro/steering/plugin-development.md`, `plugin-ecosystem.md`.

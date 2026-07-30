@@ -1,28 +1,56 @@
 # Known Issues
 
-> **Single source of truth:** `docs/MASTER_ISSUE_REGISTRY.md`  
-> This file lists only currently open issues for quick reference.  
-> For full history, fix details, and resolved issues see the registry.
-
-All confirmed bugs found during the 104-file review pass (May 2026) have been fixed. The codebase is in a clean, production-quality state.
+> **Single source of truth for open issues.**  
+> Add new findings here when discovered; remove when fixed.
 
 ---
 
 ## Open — Fix Immediately (before next deployment)
 
-No open issues in this tier.
+### (resolved 2026-07-29) EDGE-DROP-1 / EDGE-DROP-2 / AUTH-MOUNT-1
+
+Fixed in code:
+- `app/api/routers/pipelines.py` now executes GraphIR directly through `get_backend().execute(graph)`.
+- `app/api/routers/artifacts.py` replay now executes loaded GraphIR directly through `get_backend().execute(graph)`.
+- `app/api/main.py` now enforces bearer auth on `/files`, `/input-files`, and `/run-files` via middleware when token auth is enabled.
 
 ---
 
 ## Open — Fix This Sprint
 
-No open issues in this tier.
+### (resolved 2026-07-29) FE-YAML-1 — audiobuilder was YAML-primary
 
----
+**Was:** `audiobuilder/` canvas run/save emitted YAML and rejected non-linear graphs.  
+**Status:** `audiobuilder/` removed. Replaced by `graphyn-ui/` — IR-native Builder with platform surfaces (Runs, Artifacts, Plugins, Templates, Data, Projects, System).
 
-## Open — Fix When Touching the File
+### (resolved 2026-07-29) BACKEND-PATH-1 — CLI/API paths bypass `get_backend()`
 
-No open issues in this tier.
+**Files:** `app/cli/main.py` (`cmd_artifacts_replay`), parts of `artifacts.py`  
+**Detail:** Docs claim all interfaces use `get_backend().execute()`; CLI replay calls `orchestrator.run_pipeline_ir` directly.  
+**Status:** Fixed for CLI artifact replay (`app/cli/main.py`) and artifact replay API path.
+
+### DEPS-1 — Dependency manifest skew
+
+**Files:** `requirements.txt`, `setup.py`  
+**Detail:** Runtime uses `httpx`, `packaging`, optional `redis`; pins are incomplete/out of sync between files.  
+**Fix:** Single source of deps; declare optional extras for redis/hf/tf.
+
+### PLUGIN-LOAD-1 — Plugin startup can fail with stale installed bytecode
+
+**Detail:** After loader module-naming changes, old `__pycache__` entries under `~/.graphyn/plugins/installed/` can cause startup warnings such as: `Plugin 'feature-frontend' declared 1 entry point(s) but no node types were registered`. Runtime install/upgrade still succeeds.  
+**Workaround:** Clear stale plugin caches (`~/.graphyn/plugins/installed/**/__pycache__`) and rerun plugin load/install.
+
+### EVENT-DRIVEN-EXIT-1 — Event-driven demos may not terminate promptly
+
+**Files:** `examples/15_event_driven_pipeline/event_driven_demo.py`, `app/core/events.py`  
+**Detail:** On some Linux environments, file-watcher event loops may continue running briefly after cancel, causing long waits in scripted full-suite runs.  
+**Workaround:** Run with a process timeout in CI/sweeps; treat output artifacts and completion logs as pass criteria.
+
+### TF-GPU-CC12-1 — Keras training unsupported on compute capability ≥12
+
+**Files:** `app/core/tf_runtime.py` (`select_keras_device`), `PluginPackage/Common/trainer/nodes.py`  
+**Detail:** RTX 50-series (e.g. RTX 5070 Ti, CC 12.0) is visible to TensorFlow but Keras `fit` fails (PTX/libdevice/XLA JIT). Soft-placement CPU fallback without pinning also fails (CPU weights + GPU train step).  
+**Workaround:** Platform defaults Keras to CPU on CC ≥12. Force GPU only with `GRAPHYN_TF_FORCE_GPU=1` (expected to fail until TF/CUDA support catches up). FaceRecognition and other GPU apps are left alone (memory growth only).
 
 ---
 
@@ -31,15 +59,20 @@ No open issues in this tier.
 ### SCALE-3 — `run-async` status tracking uses `meta.json` polling
 
 **File:** `app/api/routers/pipelines.py` → `GET /api/v1/runs/{run_id}/status`  
-**Severity:** Low (functional, but suboptimal under high concurrency)  
-**Detail:** The `run-async` endpoint starts execution in a background thread. Status is read from `meta.json` on disk, which is written atomically by `RunManager`. This is correct and safe for single-worker deployments. Under high concurrency with many simultaneous async runs, repeated `meta.json` reads may become a bottleneck. The proper fix is a lightweight in-memory status cache keyed on `run_id`, invalidated when `deregister_active_run` is called. This requires coordinating `run_control.py` and the status router, which is non-trivial to do safely without introducing race conditions.  
-**Workaround:** Use `GET /api/v1/runs/{run_id}/status` polling at ≥500ms intervals. The endpoint is fast (single file read) and correct.
+**Severity:** Low  
+**Detail:** Correct for single-worker; under high concurrency prefer an in-memory status cache coordinated with `run_control.py`.  
+**Workaround:** Poll status at ≥500ms.
+
+### AUTH-DEFAULT-1 — Auth off when token unset
+
+**Files:** `app/api/main.py`, `app/core/config.py`, MCP auth  
+**Detail:** Empty `GRAPHYN_API_TOKEN` means allow-all. Fine for local dev; dangerous if deployed without setting the env var.  
+**Fix:** Require token in non-dev profiles / document hard.
 
 ---
 
 ## How to Report
 
-1. Add the issue to `docs/MASTER_ISSUE_REGISTRY.md` in the correct priority section and update the Quick Reference table.
-2. Add a row to the matching priority tier in this file.
-3. Reference the source file and line number where the issue lives.
-4. Include a workaround if one exists.
+1. Add a row to the matching priority tier in this file.
+2. Reference the source file (and approximate location).
+3. Include a workaround if one exists.

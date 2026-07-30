@@ -136,4 +136,4 @@ artifact_type = registry.infer_type(value)
 
 `AudioSampleHandler` (`app/models/audio_artifact_serializer.py`) — domain-side implementation for `audio_samples`. Owns WAV I/O, manifest format, and `AudioSample` duck-typing. Registered at startup via `register_audio_serializer()`.
 
-> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.
+> All previously listed issues in this area have been resolved. See `docs/KNOWN_ISSUES.md` for open items.

@@ -5,6 +5,9 @@ fileMatchPattern: "app/api/main.py"
 
 # API Structure
 
+## 2026-07-29 Hardening Update
+- Static file mounts (`/files`, `/input-files`, `/run-files`) are guarded by the same bearer-token policy as API routes when `GRAPHYN_API_TOKEN` is configured.
+
 `app/api/main.py` is a thin factory. No endpoint logic here.
 
 ## Auth

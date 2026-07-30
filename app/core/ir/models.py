@@ -209,6 +209,27 @@ class IRParameter(BaseModel):
     description: str = ""
 
 
+class IRUIPosition(BaseModel):
+    """Canvas layout position for one node (console sidecar; ignored by executor)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    x: float
+    y: float
+
+
+class IRUIState(BaseModel):
+    """Optional UI-only layout state persisted alongside Graph IR.
+
+    Not used by the orchestrator. Must not be stored under ``parameters``
+    (that map is ``dict[str, IRParameter]``).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    positions: dict[str, IRUIPosition] = {}
+
+
 class GraphIR(BaseModel):
     """Top-level graph IR model — the canonical representation of a pipeline.
 
@@ -222,6 +243,7 @@ class GraphIR(BaseModel):
     nodes: list[IRNode]
     edges: list[IREdge] = []
     parameters: dict[str, IRParameter] = {}
+    ui: IRUIState | None = None
 
     @field_validator("schema_version")
     @classmethod

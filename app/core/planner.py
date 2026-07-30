@@ -25,6 +25,7 @@ import json
 import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from app.core.nodes.base import Node
@@ -32,6 +33,19 @@ from app.core.nodes.observers import NodeObserver
 from app.core.utils.hash import stable_hash
 
 log = logging.getLogger(__name__)
+
+
+def _plain_jsonable(value: Any) -> Any:
+    """Normalize mappingproxy/containers to plain JSON-compatible containers."""
+    if isinstance(value, MappingProxyType):
+        return {k: _plain_jsonable(v) for k, v in value.items()}
+    if isinstance(value, dict):
+        return {k: _plain_jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_plain_jsonable(v) for v in value]
+    return value
 
 
 # ── Data structures ────────────────────────────────────────────────────────────
@@ -137,7 +151,7 @@ def _ir_to_pipeline_config(graph: Any) -> PipelineConfig:
         NodeSpec(
             node_id=ir_node.id,
             node_type=ir_node.node_type,
-            config=dict(ir_node.config),
+            config=_plain_jsonable(ir_node.config),
         )
         for ir_node in graph.nodes
     ]
@@ -206,14 +220,15 @@ class PipelineGraph:
             # the same seed and node types but different configs produce distinct
             # node seeds (important for augmentation nodes with random behaviour).
             # Finding 3 (HIGH): wrap json.dumps so non-serializable configs give a clear error
+            config_plain = _plain_jsonable(spec.config)
             try:
-                config_str = json.dumps(spec.config, sort_keys=True)
+                config_str = json.dumps(config_plain, sort_keys=True)
             except TypeError as exc:
                 raise PipelineGraphError(
                     f"Node '{spec.node_id}' config is not JSON-serializable: {exc}"
                 ) from exc
             node_seed = stable_hash(seed, spec.node_type, i, config_str) % (2 ** 32)
-            node_config = copy.deepcopy(spec.config)
+            node_config = copy.deepcopy(config_plain)
             node = node_class(config=node_config, seed=node_seed, observer=self._observer)
             self._nodes[spec.node_id] = node
 

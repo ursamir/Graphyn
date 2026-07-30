@@ -7,6 +7,10 @@ fileMatchPattern: "app/core/sdk.py,app/cli/**"
 
 Both delegate to `get_backend().execute()` via `GraphIR` — no separate execution logic. The SDK calls `get_backend().execute()` internally; the CLI calls `get_backend().execute()` for seed-override paths and `pipeline.run()` for standard paths.
 
+## 2026-07-29 Runtime Note
+- SDK execution now clones IR through `dump_ir()` + `load_ir()` (not `copy.deepcopy`) to avoid mappingproxy copy/serialization failures.
+- Plugin installs are idempotent by default in `PluginManager.install()` (existing installs are reused unless `upgrade=True`).
+
 ## Python SDK (`app/core/sdk.py`)
 
 ```python

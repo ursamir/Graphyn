@@ -246,10 +246,12 @@ bash examples/05_speech_enhancement/run_cli.sh
 
 Two-phase execution: Phase 1 preprocesses all 6 command labels (identical to Example 02). Phase 2 extracts MFCC features, trains a DS-CNN model, evaluates it, and exports an INT8 TFLite model.
 
+> Current `run_train.py` defaults are tuned for fast local verification (`epochs=3`, `batch_size=8`, CPU-safe TensorFlow flags). Raise epochs for production-quality model quality measurements.
+
 ```bash
 # Step-by-step CLI (recommended for first run)
 bash examples/06_speech_commands_e2e/run_preprocess.sh   # Phase 1: ~45s
-bash examples/06_speech_commands_e2e/run_train_ml.sh     # Phase 2: ~8 min
+bash examples/06_speech_commands_e2e/run_train_ml.sh     # Phase 2: several minutes (hardware-dependent)
 bash examples/06_speech_commands_e2e/run_infer.sh \
     --input examples/02_speech_commands/data/yes         # Inference
 
@@ -261,8 +263,8 @@ venv/bin/python examples/06_speech_commands_e2e/run_train.py
 |---|---|
 | **Architecture** | DS-CNN — Depthwise Separable CNN, ~22K parameters |
 | **Features** | 40-bin MFCC, 101 frames (~1s at 16kHz) |
-| **Test accuracy** | 82–84% |
-| **TFLite model** | 44 KB (INT8 quantized) |
+| **Test accuracy** | Depends on training profile (`run_train.py` defaults prioritize quick verification) |
+| **TFLite model** | Generated at `output/tflite/model.tflite` (size varies by backend/build) |
 | **Inference time** | < 100ms per clip (CPU) |
 
 **Outputs:**
@@ -271,7 +273,7 @@ output/
 ├── dataset/speech_commands/v1/   4800 preprocessed WAV files
 ├── model.keras                   Keras model (385 KB)
 ├── saved_model/                  TF SavedModel
-├── tflite/model.tflite           INT8 TFLite model (44 KB)
+├── tflite/model.tflite           INT8 TFLite model
 ├── metrics.json                  Test accuracy + per-class metrics
 ├── confusion_matrix.png          Confusion matrix heatmap
 └── training_curves.png           Loss and accuracy curves
@@ -349,7 +351,7 @@ venv/bin/python examples/08_rest_api_streaming/stream_client.py --verbose
 
 ### [09 — Parallel Wave Execution](09_parallel_execution/)
 
-**The platform's parallel DAG executor — 2.7× faster than sequential.**
+**The platform's parallel DAG executor — meaningful speedup vs sequential.**
 
 Builds a fan-out DAG with 4 independent branches (one per label class). The executor automatically groups nodes into parallel waves and runs each wave concurrently.
 
@@ -370,7 +372,7 @@ Wave 2: segmenter_yes, segmenter_no, segmenter_up, segmenter_down  ← concurren
 ...
 ```
 
-**Results:** Sequential 3.11s → Parallel 1.17s → **2.7× speedup**
+**Results:** Actual speedup depends on machine, CPU cores, and I/O profile.
 
 ---
 
@@ -498,7 +500,7 @@ dependencies     = []
 
 **The platform as a real-time processing daemon — not just a batch processor.**
 
-Demonstrates `event_driven=True` with two event sources: `TimerSource` (fires every N seconds) and `FileWatcherSource` (triggers on new files in a directory). The pipeline runs indefinitely until `run.cancel()` is called.
+Demonstrates `event_driven=True` with two event sources: `TimerSource` (fires every N seconds) and `FileWatcherSource` (triggers on new files in a directory). The demo requests cancellation after ingesting test files and then exits.
 
 ```bash
 venv/bin/python examples/15_event_driven_pipeline/event_driven_demo.py
@@ -536,7 +538,7 @@ Every run stores its `GraphIR` as `workspace/runs/{run_id}/graph.json`. Replay l
 
 **Re-run only the nodes you changed.**
 
-Demonstrates three execution modes: full pipeline (8 nodes), `exclude_nodes` (skip one node), and `include_nodes` + `input_overrides` (inject pre-computed audio samples and run only the 4 downstream nodes). Speedup varies by machine; the partial run is typically 50–100× faster than the full run because it skips the expensive ingest and conditioning steps.
+Demonstrates three execution modes: full pipeline (8 nodes), `exclude_nodes` (skip selected nodes), and `include_nodes` + `input_overrides` (inject pre-computed audio samples and run only the 4 downstream nodes). Speedup varies by machine; partial runs are much faster when ingest/conditioning stages are skipped.
 
 ```bash
 venv/bin/python examples/17_partial_execution/partial_demo.py
@@ -546,7 +548,7 @@ venv/bin/python examples/17_partial_execution/partial_demo.py
 ```
 Full run (8 nodes):                    ~1.3s
 exclude_nodes (7 nodes):               ~0.6s
-include_nodes + overrides (4 nodes):   ~0.02s
+include_nodes + overrides (4 nodes):   fast downstream-only rerun
 ```
 
 **CLI:**
@@ -554,6 +556,9 @@ include_nodes + overrides (4 nodes):   ~0.02s
 venv/bin/python -m app.cli.main run \
     --graph pipeline.graph.json \
     --include-nodes augmentation_pipeline_4,feature_frontend_5,dataset_builder_6,dataset_versioner_7
+venv/bin/python -m app.cli.main run \
+    --graph pipeline.graph.json \
+    --exclude-nodes augmentation_pipeline_4,feature_frontend_5
 ```
 
 ---
@@ -714,19 +719,24 @@ All examples have been tested with real Google Speech Commands v0.02 data.
 
 | Example | Input | Output | Time |
 |---|---|---|---|
-| 01 Wake Word | 400 clips (2 labels) | 4800 samples | ~25s |
-| 02 Speech Commands | 1200 clips (6 labels) | 4800 samples | ~45s |
-| 03 Environmental Sounds | 1000 clips (5 classes) | 4000 samples | ~40s |
-| 04 Speaker Verification | 120 clips (6 speakers) | 120 samples + metadata | ~5s |
-| 05 Speech Enhancement | 186 clips | 372 paired samples | ~15s |
-| 06 E2E Training | 1200 clips → 4800 features | 82–84% accuracy, 44 KB TFLite | ~8 min |
-| 07 MCP Agent | — | Pipeline built + run via MCP | ~3s |
-| 08 REST Streaming | 200 clips | NDJSON stream + timing summary | ~1s |
-| 09 Parallel | 800 clips (4 labels) | 4 × 800 samples | 1.2s (**2.7× speedup**) |
-| 10 Resumable | 200 clips | Skips checkpointed nodes on resume | varies |
-| 12 Conditional | 200 clips | Branch A or B based on condition | ~2s |
+| 01 Wake Word | 400 clips (2 labels) | 4800 samples | ~50s |
+| 02 Speech Commands | 1200 clips (6 labels) | ~4800 samples | ~177s |
+| 03 Environmental Sounds | 1000 clips (5 classes) | ~4000 samples | ~158s |
+| 04 Speaker Verification | 120 clips (6 speakers) | 120 samples + metadata | ~10s |
+| 05 Speech Enhancement | 200 clips clean + noise refs | clean/degraded paired output | ~32s |
+| 06 E2E Training | 1200 clips → features/model/tflite | DS-CNN artifacts + TFLite export | ~298s |
+| 07 MCP Agent | — | Graph generated + executed via MCP tools | ~4s |
+| 08 REST Streaming | 200 clips | NDJSON stream + timing summary | <1s |
+| 09 Parallel | 800 clips (4 labels) | branch-wise augmented outputs | ~134s |
+| 10 Resumable | 200 clips | Resume flow + checkpoint semantics | ~37s |
+| 11 Lineage | dataset pipeline | artifact lineage graph | ~16s |
+| 12 Conditional | 200 clips | Branch A/B based on condition expression | ~35s |
 | 13 CSV | 100 rows | 62 filtered + normalized rows | <1s |
-| 16 Replay | 200 clips | Identical output hash confirmed | ~2s |
-| 17 Partial | 200 clips | 4/8 nodes executed | ~0.02s partial run |
-| 18 Composition | 200 clips | 8-node composed pipeline | ~3s |
-| 20 Retry | — | 3 attempts, 1.5s total backoff | 1.5s |
+| 14 Plugin Manifest | text samples | install/use/disable/enable lifecycle | ~1s |
+| 15 Event Driven | timer + watched WAV drops | event-triggered processing output | ~30s (+ possible linger in some environments) |
+| 16 Replay | 200 clips | Deterministic replay hash match | ~64s |
+| 17 Partial | 200 clips | include/exclude/input-override modes | ~36s |
+| 18 Composition | 200 clips | composed 8-node graph execution | ~25s |
+| 19 Capability | registry inventory | capability summary + edge graph | ~1s |
+| 20 Retry | synthetic flaky node | 3 attempts, exponential backoff | ~3s |
+| 21 Runtime Control | active run control | pause/resume/cancel paths | ~16s |

@@ -21,6 +21,8 @@ from app.core.ir.models import (
     IRMetadata,
     IRNode,
     IRParameter,
+    IRUIPosition,
+    IRUIState,
 )
 from app.core.ir.loader import (
     CURRENT_IR_VERSION,
@@ -40,6 +42,8 @@ __all__ = [
     "IRMetadata",
     "IRNode",
     "IRParameter",
+    "IRUIPosition",
+    "IRUIState",
     # Loader
     "CURRENT_IR_VERSION",
     "IRValidationError",

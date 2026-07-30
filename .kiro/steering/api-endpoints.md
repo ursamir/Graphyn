@@ -7,6 +7,13 @@ fileMatchPattern: "app/api/routers/**"
 
 All routes under `/api/v1/`. Auth: optional Bearer token via `GRAPHYN_API_TOKEN`.
 
+## 2026-07-29 Hardening Update
+- Pipeline run and replay paths now execute preserved GraphIR via `get_backend().execute(graph)`.
+- Run-control API now supports distributed-worker semantics (`run_active_on_another_worker`).
+- Template API supports version lifecycle (`/templates/{name}/versions`, `version` query/body). Legacy flat `{name}.graph.json` templates return HTTP 200 with `storage: "legacy_flat"` (not 404).
+- `POST /pipelines/templates/sync-examples` imports **one template per numbered example** (canonical `pipeline.graph.json` / `composed.graph.json` / …) plus `examples/templates/` starters; prunes old per-label shard templates. `GET /pipelines/examples` lists that same set.
+- System API now exposes `/system/readiness` and `/system/metrics` for baseline observability.
+
 ## Nodes (`routers/nodes.py`)
 
 Node responses include a `capability_metadata` object with fields: `requires_gpu`, `supports_cpu`, `supports_edge`, `deterministic`, `cacheable`, `streaming_support`, `realtime_support`, `memory_requirements`, `dependency_requirements`, `batch_support`.
@@ -32,9 +39,12 @@ IR JSON is detected by the presence of a `schema_version` field in the request b
 | POST | `/api/v1/pipelines/run` | IR JSON or `{"yaml": "..."}` → NDJSON stream (see below) |
 | POST | `/api/v1/pipelines/run-async` | IR JSON or `{"yaml": "..."}` → `{"run_id": "..."}` |
 | GET | `/api/v1/pipelines/templates` | List template names |
-| GET | `/api/v1/pipelines/templates/{name}` | `{"name": "...", "yaml": "..."}` |
-| POST | `/api/v1/pipelines/templates` | `{"name": "...", "yaml": "..."}` → `{"name": "...", "saved": true}` |
-| DELETE | `/api/v1/pipelines/templates/{name}` | `{"name": "...", "deleted": true}` |
+| GET | `/api/v1/pipelines/templates/{name}` | `?version=v1` optional; returns `{"name": "...", "graph": {...}}` or legacy `yaml` |
+| GET | `/api/v1/pipelines/examples` | List bundled example Graph IR metadata |
+| POST | `/api/v1/pipelines/templates/sync-examples` | Import examples → project templates |
+| GET | `/api/v1/pipelines/templates/{name}/versions` | List versions + latest; legacy flat → `storage: legacy_flat` |
+| POST | `/api/v1/pipelines/templates` | `{"name": "...", "yaml": "...", "version": "v1", "description": ""}` |
+| DELETE | `/api/v1/pipelines/templates/{name}` | `?version=v1` optional; delete version or whole template |
 
 **IR JSON format** (canonical):
 ```json
@@ -58,6 +68,7 @@ IR JSON is detected by the presence of a `schema_version` field in the request b
 | GET | `/api/v1/runs/{run_id}/checkpoints/{node_id}/samples` | First N samples `?n=10` |
 | GET | `/api/v1/runs/{run_id}/artifacts` | List all artifacts for a run (delegates to `ArtifactStore.list(run_id=run_id)`) |
 | GET | `/api/v1/runs/{run_id}/provenance` | Provenance summary: `{"run_id", "artifact_count", "artifacts", "provenance_records"}` |
+| GET | `/api/v1/runs/{run_id}/debug-report` | Consolidated operator report (status, checkpoints, errors, artifact/provenance counts, path pointers) |
 
 ## Run Control (`routers/run_control.py`)
 
@@ -86,6 +97,8 @@ Control active pipeline runs. Returns HTTP 400 with `{"error": "invalid_run_id"}
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/v1/system/health` | `{"status": "ok", "timestamp": "..."}` |
+| GET | `/api/v1/system/readiness` | `{"status": "ready", "checks": {"runs_dir_exists": bool, "cache_dir_exists": bool}}` |
+| GET | `/api/v1/system/metrics` | In-process request, latency, and status-code metrics snapshot |
 | POST | `/api/v1/system/cleanup` | Delete runs + cache + optionally artifacts — body: `{"older_than_days": 7, "delete_cache": true, "delete_artifacts": false}` |
 | GET | `/api/v1/system/projects-registry` | All projects `?q=search&status=...` |
 | GET | `/api/v1/system/webhooks` | Current webhook config |
@@ -122,10 +135,13 @@ Error responses use `{"error": "<ErrorClassName>", "detail": "<message>"}`. Remo
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/v1/plugins` | List all installed plugins → JSON array of `PluginRecord` |
+| GET | `/api/v1/plugins` | List all installed plugins → JSON array of `PluginRecord` (+ `runtime`, `dependency_summary`) |
 | POST | `/api/v1/plugins/install` | Body: `{"source": str, "upgrade": bool, "expected_sha256": str|null}` → sync: `{"name", "version", "status": "installed"}` / async: `{"status": "installing", "name": "..."}` |
 | GET | `/api/v1/plugins/search` | `?q=<query>` → JSON array of index entries |
+| POST | `/api/v1/plugins/venvs/gc` | GC unused isolated plugin venvs → `{"removed": [...]}` |
 | GET | `/api/v1/plugins/{name}` | Full `PluginRecord` for installed plugin; 404 if not found |
+| GET | `/api/v1/plugins/{name}/dependencies` | Required/optional dep status for plugin |
+| POST | `/api/v1/plugins/{name}/dependencies/install` | Body: `{"include_optional": bool}` → install missing deps (shared or plugin venv) |
 | POST | `/api/v1/plugins/{name}/enable` | Enable plugin → `{"name": ..., "enabled": true}`; 404 if not found |
 | POST | `/api/v1/plugins/{name}/disable` | Disable plugin → `{"name": ..., "enabled": false}`; 404 if not found |
 | DELETE | `/api/v1/plugins/{name}` | Uninstall plugin → `{"name": ..., "status": "uninstalled"}`; 404 if not found |
@@ -176,4 +192,4 @@ data: {"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "lab
 
 ## Open Issues in This Area
 
-> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.
+> All previously listed issues in this area have been resolved. See `docs/KNOWN_ISSUES.md` for open items.

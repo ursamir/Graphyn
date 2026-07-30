@@ -230,7 +230,8 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
             future = _REPLAY_EXECUTOR.submit(
                 _get_backend().execute, graph, run_manager=new_run_manager
             )
-            future.add_done_callback(_on_replay_done)
+            if future is not None and hasattr(future, "add_done_callback"):
+                future.add_done_callback(_on_replay_done)
         except Exception as submit_exc:
             new_run_manager.mark_failed(str(submit_exc))
             return {

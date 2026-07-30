@@ -9,7 +9,9 @@ A complete machine learning pipeline from raw audio to a trained TFLite model â€
 
 ---
 
-## Prerequisites
+## Known caveats
+
+- **Trainer / TF GPU:** Example 06 uses the GPU when available, with **memory growth** so other GPU apps are not closed or starved. XLA/Triton GEMM is disabled to avoid autotune crashes. Force CPU with `GRAPHYN_TF_DEVICE=cpu`. Trainer config `device`: `auto` | `cpu` | `gpu`.
 
 ### 1. Install dependencies
 

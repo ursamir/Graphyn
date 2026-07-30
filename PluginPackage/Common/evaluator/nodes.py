@@ -253,7 +253,8 @@ class EvaluatorNode(Node):
         """Load a model from the artifact. Supports Keras (.keras, SavedModel) and
         PyTorch (.pt / .pth) formats, detected from the model_path extension."""
         model_path = artifact.model_path
-        keras_model_path = artifact.metrics.get("keras_model_path", "")
+        metrics = artifact.metrics or {}
+        keras_model_path = metrics.get("keras_model_path", "")
 
         # Try Keras first (prefer .keras format)
         if keras_model_path and Path(keras_model_path).exists():

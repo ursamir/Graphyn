@@ -1,0 +1,18 @@
+---
+description: Always use the project venv for Python commands
+globs: "**/*.py,requirements.txt,setup.py,pyproject.toml,pytest.ini"
+alwaysApply: false
+---
+
+# Python Virtual Environment
+
+Use only `venv/` at the workspace root. Never system `python` / `pip`.
+
+```bash
+venv/bin/python <script>
+venv/bin/pip install <package>
+venv/bin/uvicorn app.api.main:app --reload --port 8001
+venv/bin/pytest unit_test/
+```
+
+Python 3.10+. Keep `requirements.txt` and `setup.py` pins in sync. Tests live under `unit_test/` (not only `tests/`). Use `GRAPHYN_SKIP_PLUGIN_LOAD=1` for isolated unit tests when plugins are irrelevant.

@@ -1,0 +1,128 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "speech-recognition",
+    "seed": 42,
+    "description": "Starter ASR-style preprocess pipeline with modern PluginPackage nodes.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "starter",
+      "asr"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/02_speech_commands/data/go",
+        "source_type": "filesystem",
+        "recursive": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "augmentation_pipeline_2",
+      "node_type": "augmentation_pipeline",
+      "config": {
+        "copies_per_sample": 2,
+        "augmentations": [
+          {
+            "type": "gain",
+            "apply_prob": 1.0,
+            "gain_db": [
+              -6.0,
+              6.0
+            ]
+          },
+          {
+            "type": "speed_perturb",
+            "apply_prob": 0.5,
+            "speed_factor": [
+              0.9,
+              1.1
+            ]
+          }
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_3",
+      "node_type": "segmenter",
+      "config": {
+        "mode": "fixed",
+        "window_ms": 1000,
+        "overlap": 0.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_4",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "workspace/datasets/output/speech_recognition",
+        "version_tag": "v1",
+        "split_ratios": {
+          "train": 0.8,
+          "val": 0.1,
+          "test": 0.1
+        },
+        "random_seed": 42,
+        "append": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "augmentation_pipeline_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "augmentation_pipeline_2",
+      "src_port": "output",
+      "dst_id": "segmenter_3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_3",
+      "src_port": "output",
+      "dst_id": "audio_exporter_4",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

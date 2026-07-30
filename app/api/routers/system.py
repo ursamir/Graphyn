@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from app.core.config import runs_dir as _runs_dir, cache_dir as _cache_dir
 from app.domain.project_manager import ProjectManager
 from app.core.webhook import WebhookService
+from app.api.observability import snapshot_metrics
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -40,6 +41,25 @@ _webhook_svc = WebhookService()
 def health_check():
     """Return service health status."""
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@router.get("/readiness", summary="Readiness check")
+def readiness_check():
+    """Return readiness status with minimal dependency checks."""
+    return {
+        "status": "ready",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "checks": {
+            "runs_dir_exists": _runs_dir().exists(),
+            "cache_dir_exists": _cache_dir().exists(),
+        },
+    }
+
+
+@router.get("/metrics", summary="In-process API metrics snapshot")
+def metrics_snapshot():
+    """Return lightweight in-process API metrics."""
+    return snapshot_metrics()
 
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

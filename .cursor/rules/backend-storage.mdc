@@ -1,0 +1,13 @@
+---
+description: Runs, artifacts, provenance, and domain boundary rules
+globs: "app/core/run_journal.py,app/core/run_control.py,app/core/run_manager.py,app/core/artifact_store.py,app/core/artifact_serializer.py,app/core/provenance.py,app/core/logger.py,app/core/webhook.py,app/domain/**/*.py,app/models/**/*.py"
+alwaysApply: false
+---
+
+# Observability, Storage, Domain (BC6)
+
+- `run_journal.py` = filesystem persistence; `run_control.py` = active run registry; `run_manager.py` = shim only.
+- Artifacts: content-addressed via `ArtifactStore` + handlers from `ArtifactSerializerRegistry`.
+- Domain services (`app/domain/`) must not be imported by platform storage code.
+- Models under `app/models/` are PortDataTypes; audio serialization registers at process start.
+- Detail: `.kiro/steering/backend-services.md`, `data-models.md`, `docs/BACKEND_CORE.md`.

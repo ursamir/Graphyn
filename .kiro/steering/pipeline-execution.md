@@ -5,7 +5,16 @@ fileMatchPattern: "app/core/orchestrator.py,app/core/planner.py,app/core/node_ex
 
 # Pipeline Execution
 
+## 2026-07-29 Hardening Update
+- Parallel executor output counting now matches sequential semantics across multi-port outputs.
+- Event-driven gather failures now mark runs failed and propagate instead of silently completing.
+- Planner and IR serializer now normalize mappingproxy-backed configs before hashing/serialization to prevent runtime JSON failures.
+
 ## Graph IR (`app/core/ir/`)
+
+- Loader migrates legacy layout ``parameters.ui`` → ``ui`` and obsolete node aliases
+  (``input``→``dataset_ingest``, ``clean``→``audio_conditioner``, ``export``→``audio_exporter``, …;
+  retired ``split`` folds into exporter ``split_ratios``). See `app/core/ir/legacy_aliases.py`.
 
 ```python
 from app.core.ir import GraphIR, IRNode, IREdge, IRMetadata, IRCapabilityMetadata
@@ -34,7 +43,8 @@ IRCapabilityMetadata(requires_gpu=False, supports_cpu=True, supports_edge=False,
 ## Execution Entry Points
 
 ```python
-# Canonical entry point — all interfaces use get_backend().execute()
+# Canonical entry point — interfaces should use get_backend().execute()
+# (exceptions: docs/KNOWN_ISSUES.md)
 from app.core.runtime_backend import get_backend
 result = get_backend().execute(graph, logger=None, use_cache=True, checkpoint=False,
     streaming=False, parallel=False, observer=None, run_manager=None,
@@ -49,7 +59,7 @@ result = run_pipeline_ir(graph, ...)
 result = await run_pipeline_ir_async(graph, ...)
 ```
 
-**`RuntimeBackend` is the canonical execution entry point.** All interfaces (SDK, API, MCP, CLI) call `get_backend().execute()`. `run_pipeline_ir` is an implementation detail of `LocalPythonBackend` — new code must not import it directly. Custom backends can be registered via `register_backend(id, BackendClass)`.
+**`RuntimeBackend` is the canonical execution entry point.** Interfaces (SDK, API, MCP, CLI) should call `get_backend().execute()`. Known bypasses (e.g. CLI artifact replay) are tracked in `docs/KNOWN_ISSUES.md`. `run_pipeline_ir` is an implementation detail of `LocalPythonBackend` — new code must not import it directly. Custom backends can be registered via `register_backend(id, BackendClass)`.
 
 All new parameters default to `False`/`None` — existing call sites unchanged.
 
@@ -155,4 +165,4 @@ store.get(artifact_id)                 # fetch single record
 
 ## Open Issues in This Area
 
-> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.
+> See `docs/KNOWN_ISSUES.md` (`EVENT-DRIVEN-EXIT-1`) for current event-driven shutdown caveats on some environments.

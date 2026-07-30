@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "podcast-leveling",
+    "seed": 42,
+    "description": "Starter: LUFS normalize + denoise + export for podcast leveling.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "starter",
+      "podcast"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/02_speech_commands/data/go",
+        "source_type": "filesystem",
+        "recursive": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 48000,
+        "mono": true,
+        "normalize": true,
+        "normalize_method": "lufs",
+        "target_lufs": -16.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "speech_enhancer_2",
+      "node_type": "speech_enhancer",
+      "config": {
+        "backend": "spectral",
+        "denoise": true,
+        "dereverb": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_3",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "workspace/datasets/output/podcast-leveled",
+        "version_tag": "v1",
+        "split_ratios": {
+          "train": 0.8,
+          "val": 0.1,
+          "test": 0.1
+        },
+        "random_seed": 42,
+        "append": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "speech_enhancer_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "speech_enhancer_2",
+      "src_port": "output",
+      "dst_id": "audio_exporter_3",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

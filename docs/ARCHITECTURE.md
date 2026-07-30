@@ -31,7 +31,8 @@
 │  FastAPI REST       Pipeline class    argparse CLI  stdio JSON-RPC  │
 │  10 routers         PipelineNode      14 commands   15 tools        │
 └──────────────────────────────┬──────────────────────────────────────┘
-                               │ all call get_backend().execute()
+                               │ intended: get_backend().execute()
+                               │ (see docs/KNOWN_ISSUES for exceptions)
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  BACKEND ABSTRACTION LAYER                                          │
 │                                                                     │
@@ -86,7 +87,7 @@
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  IR LAYER                                                           │
 │                                                                     │
-│  app/core/ir/models.py        GraphIR, IRNode, IREdge, IRMetadata   │
+│  app/core/ir/models.py        GraphIR, IRNode, IREdge, IRMetadata, IRUIState │
 │  app/core/ir/loader.py        load_ir(), dump_ir(), version check   │
 │  app/core/ir/yaml_shim.py     YAML → GraphIR (deprecated path)      │
 │  app/core/ir/migrate.py       YAML file → .graph.json file          │
@@ -486,6 +487,8 @@ get_backend().execute(graph, ...)
 | API auth | Optional Bearer token via `GRAPHYN_API_TOKEN` |
 | MCP auth | Token at `arguments._meta.auth_token` |
 | Plugin sources | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated URL prefix allowlist; empty = allow all |
+| Keras TF device | `GRAPHYN_TF_DEVICE` / `select_keras_device()`; CC ≥12 GPUs default to CPU (`GRAPHYN_TF_FORCE_GPU=1` to override) |
+| Plugin isolation | `runtime` in `plugin.toml` (`inprocess`\|`isolated`); isolated venvs under `GRAPHYN_PLUGIN_VENVS_DIR`; deps API under `/api/v1/plugins/{name}/dependencies` |
 | Checkpoint node IDs | Null byte rejection + path traversal guard via `os.path.abspath` prefix check |
 | Webhook DNS | Resolves once, connects to IP directly with `Host` header (DNS rebinding fix) |
 
@@ -501,4 +504,4 @@ get_backend().execute(graph, ...)
 | Phase 4 | ArtifactStore (content-addressed), ProvenanceStore (lineage), ArtifactCollection, artifact replay |
 | Phase 5 | Plugin ecosystem: PluginManager, PluginInstaller, PluginLoader, PluginStore, PluginIndexClient, manifest-based packages, `plugin.toml` schema |
 | Phase 6–8 | 30 plugin nodes across `PluginPackage/Audio/` (18) and `PluginPackage/Common/` (12) — all phases complete |
-| Phase 9 | Post-review fix pass — 104 files reviewed, all confirmed bugs fixed. Architecture splits: `pipeline.py` → `orchestrator.py` / `planner.py` / `node_executor.py` / `checkpoint.py` / `executor.py`; `run_manager.py` → `run_journal.py` / `run_control.py`; domain services → `app/domain/`; `ArtifactSerializerRegistry` added; `RuntimeBackend` ABC added; `registry_runtime.py` added. |
+| Phase 9 | Post-review fix pass — architecture splits (`pipeline.py` / `run_manager.py` shims; domain → `app/domain/`; `ArtifactSerializerRegistry`; `RuntimeBackend`). Open defects after later audits: see `docs/KNOWN_ISSUES.md`. |

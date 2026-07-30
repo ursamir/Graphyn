@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +38,7 @@ from app.api.routers.ingest import router as ingest_router
 from app.api.routers.run_control import router as run_control_router
 from app.api.routers.artifacts import router as artifacts_router
 from app.api.routers.plugins import router as plugins_router
+from app.api.observability import record_request
 from app.core.config import api_token, datasets_output_dir, datasets_input_dir, runs_dir
 
 _logger = logging.getLogger(__name__)
@@ -89,6 +91,28 @@ def _auth_dep(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
         )
 
 
+def _auth_dep_request(request: Request) -> None:
+    """Request-scoped auth check for non-router paths (e.g. static mounts)."""
+    token = api_token()
+    if not token:
+        return
+
+    auth_header = request.headers.get("Authorization", "")
+    scheme, _, value = auth_header.partition(" ")
+    if scheme.lower() != "bearer" or not value:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if value != token:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 # ── App factory ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Graphyn API", version="2.0.0")
@@ -122,6 +146,29 @@ app.include_router(ingest_router,      prefix="/api/v1", dependencies=_deps)
 app.include_router(run_control_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(artifacts_router,   prefix="/api/v1", dependencies=_deps)
 app.include_router(plugins_router,     prefix="/api/v1", dependencies=_deps)
+
+
+@app.middleware("http")
+async def _auth_static_mounts(request: Request, call_next):
+    """Protect mounted static routes with the same token policy as /api/v1."""
+    path = request.url.path
+    if path.startswith("/files") or path.startswith("/input-files") or path.startswith("/run-files"):
+        _auth_dep_request(request)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def _request_metrics(request: Request, call_next):
+    """Capture lightweight request metrics for /api/v1 observability."""
+    started = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        duration_s = time.perf_counter() - started
+        record_request(request.url.path, request.method, status_code, duration_s)
 
 # ── Static file mounts ────────────────────────────────────────────────────────
 # NEW-8: Paths are resolved at startup time from GRAPHYN_PROJECT_DIR.

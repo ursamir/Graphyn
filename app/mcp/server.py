@@ -31,6 +31,14 @@ from app.mcp.auth import check_auth
 
 log = logging.getLogger(__name__)
 
+
+def _json_fallback(obj: Any) -> Any:
+    """Handle mappingproxy and other non-serializable types in JSON output."""
+    from types import MappingProxyType
+    if isinstance(obj, MappingProxyType):
+        return dict(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 # ── Server instance ────────────────────────────────────────────────────────────
 
 _server = Server("graphyn-mcp")
@@ -106,7 +114,7 @@ async def handle_call_tool(
             _HANDLER_EXECUTOR, lambda: handler(arguments)
         )
         log.info("tool=%s outcome=success", name)
-        return [types.TextContent(type="text", text=json.dumps(result))]
+        return [types.TextContent(type="text", text=json.dumps(result, default=_json_fallback))]
     except Exception as exc:
         error = {
             "error": True,

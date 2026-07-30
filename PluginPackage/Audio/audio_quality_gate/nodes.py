@@ -125,6 +125,9 @@ class AudioQualityGateNode(Node):
         rejected = []
 
         for sample in samples:
+            if not isinstance(sample, AudioSample) or sample.data is None:
+                rejected.append(sample)
+                continue
             reasons = self._check_sample(sample)
             quality_scores = self._compute_quality_metadata(sample)
             if reasons:

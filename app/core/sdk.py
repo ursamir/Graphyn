@@ -19,8 +19,8 @@ Reason To Change: SDK public API evolves (new Pipeline methods, new
 """
 from __future__ import annotations
 
-import copy
 import logging
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
@@ -28,6 +28,19 @@ if TYPE_CHECKING:
     from app.core.ir.models import GraphIR
 
 log = logging.getLogger(__name__)
+
+
+def _to_plain_jsonable(value: Any) -> Any:
+    """Recursively normalize mappingproxy/nested containers to plain types."""
+    if isinstance(value, MappingProxyType):
+        return {k: _to_plain_jsonable(v) for k, v in value.items()}
+    if isinstance(value, dict):
+        return {k: _to_plain_jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_plain_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_to_plain_jsonable(v) for v in value]
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -415,9 +428,10 @@ class Pipeline:
         if run_manager is None:
             run_manager = RunManager()
 
-        # Deep-copy the IR instead of round-tripping through JSON (S-03 fix).
-        # copy.deepcopy is faster and preserves all Python-level attributes.
-        graph = copy.deepcopy(self._graph_ir)
+        # Clone through IR dump/load with plain containers to avoid deepcopy
+        # failures on mappingproxy values embedded by pydantic internals.
+        from app.core.ir.loader import dump_ir, load_ir  # noqa: PLC0415
+        graph = load_ir(_to_plain_jsonable(dump_ir(self._graph_ir)))
 
         _logger = self._make_subscriber_logger(logger)
 

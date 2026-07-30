@@ -43,6 +43,8 @@ class TrainerNode(Node):
 
     Config options:
         backend          (str):   "keras" | "pytorch" | "auto". Default: "auto"
+        device           (str):   "auto" | "cpu" | "gpu" for Keras/TF. Default: "auto"
+                                  (auto follows GRAPHYN_TF_DEVICE / CUDA_VISIBLE_DEVICES)
         epochs           (int):   Maximum training epochs. Default: 30
         batch_size       (int):   Training batch size. Default: 32
         output_path      (str):   Directory for model artifacts. Default: "workspace/artifacts/models"
@@ -99,6 +101,7 @@ class TrainerNode(Node):
 
     class Config(NodeConfig):
         backend: str = "auto"           # "keras" | "pytorch" | "auto"
+        device: str = "auto"            # "auto" | "cpu" | "gpu" (Keras/TF)
         epochs: int = 30
         batch_size: int = 32
         output_path: str = "workspace/artifacts/models"
@@ -132,6 +135,81 @@ class TrainerNode(Node):
             "torch (venv/bin/pip install torch)."
         )
 
+    def _configure_keras_device(self) -> str:
+        """Select TF device string and enable VRAM sharing. Returns '/GPU:0' or '/CPU:0'."""
+        from app.core.tf_runtime import select_keras_device
+
+        import tensorflow as tf  # type: ignore
+
+        try:
+            tf.config.optimizer.set_jit(False)
+        except Exception:
+            pass
+
+        device = select_keras_device(self.config.device or "auto")
+        # CPU path must pin ops to CPU (soft placement off). With a GPU visible,
+        # soft placement would still run the train step on GPU against CPU weights.
+        try:
+            tf.config.set_soft_device_placement(not device.startswith("/CPU"))
+        except Exception:
+            pass
+
+        if device.startswith("/GPU"):
+            log.info("TrainerNode (keras): using GPU:0 (memory growth on)")
+        else:
+            log.info("TrainerNode (keras): using CPU")
+        return device
+
+    @staticmethod
+    def _keras_model_on_device(model, device: str):
+        """Clone+compile so weights and graph live on ``device``."""
+        import keras
+        import tensorflow as tf  # type: ignore
+
+        with tf.device(device):
+            cloned = keras.models.clone_model(model)
+            cloned.set_weights(model.get_weights())
+            lr = 0.001
+            try:
+                lr = float(keras.backend.get_value(model.optimizer.learning_rate))
+            except Exception:
+                pass
+            cloned.compile(
+                optimizer=keras.optimizers.Adam(learning_rate=lr),
+                loss="sparse_categorical_crossentropy",
+                metrics=["accuracy"],
+                jit_compile=False,
+            )
+            return cloned
+
+    @staticmethod
+    def _fit_keras(model, dataset, *, epochs: int, batch_size: int, callbacks, device: str):
+        """Run ``model.fit`` with correct device scoping.
+
+        - CPU: entire fit under ``/CPU:0`` with soft placement off (required when
+          a GPU is visible but unusable).
+        - GPU: no device scope (tf.data stays on CPU; compute follows GPU vars).
+        """
+        import tensorflow as tf  # type: ignore
+
+        fit_kwargs = dict(
+            x=dataset.X_train,
+            y=dataset.y_train,
+            validation_data=(dataset.X_val, dataset.y_val),
+            epochs=epochs,
+            batch_size=batch_size,
+            callbacks=callbacks,
+            verbose=1,
+        )
+        if device.startswith("/CPU"):
+            try:
+                tf.config.set_soft_device_placement(False)
+            except Exception:
+                pass
+            with tf.device(device):
+                return model.fit(**fit_kwargs)
+        return model.fit(**fit_kwargs)
+
     # ── Keras training ────────────────────────────────────────────────────────
 
     def _train_keras(self, model, dataset, out_path: Path) -> ModelArtifact:
@@ -143,6 +221,7 @@ class TrainerNode(Node):
           - <output_path>/saved_model/X_train_repr.npy — INT8 calibration data
         """
         import keras
+        import tensorflow as tf  # type: ignore
 
         if self.config.mixed_precision:
             keras.mixed_precision.set_global_policy("mixed_float16")
@@ -177,20 +256,63 @@ class TrainerNode(Node):
             keras.callbacks.TerminateOnNaN(),  # stop immediately on NaN loss
         ]
 
+        device = self._configure_keras_device()
+        model = self._keras_model_on_device(model, device)
+
         log.info(
-            "TrainerNode (keras): training for up to %d epochs (batch_size=%d)...",
-            self.config.epochs, self.config.batch_size,
+            "TrainerNode (keras): training for up to %d epochs (batch_size=%d, device=%s)...",
+            self.config.epochs,
+            self.config.batch_size,
+            device,
         )
 
-        history = model.fit(
-            dataset.X_train,
-            dataset.y_train,
-            validation_data=(dataset.X_val, dataset.y_val),
-            epochs=self.config.epochs,
-            batch_size=self.config.batch_size,
-            callbacks=callbacks,
-            verbose=1,
-        )
+        try:
+            history = self._fit_keras(
+                model,
+                dataset,
+                epochs=self.config.epochs,
+                batch_size=self.config.batch_size,
+                callbacks=callbacks,
+                device=device,
+            )
+        except Exception as exc:
+            msg = str(exc)
+            is_gpu_fail = device.startswith("/GPU") and (
+                "Autotuner could not compile" in msg
+                or "triton_gemm" in msg
+                or "DEVICE_TYPE_INVALID" in msg
+                or "different_device" in msg
+                or "located in device" in msg
+                or "Could not satisfy device specification" in msg
+                or "enable_soft_placement" in msg
+                or "JIT compilation failed" in msg
+                or "libdevice" in msg
+            )
+            if is_gpu_fail:
+                log.warning(
+                    "TrainerNode (keras): GPU training failed (%s). "
+                    "Rebuilding model on CPU and retrying.",
+                    msg[:200],
+                )
+                device = "/CPU:0"
+                try:
+                    tf.config.set_soft_device_placement(False)
+                except Exception:
+                    pass
+                model = self._keras_model_on_device(model, device)
+                history = self._fit_keras(
+                    model,
+                    dataset,
+                    epochs=self.config.epochs,
+                    batch_size=self.config.batch_size,
+                    callbacks=callbacks,
+                    device=device,
+                )
+            else:
+                raise RuntimeError(
+                    "TrainerNode (keras): training failed. "
+                    f"device={device}. Original error: {exc}"
+                ) from exc
 
         # Check for NaN loss (TerminateOnNaN stops training but does not raise)
         import math as _math
@@ -648,7 +770,20 @@ class ModelBuilderNode(Node):
                 )
 
         if backend == "keras":
-            model = self._build_keras_model(dataset.input_shape, dataset.n_classes)
+            try:
+                from app.core.tf_runtime import select_keras_device
+                import tensorflow as tf  # type: ignore
+
+                device = select_keras_device("auto")
+                try:
+                    tf.config.set_soft_device_placement(not device.startswith("/CPU"))
+                except Exception:
+                    pass
+                with tf.device(device):
+                    model = self._build_keras_model(dataset.input_shape, dataset.n_classes)
+                log.info("ModelBuilderNode: model placed on %s", device)
+            except ImportError:
+                model = self._build_keras_model(dataset.input_shape, dataset.n_classes)
         else:
             raise ValueError(
                 f"ModelBuilderNode: backend '{backend}' not supported. Use 'keras' or 'auto'."

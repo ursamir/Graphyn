@@ -5,6 +5,11 @@ fileMatchPattern: "app/mcp/**"
 
 # MCP Server
 
+## 2026-07-29 Hardening Update
+- Graph-generation handlers now sanitize non-JSON-safe values before validation/return.
+- Background execution/replay handlers now tolerate mocked submit futures and preserve failure signaling.
+- MCP server JSON responses now include a mappingproxy-safe fallback encoder to prevent tool-response serialization crashes.
+
 Thin delegation shell — all business logic stays in SDK/core. No handler should exceed ~30 lines.
 
 ## Module Structure
@@ -49,14 +54,14 @@ Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`
 | `get_graph_schema` | `graph.py` | `GraphIR.model_json_schema()` |
 | `get_graph_capability_summary` | `graph.py` | registry + two-step resolution |
 | `get_event_schema` | `graph.py` | static dict |
-| `execute_pipeline` | `execution.py` | `run_pipeline_ir()`, `RunManager` |
+| `execute_pipeline` | `execution.py` | `get_backend().execute()`, `RunManager` |
 | `inspect_run` | `artifacts.py` | workspace filesystem |
 | `pause_run` | `run_control.py` | `get_active_run(run_id).pause()` |
 | `resume_run` | `run_control.py` | `get_active_run(run_id).resume()` |
 | `cancel_run` | `run_control.py` | `get_active_run(run_id).cancel()` |
 | `list_artifacts` | `provenance.py` | `ArtifactStore.list()` |
 | `get_artifact_lineage` | `provenance.py` | `ProvenanceStore.get_lineage()` |
-| `replay_run` | `provenance.py` | `load_ir_from_file()`, `run_pipeline_ir()`, `RunManager` |
+| `replay_run` | `provenance.py` | `load_ir_from_file()`, `get_backend().execute()`, `RunManager` |
 | `optimize_execution` | `optimization.py` | `PipelineGraph`, `_resolve_capability()` |
 
 ## `list_nodes` Dispatch (priority order)
@@ -111,4 +116,4 @@ All handlers return structured JSON. Never raw exceptions.
 
 ## Open Issues in This Area
 
-> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.
+> All previously listed issues in this area have been resolved. See `docs/KNOWN_ISSUES.md` for open items.

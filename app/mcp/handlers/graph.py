@@ -16,6 +16,7 @@ Reason To Change: Graph tool schemas change, new graph tools are added, or
 """
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 
 # ── Tool schema constants ─────────────────────────────────────────────────────
@@ -181,7 +182,15 @@ def generate_graph_handler(arguments: dict[str, Any]) -> Any:
     """
     import pydantic
 
-    from app.core.ir.loader import CURRENT_IR_VERSION, dump_ir, load_ir
+    from app.core.ir.loader import CURRENT_IR_VERSION, load_ir
+    def _to_plain_jsonable(value: Any) -> Any:
+        if isinstance(value, MappingProxyType):
+            value = dict(value)
+        if isinstance(value, dict):
+            return {str(k): _to_plain_jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_to_plain_jsonable(v) for v in value]
+        return value
     from app.core.ir.models import GraphIR, IREdge
     from app.core.registry_runtime import get_registry
     from app.core.sdk import Pipeline, PipelineNode
@@ -235,7 +244,7 @@ def generate_graph_handler(arguments: dict[str, Any]) -> Any:
     # any error here would be unexpected; we let it propagate as an unhandled
     # exception (caught by the server's generic handler).
     pipeline_nodes = [
-        PipelineNode(spec["node_type"], spec.get("config") or {})
+        PipelineNode(spec["node_type"], dict(spec.get("config") or {}))
         for spec in node_specs
     ]
     pipeline = Pipeline(
@@ -287,7 +296,7 @@ def generate_graph_handler(arguments: dict[str, Any]) -> Any:
     # ── Step 5: Validate via load_ir ──────────────────────────────────────────
     # Req 3.3: validate the final graph before returning.
     try:
-        graph_dict = dump_ir(graph)
+        graph_dict = _to_plain_jsonable(graph.model_dump(mode="python"))
         load_ir(graph_dict)  # raises pydantic.ValidationError or IRVersionError
     except Exception as exc:
         return {

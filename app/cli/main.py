@@ -918,7 +918,7 @@ def cmd_artifacts_replay(args):
     """Re-execute a pipeline using the graph.json stored for a run."""
     from app.core.ir.loader import load_ir_from_file
     from app.core.run_journal import RunManager
-    from app.core.orchestrator import run_pipeline_ir
+    from app.core.runtime_backend import get_backend
 
     run_id = args.run_id
     runs_dir_path = str(_runs_dir())
@@ -955,7 +955,7 @@ def cmd_artifacts_replay(args):
 
     run_manager = RunManager()
     try:
-        run_pipeline_ir(graph, run_manager=run_manager)
+        get_backend().execute(graph, run_manager=run_manager)
     except Exception as exc:
         print(f"Replay failed: {exc}", file=sys.stderr)
         sys.exit(1)

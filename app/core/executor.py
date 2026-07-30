@@ -333,11 +333,10 @@ class ParallelExecutor:
 
         node_duration = time.time() - node_start_time
         _node_outputs = node_outputs[node_id]
-        _output_count = 0
-        for _v in _node_outputs.values():
-            if isinstance(_v, list):
-                _output_count = len(_v)
-                break
+        _output_count = sum(
+            len(v) if isinstance(v, list) else (0 if v is None else 1)
+            for v in _node_outputs.values()
+        )
         logger.node_end(node_type, idx, node_duration, output_count=_output_count)
 
         # NEW-5 fix: protect node_stats.append() with a lock so ordering is

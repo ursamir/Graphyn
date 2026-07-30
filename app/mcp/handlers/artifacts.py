@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -100,6 +101,24 @@ INSPECT_RUN_SCHEMA = {
 
 
 # ── Handler ───────────────────────────────────────────────────────────────────
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_safe_id(value: str, field: str) -> str:
+    if not _SAFE_ID_RE.match(value):
+        raise ValueError(
+            f"Invalid {field!r}: {value!r}. Use ASCII letters/digits/_/- only."
+        )
+    return value
+
+
+def _safe_run_dir(root: Path, run_id: str) -> Path:
+    _validate_safe_id(run_id, "run_id")
+    resolved_root = root.resolve()
+    run_dir = (resolved_root / run_id).resolve()
+    if not run_dir.is_relative_to(resolved_root):
+        raise ValueError("run_id resolves outside runs directory")
+    return run_dir
 
 
 def inspect_run_handler(arguments: dict[str, Any]) -> Any:
@@ -174,7 +193,15 @@ def inspect_run_handler(arguments: dict[str, Any]) -> Any:
         return {"runs": runs}
 
     # ── Single run inspection ──────────────────────────────────────────────────
-    run_dir = _RUNS_DIR / run_id
+    try:
+        run_dir = _safe_run_dir(_RUNS_DIR, run_id)
+    except ValueError as exc:
+        return {
+            "error": True,
+            "error_type": "invalid_run_id",
+            "message": str(exc),
+            "run_id": run_id,
+        }
 
     # Req 5.5: run directory must exist.
     if not run_dir.exists():
@@ -269,6 +296,15 @@ def inspect_run_handler(arguments: dict[str, Any]) -> Any:
     # Req 5.8: return manifest.json for the given node checkpoint.
     node_id = arguments.get("node_id")
     if node_id:
+        try:
+            _validate_safe_id(node_id, "node_id")
+        except ValueError as exc:
+            return {
+                "error": True,
+                "error_type": "invalid_node_id",
+                "message": str(exc),
+                "node_id": node_id,
+            }
         checkpoint_dir = run_dir / "checkpoints" / f"node_{node_id}"
         manifest_path = checkpoint_dir / "manifest.json"
         if not manifest_path.exists():

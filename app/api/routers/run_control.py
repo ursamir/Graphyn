@@ -16,7 +16,7 @@ Reason To Change: New run control action added, or run_id validation changes.
 Req 7.5, 7.6
 """
 from fastapi import APIRouter, HTTPException
-from app.core.run_control import get_active_run
+from app.core.run_control import get_active_run, is_active_on_another_worker
 from app.core.config import runs_dir as _runs_dir
 
 router = APIRouter(prefix="/runs", tags=["run-control"])
@@ -55,6 +55,16 @@ def _run_not_found_error(run_id: str) -> HTTPException:
     )
 
 
+def _run_elsewhere_error(run_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "run_active_on_another_worker",
+            "run_id": run_id,
+        },
+    )
+
+
 @router.post("/{run_id}/pause")
 def pause_run(run_id: str):
     """Pause an active pipeline run after the current node completes.
@@ -65,6 +75,8 @@ def pause_run(run_id: str):
     _validate_run_id(run_id)
     run = get_active_run(run_id)
     if run is None:
+        if is_active_on_another_worker(run_id):
+            raise _run_elsewhere_error(run_id)
         raise _run_not_found_error(run_id)
     try:
         run.pause()
@@ -83,6 +95,8 @@ def resume_run(run_id: str):
     _validate_run_id(run_id)
     run = get_active_run(run_id)
     if run is None:
+        if is_active_on_another_worker(run_id):
+            raise _run_elsewhere_error(run_id)
         raise _run_not_found_error(run_id)
     try:
         run.resume()
@@ -101,6 +115,8 @@ def cancel_run(run_id: str):
     _validate_run_id(run_id)
     run = get_active_run(run_id)
     if run is None:
+        if is_active_on_another_worker(run_id):
+            raise _run_elsewhere_error(run_id)
         raise _run_not_found_error(run_id)
     try:
         run.cancel()

@@ -73,7 +73,7 @@ def handle_pause_run(arguments: dict) -> dict:
     except OSError as exc:
         return {"error": True, "error_type": "run_control_error",
                 "message": f"Failed to persist pause state: {exc}", "run_id": run_id}
-    return {"run_id": run_id, "status": "pause_requested",
+    return {"run_id": run_id, "status": "paused",
             "message": "Pause signal sent. Run will pause after current node completes."}
 
 
@@ -100,5 +100,5 @@ def handle_cancel_run(arguments: dict) -> dict:
     if run is None:
         return _run_not_active_error(run_id)
     run.cancel()
-    return {"run_id": run_id, "status": "cancel_requested",
+    return {"run_id": run_id, "status": "cancelled",
             "message": "Cancel signal sent. Run will stop after current node completes."}

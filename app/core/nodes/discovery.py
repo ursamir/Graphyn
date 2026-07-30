@@ -314,13 +314,12 @@ class AutoDiscovery:
             # Plugin file — load from path using a dotted module name so that
             # cls.__module__ matches module.__name__ during _process_module.
             #
-            # Use a hash of the full path to guarantee uniqueness across
-            # different plugin root directories that may share subdirectory
-            # names (e.g. plugins_v1/audio_classifier/nodes.py and
-            # plugins_v2/audio_classifier/nodes.py would otherwise both
-            # produce "audio_classifier.nodes" and collide in sys.modules).
+            # Use a hash of the plugin directory path (not file path) so all
+            # entry points from the same plugin share one package namespace.
+            # This allows sibling imports like ``import <pkg>.types`` from
+            # ``nodes.py`` to resolve correctly.
             parent = path.parent.name
-            path_hash = hashlib.md5(str(path).encode()).hexdigest()[:8]
+            path_hash = hashlib.md5(str(path.parent).encode()).hexdigest()[:8]
             stem = path.stem
             module_name = (
                 f"_graphyn_plugin_{parent}_{path_hash}.{stem}"

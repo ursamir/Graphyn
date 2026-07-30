@@ -471,6 +471,25 @@ class ProjectManager:
 
     _VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
 
+    @classmethod
+    def _validate_version(cls, version: str) -> None:
+        """Raise ValueError if version is not a safe canonical version token."""
+        if not cls._VERSION_RE.match(version):
+            raise ValueError(
+                f"Invalid version string {version!r}. "
+                "Must match pattern v<N> or v<N>.<N>[.<N>...] (e.g. v1, v1.0.0)."
+            )
+
+    def _version_dir(self, name: str, version: str) -> Path:
+        """Return a validated version directory path within a project."""
+        self._validate_name(name)
+        self._validate_version(version)
+        d = self._require_project(name)
+        version_dir = (d / version).resolve()
+        if not version_dir.is_relative_to(d.resolve()):
+            raise ValueError("Version path resolves outside project directory")
+        return version_dir
+
     def _is_version_dir(self, d: Path) -> bool:
         return d.is_dir() and bool(self._VERSION_RE.match(d.name))
 
@@ -494,11 +513,7 @@ class ProjectManager:
         import uuid as _uuid
         d = self._require_project(name)
         # F4 fix: validate version string against _VERSION_RE to prevent path traversal
-        if not self._VERSION_RE.match(version):
-            raise ValueError(
-                f"Invalid version string {version!r}. "
-                "Must match pattern v<N> or v<N>.<N>[.<N>...] (e.g. v1, v1.0.0)."
-            )
+        self._validate_version(version)
         version_dir = d / version
         if not version_dir.exists():
             raise FileNotFoundError(
@@ -531,8 +546,7 @@ class ProjectManager:
 
     def get_lineage(self, name: str, version: str) -> dict:
         """Read {version}/lineage.json."""
-        d = self._require_project(name)
-        lineage_file = d / version / "lineage.json"
+        lineage_file = self._version_dir(name, version) / "lineage.json"
         return self._read_json(lineage_file, {})
 
     # ------------------------------------------------------------------ #
@@ -636,9 +650,8 @@ class ProjectManager:
 
     def diff_versions(self, name: str, version_a: str, version_b: str) -> dict:
         """Compare labels.csv files, return {added, removed, changed} sample counts."""
-        d = self._require_project(name)
-        labels_a = self._read_labels_csv(d / version_a / "labels.csv")
-        labels_b = self._read_labels_csv(d / version_b / "labels.csv")
+        labels_a = self._read_labels_csv(self._version_dir(name, version_a) / "labels.csv")
+        labels_b = self._read_labels_csv(self._version_dir(name, version_b) / "labels.csv")
 
         keys_a = set(labels_a.keys())
         keys_b = set(labels_b.keys())
@@ -680,7 +693,7 @@ class ProjectManager:
     def get_stats(self, name: str, version: str) -> dict:
         """Compute stats from version dir including histograms and class imbalance."""
         d = self._require_project(name)
-        version_dir = d / version
+        version_dir = self._version_dir(name, version)
         if not version_dir.exists():
             raise FileNotFoundError(
                 f"Version '{version}' not found in project '{name}'"
@@ -873,7 +886,7 @@ class ProjectManager:
     ) -> dict:
         """List WAV files with pagination and optional label/split filters."""
         d = self._require_project(name)
-        version_dir = d / version
+        version_dir = self._version_dir(name, version)
         if not version_dir.exists():
             raise FileNotFoundError(
                 f"Version '{version}' not found in project '{name}'"
@@ -954,7 +967,7 @@ class ProjectManager:
         _log = _logging.getLogger(__name__)
         _MAX_FILES = 10_000
         d = self._require_project(name)
-        version_dir = d / version
+        version_dir = self._version_dir(name, version)
         if not version_dir.exists():
             raise FileNotFoundError(
                 f"Version '{version}' not found in project '{name}'"

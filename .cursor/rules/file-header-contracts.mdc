@@ -1,0 +1,29 @@
+---
+description: Architectural contract docstrings required on app/ Python modules
+globs: "app/**/*.py"
+alwaysApply: false
+---
+
+# File-Header Contracts
+
+Every non-trivial `app/**/*.py` file needs a module docstring as the **first statement** with all 7 fields:
+
+```python
+# app/path/to/file.py
+"""
+Bounded Context:  <e.g. BC5 — Execution Runtime>
+Responsibility:   <one sentence>
+Owns:             <classes/functions defined here>
+Public Surface:   <what callers import>
+Must NOT:         <hard import/behavior constraints>
+Dependencies:     <direct deps>
+Reason To Change: <single reason to modify>
+"""
+from __future__ import annotations  # AFTER docstring
+```
+
+Exempt: empty/`#`-only `__init__.py`, tiny `__main__.py`. Logic-bearing `__init__.py` must have a contract.
+
+BC names: BC1 Graph Language, BC2 Node Contract, BC3 Node Catalog, BC4 Execution Planner, BC5 Execution Runtime, BC6 Observability & Storage; plus Domain / API / CLI / MCP labels as in `.kiro/steering/file-header-contracts.md`.
+
+`Must NOT` must name forbidden imports (e.g. no `app.domain` from platform storage).

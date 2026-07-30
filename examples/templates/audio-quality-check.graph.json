@@ -1,0 +1,113 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "audio-quality-check",
+    "seed": 42,
+    "description": "Starter: silence/VAD segment + quality gate + export.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "starter",
+      "quality"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/02_speech_commands/data/go",
+        "source_type": "filesystem",
+        "recursive": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_1",
+      "node_type": "segmenter",
+      "config": {
+        "mode": "silence",
+        "silence_threshold_db": 40.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "segmenter_vad_2",
+      "node_type": "segmenter",
+      "config": {
+        "mode": "vad",
+        "vad_aggressiveness": 2,
+        "window_ms": 300
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_quality_gate_3",
+      "node_type": "audio_quality_gate",
+      "config": {
+        "check_silence": true,
+        "check_clipping": true,
+        "check_duration": true,
+        "rejection_policy": "skip"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_exporter_4",
+      "node_type": "audio_exporter",
+      "config": {
+        "output_dir": "workspace/datasets/output/quality-checked",
+        "version_tag": "v1",
+        "split_ratios": {
+          "train": 0.8,
+          "val": 0.1,
+          "test": 0.1
+        },
+        "random_seed": 42,
+        "append": false
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "segmenter_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_1",
+      "src_port": "output",
+      "dst_id": "segmenter_vad_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "segmenter_vad_2",
+      "src_port": "output",
+      "dst_id": "audio_quality_gate_3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_quality_gate_3",
+      "src_port": "output",
+      "dst_id": "audio_exporter_4",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

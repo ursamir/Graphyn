@@ -79,14 +79,14 @@ class MultimodalFusionNode(Node):
         ),
         "text": InputPort(
             name="text",
-            data_type=list,
+            data_type=object | None,
             cardinality="single",
             required=False,
             description="Text embedding vectors (optional)",
         ),
         "video": InputPort(
             name="video",
-            data_type=list,
+            data_type=object | None,
             cardinality="single",
             required=False,
             description="Video embedding vectors (optional)",

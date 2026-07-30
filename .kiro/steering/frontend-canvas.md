@@ -1,100 +1,35 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "audiobuilder/src/flow/**,audiobuilder/src/store/**,audiobuilder/src/utils/**,audiobuilder/src/App.tsx,audiobuilder/src/main.tsx"
+fileMatchPattern: "graphyn-ui/src/features/builder/**,graphyn-ui/src/store/**,graphyn-ui/src/api/**,graphyn-ui/src/types/**,graphyn-ui/src/App.tsx,graphyn-ui/src/main.tsx"
 ---
 
-# Frontend — Canvas, Store, and Pipeline Execution
+# Frontend — Graphyn Builder (Canvas + IR)
 
-You are editing the pipeline canvas, global state, or utility layer.
+Platform console for typed DAG workflows. Product identity is **Graphyn**, not audio-only tooling.
 
 ## Stack
 
-React 18 + TypeScript + Vite + ReactFlow + Zustand + Tailwind CSS.
-API base: `VITE_API_BASE_URL` env var (default `http://localhost:8001`). All endpoints under `/api/v1/`.
+React + TypeScript + Vite + React Flow + Zustand + Tailwind.
+API: Vite proxy `/api` → `:8001`, or `VITE_API_BASE_URL` (default `/api/v1`).
 
-## Global State: `usePipelineStore` (`store/pipeline.ts`)
+## Views (App shell)
 
-| Field | Type | Purpose |
-|---|---|---|
-| `selectedNodeId` | `string \| null` | Selected canvas node |
-| `selectedNodeType` | `string \| null` | Type of selected node |
-| `logs` | `LogEntry[]` | Execution log entries |
-| `isRunning` | `boolean` | Pipeline executing |
-| `error` | `string \| null` | Current error |
-| `seed` | `number` | Pipeline seed (default 42) |
-| `nodeConfigs` | `Record<string, Record<string, unknown>>` | Per-node config by node ID |
-| `flowNodes` | `FlowNode[]` | Canvas nodes snapshot |
-| `flowEdges` | `FlowEdge[]` | Canvas edges snapshot |
-| `activeProject` | `string \| null` | Active project name |
-| `lastRunId` | `string \| null` | Most recent run ID |
+`builder` | `runs` | `artifacts` | `plugins` | `templates` | `data` | `projects` | `system`
 
-## App.tsx — Tab Navigation
+## Builder
 
-Seven views via `view` state: `pipeline`, `projects`, `datasets`, `annotation`, `quality`, `runs`, `registry`.
+- Node catalog from `GET /api/v1/nodes` (refreshed after plugin changes).
+- Multi-port handles, validate-config, soft compatibility check.
+- Canvas → Graph IR; layout in `ui.positions` (not under `parameters`).
+- Validate / stream run / cancel / run-async; save as template.
+- Import/export `.graph.json` only (no YAML-first path).
 
-## Pipeline Execution (`handleRunPipeline`)
+## Shell
 
-1. Read `flowNodes`, `flowEdges`, `nodeConfigs` from store
-2. `generateYAML()` → YAML string
-3. `POST /api/v1/pipelines/run`
-4. Read NDJSON line-by-line, dispatch events:
-   - `pipeline_start` → set `totalNodes`
-   - `node_start` → node status `"running"`, update progress
-   - `node_end` → node status `"success"`, record duration for ETA
-   - `node_error` → node status `"error"`
-   - `done` → complete, set `lastRunId`
-5. Browser `Notification` on completion/failure
+- Hash deep-links `#/view` and `#/runs/:id`.
+- Settings: Bearer token (`graphyn_api_token`).
+- `ToastHost` + `ErrorBoundary`. Client: timeout, GET retry, `X-Request-ID`, `ApiError`.
 
-## FlowCanvas.tsx — Imperative API (via `canvasRef`)
+## Store (`useAppStore`)
 
-| Method | Description |
-|---|---|
-| `clearCanvas()` | Remove all nodes/edges, clear configs |
-| `loadYAML(yaml, schemas)` | Parse YAML, create nodes, chain edges |
-| `resetNodeStatuses()` | Set all nodes to `"idle"` |
-| `updateNodeStatus(nodeId, status, errorMsg?)` | Update visual status |
-| `getNodeIndexMap(edges)` | `Map<nodeIndex, nodeId>` for event routing |
-
-Node placement on YAML load: `{x: 200, y: 80 + i * 140}` (vertical stack).
-
-## Connection Validation
-
-On connect: checks `source.output_type === target.input_type`. Incompatible connections silently blocked. During drag: nodes highlight compatible/incompatible via `draggingOutputType`.
-
-## YAML Generation (`utils/yaml.ts`)
-
-`generateYAML(nodes, edges, configs, seed)`:
-1. Validate all nodes have type + config
-2. Build adjacency map from edges
-3. Validate: no cycles, single start node, no multi-in/multi-out
-4. Topological sort (linear chain only)
-5. Normalize config values: numeric strings → numbers, `"true"`/`"false"` → booleans
-6. Serialize with `js-yaml`
-
-**Always produces linear format.** DAG format must be written manually and loaded via "Load Pipeline".
-
-## API Helper (`utils/api.ts`)
-
-`apiUrl(path, query?)` — constructs full URLs from `API_BASE_URL`. Skips null/undefined/empty query params.
-
-## Autosave (`hooks/useAutosave.ts`)
-
-Saves `{nodes, edges, configs, seed}` to `localStorage["audiobuilder_canvas_autosave"]` after 5s inactivity. Only when `nodes.length > 0`. On mount, `App.tsx` checks for saved state and shows restore prompt.
-
-## Keyboard Shortcuts (`hooks/useKeyboardShortcuts.ts`)
-
-| Shortcut | Action |
-|---|---|
-| `Ctrl/Cmd+S` | Save pipeline (download YAML) |
-| `Ctrl/Cmd+F` | Focus node search |
-| `Ctrl/Cmd+Enter` | Run pipeline |
-| `Ctrl/Cmd+Z` / `+Shift+Z` | Undo / Redo |
-
-## Build
-
-```bash
-# from audiobuilder/
-npm run dev      # Vite dev server
-npm run build    # → audiobuilder/dist/
-npm run lint     # ESLint
-```
+`view`, `focusRunId`/`openRun`, `catalog`/`refreshCatalog`, `seed`, `logs`, `isRunning`, `lastRunId`, `statusMessage`, `toasts`, `getCanvasGraph`, `pendingGraph` / `loadGraphIntoBuilder` (Templates → Builder handoff; Builder is unmounted off-tab so window events are lost).

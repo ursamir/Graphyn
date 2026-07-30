@@ -610,8 +610,12 @@ async def run_pipeline_ir_async(
                     for nid, src in sources.items()
                 ]
                 cancel_task = asyncio.create_task(_cancel_watcher())
-                await asyncio.gather(*tasks, return_exceptions=True)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
                 cancel_task.cancel()
+                for result in results:
+                    if isinstance(result, BaseException):
+                        run.mark_failed(str(result))
+                        raise result
             except asyncio.CancelledError:
                 pass
             finally:

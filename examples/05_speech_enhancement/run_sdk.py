@@ -3,7 +3,7 @@
 Example 05 — Speech Enhancement Dataset Pipeline (Python SDK)
 =============================================================
 Dataset: Google Speech Commands v0.02 (test set + background noise)
-  data/clean_speech/ ← yes/ + no/ from test set (186 clips, 1s, 16kHz)
+  data/clean_speech/ ← yes/ + no/ from test set (200 clips, 1s, 16kHz)
   data/noise/        ← _background_noise_/ (6 real noise WAVs)
 
 Purpose:

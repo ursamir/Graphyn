@@ -21,9 +21,12 @@ This index is the entry point for all documentation. Start here, then follow the
 | [MCP_SERVER.md](./MCP_SERVER.md) | MCP server: all 15 tools, auth, tool registry, error contract |
 | [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md) | Writing and deploying plugins, manifest schema, lifecycle, quality checklist |
 | [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port data types, workspace layout, artifact format, streaming protocol |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Docker and docker-compose deployment baseline |
 | [USERGUIDE.md](./USERGUIDE.md) | Complete user guide — SDK, CLI, API, MCP, nodes, plugins, advanced runtime |
-| [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Open issues and deferred items |
-| [MASTER_ISSUE_REGISTRY.md](./MASTER_ISSUE_REGISTRY.md) | Full issue history — open and resolved |
+| [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Open issues and deferred items (single source of truth) |
+| [MARKET_READINESS_ROADMAP.md](./MARKET_READINESS_ROADMAP.md) | Detailed feature roadmap and phased market-readiness plan |
+| [SOURCE_TRUTH_CODE_REVIEW_2026-07-29.md](./SOURCE_TRUTH_CODE_REVIEW_2026-07-29.md) | Code-first review findings (backend, plugins, frontend, tests) |
+| [graphyn-customer-architecture-review.canvas.tsx](./graphyn-customer-architecture-review.canvas.tsx) | Canvas artifact for customer/architecture assessment |
 
 ---
 
@@ -50,7 +53,7 @@ Reads JSON-RPC from stdin, writes responses to stdout. Logs to stderr.
 ### Run a pipeline from the CLI
 
 ```bash
-venv/bin/python -m app.cli.main run --graph workspace/configs/templates/basic-wakeword.graph.json
+venv/bin/python -m app.cli.main run --graph examples/templates/basic-wakeword.graph.json
 ```
 
 ### Run a pipeline from Python
@@ -84,7 +87,7 @@ venv/bin/python -m app.cli.main validate --graph my-pipeline.graph.json
 
 **Graph IR** — the canonical pipeline representation (`app/core/ir/`). Versioned, validated, runtime-agnostic JSON. All interfaces produce and consume `GraphIR` objects.
 
-**RuntimeBackend** — the canonical execution entry point (`app/core/runtime_backend.py`). All interfaces call `get_backend().execute(graph)`. `LocalPythonBackend` (default) delegates to `orchestrator.run_pipeline_ir_async()`.
+**RuntimeBackend** — the canonical execution entry point (`app/core/runtime_backend.py`). Interfaces call `get_backend().execute(graph)`. `LocalPythonBackend` (default) delegates to `orchestrator.run_pipeline_ir_async()`.
 
 **Registry** — a singleton `NodeRegistry` populated at startup by `AutoDiscovery`. Maps node type strings to Python classes and metadata.
 
@@ -146,7 +149,7 @@ PluginPackage/
 | `app/core/run_manager.py` (primary run service) | Re-export shim only — split into `run_journal.py` (persistence) + `run_control.py` (active registry) |
 | Domain services in `app/core/` | Moved to `app/domain/ingestion.py`, `project_manager.py`, `quality_checker.py` |
 | `AudioSample` imported directly by platform storage | `ArtifactSerializerRegistry` — platform calls registry; domain registers `AudioSampleHandler` at startup |
-| `run_pipeline_ir()` called directly by all interfaces | `get_backend().execute()` — `RuntimeBackend` ABC is the canonical entry point |
+| `run_pipeline_ir()` called directly by all interfaces | `get_backend().execute()` — `RuntimeBackend` ABC is the canonical entry point (exceptions still tracked in KNOWN_ISSUES) |
 | `_resolve_capability()` in `orchestrator.py` | Moved to `registry_runtime.py` (BC3) — shared by orchestrator and executor without circular coupling |
 | `run_id` as 8-char hex | Full 32-char UUID4 hex |
 | 29 plugin nodes | 30 plugin nodes (`model_builder` added to Common) |

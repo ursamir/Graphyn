@@ -71,6 +71,7 @@
       "node_type": "trainer",
       "config": {
         "backend": "keras",
+        "device": "auto",
         "epochs": 30,
         "batch_size": 32,
         "output_path": "examples/06_speech_commands_e2e/output",

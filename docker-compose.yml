@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  graphyn-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: graphyn-api
+    ports:
+      - "8001:8001"
+    environment:
+      # Set in shell/.env when needed
+      GRAPHYN_API_TOKEN: ${GRAPHYN_API_TOKEN:-}
+      GRAPHYN_HOME: /app/workspace
+      # Keep GPU disabled by default to avoid disrupting shared hosts.
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
+    volumes:
+      - ./workspace:/app/workspace
+      - ./plugins:/app/plugins
+    restart: unless-stopped

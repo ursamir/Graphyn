@@ -113,6 +113,42 @@ class TestTemplates:
             resp = api_client.get("/api/v1/pipelines/templates/nonexistent")
         assert resp.status_code == 404
 
+    def test_list_versions_legacy_flat_returns_200(self, api_client, tmp_path):
+        """Legacy flat templates must not 404 on /versions."""
+        (tmp_path / "audio-quality-check.graph.json").write_text(json.dumps(_VALID_IR))
+        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+            resp = api_client.get("/api/v1/pipelines/templates/audio-quality-check/versions")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["name"] == "audio-quality-check"
+        assert body["versions"] == []
+        assert body["storage"] == "legacy_flat"
+        assert body["latest_version"] is None
+
+    def test_list_versions_missing_returns_404(self, api_client, tmp_path):
+        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+            resp = api_client.get("/api/v1/pipelines/templates/missing/versions")
+        assert resp.status_code == 404
+
+    def test_list_examples_returns_graph_irs(self, api_client):
+        resp = api_client.get("/api/v1/pipelines/examples")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) >= 1
+        assert "id" in body[0] and "source" in body[0]
+
+    def test_sync_examples_writes_templates(self, api_client, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "app.core.example_templates.templates_dir",
+            lambda: tmp_path,
+        )
+        resp = api_client.post("/api/v1/pipelines/templates/sync-examples")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count_written"] >= 1
+        assert any(tmp_path.glob("ex-*.graph.json")) or any(tmp_path.glob("*.graph.json"))
+
     def test_delete_template(self, api_client, tmp_path):
         """DELETE /api/v1/pipelines/templates/{name} deletes the template."""
         (tmp_path / "to-delete.graph.json").write_text(json.dumps(_VALID_IR))

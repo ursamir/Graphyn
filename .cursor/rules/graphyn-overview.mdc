@@ -1,0 +1,39 @@
+---
+description: Graphyn platform vision, architecture, and hard constraints
+alwaysApply: true
+---
+
+# Graphyn Platform
+
+AI/workflow DAG engine. Brand/package: **graphyn-sdk**. Primary domain: audio ML; extensible via plugins.
+
+## Architecture (one line)
+
+`CLI | SDK | API | MCP` → `get_backend().execute(graph)` → `LocalPythonBackend` → `orchestrator` → planner / node_executor / ParallelExecutor + run_journal / artifacts.
+
+## Key Concepts
+
+- **Node** — typed ports + Pydantic `Config` + `process()`; extends `app.core.nodes.base.Node`
+- **Graph IR** — canonical `.graph.json` (`app/core/ir/`); YAML deprecated
+- **Registry** — `NodeRegistry` via `initialize_registry()` / AutoDiscovery
+- **Plugin** — manifest package in `PluginPackage/`; `plugins/` is install-only
+- **RuntimeBackend** — only execution entry for interfaces
+
+## Dependency Rules (never violate)
+
+- Platform (`app/core` storage/cache) must not import `app/domain/` or `AudioSample` directly
+- Domain registers serializers at startup (`register_audio_serializer()`)
+- Import `resolve_capability` from `registry_runtime`, not `orchestrator`
+- Do not edit `plugins/` or reintroduce fat `pipeline.py` / `run_manager.py` (shims only)
+
+## Where to look
+
+| Need | Path |
+|---|---|
+| Docs index | `docs/README.md` |
+| Architecture | `docs/ARCHITECTURE.md` |
+| Detailed steering | `.kiro/steering/` |
+| Node catalogue | `docs/NODE_CATALOGUE.md` / `PluginPackage/NODES.md` |
+| Open issues | `docs/KNOWN_ISSUES.md` |
+
+Prefer `docs/` + source over inventing APIs. Deep detail lives in `.kiro/steering/*.md` — read the matching file before large edits in that area.

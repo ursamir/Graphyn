@@ -57,10 +57,17 @@ class FileWatcherSource(EventSource):
     Req 6.9
     """
 
-    def __init__(self, path: str, pattern: str = "*", poll_interval_s: float = 1.0) -> None:
+    def __init__(
+        self,
+        path: str,
+        pattern: str = "*",
+        poll_interval_s: float = 1.0,
+        use_watchfiles: bool = True,
+    ) -> None:
         self.path = path
         self.pattern = pattern
         self.poll_interval_s = poll_interval_s
+        self.use_watchfiles = use_watchfiles
         self._stop_event: asyncio.Event | None = None
         # Tracks whether close() was called before watch() started so that
         # watch() exits immediately rather than running forever.
@@ -80,6 +87,8 @@ class FileWatcherSource(EventSource):
 
         self._stop_event = asyncio.Event()
         try:
+            if not self.use_watchfiles:
+                raise ImportError("watchfiles explicitly disabled")
             import watchfiles
             # Finding 1 fix: catch non-ImportError backend errors and re-raise
             # with context so the caller (and asyncio.gather) sees a meaningful

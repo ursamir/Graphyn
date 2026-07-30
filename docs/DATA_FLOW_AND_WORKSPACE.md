@@ -151,12 +151,8 @@ workspace/
 │       │   └── manifest.json
 │       └── manifest.json
 ├── configs/
-│   └── templates/
-│       ├── basic-wakeword.graph.json
-│       ├── speech-recognition.graph.json
-│       ├── audio-classification.graph.json
-│       ├── audio-quality-check.graph.json
-│       └── podcast-leveling.graph.json
+│   └── templates/             # local runtime copies (gitignored with workspace/)
+│       └── *.graph.json       # canonical tracked copies: examples/templates/
 └── webhooks.json              # {url, events}
 ```
 

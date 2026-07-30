@@ -1,6 +1,6 @@
 # Plugin Nodes — Complete Reference
 
-29 plugins total. All complete. For architecture, data types, and install patterns → `ARCHITECTURE.md`.
+**30 node types** across Audio + Common packages (`model_builder` ships inside the `trainer` plugin). For architecture, data types, and install patterns → `ARCHITECTURE.md`. Fresh-install gaps: see `docs/KNOWN_ISSUES.md` (PLUGIN-LOAD-1).
 
 ---
 
@@ -319,7 +319,7 @@ guidance_scale: float = 3.0
 
 ---
 
-## Common Plugins — `PluginPackage/Common/` (11 nodes)
+## Common Plugins — `PluginPackage/Common/` (12 node types; 11 packages)
 
 ### `dataset_builder` — ML Dataset Assembly
 **Category:** ML | **Version:** v1.0.0
@@ -352,6 +352,20 @@ checkpoint_path: str = ""
 ```
 
 **Ports:** `model` (Keras/PyTorch model) + `dataset: DatasetArtifact` → `output: ModelArtifact`
+
+---
+
+### `model_builder` — Model Architecture Construction
+**Category:** ML | **Version:** v1.0.0  
+**Package:** ships in `trainer` (`PluginPackage/Common/trainer/`) — not a separate plugin folder.
+
+```python
+architecture: str = "ds_cnn"   # "ds_cnn" | "mobilenet" | "simple_cnn"
+backend: str = "auto"          # "keras" | "pytorch" | "auto"
+# additional arch hyperparams in Config — see trainer/nodes.py ModelBuilderNode
+```
+
+**Ports:** `input: object` (dataset/dict) → `output: object` (untrained model)
 
 ---
 
@@ -524,6 +538,7 @@ output_dim: int = 512
 | `voice_converter` | Optional | No | No | Yes | No | No |
 | `audio_generator` | Yes | No | No | No | No | No |
 | `dataset_builder` | No | No | No | No | Yes | Yes |
+| `model_builder` | Optional | No | No | No | No | No |
 | `trainer` | Optional | No | No | No | No | No |
 | `evaluator` | No | No | No | No | Yes | No |
 | `edge_optimizer` | No | No | No | No | Yes | Yes |

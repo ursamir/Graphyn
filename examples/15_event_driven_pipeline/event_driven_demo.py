@@ -112,7 +112,13 @@ def demo_file_watcher() -> None:
             IRNode(id="dataset_ingest_0",    node_type="dataset_ingest",
                    config={"path": str(WATCH_DIR), "recursive": False, "source_type": "filesystem"},
                    event_trigger={"source_type": "file_watcher",
-                                  "source_config": {"path": str(WATCH_DIR), "pattern": "*.wav"}}),
+                                  "source_config": {
+                                      "path": str(WATCH_DIR),
+                                      "pattern": "*.wav",
+                                      # Prefer polling backend in demo mode to avoid
+                                      # environment-specific native watcher crashes.
+                                      "use_watchfiles": False,
+                                  }}),
             IRNode(id="audio_conditioner_1", node_type="audio_conditioner",
                    config={"target_sample_rate": 16000}),
             IRNode(id="segmenter_2",         node_type="segmenter",
@@ -143,7 +149,8 @@ def demo_file_watcher() -> None:
         except Exception:
             pass
 
-    # Start pipeline in background thread
+    # Start pipeline in a daemon thread so process can exit even if the
+    # event-driven loop doesn't honour cancel() quickly.
     thread = threading.Thread(target=_run_pipeline, daemon=True)
     thread.start()
 
@@ -170,7 +177,12 @@ def demo_file_watcher() -> None:
         print(f"\n  {_ok('✓')} Pipeline cancelled gracefully")
         print(f"    run_id: {run_mgr.run_id}")
 
-    thread.join(timeout=5)
+    thread.join(timeout=10)
+    if thread.is_alive():
+        if run_mgr:
+            run_mgr.cancel()
+        thread.join(timeout=5)
+    # daemon=True ensures the process will exit even if the thread lingers.
 
     # Count node_end events
     node_ends = [e for e in logger.logs if e.get("type") == "node_end"]

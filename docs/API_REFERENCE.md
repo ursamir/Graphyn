@@ -197,7 +197,7 @@ Each line is a JSON object. Two types of objects are interleaved:
 ```json
 {"type": "pipeline_start", "total_nodes": 5, "timestamp": "2024-01-01T00:00:00+00:00"}
 {"type": "node_start", "node_type": "dataset_ingest", "node_index": 0, "total_nodes": 5, "timestamp": "..."}
-{"type": "node_end", "node_type": "dataset_ingest", "node_index": 0, "duration": 0.123, "output_count": 42, "timestamp": "..."}
+{"type": "node_end", "node_type": "dataset_ingest", "node_index": 0, "duration_s": 0.123, "output_count": 42, "timestamp": "..."}
 {"type": "node_error", "node_type": "audio_conditioner", "node_index": 1, "error_message": "...", "error_type": "ValueError", "timestamp": "..."}
 {"type": "pipeline_summary", "timestamp": "..."}
 {"type": "done", "timestamp": "2024-01-01T00:00:01+00:00"}
@@ -241,14 +241,17 @@ List available pipeline template names.
 
 ### `GET /api/v1/pipelines/templates/{name}`
 
-Get the YAML content of a named template.
+Get template content. IR-native templates return `graph`. Legacy node types (`input`, `clean`, `export`, …) are migrated to current PluginPackage types before the response.
+
+**Query params:**
+- `version` (optional) — fetch a specific template version.
 
 **Response:**
 ```json
-{"name": "basic-wakeword", "yaml": "pipeline:\n  seed: 42\n  ..."}
+{"name": "basic-wakeword", "graph": {"schema_version": "1.1", "nodes": [], "edges": []}}
 ```
 
-**Errors:** `400` if name contains invalid characters. `404` if not found.
+**Errors:** `400` if name contains invalid characters. `404` if not found. `422` if IR cannot be migrated/validated.
 
 ---
 
@@ -258,15 +261,52 @@ Save a new pipeline template.
 
 **Request body:**
 ```json
-{"name": "my-template", "yaml": "pipeline:\n  ..."}
+{
+  "name": "my-template",
+  "yaml": "{\"schema_version\":\"1.1\",\"metadata\":{...},\"nodes\":[...],\"edges\":[...],\"parameters\":{}}",
+  "version": "v1",
+  "description": "Initial baseline"
+}
 ```
 
 **Response:**
 ```json
-{"name": "my-template", "saved": true}
+{"name": "my-template", "version": "v1", "saved": true}
 ```
 
-**Errors:** `400` if name contains invalid characters (only `[A-Za-z0-9_-]` allowed).
+**Errors:** `400` invalid name/version, `422` invalid IR JSON payload.
+
+---
+
+### `POST /api/v1/pipelines/templates/sync-examples`
+
+Import Builder-facing example templates into `{project}/configs/templates/`.
+
+**Policy:** one numbered example folder → one template (canonical `pipeline.graph.json`, or `composed.graph.json` / `pipeline_train_ml.graph.json` / …). Per-label CLI shards are not imported. Starter graphs from `examples/templates/` are included. Obsolete `ex-*` shard templates are pruned.
+
+**Query:** `force` (default `true`) — overwrite existing.
+
+**Response:** `{ written, pruned, skipped, errors, count_written, count_pruned, ... }`
+
+### `GET /api/v1/pipelines/examples`
+
+List bundled example Graph IR metadata (id, source, title, description, tags) without copying.
+
+---
+
+### `GET /api/v1/pipelines/templates/{name}/versions`
+
+List available versions for a template. Works for versioned dirs and legacy flat `{name}.graph.json` files (returns `storage: "legacy_flat"`, empty `versions`, HTTP 200 — not 404).
+
+**Response (versioned):**
+```json
+{"name": "my-template", "latest_version": "v3", "versions": ["v1", "v2", "v3"], "storage": "versioned"}
+```
+
+**Response (legacy flat):**
+```json
+{"name": "audio-quality-check", "latest_version": null, "versions": [], "storage": "legacy_flat"}
+```
 
 ---
 
@@ -274,12 +314,15 @@ Save a new pipeline template.
 
 Delete a named template.
 
+**Query params:**
+- `version` (optional) — delete only that version.
+
 **Response:**
 ```json
 {"name": "my-template", "deleted": true}
 ```
 
-**Errors:** `400` invalid name. `404` not found.
+**Errors:** `400` invalid name/version. `404` not found.
 
 ---
 
@@ -437,6 +480,20 @@ Return a provenance summary for a run. Returns 404 if the run does not exist.
 
 ---
 
+### `GET /api/v1/runs/{run_id}/debug-report`
+
+Return a consolidated run-operator debug payload combining status, checkpoint inventory,
+artifact/provenance counts, and recent error log entries.
+
+**Response fields include:**
+- `status` (same schema as `/runs/{run_id}/status`)
+- `checkpoint_count`, `checkpoints`
+- `artifact_count`, `provenance_count`
+- `error_count`, `recent_errors`
+- `paths` (`run_dir`, `meta_json`, `logs_json`, `checkpoints_dir`)
+
+---
+
 ## Data — `/api/v1/data`
 
 ### `GET /api/v1/data/inputs`
@@ -575,6 +632,35 @@ Health check.
 
 ---
 
+### `GET /api/v1/system/readiness`
+
+Readiness check with basic filesystem dependency validation.
+
+**Response:**
+```json
+{
+  "status": "ready",
+  "timestamp": "2024-01-01T00:00:00+00:00",
+  "checks": {"runs_dir_exists": true, "cache_dir_exists": true}
+}
+```
+
+---
+
+### `GET /api/v1/system/metrics`
+
+In-process API metrics snapshot.
+
+**Response fields include:**
+- `requests_total`
+- `errors_5xx_total`
+- `requests_per_second`
+- `latency_s` (`avg`, `p50`, `p95`, `p99`, `sample_size`)
+- `by_status`
+- `by_route`
+
+---
+
 ### `POST /api/v1/system/cleanup`
 
 Delete run directories and cache entries.
@@ -584,7 +670,7 @@ Delete run directories and cache entries.
 {"older_than_days": 7, "delete_cache": true}
 ```
 
-Note: `older_than_days` is accepted but the current implementation deletes all runs regardless of age.
+Cleanup respects `older_than_days` cutoff for runs and cache directories.
 
 **Response:**
 ```json
@@ -733,10 +819,13 @@ Plugin lifecycle management. All operations delegate to `PluginManager`. Error r
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/v1/plugins` | List all installed plugins → JSON array of `PluginRecord` |
+| GET | `/api/v1/plugins` | List all installed plugins → JSON array of `PluginRecord` (+ `runtime`, `dependency_summary`) |
 | POST | `/api/v1/plugins/install` | Install a plugin; body: `{"source": str, "upgrade": bool, "expected_sha256": str\|null}` |
 | GET | `/api/v1/plugins/search` | Search plugin index; `?q=<query>` → JSON array of index entries |
+| POST | `/api/v1/plugins/venvs/gc` | Remove unused isolated plugin venvs → `{"removed": [...]}` |
 | GET | `/api/v1/plugins/{name}` | Get full `PluginRecord` for an installed plugin. Surfaces `installing`/`failed`/`installed` states for async installs. |
+| GET | `/api/v1/plugins/{name}/dependencies` | Dependency status (required/optional, satisfied, runtime, python) |
+| POST | `/api/v1/plugins/{name}/dependencies/install` | Install missing deps; body: `{"include_optional": bool}` |
 | POST | `/api/v1/plugins/{name}/enable` | Enable plugin → `{"name": ..., "enabled": true}` |
 | POST | `/api/v1/plugins/{name}/disable` | Disable plugin → `{"name": ..., "enabled": false}` |
 | DELETE | `/api/v1/plugins/{name}` | Uninstall plugin → `{"name": ..., "status": "uninstalled"}` |

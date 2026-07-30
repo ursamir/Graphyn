@@ -1,0 +1,15 @@
+---
+description: Node base class, ports, metadata, and registry conventions
+globs: "app/core/nodes/**/*.py"
+alwaysApply: false
+---
+
+# Node System (BC2 / BC3)
+
+- Subclass `Node`; set `metadata: ClassVar[NodeMetadata]` (required).
+- Declare `input_ports` / `output_ports`; `Config(NodeConfig)` with `extra="forbid"`.
+- Validate constrained config fields with Pydantic validators at construction time.
+- SISO: one `input` + one `output` → `process(self, data)` auto-wrapped.
+- Capability fields on metadata (`cacheable`, `deterministic`, `streaming_support`, …) default safe; set accurately for MCP/schedulers.
+- Register via AutoDiscovery / plugin entry points — do not hand-register in production paths.
+- Detail: `.kiro/steering/node-base.md`, `node-registry.md`, `docs/NODE_SYSTEM.md`.

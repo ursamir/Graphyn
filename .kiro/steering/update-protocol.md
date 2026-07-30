@@ -40,14 +40,12 @@ When you modify code, update the matching steering file AND the matching `docs/`
 | `docs/PLUGIN_GUIDE.md` | Plugin API change, new plugin in `PluginPackage/` |
 | `docs/ARCHITECTURE.md` | New interface, major structural change |
 | `docs/KNOWN_ISSUES.md` | Fix → remove from open tables. New issue → add to correct priority tier. |
-| `docs/MASTER_ISSUE_REGISTRY.md` | Any new issue found or any issue resolved — update status and move to Resolved table. |
 
 ## Action Checklists
 
 **Fix an open issue:**
 1. Fix the code
-2. Move the issue row to the Resolved table in `docs/MASTER_ISSUE_REGISTRY.md`
-3. Remove it from the matching priority tier in `docs/KNOWN_ISSUES.md`
+2. Remove it from the matching priority tier in `docs/KNOWN_ISSUES.md`
 
 **New plugin node:**
 1. Implement in `PluginPackage/Audio/` or `PluginPackage/Common/`
@@ -63,4 +61,4 @@ When you modify code, update the matching steering file AND the matching `docs/`
 
 **New env var:** add row to `project-overview.md` Environment Variables table
 
-**New issue found during work:** add to `docs/MASTER_ISSUE_REGISTRY.md` in the correct priority section and add a row to the Quick Reference table. Add to `docs/KNOWN_ISSUES.md` in the correct tier.
+**New issue found during work:** add to `docs/KNOWN_ISSUES.md` in the correct priority tier.

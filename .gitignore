@@ -1,20 +1,30 @@
 __pycache__/
 *.pyc
-*venv/
-*.hypothesis/
-*workspace/
+venv/
+.venv/
+.hypothesis/
+.pytest_cache/
+workspace/
 
-*node_modules/
+node_modules/
 *.log
-*dist/
-*build/
-*public/
+dist/
+build/
 
 *.gz
+*.tar
+*.tar.gz
 
 examples/*/data*
 examples/*/output*
+examples/*/watch_inbox/*.wav
 
 plugins/*
+!plugins/.gitkeep
 PluginPackage/*/input/*
 PluginPackage/*/output/*
+
+# Process / IDE caches (never commit)
+review_agent_work/
+.kiro/specs/
+Requirement/

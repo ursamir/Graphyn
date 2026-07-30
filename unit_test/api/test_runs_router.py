@@ -65,3 +65,45 @@ class TestGetRun:
         assert resp.status_code == 200
         body = resp.json()
         assert body["run_id"] == "abc123"
+
+
+class _DummyArtifactStore:
+    def list(self, run_id=None):
+        return []
+
+
+class _DummyProvenanceStore:
+    def find_by_run(self, run_id):
+        return []
+
+
+class TestRunDebugReport:
+    def test_debug_report_returns_expected_fields(self, api_client, tmp_path):
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+        run_dir = runs_dir / "abc123"
+        run_dir.mkdir()
+        (run_dir / "meta.json").write_text(json.dumps({"run_id": "abc123", "status": "failed"}))
+        (run_dir / "logs.json").write_text(
+            json.dumps(
+                [
+                    {"level": "INFO", "message": "started"},
+                    {"level": "ERROR", "message": "node failure"},
+                ]
+            )
+        )
+        (run_dir / "checkpoints").mkdir()
+
+        with (
+            patch("app.api.routers.runs._get_runs_root", return_value=runs_dir),
+            patch("app.core.artifact_store.ArtifactStore", return_value=_DummyArtifactStore()),
+            patch("app.core.provenance.ProvenanceStore", return_value=_DummyProvenanceStore()),
+        ):
+            resp = api_client.get("/api/v1/runs/abc123/debug-report")
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["run_id"] == "abc123"
+        assert "status" in payload
+        assert "artifact_count" in payload
+        assert payload["error_count"] >= 1

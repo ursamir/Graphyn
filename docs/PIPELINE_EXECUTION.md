@@ -13,7 +13,8 @@ IR JSON file  (or YAML — deprecated)
 load_ir() / yaml_shim          → GraphIR object
     │
     ▼
-get_backend().execute(graph)   → canonical entry point (all interfaces)
+get_backend().execute(graph)   → canonical entry point (intended for all interfaces)
+                                 execution path used by SDK/API/CLI/MCP
     │
     ▼
 LocalPythonBackend.execute()
@@ -43,7 +44,7 @@ The canonical pipeline representation. All interfaces produce and consume `Graph
 ```python
 from app.core.ir import GraphIR, IRNode, IREdge, IRMetadata, IRCapabilityMetadata
 from app.core.ir import load_ir, dump_ir, load_ir_from_file, dump_ir_to_file
-from app.core.ir import CURRENT_IR_VERSION  # "1.0"
+from app.core.ir import CURRENT_IR_VERSION  # "1.1"
 
 # Load from dict (e.g. from API request body)
 graph = load_ir(graph_dict)
@@ -139,7 +140,7 @@ from app.core.orchestrator import run_pipeline_ir
 result = run_pipeline_ir(graph, ...)
 ```
 
-`RuntimeBackend` is the canonical execution entry point. `LocalPythonBackend` (the default) delegates to `orchestrator.run_pipeline_ir`. Custom backends can be registered via `register_backend(id, BackendClass)`. All interfaces (SDK, API, MCP, CLI) call `get_backend().execute()`.
+`RuntimeBackend` is the canonical execution entry point. `LocalPythonBackend` (the default) delegates to `orchestrator.run_pipeline_ir_async`. Custom backends can be registered via `register_backend(id, BackendClass)`.
 
 `run_pipeline()` is a **deprecated shim** — it reads raw YAML, emits `DeprecationWarning`, then calls `run_pipeline_ir`. Use `get_backend().execute()` for all new code.
 

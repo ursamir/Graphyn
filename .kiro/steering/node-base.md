@@ -133,4 +133,4 @@ class MyNode(Node):
 
 ## Open Issues in This Area
 
-> All previously listed issues in this area have been resolved. See `docs/MASTER_ISSUE_REGISTRY.md` Resolved table.
+> All previously listed issues in this area have been resolved. See `docs/KNOWN_ISSUES.md` for open items.

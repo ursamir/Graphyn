@@ -119,20 +119,22 @@ def main() -> None:
     print(f"    Nodes executed ({len(executed)}): {', '.join(executed)}")
 
     # ── exclude_nodes ─────────────────────────────────────────────────
-    print(f"\n{_h('Run 2 — exclude_nodes=[\"augmentation_pipeline_4\"]')}")
-    print(f"  {_dim('Skip the augmentation node — useful for quick validation runs')}")
+    print(f"\n{_h('Run 2 — exclude_nodes=[\"augmentation_pipeline_4\", \"feature_frontend_5\"]')}")
+    print(f"  {_dim('Skip augmentation and dependent frontend nodes for a fast integrity run')}")
     pipeline2 = build_pipeline()
     t0 = time.perf_counter()
     result2, run_mgr2 = pipeline2.run_with_manager(
-        exclude_nodes=["augmentation_pipeline_4"],
+        exclude_nodes=["augmentation_pipeline_4", "feature_frontend_5"],
         use_cache=False,
     )
     t_excl = time.perf_counter() - t0
     executed2, skipped2 = _nodes_from_logs(run_mgr2)
-    print(f"  {_ok('✓')} Excluded augmentation_pipeline: {t_excl:.2f}s  run_id={run_mgr2.run_id[:8]}")
+    print(f"  {_ok('✓')} Excluded augmentation/frontend nodes: {t_excl:.2f}s  run_id={run_mgr2.run_id[:8]}")
     print(f"    Nodes executed ({len(executed2)}): {', '.join(executed2)}")
     aug_skipped = "augmentation_pipeline" in skipped2
+    feat_skipped = "feature_frontend" in skipped2
     print(f"    augmentation_pipeline skipped: {'✓ yes' if aug_skipped else '✗ no (check node ID)'}")
+    print(f"    feature_frontend skipped: {'✓ yes' if feat_skipped else '✗ no (check node ID)'}")
 
     # ── include_nodes with input_overrides ────────────────────────────
     print(f"\n{_h('Run 3 — include_nodes + input_overrides')}")
@@ -185,7 +187,7 @@ def main() -> None:
     print(f"  graphyn run --graph pipeline.graph.json \\")
     print(f"      --include-nodes augmentation_pipeline_4,feature_frontend_5,dataset_builder_6,dataset_versioner_7")
     print(f"  graphyn run --graph pipeline.graph.json \\")
-    print(f"      --exclude-nodes augmentation_pipeline_4")
+    print(f"      --exclude-nodes augmentation_pipeline_4,feature_frontend_5")
     print(f"\n{'='*60}\n")
 
 

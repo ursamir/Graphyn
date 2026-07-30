@@ -14,6 +14,7 @@ Reason To Change: New artifact endpoint added, or replay behaviour changes.
 from __future__ import annotations
 
 import re
+import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,7 @@ _ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # queued up to MAX_QUEUED_REPLAYS — beyond that a 429 is returned immediately.
 _replay_executor = ThreadPoolExecutor(max_workers=1)
 _replay_futures: list[Future] = []  # type: ignore[type-arg]
+_replay_futures_lock = threading.Lock()
 _MAX_QUEUED_REPLAYS = 10
 
 
@@ -128,6 +130,7 @@ def replay_artifact(artifact_id: str):
     from app.core.artifact_store import ArtifactNotFoundError, ArtifactStore
     from app.core.ir.loader import load_ir_from_file
     from app.core.run_journal import RunManager
+    from app.core.runtime_backend import get_backend
 
     # Step 1: resolve artifact → provenance → run_id
     artifact_store = ArtifactStore()
@@ -171,25 +174,17 @@ def replay_artifact(artifact_id: str):
     # Bounded queue: prune completed futures and reject if too many are pending
     # to prevent unbounded memory growth under concurrent replay requests (HIGH fix).
     global _replay_futures  # noqa: PLW0603
-    _replay_futures = [f for f in _replay_futures if not f.done()]
-    if len(_replay_futures) >= _MAX_QUEUED_REPLAYS:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many replay requests queued — try again later",
-        )
-
-    from app.core.sdk import Pipeline, PipelineNode
+    with _replay_futures_lock:
+        _replay_futures = [f for f in _replay_futures if not f.done()]
+        if len(_replay_futures) >= _MAX_QUEUED_REPLAYS:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many replay requests queued — try again later",
+            )
 
     def _do_replay():
         try:
-            nodes = [PipelineNode(n.node_type, dict(n.config)) for n in graph.nodes]
-            replay_pipeline = Pipeline(
-                nodes=nodes,
-                seed=graph.metadata.seed,
-                name=graph.metadata.name,
-                description=graph.metadata.description,
-            )
-            replay_pipeline.run(run_manager=new_run_mgr)
+            get_backend().execute(graph, run_manager=new_run_mgr)
         except Exception as exc:
             # Wrap mark_failed so a disk-full or other error here is not
             # silently swallowed by the executor (HIGH fix).
@@ -199,7 +194,8 @@ def replay_artifact(artifact_id: str):
                 pass
 
     future = _replay_executor.submit(_do_replay)
-    _replay_futures.append(future)
+    with _replay_futures_lock:
+        _replay_futures.append(future)
 
     # Step 5: return immediately
     return {"run_id": new_run_id, "status": "started"}

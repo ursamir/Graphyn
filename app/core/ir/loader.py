@@ -20,6 +20,7 @@ import json
 import os
 import warnings
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pydantic
@@ -110,13 +111,45 @@ def _check_version(schema_version: str) -> None:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
+def _migrate_ui_sidecar(data: dict[str, Any]) -> dict[str, Any]:
+    """Move misplaced ``parameters.ui`` layout into top-level ``ui``.
+
+    Early console builds wrote canvas positions under ``parameters.ui``, but
+    ``parameters`` values must be ``IRParameter`` objects. Silently relocate.
+    """
+    params = data.get("parameters")
+    if not isinstance(params, dict):
+        return data
+    ui_blob = params.get("ui")
+    if not isinstance(ui_blob, dict):
+        return data
+    # Only migrate layout-shaped blobs (have positions) — never steal a real param.
+    if "positions" not in ui_blob and "type" in ui_blob:
+        return data
+    out = dict(data)
+    new_params = dict(params)
+    new_params.pop("ui", None)
+    out["parameters"] = new_params
+    existing_ui = out.get("ui") if isinstance(out.get("ui"), dict) else {}
+    merged = {**ui_blob, **existing_ui}
+    if "positions" in ui_blob and "positions" in existing_ui:
+        merged["positions"] = {
+            **(ui_blob.get("positions") or {}),
+            **(existing_ui.get("positions") or {}),
+        }
+    out["ui"] = merged
+    return out
+
+
 def load_ir(data: dict[str, Any]) -> GraphIR:
     """Validate and return a GraphIR from a JSON-compatible dict.
 
     Performs:
     1. Runtime type guard (raises TypeError if data is not a dict)
-    2. Pydantic schema validation (raises pydantic.ValidationError on failure)
-    3. Schema version check (raises IRVersionError on major mismatch)
+    2. Migrate legacy ``parameters.ui`` layout sidecar → ``ui``
+    3. Migrate obsolete node_type aliases (``input``→``dataset_ingest``, …)
+    4. Pydantic schema validation (raises pydantic.ValidationError on failure)
+    5. Schema version check (raises IRVersionError on major mismatch)
 
     Args:
         data: A JSON-compatible dict, typically from json.loads() or yaml.safe_load().
@@ -136,6 +169,10 @@ def load_ir(data: dict[str, Any]) -> GraphIR:
             f"load_ir expects a dict, got {type(data).__name__!r}. "
             "Ensure the source file is non-empty and contains a JSON object."
         )
+    data = _migrate_ui_sidecar(data)
+    from app.core.ir.legacy_aliases import migrate_legacy_node_types
+
+    data = migrate_legacy_node_types(data)
     graph = GraphIR.model_validate(data)
     _check_version(graph.schema_version)
     return graph
@@ -189,7 +226,22 @@ def dump_ir(graph: GraphIR) -> dict[str, Any]:
 
     Req 1.8.3
     """
-    return graph.model_dump(mode="json")
+    def _plain(value: Any) -> Any:
+        if isinstance(value, MappingProxyType):
+            return {k: _plain(v) for k, v in value.items()}
+        if isinstance(value, dict):
+            return {k: _plain(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_plain(v) for v in value]
+        if isinstance(value, tuple):
+            return [_plain(v) for v in value]
+        return value
+
+    try:
+        return graph.model_dump(mode="json")
+    except Exception:
+        # Fallback for pydantic internals that carry mappingproxy values.
+        return _plain(graph.model_dump(mode="python"))
 
 
 def dump_ir_to_file(graph: GraphIR, path: str) -> None:

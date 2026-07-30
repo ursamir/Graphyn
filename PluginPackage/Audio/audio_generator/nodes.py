@@ -65,7 +65,7 @@ class AudioGeneratorNode(Node):
     input_ports: ClassVar[dict[str, InputPort]] = {
         "input": InputPort(
             name="input",
-            data_type=list,
+            data_type=object | None,
             cardinality="single",
             required=False,
             description="List of text prompts (optional — uses config.prompt if empty)",

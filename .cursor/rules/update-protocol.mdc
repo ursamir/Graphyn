@@ -1,0 +1,26 @@
+---
+description: Keep Kiro steering and docs in sync after code changes
+alwaysApply: true
+---
+
+# Update Protocol
+
+When you modify code, update the matching `.kiro/steering/` file **and** matching `docs/` file before finishing. Change only the affected section — never rewrite whole files.
+
+| Code area | Steering | Docs |
+|---|---|---|
+| Top-level / env / entry points | `project-overview.md` | `ARCHITECTURE.md` |
+| Node base / ports / metadata | `node-base.md` | `NODE_SYSTEM.md` |
+| Registry / discovery | `node-registry.md` | `NODE_SYSTEM.md` |
+| Plugins / PluginPackage | `plugin-development.md`, `plugin-ecosystem.md` | `PLUGIN_GUIDE.md` |
+| Orchestrator / IR / executor | `pipeline-execution.md` | `PIPELINE_EXECUTION.md` |
+| API routers | `api-endpoints.md` | `API_REFERENCE.md` |
+| `api/main.py` | `api-structure.md` | `API_REFERENCE.md` |
+| SDK / CLI | `sdk-cli.md` | `SDK_AND_CLI.md`, `USERGUIDE.md` |
+| Runs / artifacts / domain | `backend-services.md` | `BACKEND_CORE.md`, `DOMAIN_SERVICES.md` |
+| MCP | `mcp-server.md` | `MCP_SERVER.md` |
+| Models | `data-models.md` | `DATA_FLOW_AND_WORKSPACE.md` |
+| graphyn-ui canvas / shell | `frontend-canvas.md` | — |
+| graphyn-ui feature screens | `frontend-features.md` | — |
+
+**Issues:** new → add to `KNOWN_ISSUES.md`. Fixed → remove from open tiers.
