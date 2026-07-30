@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.plugins.errors import (
-    PluginAlreadyInstalledError,
     PluginNotFoundError,
 )
 from app.core.plugins.index import PluginIndexClient
@@ -154,10 +153,12 @@ class PluginManager:
                 existing = None
 
             if existing is not None and not upgrade:
-                raise PluginAlreadyInstalledError(
-                    f"Plugin '{_pre_name}' is already installed (version {existing.version}). "
-                    "Use upgrade=True to replace the existing installation."
+                log.info(
+                    "Plugin '%s' already installed (version %s); reusing existing installation.",
+                    _pre_name,
+                    existing.version,
                 )
+                return existing
 
             # Step 3 — upgrade: uninstall existing first (best-effort name)
             if existing is not None and upgrade:
@@ -188,11 +189,12 @@ class PluginManager:
                     except PluginNotFoundError:
                         auth_existing = None
                     if auth_existing is not None and not upgrade:
-                        raise PluginAlreadyInstalledError(
-                            f"Plugin '{manifest.name}' is already installed "
-                            f"(version {auth_existing.version}). "
-                            "Use upgrade=True to replace the existing installation."
+                        log.info(
+                            "Plugin '%s' already installed (version %s); reusing existing installation.",
+                            manifest.name,
+                            auth_existing.version,
                         )
+                        return auth_existing
                     if auth_existing is not None and upgrade:
                         # G4-UPGRADE fix: back up the old install dir before uninstalling
                         # so we can restore it if the new copy or load fails.
@@ -310,6 +312,16 @@ class PluginManager:
         # Step 2 — unload node types from registry
         self._unload_node_types(record)
 
+        # Step 2b — drop isolated runtime registration + venv
+        try:
+            from app.core.plugins.runtime_registry import get_runtime_registry
+            from app.core.plugins.venv_manager import PluginVenvManager
+
+            get_runtime_registry().unregister_plugin(name)
+            PluginVenvManager().remove(name)
+        except Exception as exc:
+            log.warning("Cleanup of isolated venv for '%s' failed: %s", name, exc)
+
         # Step 3 — delete record from store
         self._store.delete(name)
 
@@ -403,6 +415,103 @@ class PluginManager:
         """
         return self._store.get(name)
 
+    def dependency_status(self, name: str) -> dict:
+        """Return dependency satisfaction status for an installed plugin."""
+        from app.core.plugins.dependencies import DependencyChecker
+        from app.core.plugins.runtime_registry import get_runtime_registry
+
+        record = self._store.get(name)
+        manifest = record.manifest or {}
+        deps = list(manifest.get("dependencies") or [])
+        opt = list(manifest.get("optional_dependencies") or [])
+        runtime = (manifest.get("runtime") or "inprocess").lower()
+        python = None
+        spec = get_runtime_registry().get_for_plugin(name)
+        if runtime == "isolated":
+            from app.core.plugins.venv_manager import PluginVenvManager
+
+            py = PluginVenvManager().python_bin(name)
+            if py.exists():
+                python = str(py)
+            elif spec is not None:
+                python = spec.venv_python
+
+        rows = DependencyChecker().status(
+            deps, optional_dependencies=opt, python=python
+        )
+        return {
+            "name": name,
+            "runtime": runtime,
+            "python": python,
+            "dependencies": [
+                {
+                    "requirement": r.requirement,
+                    "name": r.name,
+                    "satisfied": r.satisfied,
+                    "installed_version": r.installed_version,
+                    "optional": r.optional,
+                }
+                for r in rows
+            ],
+            "missing_required": [
+                r.requirement for r in rows if not r.optional and not r.satisfied
+            ],
+            "missing_optional": [
+                r.requirement for r in rows if r.optional and not r.satisfied
+            ],
+        }
+
+    def install_dependencies(
+        self, name: str, *, include_optional: bool = False
+    ) -> dict:
+        """Install missing deps for *name* (shared env or plugin venv)."""
+        from app.core.plugins.dependencies import DependencyChecker
+
+        record = self._store.get(name)
+        manifest = record.manifest or {}
+        deps = list(manifest.get("dependencies") or [])
+        opt = list(manifest.get("optional_dependencies") or [])
+        runtime = (manifest.get("runtime") or "inprocess").lower()
+        to_install = list(deps)
+        if include_optional:
+            to_install.extend(opt)
+
+        if runtime == "isolated":
+            from app.core.plugins.venv_manager import PluginVenvManager
+
+            py = PluginVenvManager().ensure(name, to_install)
+            # Refresh runtime registry python path if nodes already registered
+            from app.core.plugins.runtime_registry import (
+                IsolatedPluginSpec,
+                get_runtime_registry,
+            )
+
+            existing = get_runtime_registry().get_for_plugin(name)
+            node_types = existing.node_types if existing else ()
+            get_runtime_registry().register(
+                IsolatedPluginSpec(
+                    plugin_name=name,
+                    install_path=record.install_path,
+                    venv_python=str(py),
+                    node_types=node_types,
+                )
+            )
+        else:
+            checker = DependencyChecker()
+            status = checker.status(to_install)
+            missing = [s.requirement for s in status if not s.satisfied]
+            if missing:
+                checker.install(missing, python=None, check_platform=True)
+
+        return self.dependency_status(name)
+
+    def gc_plugin_venvs(self) -> list[str]:
+        """Remove isolated venvs for plugins that are no longer installed."""
+        from app.core.plugins.venv_manager import PluginVenvManager
+
+        names = {r.name for r in self._store.list()}
+        return PluginVenvManager().gc_unused(names)
+
     def load_enabled_plugins(self) -> None:
         """Load all enabled plugins from the store.
 
@@ -439,10 +548,32 @@ class PluginManager:
                     exc,
                     exc_info=True,
                 )
+                # Self-heal path: stale bytecode/module state can cause startup
+                # load failures after loader/module-name changes. Clear pycache
+                # and retry once.
+                try:
+                    self._clear_plugin_pycache(install_path)
+                    node_types = self._loader.load(install_path)
+                    log.info(
+                        "Startup: recovered plugin '%s' after cache clear — node types: %s",
+                        record.name,
+                        node_types,
+                    )
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _clear_plugin_pycache(self, install_path: Path) -> None:
+        """Best-effort clear of stale __pycache__ directories for one plugin."""
+        try:
+            for p in install_path.rglob("__pycache__"):
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+        except Exception:
+            pass
 
     def _unload_node_types(self, record: PluginRecord) -> None:
         """Unload all node types contributed by *record* from the registry.

@@ -133,13 +133,29 @@ class InstallRequest(BaseModel):
 def list_plugins() -> list[dict[str, Any]]:
     """Return a JSON array of all installed PluginRecord objects.
 
+    Each record is enriched with ``runtime`` and a compact dependency summary.
     Requirements: req-07 §8.2
     """
     from app.core.plugins.manager import PluginManager
 
     manager = PluginManager()
     records = manager.list_installed()
-    return [r.model_dump() for r in records]
+    out: list[dict[str, Any]] = []
+    for record in records:
+        data = record.model_dump()
+        manifest = record.manifest or {}
+        data["runtime"] = manifest.get("runtime") or "inprocess"
+        try:
+            status = manager.dependency_status(record.name)
+            data["dependency_summary"] = {
+                "missing_required": status.get("missing_required") or [],
+                "missing_optional": status.get("missing_optional") or [],
+                "runtime": status.get("runtime"),
+            }
+        except Exception:
+            data["dependency_summary"] = None
+        out.append(data)
+    return out
 
 
 # ── GET /plugins/search ───────────────────────────────────────────────────────
@@ -163,6 +179,15 @@ def search_plugins(
     except PluginIndexError as exc:
         raise _plugin_http_error(exc) from exc
     return [entry.model_dump() for entry in results]
+
+
+@router.post("/venvs/gc", summary="Garbage-collect unused plugin venvs")
+def gc_plugin_venvs() -> dict[str, Any]:
+    """Remove isolated venvs for plugins that are no longer installed."""
+    from app.core.plugins.manager import PluginManager
+
+    removed = PluginManager().gc_plugin_venvs()
+    return {"removed": removed}
 
 
 # ── POST /plugins/install ─────────────────────────────────────────────────────
@@ -333,3 +358,39 @@ def get_plugin(name: str) -> dict[str, Any]:
         raise _plugin_http_error(PluginNotFoundError(name)) from None
 
     return record.model_dump()
+
+
+# ── GET /plugins/{name}/dependencies ──────────────────────────────────────────
+
+
+@router.get("/{name}/dependencies", summary="Plugin dependency status")
+def get_plugin_dependencies(name: str) -> dict[str, Any]:
+    """Return required/optional dependency satisfaction for an installed plugin."""
+    from app.core.plugins.manager import PluginManager
+
+    manager = PluginManager()
+    try:
+        return manager.dependency_status(name)
+    except PluginNotFoundError as exc:
+        raise _plugin_http_error(exc) from exc
+
+
+class InstallDepsBody(BaseModel):
+    include_optional: bool = False
+
+
+@router.post("/{name}/dependencies/install", summary="Install plugin dependencies")
+def install_plugin_dependencies(
+    name: str, body: InstallDepsBody | None = None
+) -> dict[str, Any]:
+    """Install missing required (and optionally optional) deps for *name*."""
+    from app.core.plugins.manager import PluginManager
+
+    include_optional = bool(body.include_optional) if body else False
+    manager = PluginManager()
+    try:
+        return manager.install_dependencies(name, include_optional=include_optional)
+    except PluginNotFoundError as exc:
+        raise _plugin_http_error(exc) from exc
+    except Exception as exc:
+        raise _plugin_http_error(exc) from exc

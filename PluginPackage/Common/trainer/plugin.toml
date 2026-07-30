@@ -18,3 +18,5 @@ optional_dependencies = [
     "keras>=3.0",
     "torch>=2.0",
 ]
+
+runtime = "isolated"

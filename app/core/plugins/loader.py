@@ -138,17 +138,45 @@ class PluginLoader:
         # Step 3 — Python version compatibility
         self._check_python_compat(manifest, plugin_dir)
 
-        # Step 4 — dependency check (raises PluginDependencyError on failure)
-        DependencyChecker().check(manifest.dependencies)
+        # Step 4 — dependency check / isolated venv
+        if (manifest.runtime or "inprocess") == "isolated":
+            from app.core.plugins.venv_manager import PluginVenvManager
+
+            # Required deps install into the plugin venv (not shared).
+            # Optional deps install via POST .../dependencies/install?include_optional.
+            venv_mgr = PluginVenvManager()
+            venv_py = venv_mgr.ensure(
+                manifest.name,
+                list(manifest.dependencies),
+            )
+        else:
+            DependencyChecker().check(manifest.dependencies)
+            venv_py = None
 
         # Step 5 — import entry points and register nodes
         new_node_types = self._import_entry_points(plugin_dir, manifest)
 
+        if (manifest.runtime or "inprocess") == "isolated" and venv_py is not None:
+            from app.core.plugins.runtime_registry import (
+                IsolatedPluginSpec,
+                get_runtime_registry,
+            )
+
+            get_runtime_registry().register(
+                IsolatedPluginSpec(
+                    plugin_name=manifest.name,
+                    install_path=str(Path(plugin_dir).resolve()),
+                    venv_python=str(venv_py),
+                    node_types=tuple(new_node_types),
+                )
+            )
+
         # Step 6 — log summary
         log.info(
-            "Loaded plugin '%s' v%s — registered %d node type(s): %s",
+            "Loaded plugin '%s' v%s (runtime=%s) — registered %d node type(s): %s",
             manifest.name,
             manifest.version,
+            manifest.runtime,
             len(new_node_types),
             new_node_types,
         )

@@ -19,3 +19,5 @@ optional_dependencies = [
     "onnxruntime>=1.16",
     "tf2onnx>=1.15",
 ]
+
+runtime = "isolated"

@@ -44,12 +44,15 @@ tags             = ["audio"]
 
 dependencies = ["numpy>=1.24", "librosa>=0.10"]   # pinned, no open ranges
 optional_dependencies = ["torch>=2.0"]             # heavy deps — node must degrade gracefully
+runtime = "inprocess"                              # or "isolated" for conflicting stacks
 ```
 
 **Dependency rules:**
 - Core deps (numpy, librosa, scipy) → `dependencies`
 - Heavy deps (torch, tensorflow, transformers) → `optional_dependencies` only
 - Never put heavy deps in `dependencies` — blocks CPU-only installs
+- `runtime = "isolated"` — required deps go to `~/.graphyn/plugins/venvs/<name>/`; `process()` runs via `app.core.plugins.worker` (use for trainer / edge-optimizer / realtime-inference)
+- Shared-env installs guarded by `PLATFORM_CONSTRAINTS`; UI/API: `GET|POST /plugins/{name}/dependencies`
 
 ---
 
@@ -294,3 +297,5 @@ All 30 plugins are complete. See `plugin-development.md` steering file for the f
 
 ### Common (`PluginPackage/Common/`) — 12 nodes
 `dataset_builder`, `model_builder`, `trainer`, `evaluator`, `edge_optimizer`, `realtime_inference`, `dataset_balancer`, `dataset_versioner`, `experiment_tracker`, `deployment_packager`, `embedding_generator`, `multimodal_fusion`
+
+**Trainer / ModelBuilder (Keras):** `select_keras_device()` picks `/GPU:0` or `/CPU:0`. GPUs with compute capability ≥12 (Blackwell, e.g. RTX 5070 Ti) default to CPU because this TensorFlow build cannot run Keras training on them (missing CUDA kernels / libdevice). CPU `fit` uses soft placement off + `tf.device("/CPU:0")`. Set `GRAPHYN_TF_FORCE_GPU=1` only to force a GPU attempt. `trainer.config.device`: `auto`|`cpu`|`gpu`.

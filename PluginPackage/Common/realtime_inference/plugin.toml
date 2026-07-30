@@ -18,3 +18,5 @@ optional_dependencies = [
     "torch>=2.0",
     "onnxruntime>=1.16",
 ]
+
+runtime = "isolated"

@@ -119,7 +119,7 @@ class NodeExecutor:
 
             t0 = time.perf_counter()
             try:
-                outputs = node.process(inputs)
+                outputs = self._process(node, inputs)
                 # Guard: a node that forgets to return its outputs dict would
                 # cause an AttributeError on outputs.items() below, which would
                 # bypass on_error() and the retry loop entirely.  Treat None as
@@ -165,6 +165,37 @@ class NodeExecutor:
         if self._setup_done:
             self.teardown()
         raise last_exc
+
+    def _process(self, node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
+        """Run ``node.process`` in-process or via an isolated plugin worker."""
+        node_type = getattr(type(node), "node_type", None) or getattr(
+            getattr(node, "metadata", None), "node_type", None
+        )
+        if node_type:
+            try:
+                from app.core.plugins.isolated_executor import run_isolated_node
+                from app.core.plugins.runtime_registry import get_runtime_registry
+
+                spec = get_runtime_registry().get_for_node(str(node_type))
+            except Exception:
+                spec = None
+            if spec is not None:
+                config = {}
+                raw_cfg = getattr(node, "config", None)
+                if raw_cfg is not None:
+                    if hasattr(raw_cfg, "model_dump"):
+                        config = raw_cfg.model_dump()
+                    elif isinstance(raw_cfg, dict):
+                        config = dict(raw_cfg)
+                seed = int(getattr(node, "seed", 42) or 42)
+                return run_isolated_node(
+                    spec,
+                    node_type=str(node_type),
+                    config=config,
+                    seed=seed,
+                    inputs=inputs,
+                )
+        return node.process(inputs)
 
     async def execute_stream(
         self, inputs: dict[str, Any]

@@ -74,8 +74,12 @@ class PluginManifest(BaseModel):
         List of PEP 508 requirement strings. Default ``[]``.
     optional_dependencies
         List of PEP 508 requirement strings for optional heavy deps (e.g. torch,
-        tensorflow). These are NOT checked by DependencyChecker at install time —
-        the node must degrade gracefully when they are absent. Default ``[]``.
+        tensorflow). Not required for in-process load; may be installed on
+        demand or into an isolated plugin venv. Default ``[]``.
+    runtime
+        ``"inprocess"`` (default) — load and execute in the platform interpreter.
+        ``"isolated"`` — deps live in a per-plugin venv; ``process()`` runs in a
+        subprocess worker so conflicting stacks cannot break the platform env.
     homepage
         URL string or ``None``.
     license
@@ -100,6 +104,7 @@ class PluginManifest(BaseModel):
     tags: list[str] = []
     dependencies: list[str] = []
     optional_dependencies: list[str] = []
+    runtime: str = "inprocess"
     homepage: str | None = None
     license: str | None = None
     min_python: str | None = None
@@ -188,7 +193,7 @@ class PluginManifest(BaseModel):
                 )
         return v
 
-    @field_validator("dependencies")
+    @field_validator("dependencies", "optional_dependencies")
     @classmethod
     def _validate_dependencies(cls, v: list[str]) -> list[str]:
         from packaging.requirements import Requirement
@@ -205,6 +210,17 @@ class PluginManifest(BaseModel):
                     f"Dependency {item!r} is not a valid PEP 508 requirement: {exc}"
                 ) from exc
         return v
+
+    @field_validator("runtime")
+    @classmethod
+    def _validate_runtime(cls, v: str) -> str:
+        allowed = {"inprocess", "isolated"}
+        normalized = (v or "inprocess").strip().lower()
+        if normalized not in allowed:
+            raise ValueError(
+                f"'runtime' must be one of {sorted(allowed)} (got {v!r})"
+            )
+        return normalized
 
     # ------------------------------------------------------------------
     # Cross-field validation: entry_points must have >= 1 item

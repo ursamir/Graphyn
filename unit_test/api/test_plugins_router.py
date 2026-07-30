@@ -13,10 +13,12 @@ def _make_plugin_record(name: str = "my-plugin", version: str = "1.0.0", enabled
     record.name = name
     record.version = version
     record.enabled = enabled
+    record.manifest = {"runtime": "inprocess", "dependencies": [], "optional_dependencies": []}
     record.model_dump.return_value = {
         "name": name,
         "version": version,
         "enabled": enabled,
+        "manifest": record.manifest,
     }
     return record
 
@@ -31,6 +33,16 @@ def _make_manager(records=None, plugin_name: str = "my-plugin"):
     manager.enable.return_value = record
     manager.disable.return_value = _make_plugin_record(plugin_name, enabled=False)
     manager.uninstall.return_value = None
+    manager.dependency_status.return_value = {
+        "name": plugin_name,
+        "runtime": "inprocess",
+        "python": None,
+        "dependencies": [],
+        "missing_required": [],
+        "missing_optional": [],
+    }
+    manager.install_dependencies.return_value = manager.dependency_status.return_value
+    manager.gc_plugin_venvs.return_value = []
     return manager
 
 
@@ -166,3 +178,30 @@ class TestDeletePlugin:
         body = resp.json()
         assert body["name"] == "my-plugin"
         assert body["status"] == "uninstalled"
+
+
+class TestPluginDependencies:
+    def test_get_dependencies(self, api_client):
+        manager = _make_manager("my-plugin")
+        with patch("app.core.plugins.manager.PluginManager", return_value=manager):
+            resp = api_client.get("/api/v1/plugins/my-plugin/dependencies")
+        assert resp.status_code == 200
+        assert resp.json()["runtime"] == "inprocess"
+
+    def test_install_dependencies(self, api_client):
+        manager = _make_manager("my-plugin")
+        with patch("app.core.plugins.manager.PluginManager", return_value=manager):
+            resp = api_client.post(
+                "/api/v1/plugins/my-plugin/dependencies/install",
+                json={"include_optional": True},
+            )
+        assert resp.status_code == 200
+        manager.install_dependencies.assert_called_once()
+
+    def test_gc_venvs(self, api_client):
+        manager = _make_manager()
+        manager.gc_plugin_venvs.return_value = ["orphan"]
+        with patch("app.core.plugins.manager.PluginManager", return_value=manager):
+            resp = api_client.post("/api/v1/plugins/venvs/gc")
+        assert resp.status_code == 200
+        assert resp.json()["removed"] == ["orphan"]

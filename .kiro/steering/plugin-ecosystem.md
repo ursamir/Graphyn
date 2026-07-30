@@ -73,4 +73,22 @@ PluginError
 | `GRAPHYN_PLUGIN_INDEX_URL` | `""` | Remote index URL |
 | `GRAPHYN_HOME` | `~/.graphyn/` | `PluginStore` writes to `{GRAPHYN_HOME}/plugins/` |
 | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | `""` | Comma-separated URL prefixes; empty = allow all. When set, remote sources not matching any prefix are rejected with `PluginInstallError` (SEC-6 fix) |
-| `GRAPHYN_STRICT_COMPAT` | `""` | `"1"` or `"true"` to raise `PluginCompatibilityError` when `app.__version__` is unset (instead of skipping the platform version check with a WARNING) |
+| `GRAPHYN_PLUGIN_VENVS_DIR` | `{GRAPHYN_HOME}/plugins/venvs/` | Per-plugin isolated virtualenvs for `runtime = "isolated"` |
+| `GRAPHYN_TF_DEVICE` | unset (GPU allowed) | Set `cpu` to hide CUDA from TensorFlow. Default allows GPUs with memory growth so other apps keep their VRAM. |
+| `GRAPHYN_TF_FORCE_GPU` | unset | Set `1` to force Keras GPU even on unsupported compute capability (≥12 / Blackwell). |
+
+### Dependency isolation (hybrid)
+
+- Every plugin declares `dependencies` + `optional_dependencies` (PEP 508) in `plugin.toml`.
+- Default `runtime = "inprocess"`: deps checked/installed into the shared platform venv; `DependencyChecker` refuses installs that contradict `PLATFORM_CONSTRAINTS` (numpy/pydantic/packaging).
+- `runtime = "isolated"` (trainer, edge-optimizer, realtime-inference): create `{GRAPHYN_PLUGIN_VENVS_DIR}/<plugin>/` with `--system-site-packages`, install required deps there, write `requirements.lock`. `NodeExecutor` runs `process()` via `python -m app.core.plugins.worker` (pickle IPC).
+- API: `GET/POST /api/v1/plugins/{name}/dependencies[/install]`, `POST /api/v1/plugins/venvs/gc`.
+- Uninstall removes the plugin venv; `gc_plugin_venvs()` drops orphans.
+
+### Trainer / ModelBuilder (Keras) device placement
+
+- Device choice via `app.core.tf_runtime.select_keras_device()` (`auto`|`cpu`|`gpu`, plus env).
+- Compute capability ≥ 12 (e.g. RTX 5070 Ti) → **CPU by default** — current TF wheels lack CUDA kernels / libdevice; GPU `fit` fails with XLA/JIT errors. Override with `GRAPHYN_TF_FORCE_GPU=1`.
+- **CPU fit:** soft placement off + entire `fit` under `tf.device("/CPU:0")` (required when a GPU is still visible).
+- **GPU fit:** soft placement on; do not wrap `fit` in `/GPU:0` (tf.data RangeDataset is CPU-only). On failure, clone+recompile on CPU and retry with the CPU fit pattern.
+- After editing `PluginPackage/Common/trainer/`, reinstall with upgrade and restart the API.

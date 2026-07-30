@@ -26,6 +26,7 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_PLUGIN_AUTO_INSTALL     Default: "" (disabled)
   GRAPHYN_PLUGIN_INDEX_URL        Default: "" (no remote index)
   GRAPHYN_PLUGIN_ALLOWED_SOURCES  Default: "" (all sources allowed)
+  GRAPHYN_PLUGIN_VENVS_DIR        Default: {GRAPHYN_HOME}/plugins/venvs/
   GRAPHYN_REDIS_URL               Default: "" (use in-process store)
 
 ## Three-tier directory model
@@ -133,6 +134,18 @@ def plugin_auto_install() -> bool:
     Override: GRAPHYN_PLUGIN_AUTO_INSTALL=1 or =true.
     """
     return _env("GRAPHYN_PLUGIN_AUTO_INSTALL").lower() in ("1", "true")
+
+
+def plugin_venvs_dir() -> Path:
+    """Return the directory for per-plugin isolated virtualenvs.
+
+    Default: ``{graphyn_home()}/plugins/venvs/``
+    Override: ``GRAPHYN_PLUGIN_VENVS_DIR`` env var.
+    """
+    override = os.environ.get("GRAPHYN_PLUGIN_VENVS_DIR", "").strip()
+    if override:
+        return Path(override)
+    return graphyn_home() / "plugins" / "venvs"
 
 
 def plugin_allowed_sources() -> list[str]:

@@ -5,6 +5,10 @@ fileMatchPattern: "plugins/**,app/core/plugins/**,PluginPackage/**"
 
 # Plugin Development
 
+## 2026-07-29 Hardening Update
+- Optional plugin inputs that can be absent should use permissive `data_type` declarations to avoid install-time port validation failures.
+- Common/Audio runtime paths were hardened with malformed-input guards in streaming, inference, and quality nodes.
+
 All 30 plugins are complete. For node specs and capabilities → `PluginPackage/NODES.md`. For architecture and data flow → `PluginPackage/ARCHITECTURE.md`.
 
 ## Locations
@@ -42,9 +46,10 @@ tags             = ["audio"]
 
 dependencies = ["numpy>=1.24", "librosa>=0.10"]   # pinned, no open ranges
 optional_dependencies = ["torch>=2.0"]             # heavy deps — node must degrade gracefully
+runtime = "inprocess"                              # or "isolated"
 ```
 
-Core deps (numpy, librosa, scipy) → `dependencies`. Heavy deps (torch, tensorflow, transformers) → `optional_dependencies` only. Never put heavy deps in `dependencies` — it blocks CPU-only installs.
+Core deps (numpy, librosa, scipy) → `dependencies`. Heavy deps (torch, tensorflow, transformers) → `optional_dependencies` only. Never put heavy deps in `dependencies` — it blocks CPU-only installs. Use `runtime = "isolated"` for conflicting stacks (trainer, edge-optimizer, realtime-inference): per-plugin venv + subprocess worker.
 
 ## Node Template
 
