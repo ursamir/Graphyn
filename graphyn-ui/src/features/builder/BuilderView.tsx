@@ -23,7 +23,7 @@ import {
   BookmarkPlus,
   Zap,
 } from 'lucide-react'
-import { apiFetch, apiJson, ApiError } from '../../api/client'
+import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import {
   buildGraphFromCanvas,
@@ -46,6 +46,9 @@ function defaultsFromSchema(entry?: NodeCatalogEntry): Record<string, unknown> {
 
 function BuilderInner() {
   const catalog = useAppStore((s) => s.catalog)
+  const bootError = useAppStore((s) => s.bootError)
+  const bootStatus = useAppStore((s) => s.bootStatus)
+  const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const seed = useAppStore((s) => s.seed)
   const setSeed = useAppStore((s) => s.setSeed)
   const isRunning = useAppStore((s) => s.isRunning)
@@ -454,8 +457,30 @@ function BuilderInner() {
           />
         </div>
         <div className="flex-1 overflow-y-auto p-2">
-          {byCategory.length === 0 ? (
-            <div className="px-2 py-6 text-sm text-ink-500">No nodes loaded. Check API / plugins.</div>
+          {catalog.length === 0 ? (
+            <div className="space-y-2 px-2 py-4">
+              {bootError && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-sm text-rose-800">
+                  {bootError}
+                </div>
+              )}
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-sm text-amber-900">
+                {bootStatus === 401 || !getApiToken()
+                  ? 'Set API token in Settings'
+                  : 'No plugins installed'}
+              </div>
+              {(bootStatus === 401 || !getApiToken()) && (
+                <button
+                  type="button"
+                  className="btn-primary w-full text-sm"
+                  onClick={() => setSettingsOpen(true)}
+                >
+                  Open Settings
+                </button>
+              )}
+            </div>
+          ) : byCategory.length === 0 ? (
+            <div className="px-2 py-6 text-sm text-ink-500">No nodes match the search.</div>
           ) : (
             byCategory.map(([cat, items]) => (
               <div key={cat} className="mb-3">

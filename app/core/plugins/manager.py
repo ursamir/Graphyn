@@ -7,7 +7,8 @@ Owns:             Install workflow (resolve → manifest → copy → load → p
                   uninstall workflow (unload → delete record → remove dir),
                   enable/disable (registry reload/unload), startup loading.
 Public Surface:   PluginManager.install(), uninstall(), enable(), disable(),
-                  list_installed(), get(), load_enabled_plugins()
+                  list_installed(), get(), load_enabled_plugins(),
+                  install_bundled_plugins(), maybe_auto_install_and_load()
 Must NOT:         Import from app.domain or app.api.
                   Must not call PluginLoader, PluginStore, or PluginInstaller
                   directly from outside this package.
@@ -522,6 +523,75 @@ class PluginManager:
 
         names = {r.name for r in self._store.list()}
         return PluginVenvManager().gc_unused(names)
+
+    def install_bundled_plugins(
+        self,
+        package_root: Path | None = None,
+        *,
+        upgrade: bool = True,
+    ) -> int:
+        """Install every ``plugin.toml`` under ``PluginPackage/*/*/``.
+
+        Idempotent when ``upgrade=True`` (reinstalls over existing records).
+        Failures are logged and do not abort remaining installs. No network
+        I/O for local path sources.
+
+        Returns
+        -------
+        int
+            Number of plugins successfully passed to :meth:`install`.
+        """
+        from app.core.config import plugin_package_dir as _plugin_package_dir
+
+        root = Path(package_root) if package_root is not None else _plugin_package_dir()
+        if not root.is_dir():
+            log.warning("Bundled PluginPackage directory missing: %s", root)
+            return 0
+        tomls = sorted(root.glob("*/*/plugin.toml"))
+        installed = 0
+        for toml_path in tomls:
+            plugin_dir = toml_path.parent
+            try:
+                self.install(str(plugin_dir), upgrade=upgrade)
+                installed += 1
+            except Exception as exc:
+                log.warning(
+                    "Startup: failed to auto-install bundled plugin from '%s': %s",
+                    plugin_dir,
+                    exc,
+                    exc_info=True,
+                )
+        log.info(
+            "Startup: auto-installed %d bundled plugin(s) from %s (%d manifests)",
+            installed,
+            root,
+            len(tomls),
+        )
+        return installed
+
+    def maybe_auto_install_and_load(
+        self,
+        package_root: Path | None = None,
+    ) -> int:
+        """Install bundled plugins when requested or none are enabled, then load.
+
+        Skip entirely when ``GRAPHYN_SKIP_PLUGIN_LOAD`` is set.
+        Installs when ``GRAPHYN_AUTO_INSTALL_PLUGINS`` is true (default true
+        in production) **or** the enabled-plugin list is empty.
+
+        Returns the number of bundled plugins installed (0 if skipped).
+        """
+        from app.core.config import auto_install_plugins, skip_plugin_load
+
+        if skip_plugin_load():
+            log.info("Startup: GRAPHYN_SKIP_PLUGIN_LOAD set — skipping plugin install/load")
+            return 0
+        enabled = [r for r in self.list_installed() if r.enabled]
+        did_install = 0
+        if auto_install_plugins() or not enabled:
+            did_install = self.install_bundled_plugins(package_root, upgrade=True)
+        self.load_enabled_plugins()
+        return did_install
 
     def load_enabled_plugins(self) -> None:
         """Load all enabled plugins from the store.

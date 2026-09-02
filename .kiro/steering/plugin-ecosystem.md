@@ -50,6 +50,8 @@ Individual entry-point failures → WARNING + skip; remaining entry points still
 | `list_installed()` | `list[PluginRecord]` | — |
 | `get(name)` | `PluginRecord` | `PluginNotFoundError` |
 | `load_enabled_plugins()` | `None` | — (failures logged, not raised) |
+| `install_bundled_plugins()` | `int` | count of `PluginPackage/*/*/plugin.toml` installs |
+| `maybe_auto_install_and_load()` | `int` | auto-install then load; skip if `GRAPHYN_SKIP_PLUGIN_LOAD` |
 
 ## Error Hierarchy
 
@@ -70,6 +72,7 @@ PluginError
 |---|---|---|
 | `GRAPHYN_PLUGINS_DIR` | `"plugins"` | Install directory |
 | `GRAPHYN_PLUGIN_AUTO_INSTALL` | `""` | `"1"` or `"true"` to auto-install pip deps |
+| `GRAPHYN_AUTO_INSTALL_PLUGINS` | production default true | install bundled PluginPackage manifests at startup |
 | `GRAPHYN_PLUGIN_INDEX_URL` | `""` | Remote index URL |
 | `GRAPHYN_HOME` | `~/.graphyn/` | `PluginStore` writes to `{GRAPHYN_HOME}/plugins/` |
 | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | `""` | Comma-separated URL prefixes; empty = allow all. When set, remote sources not matching any prefix are rejected with `PluginInstallError` (SEC-6 fix) |

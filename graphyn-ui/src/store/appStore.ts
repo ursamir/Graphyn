@@ -43,6 +43,11 @@ interface AppState {
   toasts: Toast[]
   pushToast: (message: string, tone?: ToastTone) => void
   dismissToast: (id: string) => void
+  bootError: string | null
+  bootStatus: number | null
+  setBootError: (message: string | null, status?: number | null) => void
+  settingsOpen: boolean
+  setSettingsOpen: (open: boolean) => void
   getCanvasGraph: (() => unknown) | null
   setGetCanvasGraph: (fn: (() => unknown) | null) => void
   /** Graph waiting to paint once Builder mounts (Templates → Builder handoff). */
@@ -83,6 +88,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       toasts: [...s.toasts, { id: crypto.randomUUID(), message, tone }].slice(-5),
     })),
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  bootError: null,
+  bootStatus: null,
+  setBootError: (bootError, bootStatus = null) => set({ bootError, bootStatus: bootStatus ?? null }),
+  settingsOpen: false,
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   getCanvasGraph: null,
   setGetCanvasGraph: (fn) => set({ getCanvasGraph: fn }),
   pendingGraph: null,

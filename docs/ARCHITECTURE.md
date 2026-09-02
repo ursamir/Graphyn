@@ -343,7 +343,10 @@ Application startup (API / CLI / MCP)
          │
          ├── initialize_registry()              ← idempotent; no-op on second call
          │   (app/core/nodes/__init__.py)
-         │   ├── PluginManager.load_enabled_plugins()
+         │   ├── PluginManager.maybe_auto_install_and_load()
+         │   │     (GRAPHYN_AUTO_INSTALL_PLUGINS or empty enabled list:
+         │   │      install PluginPackage/*/*/plugin.toml with upgrade=True)
+         │   │     then load_enabled_plugins(); skip if GRAPHYN_SKIP_PLUGIN_LOAD=1
          │   └── AutoDiscovery.run(
          │           nodes_dir="app/core/nodes",
          │           plugins_dir=plugins_home(),

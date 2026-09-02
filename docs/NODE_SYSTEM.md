@@ -193,7 +193,7 @@ Called in: `app/api/main.py`, `app/cli/main.py` (module level), `app/mcp/server.
 - Duplicate `node_type` → `DuplicateNodeTypeError` (server fails to start)
 - Import error → warning + skip
 
-**Test isolation:** set `GRAPHYN_SKIP_PLUGIN_LOAD=1` to skip plugin loading. Do NOT call `initialize_registry()` in tests that need an empty registry.
+**Test isolation:** set `GRAPHYN_SKIP_PLUGIN_LOAD=1 (also skips bundled PluginPackage auto-install)` to skip plugin loading. Do NOT call `initialize_registry()` in tests that need an empty registry.
 
 ---
 

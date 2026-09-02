@@ -6,15 +6,17 @@ Responsibility:   FastAPI application factory. Wires auth, CORS, routers,
 Owns:             App instance, auth dependency (_auth_dep), CORS middleware,
                   router inclusion, static file mounts.
 Public Surface:   app (FastAPI instance) — imported by uvicorn entry point.
-Must NOT:         Contain endpoint logic — all routes live in app/api/routers/.
+Must NOT:         Contain business endpoint logic — /api/v1 routes live in
+                  app/api/routers/. Unauthenticated landing/health may live here.
 Dependencies:     fastapi, app.api.routers.*, app.core.config,
                   app.models.audio_artifact_serializer (startup hook).
 Reason To Change: New router added, CORS origins change, auth strategy changes,
                   or new startup hook is required.
 
 All endpoint logic lives in routers under app/api/routers/.
-All routes are served under /api/v1/.
-No legacy root-path endpoints.
+Authenticated routes are served under /api/v1/.
+Unauthenticated GET / and GET /health exist so operators hitting :8001
+are not met with a bare 404.
 """
 from __future__ import annotations
 
@@ -166,6 +168,26 @@ app.include_router(run_control_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(artifacts_router,   prefix="/api/v1", dependencies=_deps)
 app.include_router(plugins_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(secrets_router,     prefix="/api/v1", dependencies=_deps)
+
+
+@app.get("/")
+async def root_landing() -> dict[str, str]:
+    """Unauthenticated landing JSON pointing at the UI and versioned API."""
+    return {
+        "service": "graphyn-api",
+        "api": "/api/v1/",
+        "docs": "/docs",
+        "health": "/health",
+        "ui": "http://localhost:5173",
+    }
+
+
+@app.get("/health")
+async def root_health() -> dict[str, str]:
+    """Unauthenticated liveness probe (does not require Bearer token)."""
+    return {"status": "ok"}
+
+
 
 
 @app.middleware("http")

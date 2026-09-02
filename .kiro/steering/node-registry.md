@@ -53,7 +53,7 @@ initialize_registry()   # idempotent — safe to call multiple times
 Called in: `app/api/main.py`, `app/cli/main.py` (module level), `app/mcp/server._startup()`.
 
 **`initialize_registry()` sequence:**
-1. `PluginManager().load_enabled_plugins()` — loads enabled plugins from store
+1. `PluginManager().maybe_auto_install_and_load()` — if `GRAPHYN_AUTO_INSTALL_PLUGINS` is true (default when `GRAPHYN_ENV=production`) **or** no enabled plugins are installed, install every `PluginPackage/*/*/plugin.toml` via `install(upgrade=True)`, then `load_enabled_plugins()`. Skipped when `GRAPHYN_SKIP_PLUGIN_LOAD=1`.
 2. `AutoDiscovery(registry).run(nodes_dir, plugins_dir, models_dir)` — scans and registers
 
 **Test isolation:** set `GRAPHYN_SKIP_PLUGIN_LOAD=1` to skip plugin loading. Do NOT call `initialize_registry()` in tests that need an empty registry.

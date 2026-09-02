@@ -14,7 +14,7 @@ import {
   KeyRound,
   X,
 } from 'lucide-react'
-import { apiJson, getApiToken, setApiToken } from './api/client'
+import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
 import { useAppStore, type AppView } from './store/appStore'
 import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
@@ -62,19 +62,27 @@ export default function App() {
   const toasts = useAppStore((s) => s.toasts)
   const dismissToast = useAppStore((s) => s.dismissToast)
   const pushToast = useAppStore((s) => s.pushToast)
-  const [bootError, setBootError] = React.useState<string | null>(null)
-  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const bootError = useAppStore((s) => s.bootError)
+  const setBootError = useAppStore((s) => s.setBootError)
+  const settingsOpen = useAppStore((s) => s.settingsOpen)
+  const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const [tokenDraft, setTokenDraft] = React.useState('')
 
   const refreshCatalog = React.useCallback(async () => {
     try {
       const nodes = await apiJson<NodeCatalogEntry[]>('/nodes')
       setCatalog(nodes)
-      setBootError(null)
+      setBootError(null, null)
     } catch (err) {
-      setBootError(err instanceof Error ? err.message : 'Failed to load node catalog')
+      const message = err instanceof Error ? err.message : 'Failed to load node catalog'
+      const status = err instanceof ApiError ? err.status : null
+      setBootError(message, status)
+      if (err instanceof ApiError && err.status === 401) {
+        setTokenDraft(getApiToken())
+        setSettingsOpen(true)
+      }
     }
-  }, [setCatalog])
+  }, [setCatalog, setBootError, setSettingsOpen])
 
   React.useEffect(() => {
     setRefreshCatalog(refreshCatalog)
@@ -99,6 +107,10 @@ export default function App() {
       window.history.replaceState(null, '', next)
     }
   }, [view])
+
+  React.useEffect(() => {
+    if (settingsOpen) setTokenDraft(getApiToken())
+  }, [settingsOpen])
 
   const openSettings = () => {
     setTokenDraft(getApiToken())

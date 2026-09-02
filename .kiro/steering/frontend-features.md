@@ -21,8 +21,8 @@ fileMatchPattern: "graphyn-ui/src/features/**"
 ## Shell (`App.tsx`)
 
 - Hash routes: `#/builder`, `#/runs/:id`, …
-- Settings: Bearer token → `localStorage` `graphyn_api_token`
-- Global `ToastHost` + `ErrorBoundary`; catalog refresh after plugin mutations
+- Settings: Bearer token → `localStorage` `graphyn_api_token` (auto-opens on catalog 401)
+- Global `ToastHost` + `ErrorBoundary`; catalog refresh after plugin mutations and after saving the token
 
 ## Rules
 

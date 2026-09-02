@@ -19,6 +19,8 @@ API: Vite proxy `/api` → `:8001`, or `VITE_API_BASE_URL` (default `/api/v1`).
 ## Builder
 
 - Node catalog from `GET /api/v1/nodes` (refreshed after plugin changes).
+- Catalog shows `bootError` (including 401). On `ApiError` 401, Settings opens automatically; saving the token refreshes the catalog.
+- Empty catalog banner: "Set API token in Settings" or "No plugins installed".
 - Multi-port handles, validate-config, soft compatibility check.
 - Canvas → Graph IR; layout in `ui.positions` (not under `parameters`).
 - Validate / stream run / cancel / run-async; save as template.
@@ -32,4 +34,4 @@ API: Vite proxy `/api` → `:8001`, or `VITE_API_BASE_URL` (default `/api/v1`).
 
 ## Store (`useAppStore`)
 
-`view`, `focusRunId`/`openRun`, `catalog`/`refreshCatalog`, `seed`, `logs`, `isRunning`, `lastRunId`, `statusMessage`, `toasts`, `getCanvasGraph`, `pendingGraph` / `loadGraphIntoBuilder` (Templates → Builder handoff; Builder is unmounted off-tab so window events are lost).
+`view`, `focusRunId`/`openRun`, `catalog`/`refreshCatalog`, `bootError`/`bootStatus`, `settingsOpen`, `seed`, `logs`, `isRunning`, `lastRunId`, `statusMessage`, `toasts`, `getCanvasGraph`, `pendingGraph` / `loadGraphIntoBuilder` (Templates → Builder handoff; Builder is unmounted off-tab so window events are lost).

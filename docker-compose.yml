@@ -24,6 +24,7 @@ services:
       GRAPHYN_API_TOKEN: ${GRAPHYN_API_TOKEN:-}
       GRAPHYN_HOME: /data/graphyn-home
       GRAPHYN_PROJECT_DIR: /app/workspace
+      GRAPHYN_AUTO_INSTALL_PLUGINS: "1"
       CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
     volumes:
       - graphyn-home:/data/graphyn-home

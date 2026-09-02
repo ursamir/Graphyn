@@ -168,6 +168,10 @@ class MyNode(Node):
 
 ---
 
+## Bundled auto-install (Docker / production)
+
+On API startup, if `GRAPHYN_SKIP_PLUGIN_LOAD` is not set **and** (`GRAPHYN_AUTO_INSTALL_PLUGINS` is true — default when `GRAPHYN_ENV=production` — **or** no enabled plugins are installed), Graphyn installs every `PluginPackage/*/*/plugin.toml` via `PluginManager.install(upgrade=True)` then `load_enabled_plugins()`. Docker Compose sets `GRAPHYN_AUTO_INSTALL_PLUGINS=1` because the `GRAPHYN_HOME` volume starts empty.
+
 ## Installing a Plugin
 
 ```python

@@ -25,7 +25,10 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_ENV                     Default: development
   GRAPHYN_AUTH_REQUIRED           Default: "" (see auth_required())
   GRAPHYN_PLUGINS_DIR             Default: plugins/
-  GRAPHYN_PLUGIN_AUTO_INSTALL     Default: "" (disabled)
+  GRAPHYN_PLUGIN_AUTO_INSTALL     Default: "" (disabled — pip deps)
+  GRAPHYN_AUTO_INSTALL_PLUGINS    Default: true when GRAPHYN_ENV=production
+  GRAPHYN_PLUGIN_PACKAGE_DIR      Default: <repo>/PluginPackage
+  GRAPHYN_SKIP_PLUGIN_LOAD        Default: "" (set 1 to skip bundled install+load)
   GRAPHYN_PLUGIN_INDEX_URL        Default: "" (no remote index)
   GRAPHYN_PLUGIN_ALLOWED_SOURCES  Default: "" (all sources allowed)
   GRAPHYN_PLUGIN_VENVS_DIR        Default: {GRAPHYN_HOME}/plugins/venvs/
@@ -137,6 +140,37 @@ def plugin_auto_install() -> bool:
     Override: GRAPHYN_PLUGIN_AUTO_INSTALL=1 or =true.
     """
     return _env("GRAPHYN_PLUGIN_AUTO_INSTALL").lower() in ("1", "true")
+
+
+def plugin_package_dir() -> Path:
+    """Return the bundled PluginPackage source tree.
+
+    Default: ``{repo_root}/PluginPackage`` (two parents above this file).
+    Override: ``GRAPHYN_PLUGIN_PACKAGE_DIR``.
+    """
+    override = os.environ.get("GRAPHYN_PLUGIN_PACKAGE_DIR", "").strip()
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[2] / "PluginPackage"
+
+
+def skip_plugin_load() -> bool:
+    """True when GRAPHYN_SKIP_PLUGIN_LOAD is 1/true/yes."""
+    return _env("GRAPHYN_SKIP_PLUGIN_LOAD").lower() in ("1", "true", "yes")
+
+
+def auto_install_plugins() -> bool:
+    """Whether to install every PluginPackage/*/*/plugin.toml at startup.
+
+    GRAPHYN_AUTO_INSTALL_PLUGINS=1/true/yes forces on.
+    GRAPHYN_AUTO_INSTALL_PLUGINS=0/false/no forces off (empty catalog still
+    triggers install — see initialize_registry).
+    Unset defaults to True when GRAPHYN_ENV is production/prod.
+    """
+    raw = os.environ.get("GRAPHYN_AUTO_INSTALL_PLUGINS")
+    if raw is not None and raw.strip() != "":
+        return raw.strip().lower() in ("1", "true", "yes")
+    return graphyn_env() in ("production", "prod")
 
 
 def plugin_venvs_dir() -> Path:
