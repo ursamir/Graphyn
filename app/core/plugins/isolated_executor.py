@@ -4,7 +4,8 @@ Bounded Context:  BC3 / BC5 — Isolated plugin execution bridge
 Responsibility:   Run an isolated plugin node's process() in a subprocess
                   using that plugin's venv Python, with pickle IPC via files.
 Owns:             run_isolated_node(), recast_plugin_types()
-Public Surface:   run_isolated_node, recast_plugin_types, load_isolated_outputs
+Public Surface:   run_isolated_node, recast_plugin_types, load_isolated_outputs,
+                  hydrate_platform_models (via app.core.plugins.hydrate)
 Must NOT:         Import from app.domain or app.api.
 Dependencies:     stdlib, runtime_registry
 Reason To Change: IPC protocol or worker CLI changes.
@@ -36,7 +37,17 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from app.core.plugins.hydrate import coerce_node_inputs, hydrate_platform_models
 from app.core.plugins.runtime_registry import IsolatedPluginSpec
+
+__all__ = [
+    "RestrictedUnpickler",
+    "coerce_node_inputs",
+    "hydrate_platform_models",
+    "load_isolated_outputs",
+    "recast_plugin_types",
+    "run_isolated_node",
+]
 
 log = logging.getLogger(__name__)
 

@@ -235,6 +235,9 @@ class NodeExecutor:
 
     def _process(self, node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
         """Run ``node.process`` in-process or via an isolated plugin worker."""
+        from app.core.plugins.hydrate import coerce_node_inputs
+
+        inputs = coerce_node_inputs(inputs, type(node))
         spec = self._isolated_spec()
         if spec is not None:
             from app.core.plugins.isolated_executor import run_isolated_node

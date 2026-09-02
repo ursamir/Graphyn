@@ -158,3 +158,17 @@ def test_key_determinism_property(node_type: str, config: dict, input_hash: str)
     k2 = cache.key(node_type, config, input_hash)
     assert k1 == k2
     assert len(k1) == 64
+
+
+def test_save_then_load_hydrates_model_artifact(cache: PipelineCache):
+    """JSON cache restore must return ModelArtifact, not a raw dict."""
+    from app.models.model_artifact import ModelArtifact
+
+    key = cache.key("trainer", {}, "artifact_hash")
+    art = ModelArtifact(model_path="/tmp/saved_model", labels=["a", "b"], metrics={"keras_model_path": "/tmp/m.keras"})
+    cache.save(key, {"output": art})
+    loaded = cache.load(key)
+    assert isinstance(loaded["output"], ModelArtifact)
+    assert loaded["output"].model_path == "/tmp/saved_model"
+    assert loaded["output"].labels == ["a", "b"]
+    assert loaded["output"].metrics["keras_model_path"] == "/tmp/m.keras"

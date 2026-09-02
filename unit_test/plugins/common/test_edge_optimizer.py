@@ -98,3 +98,68 @@ def test_process_smoke(installed_cls, tmp_path):
     )
     result = node.process({"input": artifact})
     assert "output" in result
+
+
+def _load_edge_nodes():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[3] / "PluginPackage/Common/edge_optimizer/nodes.py"
+    spec = importlib.util.spec_from_file_location("graphyn_edge_nodes_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_tflite_converter_uses_keras_file_not_saved_model(tmp_path):
+    """model_path as a file uses from_keras_model; dirs keep from_saved_model. No TF download."""
+    from unittest.mock import MagicMock, patch
+    from app.models.model_artifact import ModelArtifact
+
+    nodes = _load_edge_nodes()
+    keras_file = tmp_path / "model.keras"
+    keras_file.write_bytes(b"fake-keras")
+    saved_dir = tmp_path / "saved_model"
+    saved_dir.mkdir()
+    (saved_dir / "X_train_repr.npy").write_bytes(b"")
+
+    fake_tf = MagicMock()
+    conv = MagicMock()
+    fake_tf.lite.TFLiteConverter.from_keras_model.return_value = conv
+    fake_tf.lite.TFLiteConverter.from_saved_model.return_value = conv
+    loaded = MagicMock()
+
+    with patch.dict("sys.modules", {"keras": MagicMock(), "keras.models": MagicMock()}):
+        import keras
+
+        keras.models.load_model.return_value = loaded
+        art_file = ModelArtifact(model_path=str(keras_file), labels=["a"])
+        nodes.EdgeOptimizerNode._tflite_converter(fake_tf, art_file)
+        fake_tf.lite.TFLiteConverter.from_keras_model.assert_called_once_with(loaded)
+        fake_tf.lite.TFLiteConverter.from_saved_model.assert_not_called()
+
+        art_dir = ModelArtifact(model_path=str(saved_dir), labels=["a"])
+        fake_tf.lite.TFLiteConverter.from_keras_model.reset_mock()
+        nodes.EdgeOptimizerNode._tflite_converter(fake_tf, art_dir)
+        fake_tf.lite.TFLiteConverter.from_saved_model.assert_called_once_with(str(saved_dir))
+
+
+def test_int8_repr_path_sibling_of_keras_file(tmp_path):
+    import numpy as np
+    from app.models.model_artifact import ModelArtifact
+
+    nodes = _load_edge_nodes()
+    keras_file = tmp_path / "model.keras"
+    keras_file.write_bytes(b"x")
+    saved = tmp_path / "saved_model"
+    saved.mkdir()
+    np.save(str(saved / "X_train_repr.npy"), np.zeros((2, 1), dtype=np.float32))
+    art = ModelArtifact(
+        model_path=str(keras_file),
+        labels=["a"],
+        metrics={"keras_model_path": str(keras_file)},
+    )
+    found = nodes.EdgeOptimizerNode._int8_repr_path(art)
+    assert found.name == "X_train_repr.npy"
+    assert found.exists()

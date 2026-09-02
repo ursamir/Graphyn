@@ -39,6 +39,8 @@ def _run(job: dict[str, Any]) -> None:
     with inputs_path.open("rb") as fh:
         inputs = pickle.load(fh)
 
+    from app.core.plugins.hydrate import coerce_node_inputs
+
     registry = NodeRegistry()
     discovery = AutoDiscovery(registry)
     manifest = load_manifest(plugin_dir)
@@ -48,6 +50,7 @@ def _run(job: dict[str, Any]) -> None:
         discovery._process_module(module)  # noqa: SLF001
 
     node_cls = registry.get_class(node_type)
+    inputs = coerce_node_inputs(inputs, node_cls)
     node = node_cls(config=config, seed=seed)
     node.setup()
     try:

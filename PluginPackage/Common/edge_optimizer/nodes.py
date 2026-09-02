@@ -139,6 +139,41 @@ class EdgeOptimizerNode(Node):
 
     # ── TFLite export ─────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _int8_repr_path(artifact: ModelArtifact) -> Path:
+        """Locate X_train_repr.npy next to a SavedModel dir or a .keras file."""
+        mp = Path(artifact.model_path)
+        candidates: list[Path] = []
+        if mp.is_dir():
+            candidates.append(mp / "X_train_repr.npy")
+        else:
+            candidates.append(mp.parent / "saved_model" / "X_train_repr.npy")
+            candidates.append(mp.parent / "X_train_repr.npy")
+        keras_path = (artifact.metrics or {}).get("keras_model_path") or ""
+        if keras_path:
+            kp = Path(str(keras_path))
+            candidates.append(kp.parent / "saved_model" / "X_train_repr.npy")
+        for path in candidates:
+            if path.exists():
+                return path
+        return candidates[0] if candidates else mp / "X_train_repr.npy"
+
+    @staticmethod
+    def _tflite_converter(tf, artifact: ModelArtifact):
+        """Build a TFLiteConverter from a SavedModel directory or a Keras file.
+
+        Does not assume a live keras object in pickle/IPC — loads from disk.
+        """
+        mp = Path(artifact.model_path)
+        if mp.is_file():
+            import keras
+
+            model = keras.models.load_model(str(mp))
+            log.info("EdgeOptimizerNode: converting Keras file %s via from_keras_model", mp)
+            return tf.lite.TFLiteConverter.from_keras_model(model)
+        log.info("EdgeOptimizerNode: converting SavedModel dir %s via from_saved_model", mp)
+        return tf.lite.TFLiteConverter.from_saved_model(str(mp))
+
     def _export_tflite(self, artifact: ModelArtifact, out_path: Path) -> DeploymentArtifact:
         """Convert SavedModel to TFLite with the configured quantization.
 
@@ -160,7 +195,7 @@ class EdgeOptimizerNode(Node):
         quantization = self.config.quantization
         log.info("EdgeOptimizerNode: converting SavedModel to TFLite (%s)...", quantization)
 
-        converter = tf.lite.TFLiteConverter.from_saved_model(artifact.model_path)
+        converter = self._tflite_converter(tf, artifact)
 
         if self.config.operator_fusion:
             # DEFAULT optimization enables operator fusion and constant folding
@@ -175,8 +210,9 @@ class EdgeOptimizerNode(Node):
             if not self.config.operator_fusion:
                 converter.optimizations = [tf.lite.Optimize.DEFAULT]
 
-            # Load representative dataset from saved X_train_repr.npy
-            repr_path = Path(artifact.model_path) / "X_train_repr.npy"
+            # Load representative dataset from saved_model/X_train_repr.npy
+            # (or sibling saved_model/ when model_path is a .keras file).
+            repr_path = self._int8_repr_path(artifact)
             if repr_path.exists():
                 X_repr = np.load(str(repr_path))
             else:

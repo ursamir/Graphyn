@@ -779,3 +779,49 @@ filters = { type = "integer", default = 64 }
         assert cfg.filters == 32
     finally:
         get_runtime_registry().unregister_plugin("iso-plugin")
+
+
+def test_coerce_node_inputs_dict_to_model_and_dataset_artifact() -> None:
+    """Worker coerce: cache JSON dicts become ModelArtifact / DatasetArtifact."""
+    from app.core.nodes.ports import InputPort
+    from app.core.plugins.hydrate import coerce_node_inputs
+    from app.models.dataset_artifact import DatasetArtifact
+    from app.models.model_artifact import ModelArtifact
+
+    class _Ports:
+        input_ports = {
+            "model_artifact": InputPort(
+                name="model_artifact", data_type=ModelArtifact, required=True
+            ),
+            "dataset": InputPort(name="dataset", data_type=DatasetArtifact, required=True),
+            "batch": InputPort(
+                name="batch", data_type=ModelArtifact, cardinality="multi", required=True
+            ),
+        }
+
+    model_dict = {"model_path": "/tmp/saved_model", "labels": ["yes", "no"], "history": {}, "metrics": {}}
+    dataset_dict = {
+        "labels": ["yes", "no"],
+        "n_classes": 2,
+        "input_shape": [4, 2, 1],
+        "X_test": [[0.0, 1.0]],
+        "y_test": [1],
+    }
+    out = coerce_node_inputs(
+        {
+            "model_artifact": model_dict,
+            "dataset": dataset_dict,
+            "batch": [model_dict],
+        },
+        _Ports,
+    )
+    assert isinstance(out["model_artifact"], ModelArtifact)
+    assert out["model_artifact"].model_path == "/tmp/saved_model"
+    assert out["model_artifact"].labels == ["yes", "no"]
+    assert isinstance(out["dataset"], DatasetArtifact)
+    assert out["dataset"].n_classes == 2
+    assert list(out["dataset"].X_test.shape)  # numpy from list
+    assert isinstance(out["batch"][0], ModelArtifact)
+    # Already-typed objects stay objects.
+    again = coerce_node_inputs({"model_artifact": out["model_artifact"], "dataset": out["dataset"]}, _Ports)
+    assert again["model_artifact"] is out["model_artifact"]

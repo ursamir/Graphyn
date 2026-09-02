@@ -239,7 +239,8 @@ class PipelineCache:
         if outputs_path.exists():
             try:
                 with open(outputs_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    from app.core.plugins.hydrate import hydrate_platform_models  # noqa: PLC0415
+                    return hydrate_platform_models(json.load(f))
             except Exception as exc:
                 logger.warning(
                     "Cache read (outputs.json) failed for key %s (%s) — will re-execute",

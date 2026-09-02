@@ -211,3 +211,48 @@ def test_plots_degrade_without_matplotlib(tmp_path):
                     result = node.process({"model_artifact": artifact, "dataset": dataset})
     assert isinstance(result["output"], ModelArtifact)
     assert (tmp_path / "eval_out" / "metrics.json").is_file()
+
+
+def test_process_dict_inputs_do_not_attributeerror(tmp_path):
+    """Cache/IPC dicts hydrated to artifacts — process() must not hit .model_path on dict."""
+    from app.core.plugins.hydrate import coerce_node_inputs
+
+    nodes = _load_evaluator_nodes()
+    sklearn_mod, metrics_mod = _fake_sklearn_metrics()
+    fake_model = MagicMock()
+    fake_model.predict.return_value = np.array(
+        [[0.9, 0.1], [0.1, 0.9], [0.8, 0.2], [0.2, 0.8]]
+    )
+    artifact_dict = {
+        "model_path": str(tmp_path / "model.keras"),
+        "labels": ["a", "b"],
+        "history": {"loss": [0.5]},
+        "metrics": {},
+    }
+    dataset_dict = {
+        "labels": ["a", "b"],
+        "n_classes": 2,
+        "input_shape": [4, 2, 1],
+        "X_test": np.zeros((4, 4, 2, 1), dtype=np.float32).tolist(),
+        "y_test": [0, 1, 0, 1],
+    }
+    hydrated = coerce_node_inputs(
+        {"model_artifact": artifact_dict, "dataset": dataset_dict},
+        nodes.EvaluatorNode,
+    )
+    assert isinstance(hydrated["model_artifact"], ModelArtifact)
+    assert isinstance(hydrated["dataset"], DatasetArtifact)
+    node = nodes.EvaluatorNode(
+        config={
+            "output_path": str(tmp_path / "eval_out"),
+            "plot_confusion_matrix": False,
+            "plot_training_curves": False,
+            "compute_roc": False,
+        },
+        seed=0,
+    )
+    with patch.dict(sys.modules, {"sklearn": sklearn_mod, "sklearn.metrics": metrics_mod}):
+        with patch.object(node, "_load_model", return_value=fake_model):
+            result = node.process(hydrated)
+    assert isinstance(result["output"], ModelArtifact)
+    assert "test_accuracy" in result["output"].metrics
