@@ -13,6 +13,7 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+# Isolated venv extras (tflite/onnx backends; not installed into the host API image).
 optional_dependencies = [
     "tensorflow>=2.13",
     "onnx>=1.14",

@@ -13,6 +13,9 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+# Isolated venv extras (never installed into the host API image).
+# tensorflow (CPU wheels) + keras are installed on isolated load.
+# torch is skipped unless GRAPHYN_ISOLATED_INSTALL_TORCH=1.
 optional_dependencies = [
     "tensorflow>=2.13",
     "keras>=3.0",

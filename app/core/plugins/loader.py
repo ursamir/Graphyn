@@ -49,6 +49,45 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def isolated_venv_requirements(manifest: PluginManifest) -> list[str]:
+    """Requirements to pip-install into an isolated plugin venv.
+
+    Isolated workers execute plugin ``process()`` without host site-packages,
+    so they need the plugin's ML stack. Those packages stay in
+    ``optional_dependencies`` so they are **not** installed into the host
+    API image.
+
+    TensorFlow + Keras are always included. ``torch`` is skipped unless
+    ``GRAPHYN_ISOLATED_INSTALL_TORCH=1`` (keeps the default venv smaller).
+    """
+    from packaging.requirements import Requirement
+
+    reqs = list(manifest.dependencies) + list(manifest.optional_dependencies)
+    install_torch = os.environ.get("GRAPHYN_ISOLATED_INSTALL_TORCH", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if install_torch:
+        return reqs
+
+    filtered: list[str] = []
+    for item in reqs:
+        try:
+            name = Requirement(item).name.lower().replace("_", "-")
+        except Exception:
+            name = item.split()[0].lower()
+        if name in {"torch", "pytorch"}:
+            log.info(
+                "Skipping torch extra for isolated plugin '%s' "
+                "(set GRAPHYN_ISOLATED_INSTALL_TORCH=1 to install)",
+                manifest.name,
+            )
+            continue
+        filtered.append(item)
+    return filtered
+
+
 def _get_platform_version() -> str | None:
     """Return the current platform version string, or None if unknown.
 
@@ -143,12 +182,12 @@ class PluginLoader:
         if (manifest.runtime or "inprocess") == "isolated":
             from app.core.plugins.venv_manager import PluginVenvManager
 
-            # Required deps install into the plugin venv (not shared).
-            # Optional deps install via POST .../dependencies/install?include_optional.
+            # Isolated plugins need required + optional extras (TF/Keras, etc.)
+            # in the plugin venv. Do not install those into the host API image.
             venv_mgr = PluginVenvManager()
             venv_py = venv_mgr.ensure(
                 manifest.name,
-                list(manifest.dependencies),
+                isolated_venv_requirements(manifest),
             )
         else:
             DependencyChecker().check(manifest.dependencies)

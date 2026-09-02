@@ -132,7 +132,7 @@ from app.core.plugins.isolated_executor import (
     RestrictedUnpickler,
     load_isolated_outputs,
 )
-from app.core.plugins.loader import PluginLoader
+from app.core.plugins.loader import PluginLoader, isolated_venv_requirements
 from app.core.plugins.manager import PluginManager
 from app.core.plugins.store import PluginRecord
 from app.core.plugins.venv_manager import PluginVenvManager as _VenvMgr
@@ -174,6 +174,63 @@ node_types = {node_types}
 
 def _mock_ensure(plugin_name, requirements, **kwargs):
     return Path("/tmp/fake-venv/bin/python")
+
+
+def test_isolated_loader_ensure_includes_optional_deps(
+    tmp_path: Path, fresh_registry, monkeypatch
+) -> None:
+    """Isolated venvs get optional ML extras (mocked; never pip-installs TF)."""
+    monkeypatch.delenv("GRAPHYN_ISOLATED_INSTALL_TORCH", raising=False)
+    extra_toml = """
+dependencies = ["numpy>=1.24"]
+optional_dependencies = [
+    "tensorflow>=2.13",
+    "keras>=3.0",
+    "torch>=2.0",
+]
+"""
+    plugin_dir = _isolated_toml(tmp_path, extra_toml=extra_toml)
+    captured: dict = {}
+
+    def capture_ensure(plugin_name, requirements, **kwargs):
+        captured["name"] = plugin_name
+        captured["reqs"] = list(requirements)
+        return Path("/tmp/fake-venv/bin/python")
+
+    loader = PluginLoader(fresh_registry)
+    with patch.object(_VenvMgr, "ensure", side_effect=capture_ensure):
+        loader.load(plugin_dir)
+    try:
+        assert captured["name"] == "iso-plugin"
+        assert "numpy>=1.24" in captured["reqs"]
+        assert "tensorflow>=2.13" in captured["reqs"]
+        assert "keras>=3.0" in captured["reqs"]
+        # torch is optional unless GRAPHYN_ISOLATED_INSTALL_TORCH=1
+        assert not any(
+            r.split("[")[0].split(">")[0].split("=")[0].strip().lower() == "torch"
+            for r in captured["reqs"]
+        )
+    finally:
+        get_runtime_registry().unregister_plugin("iso-plugin")
+
+
+def test_isolated_venv_requirements_torch_env(monkeypatch) -> None:
+    monkeypatch.setenv("GRAPHYN_ISOLATED_INSTALL_TORCH", "1")
+    m = PluginManifest(
+        name="trainer",
+        version="1.0.0",
+        description="demo",
+        author="t",
+        platform_version=">=0.0",
+        entry_points=["nodes.py"],
+        runtime="isolated",
+        dependencies=["numpy>=1.24"],
+        optional_dependencies=["tensorflow>=2.13", "keras>=3.0", "torch>=2.0"],
+    )
+    reqs = isolated_venv_requirements(m)
+    assert "tensorflow>=2.13" in reqs
+    assert "keras>=3.0" in reqs
+    assert "torch>=2.0" in reqs
 
 
 def test_isolated_loader_does_not_exec_entry_point(tmp_path: Path, fresh_registry) -> None:

@@ -51,8 +51,12 @@ runtime = "inprocess"                              # or "isolated" for conflicti
 - Core deps (numpy, librosa, scipy) → `dependencies`
 - Heavy deps (torch, tensorflow, transformers) → `optional_dependencies` only
 - Never put heavy deps in `dependencies` — blocks CPU-only installs
-- `runtime = "isolated"` — required deps go to `~/.graphyn/plugins/venvs/<name>/`; `process()` runs via `app.core.plugins.worker` (use for trainer / edge-optimizer / realtime-inference)
+- `runtime = "isolated"` — required **and** optional deps go to `~/.graphyn/plugins/venvs/<name>/` (or `$GRAPHYN_HOME/plugins/venvs/<name>/` in Docker); `process()` runs via `app.core.plugins.worker` (use for trainer / edge-optimizer / realtime-inference). Heavy extras stay out of the host API image.
+- `torch` in `optional_dependencies` is skipped unless `GRAPHYN_ISOLATED_INSTALL_TORCH=1` (default isolated extras are TensorFlow CPU + Keras).
 - Shared-env installs guarded by `PLATFORM_CONSTRAINTS`; UI/API: `GET|POST /plugins/{name}/dependencies`
+- Existing Docker volumes created before optional extras were installed into isolated venvs:
+
+  `docker exec graphyn-api /data/graphyn-home/plugins/venvs/trainer/bin/pip install 'tensorflow>=2.13' 'keras>=3.0'`
 
 ---
 

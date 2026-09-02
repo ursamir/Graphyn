@@ -54,3 +54,13 @@ REST: `GET/POST /api/v1/secrets` (Bearer required in this compose profile). List
 
 The default **spectral** backend for podcast-leveling uses `scipy` and `noisereduce` (3.x). Those packages are in `requirements.txt` / `setup.py` `install_requires`, so the Compose image already installs them via `pip install -r requirements.txt`. **Do not** add `torch` or `deepfilternet` to the base image; they remain optional for the DeepFilterNet backend.
 
+## Isolated plugin venvs (trainer / edge-optimizer)
+
+TensorFlow and Keras are **not** in the API image. Isolated plugins install them into per-plugin venvs under `GRAPHYN_HOME` (`/data/graphyn-home/plugins/venvs/<name>/`). Existing volumes that predate this need a one-liner:
+
+```bash
+docker exec graphyn-api /data/graphyn-home/plugins/venvs/trainer/bin/pip install 'tensorflow>=2.13' 'keras>=3.0'
+```
+
+(Optionally the same for `edge-optimizer` if TFLite conversion fails with `ModuleNotFoundError`.)
+
