@@ -40,6 +40,13 @@ PLATFORM_CONSTRAINTS: tuple[str, ...] = (
     "packaging>=23.0",
 )
 
+# Installed into isolated plugin venvs so ``python -m app.core.plugins.worker``
+# can import the platform package without system_site_packages (H3).
+WORKER_BOOTSTRAP_REQUIREMENTS: tuple[str, ...] = (
+    "pydantic>=2.0,<3",
+    "packaging>=23.0",
+)
+
 
 @dataclass(frozen=True)
 class DepStatus:
@@ -181,6 +188,7 @@ class DependencyChecker:
         if not requirements:
             return
         self._parse_requirements(requirements)
+        self._check_requirement_urls(requirements)
 
         if check_platform and python is None:
             conflicts = self.check_conflicts(requirements)
@@ -222,6 +230,27 @@ class DependencyChecker:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _check_requirement_urls(requirements: list[str]) -> None:
+        """When GRAPHYN_PLUGIN_ALLOWED_SOURCES is set, reject PEP 508 URLs off-list."""
+        from app.core.config import plugin_allowed_sources, plugin_source_is_allowed
+
+        if not plugin_allowed_sources():
+            return
+        for dep in requirements:
+            try:
+                req = Requirement(dep)
+            except InvalidRequirement:
+                continue
+            url = req.url
+            if not url:
+                continue
+            if not plugin_source_is_allowed(url):
+                raise PluginDependencyError(
+                    f"PEP 508 URL requirement {dep!r} is not in "
+                    "GRAPHYN_PLUGIN_ALLOWED_SOURCES."
+                )
 
     def _status_one(
         self, dep: str, *, optional: bool, python: str | None

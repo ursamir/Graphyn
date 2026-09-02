@@ -28,6 +28,7 @@ import hashlib
 import io
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -53,6 +54,16 @@ _MAX_DOWNLOAD_BYTES: int = 100 * 1024 * 1024  # 100 MB
 _VERSION_SPEC_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9_\-]+)\s*(?P<op>==|>=|<=|!=|~=|>|<)\s*(?P<ver>\S+)$"
 )
+
+
+
+def _zip_member_is_symlink(member: zipfile.ZipInfo) -> bool:
+    """Return True if *member* is a Unix symlink (ZIP has no first-class links)."""
+    is_symlink_fn = getattr(member, "is_symlink", None)
+    if callable(is_symlink_fn) and is_symlink_fn():
+        return True
+    mode = member.external_attr >> 16
+    return stat.S_ISLNK(mode) if mode else False
 
 
 class PluginInstaller:
@@ -180,13 +191,14 @@ class PluginInstaller:
         """
         from app.core.config import plugin_allowed_sources as _allowed_sources  # noqa: PLC0415
 
+        from app.core.config import plugin_source_is_allowed  # noqa: PLC0415
+
         allowed = _allowed_sources()
         if not allowed:
             return  # allowlist not configured — permit all (backward compat)
 
-        for prefix in allowed:
-            if source.startswith(prefix):
-                return
+        if plugin_source_is_allowed(source):
+            return
 
         raise PluginInstallError(
             f"Plugin source {source!r} is not in the allowed sources list. "
@@ -284,6 +296,10 @@ class PluginInstaller:
         try:
             with httpx.stream("GET", url, follow_redirects=True, timeout=30.0) as response:
                 response.raise_for_status()
+                # H4: every redirect hop and the final URL must pass the allowlist
+                for hop in (*response.history, response):
+                    hop_url = str(hop.url)
+                    self._check_allowed_source(hop_url)
                 for chunk in response.iter_bytes(chunk_size=65_536):
                     total += len(chunk)
                     if total > _MAX_DOWNLOAD_BYTES:
@@ -475,6 +491,8 @@ class PluginInstaller:
 
         url: str = entry.download_url
         checksum: str | None = getattr(entry, "checksum", None)
+        # H4: allowlist applies to index download_url, not just the original source name
+        self._check_allowed_source(url)
 
         tmpdir = Path(tempfile.mkdtemp(prefix="kiro_plugin_index_"))
         try:
@@ -532,6 +550,11 @@ class PluginInstaller:
                 with zipfile.ZipFile(buf) as zf:
                     dest_resolved = dest_dir.resolve()
                     for member in zf.infolist():
+                        if _zip_member_is_symlink(member):
+                            raise PluginInstallError(
+                                f"Archive contains a symlink or hardlink entry "
+                                f"'{member.filename}' — not allowed for security reasons."
+                            )
                         member_path = (dest_dir / member.filename).resolve()
                         # PL-10 fix: use is_relative_to() — safe on
                         # case-insensitive filesystems (macOS/Windows)

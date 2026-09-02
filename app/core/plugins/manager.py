@@ -381,6 +381,17 @@ class PluginManager:
         if record.enabled:
             with self._install_lock:
                 self._unload_node_types(record)
+                try:
+                    from app.core.plugins.runtime_registry import get_runtime_registry
+
+                    get_runtime_registry().unregister_plugin(name)
+                except Exception as exc:
+                    log.warning(
+                        "Failed to unregister isolated runtime for disabled "
+                        "plugin '%s': %s",
+                        name,
+                        exc,
+                    )
         updated = self._store.update_enabled(name, enabled=False)
         log.info("Disabled plugin '%s'.", name)
         return updated
@@ -591,7 +602,24 @@ class PluginManager:
         install_prefix = str(install_path) + os.sep
 
         to_unregister: list[str] = []
+        try:
+            from app.core.plugins.runtime_registry import get_runtime_registry
+
+            iso = get_runtime_registry().get_for_plugin(record.name)
+            if iso is not None:
+                to_unregister.extend(iso.node_types)
+        except Exception:
+            pass
+
         for node_type, cls in list(self._registry._classes.items()):
+            marked_path = getattr(cls, "_graphyn_plugin_install_path", None)
+            if marked_path:
+                try:
+                    if str(Path(marked_path).resolve()) == str(install_path):
+                        to_unregister.append(node_type)
+                        continue
+                except Exception:
+                    pass
             try:
                 source_file = inspect.getfile(cls)
                 resolved = str(Path(source_file).resolve())
@@ -603,6 +631,7 @@ class PluginManager:
             except Exception:
                 pass
 
+        to_unregister = list(dict.fromkeys(to_unregister))
         if to_unregister:
             log.warning(
                 "Unloading %d node type(s) from plugin '%s': %s. "

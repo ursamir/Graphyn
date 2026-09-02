@@ -47,7 +47,7 @@ def _run(job: dict[str, Any]) -> None:
         module = discovery._import_file(ep_path, package_prefix=None)  # noqa: SLF001
         discovery._process_module(module)  # noqa: SLF001
 
-    node_cls = registry.get(node_type)
+    node_cls = registry.get_class(node_type)
     node = node_cls(config=config, seed=seed)
     node.setup()
     try:

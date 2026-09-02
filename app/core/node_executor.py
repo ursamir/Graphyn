@@ -65,9 +65,15 @@ class NodeExecutor:
         self._setup_done = False
 
     def setup(self) -> None:
-        """Call node.setup() once before the first execution. Subsequent calls are no-ops."""
+        """Call node.setup() once before the first execution. Subsequent calls are no-ops.
+
+        Isolated plugin nodes skip host ``setup()`` so ML stacks (TF/Torch/ONNX)
+        are not imported in the platform process. Worker ``setup()`` runs inside
+        the plugin venv instead.
+        """
         if not self._setup_done:
-            self._node.setup()
+            if self._isolated_spec() is None:
+                self._node.setup()
             self._setup_done = True
 
     def teardown(self) -> None:
@@ -166,35 +172,58 @@ class NodeExecutor:
             self.teardown()
         raise last_exc
 
-    def _process(self, node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
-        """Run ``node.process`` in-process or via an isolated plugin worker."""
-        node_type = getattr(type(node), "node_type", None) or getattr(
+    def _node_type_name(self, node: Node) -> str | None:
+        return getattr(type(node), "node_type", None) or getattr(
             getattr(node, "metadata", None), "node_type", None
         )
-        if node_type:
-            try:
-                from app.core.plugins.isolated_executor import run_isolated_node
-                from app.core.plugins.runtime_registry import get_runtime_registry
 
+    def _isolated_spec(self):
+        """Return IsolatedPluginSpec or None. Isolated types fail closed (H1)."""
+        node = self._node
+        node_type = self._node_type_name(node)
+        marked = bool(getattr(type(node), "_graphyn_isolated", False))
+        spec = None
+        lookup_error: Exception | None = None
+        try:
+            from app.core.plugins.runtime_registry import get_runtime_registry
+
+            if node_type:
                 spec = get_runtime_registry().get_for_node(str(node_type))
-            except Exception:
-                spec = None
-            if spec is not None:
-                config = {}
-                raw_cfg = getattr(node, "config", None)
-                if raw_cfg is not None:
-                    if hasattr(raw_cfg, "model_dump"):
-                        config = raw_cfg.model_dump()
-                    elif isinstance(raw_cfg, dict):
-                        config = dict(raw_cfg)
-                seed = int(getattr(node, "seed", 42) or 42)
-                return run_isolated_node(
-                    spec,
-                    node_type=str(node_type),
-                    config=config,
-                    seed=seed,
-                    inputs=inputs,
-                )
+        except Exception as exc:  # import / registry failures
+            lookup_error = exc
+            spec = None
+
+        if spec is not None:
+            return spec
+        if marked:
+            raise RuntimeError(
+                f"Isolated node type {node_type!r} is not registered in "
+                "PluginRuntimeRegistry; refusing in-process fallback."
+            ) from lookup_error
+        return None
+
+    def _process(self, node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
+        """Run ``node.process`` in-process or via an isolated plugin worker."""
+        spec = self._isolated_spec()
+        if spec is not None:
+            from app.core.plugins.isolated_executor import run_isolated_node
+
+            node_type = self._node_type_name(node) or spec.node_types[0]
+            config = {}
+            raw_cfg = getattr(node, "config", None)
+            if raw_cfg is not None:
+                if hasattr(raw_cfg, "model_dump"):
+                    config = raw_cfg.model_dump()
+                elif isinstance(raw_cfg, dict):
+                    config = dict(raw_cfg)
+            seed = int(getattr(node, "seed", 42) or 42)
+            return run_isolated_node(
+                spec,
+                node_type=str(node_type),
+                config=config,
+                seed=seed,
+                inputs=inputs,
+            )
         return node.process(inputs)
 
     async def execute_stream(
@@ -213,6 +242,11 @@ class NodeExecutor:
         in the node subclass and implement the retry loop there.
         """
         node = self._node
+        if self._isolated_spec() is not None:
+            raise RuntimeError(
+                f"Isolated node type {self._node_type_name(node)!r} cannot "
+                "stream in-process; use NodeExecutor.execute() (worker)."
+            )
         node._current_run_id = self._run_id  # type: ignore[attr-defined]
         started = False
         try:

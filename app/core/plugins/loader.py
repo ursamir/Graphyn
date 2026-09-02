@@ -26,6 +26,7 @@ Responsibilities:
 """
 from __future__ import annotations
 
+import ast
 import logging
 import os
 import sys
@@ -153,8 +154,12 @@ class PluginLoader:
             DependencyChecker().check(manifest.dependencies)
             venv_py = None
 
-        # Step 5 — import entry points and register nodes
-        new_node_types = self._import_entry_points(plugin_dir, manifest)
+        # Step 5 — register nodes. Isolated plugins must not exec_module in
+        # the host (B2): use manifest/AST node_types + stub classes.
+        if (manifest.runtime or "inprocess") == "isolated":
+            new_node_types = self._register_isolated_nodes(plugin_dir, manifest)
+        else:
+            new_node_types = self._import_entry_points(plugin_dir, manifest)
 
         if (manifest.runtime or "inprocess") == "isolated" and venv_py is not None:
             from app.core.plugins.runtime_registry import (
@@ -366,3 +371,120 @@ class PluginLoader:
             )
 
         return new_types
+
+    def _register_isolated_nodes(
+        self,
+        plugin_dir: Path,
+        manifest: PluginManifest,
+    ) -> list[str]:
+        """Register stub Node classes for an isolated plugin without importing it.
+
+        Node types come from ``manifest.node_types`` when set; otherwise they
+        are extracted via AST from entry-point files (no exec_module).
+        """
+        from app.core.nodes.base import Node
+        from app.core.nodes.metadata import NodeMetadata
+
+        names = list(manifest.node_types or [])
+        if not names:
+            names = self._ast_node_types(plugin_dir, manifest)
+        if not names:
+            raise PluginInstallError(
+                f"Isolated plugin '{manifest.name}' has no node_types in the "
+                "manifest and none could be extracted from entry points. "
+                "Add node_types = [\"...\"] to plugin.toml."
+            )
+
+        install_path = str(Path(plugin_dir).resolve())
+
+        def _isolated_process(self, inputs):  # noqa: ARG002
+            raise RuntimeError(
+                f"Isolated node '{getattr(type(self), 'node_type', '?')}' "
+                "must not run in-process"
+            )
+
+        with self._load_lock:
+            before: set[str] = set(self._registry._classes.keys())
+            for node_type in names:
+                if node_type in self._registry._classes:
+                    log.warning(
+                        "PluginLoader: isolated node type '%s' already registered "
+                        "— keeping the first registration.",
+                        node_type,
+                    )
+                    continue
+                stub = type(
+                    f"Isolated_{node_type}",
+                    (Node,),
+                    {
+                        "node_type": node_type,
+                        "input_ports": {},
+                        "output_ports": {},
+                        "metadata": NodeMetadata(
+                            node_type=node_type,
+                            label=node_type.replace("_", " ").title(),
+                            description=(
+                                f"Isolated plugin node from '{manifest.name}' "
+                                "(executed in a plugin venv worker)"
+                            ),
+                            category="plugin",
+                            version=manifest.version,
+                        ),
+                        "_graphyn_isolated": True,
+                        "_graphyn_plugin_install_path": install_path,
+                        "process": _isolated_process,
+                    },
+                )
+                stub.__module__ = f"_graphyn_isolated.{manifest.name}"
+                self._registry.register(node_type, stub, stub.metadata)
+            after: set[str] = set(self._registry._classes.keys())
+            new_types = sorted(after - before)
+
+        return sorted(set(names) | set(new_types))
+
+    @staticmethod
+    def _ast_node_types(plugin_dir: Path, manifest: PluginManifest) -> list[str]:
+        """Parse entry-point files for ``node_type = \"...\"`` without importing."""
+        found: list[str] = []
+        seen: set[str] = set()
+        for entry_point in manifest.entry_points:
+            path = plugin_dir / entry_point
+            if not path.is_file():
+                log.warning(
+                    "PluginLoader: isolated entry point '%s' missing in plugin '%s'",
+                    entry_point,
+                    manifest.name,
+                )
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except SyntaxError as exc:
+                log.warning(
+                    "PluginLoader: cannot AST-parse isolated entry point '%s' "
+                    "from plugin '%s': %s",
+                    entry_point,
+                    manifest.name,
+                    exc,
+                )
+                continue
+            for node in ast.walk(tree):
+                value = None
+                if isinstance(node, ast.Assign):
+                    if any(
+                        isinstance(tgt, ast.Name) and tgt.id == "node_type"
+                        for tgt in node.targets
+                    ):
+                        value = node.value
+                elif (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.target.id == "node_type"
+                ):
+                    value = node.value
+                if value is None:
+                    continue
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    if value.value not in seen:
+                        seen.add(value.value)
+                        found.append(value.value)
+        return found

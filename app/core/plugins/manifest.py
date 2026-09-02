@@ -86,6 +86,10 @@ class PluginManifest(BaseModel):
         SPDX identifier string or ``None``.
     min_python
         Minimum Python version string or ``None``.
+    node_types
+        Declared node_type strings. Required for reliable isolated-runtime
+        registration without importing plugin code. Default ``[]`` (AST
+        fallback from entry points for isolated plugins).
     """
 
     # ------------------------------------------------------------------
@@ -108,6 +112,7 @@ class PluginManifest(BaseModel):
     homepage: str | None = None
     license: str | None = None
     min_python: str | None = None
+    node_types: list[str] = []
 
     # ------------------------------------------------------------------
     # Field validators

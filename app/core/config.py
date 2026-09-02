@@ -27,6 +27,7 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_PLUGIN_INDEX_URL        Default: "" (no remote index)
   GRAPHYN_PLUGIN_ALLOWED_SOURCES  Default: "" (all sources allowed)
   GRAPHYN_PLUGIN_VENVS_DIR        Default: {GRAPHYN_HOME}/plugins/venvs/
+  GRAPHYN_PLUGIN_ISOLATED_TIMEOUT Default: 3600 (seconds; isolated worker subprocess)
   GRAPHYN_REDIS_URL               Default: "" (use in-process store)
 
 ## Three-tier directory model
@@ -160,6 +161,10 @@ def plugin_allowed_sources() -> list[str]:
 
     Local path sources (no ``git+``, ``http://``, ``https://`` prefix) are
     never subject to the allowlist — they are always permitted.
+
+    When the env var is set, the same prefix check must also be applied to
+    plugin-index ``download_url`` values, HTTP redirect targets, and PEP 508
+    direct-reference URLs in plugin requirements.
     """
     raw = _env("GRAPHYN_PLUGIN_ALLOWED_SOURCES")
     if not raw:
@@ -171,6 +176,43 @@ def plugin_allowed_sources() -> list[str]:
             "check for stray commas. Set to empty string to allow all sources."
         )
     return result
+
+
+
+def plugin_source_is_allowed(source: str) -> bool:
+    """Return True if *source* is permitted by GRAPHYN_PLUGIN_ALLOWED_SOURCES.
+
+    Empty allowlist (unset env) → allow all. Local paths without a remote
+    scheme are always allowed.
+    """
+    if not source.startswith(("git+", "http://", "https://")):
+        return True
+    allowed = plugin_allowed_sources()
+    if not allowed:
+        return True
+    return any(source.startswith(prefix) for prefix in allowed)
+
+
+def plugin_isolated_timeout() -> float:
+    """Return isolated worker subprocess timeout in seconds.
+
+    Override: ``GRAPHYN_PLUGIN_ISOLATED_TIMEOUT`` (float/int seconds).
+    Default: 3600. Must be finite and positive.
+    """
+    raw = os.environ.get("GRAPHYN_PLUGIN_ISOLATED_TIMEOUT", "").strip()
+    if not raw:
+        return 3600.0
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"GRAPHYN_PLUGIN_ISOLATED_TIMEOUT={raw!r} is not a number"
+        ) from exc
+    if value <= 0:
+        raise ValueError(
+            f"GRAPHYN_PLUGIN_ISOLATED_TIMEOUT={raw!r} must be > 0"
+        )
+    return value
 
 
 # ---------------------------------------------------------------------------

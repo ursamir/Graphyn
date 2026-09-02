@@ -21,3 +21,4 @@ optional_dependencies = [
 ]
 
 runtime = "isolated"
+node_types = ["edge_optimizer"]

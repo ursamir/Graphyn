@@ -250,6 +250,19 @@ class PluginIndexClient:
                     raise PluginIndexError(
                         f"Plugin index fetch from '{url}' returned HTTP {response.status_code}."
                     )
+                from app.core.config import (
+                    plugin_allowed_sources,
+                    plugin_source_is_allowed,
+                )
+
+                if plugin_allowed_sources():
+                    for hop in (*response.history, response):
+                        hop_url = str(hop.url)
+                        if not plugin_source_is_allowed(hop_url):
+                            raise PluginIndexError(
+                                f"Plugin index redirect target {hop_url!r} is not in "
+                                "GRAPHYN_PLUGIN_ALLOWED_SOURCES."
+                            )
                 for chunk in response.iter_bytes(chunk_size=65_536):
                     total += len(chunk)
                     if total > _MAX_INDEX_BYTES:

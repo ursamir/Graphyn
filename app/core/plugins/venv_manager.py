@@ -56,7 +56,7 @@ class PluginVenvManager:
         plugin_name: str,
         requirements: list[str],
         *,
-        system_site_packages: bool = True,
+        system_site_packages: bool = False,
     ) -> Path:
         """Create venv if needed, install *requirements*, write lockfile.
 
@@ -87,13 +87,20 @@ class PluginVenvManager:
                 f"Venv for plugin '{plugin_name}' has no python at {py}"
             )
 
-        if requirements:
+        # Isolated venvs must not inherit host site-packages (would share
+        # TF/Torch). Worker imports ``app`` via PYTHONPATH to the repo.
+        # Install a small bootstrap set so ``import app`` works without
+        # system_site_packages.
+        from app.core.plugins.dependencies import WORKER_BOOTSTRAP_REQUIREMENTS
+
+        install_list = list(WORKER_BOOTSTRAP_REQUIREMENTS) + list(requirements)
+        if install_list:
             checker = DependencyChecker()
-            # Install into the plugin venv — skip shared-env platform conflict
-            # hard-fail (isolation is the point).
+            # Skip shared-env platform conflict hard-fail for plugin pins
+            # (isolation is the point). Bootstrap still uses platform ranges.
             try:
                 unsatisfied = []
-                parsed = checker._parse_requirements(requirements)
+                parsed = checker._parse_requirements(install_list)
                 unsatisfied = checker._find_unsatisfied(parsed, python=str(py))
                 if unsatisfied:
                     checker.install(

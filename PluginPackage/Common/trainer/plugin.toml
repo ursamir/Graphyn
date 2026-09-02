@@ -20,3 +20,4 @@ optional_dependencies = [
 ]
 
 runtime = "isolated"
+node_types = ["trainer", "model_builder"]
