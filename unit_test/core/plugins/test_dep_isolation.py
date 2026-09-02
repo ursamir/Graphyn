@@ -371,6 +371,106 @@ def test_restricted_unpickler_allows_dict_and_numpy(tmp_path: Path) -> None:
     assert list(out["arr"]) == [1, 2, 3]
 
 
+def _fake_plugin_dataset_artifact_class():
+    """DatasetArtifact whose __module__ mimics a dynamically loaded plugin."""
+    from app.models.dataset_artifact import DatasetArtifact
+
+    module_name = "_graphyn_plugin_dataset_builder_1d6cc092.types"
+    return type(DatasetArtifact.__name__, (DatasetArtifact,), {"__module__": module_name})
+
+
+def test_recast_plugin_dataset_artifact_pickle_roundtrip() -> None:
+    """Host plugin-module DatasetArtifact recasts onto app.models and pickles."""
+    from app.core.plugins.isolated_executor import recast_plugin_types
+    from app.models.dataset_artifact import DatasetArtifact
+    from app.models.model_artifact import ModelArtifact
+
+    PluginDA = _fake_plugin_dataset_artifact_class()
+    art = PluginDA(
+        labels=["yes", "no"],
+        n_classes=2,
+        input_shape=(4, 2, 1),
+        X_train=[[0.0, 1.0, 0.0, 0.0]],
+        y_train=[1],
+    )
+    assert art.__class__.__module__.startswith("_graphyn_plugin_")
+    assert art.__class__.__name__ == "DatasetArtifact"
+
+    recast = recast_plugin_types({"dataset": art, "nested": [art]})
+    assert recast["dataset"].__class__ is DatasetArtifact
+    assert recast["dataset"].__class__.__module__ == "app.models.dataset_artifact"
+    assert recast["dataset"].labels == ["yes", "no"]
+    assert recast["nested"][0].__class__ is DatasetArtifact
+
+    blob = pickle.dumps(recast)
+    loaded = pickle.loads(blob)
+    assert isinstance(loaded["dataset"], DatasetArtifact)
+    assert loaded["dataset"].n_classes == 2
+
+    # ModelArtifact from a fake plugin module recasts the same way.
+    FakeMA = type(
+        "ModelArtifact",
+        (ModelArtifact,),
+        {"__module__": "_graphyn_plugin_trainer_deadbeef.types"},
+    )
+    recast_ma = recast_plugin_types(FakeMA(model_path="/tmp/m", labels=["a"]))
+    assert recast_ma.__class__ is ModelArtifact
+    pickle.dumps(recast_ma)
+
+
+def test_isolated_model_builder_input_pickle_does_not_explode(tmp_path: Path) -> None:
+    """run_isolated_node dump of plugin-module DatasetArtifact must succeed."""
+    from app.core.plugins import isolated_executor as iso
+    from app.models.dataset_artifact import DatasetArtifact
+
+    PluginDA = _fake_plugin_dataset_artifact_class()
+    art = PluginDA(labels=["cat"], n_classes=1, input_shape=(2,))
+    spec = IsolatedPluginSpec(
+        plugin_name="trainer",
+        install_path=str(tmp_path),
+        venv_python="/bin/true",
+        node_types=("model_builder", "trainer"),
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        job_path = Path(cmd[-1])
+        inputs_path = job_path.parent / "inputs.pkl"
+        with inputs_path.open("rb") as fh:
+            loaded = pickle.load(fh)
+        captured["inputs"] = loaded
+        out_path = job_path.parent / "outputs.pkl"
+        with out_path.open("wb") as fh:
+            pickle.dump({"ok": True}, fh)
+        m = MagicMock()
+        m.returncode = 0
+        m.stderr = ""
+        m.stdout = ""
+        return m
+
+    with patch("app.core.plugins.isolated_executor.subprocess.run", side_effect=fake_run):
+        result = iso.run_isolated_node(
+            spec,
+            node_type="model_builder",
+            config={"architecture": "simple_cnn"},
+            seed=0,
+            inputs={"input": art},
+        )
+        trainer_result = iso.run_isolated_node(
+            spec,
+            node_type="trainer",
+            config={},
+            seed=0,
+            inputs={"dataset": art, "model": None},
+        )
+    assert result == {"ok": True}
+    assert trainer_result == {"ok": True}
+    dumped = captured["inputs"]["dataset"]
+    assert dumped.__class__ is DatasetArtifact
+    assert dumped.__class__.__module__ == "app.models.dataset_artifact"
+    assert dumped.labels == ["cat"]
+
+
 def test_disable_unregisters_runtime(tmp_path: Path, fresh_registry) -> None:
     """H2: disable() must unregister_plugin on PluginRuntimeRegistry."""
     spec = IsolatedPluginSpec(

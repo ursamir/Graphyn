@@ -9,6 +9,7 @@ from app.core.example_templates import repo_root
 from app.core.nodes.compat import CompatibilityChecker
 from app.core.plugins.isolated_schema import specs_from_source
 from app.core.plugins.runtime_registry import get_runtime_registry
+from app.models.dataset_artifact import DatasetArtifact
 from app.models.model_artifact import ModelArtifact
 
 
@@ -77,6 +78,7 @@ def test_isolated_stub_trainer_output_is_model_artifact(tmp_path: Path, fresh_re
 from typing import ClassVar
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.ports import InputPort, OutputPort
+from app.models.dataset_artifact import DatasetArtifact
 from app.models.model_artifact import ModelArtifact
 
 class TrainerNode:
@@ -108,3 +110,21 @@ class TrainerNode:
         )
     finally:
         get_runtime_registry().unregister_plugin("iso-trainer")
+
+def test_dataset_builder_ast_output_is_dataset_artifact_without_importing_plugin() -> None:
+    builder_mod = "PluginPackage.Common.dataset_builder.nodes"
+    sys.modules.pop(builder_mod, None)
+    path = repo_root() / "PluginPackage/Common/dataset_builder/nodes.py"
+    specs = specs_from_source(path.read_text(encoding="utf-8"), filename=str(path))
+    assert builder_mod not in sys.modules
+    builder = specs["dataset_builder"]
+    assert builder.output_ports["output"].data_type is DatasetArtifact
+    trainer_path = repo_root() / "PluginPackage/Common/trainer/nodes.py"
+    trainer = specs_from_source(
+        trainer_path.read_text(encoding="utf-8"), filename=str(trainer_path)
+    )["model_builder"]
+    assert CompatibilityChecker.are_compatible(
+        builder.output_ports["output"].data_type,
+        trainer.input_ports["input"].data_type,
+    )
+

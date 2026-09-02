@@ -3,8 +3,8 @@
 Bounded Context:  BC3 / BC5 — Isolated plugin execution bridge
 Responsibility:   Run an isolated plugin node's process() in a subprocess
                   using that plugin's venv Python, with pickle IPC via files.
-Owns:             run_isolated_node()
-Public Surface:   run_isolated_node
+Owns:             run_isolated_node(), recast_plugin_types()
+Public Surface:   run_isolated_node, recast_plugin_types, load_isolated_outputs
 Must NOT:         Import from app.domain or app.api.
 Dependencies:     stdlib, runtime_registry
 Reason To Change: IPC protocol or worker CLI changes.
@@ -16,6 +16,11 @@ Only builtins, a small stdlib set, numpy reconstruct helpers, and
 ``app.models.*`` types are allowed. Unknown globals fail closed
 (``pickle.UnpicklingError``). Isolated plugins remain trusted for
 *inputs* pickled by the host; do not treat pickle as a sandbox.
+
+Host *inputs* may contain PortDataType instances defined in dynamically loaded
+plugin modules (``_graphyn_plugin_*.types``). Those module names are not
+importable in the worker, so pickle.dumps would fail. Before dumping, recast
+such objects onto the matching ``app.models.*`` class by ``__name__``.
 Override worker timeout with GRAPHYN_PLUGIN_ISOLATED_TIMEOUT (seconds).
 Default: 3600.
 """
@@ -72,6 +77,64 @@ class RestrictedUnpickler(pickle.Unpickler):
         )
 
 
+def _is_dynamic_plugin_module(module: str) -> bool:
+    """True if *module* is a host-loaded plugin namespace pickle cannot import."""
+    if not module:
+        return False
+    return module.startswith("_graphyn_plugin_") or "graphyn_plugin" in module
+
+
+def _platform_type_for_name(name: str) -> type | None:
+    """Resolve *name* (DatasetArtifact, ModelArtifact, ...) to an app.models class."""
+    try:
+        import app.models as models
+    except Exception:  # pragma: no cover
+        return None
+    obj = getattr(models, name, None)
+    return obj if isinstance(obj, type) else None
+
+
+def recast_plugin_types(obj: Any) -> Any:
+    """Rewrite dynamically loaded plugin types onto stable ``app.models`` classes.
+
+    Walks dict/list/tuple trees. Objects whose ``type.__module__`` is a
+    ``_graphyn_plugin_*`` (or contains ``graphyn_plugin``) are reconstructed
+    as the platform class with the same ``__name__`` via model_validate /
+    model_dump when available.
+    """
+    if obj is None or isinstance(obj, (str, bytes, int, float, bool, complex)):
+        return obj
+    if isinstance(obj, dict):
+        return {k: recast_plugin_types(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [recast_plugin_types(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(recast_plugin_types(v) for v in obj)
+
+    cls = type(obj)
+    module = getattr(cls, "__module__", "") or ""
+    if not _is_dynamic_plugin_module(module):
+        return obj
+    target = _platform_type_for_name(cls.__name__)
+    if target is None or target is cls:
+        return obj
+    try:
+        if hasattr(obj, "model_dump") and hasattr(target, "model_validate"):
+            return target.model_validate(obj.model_dump())
+        if hasattr(obj, "__dict__"):
+            payload = {k: v for k, v in vars(obj).items() if not k.startswith("_")}
+            return target(**payload)
+    except Exception as exc:
+        log.warning(
+            "isolated_executor: could not recast %s.%s onto %s: %s",
+            module,
+            cls.__name__,
+            getattr(target, "__module__", "?"),
+            exc,
+        )
+    return obj
+
+
 def load_isolated_outputs(path: Path) -> dict[str, Any]:
     """Load worker outputs with RestrictedUnpickler; must be a dict."""
     with path.open("rb") as fh:
@@ -104,7 +167,11 @@ def run_isolated_node(
     job_path = work / "job.json"
     try:
         with inputs_path.open("wb") as fh:
-            pickle.dump(inputs, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(
+                recast_plugin_types(inputs),
+                fh,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
 
         job = {
             "plugin_dir": spec.install_path,
