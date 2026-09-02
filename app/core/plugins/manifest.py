@@ -90,6 +90,10 @@ class PluginManifest(BaseModel):
         Declared node_type strings. Required for reliable isolated-runtime
         registration without importing plugin code. Default ``[]`` (AST
         fallback from entry points for isolated plugins).
+    config_schema
+        Optional per-node-type JSON Schema (or flat {field: {type, default}}
+        tables) used by isolated stubs when AST Config extraction is empty.
+        Keys are node_type strings. Default ``{}``.
     """
 
     # ------------------------------------------------------------------
@@ -113,6 +117,7 @@ class PluginManifest(BaseModel):
     license: str | None = None
     min_python: str | None = None
     node_types: list[str] = []
+    config_schema: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Field validators
@@ -344,14 +349,18 @@ def _load_toml(path: Path) -> dict[str, Any]:
             f"Failed to parse TOML manifest at {path!r}: {exc}"
         ) from exc
 
-    # Support [plugin] section (canonical) or flat top-level keys
+    # Support [plugin] section (canonical) or flat top-level keys.
+    # Sibling tables such as [config_schema.<node_type>] merge onto the plugin dict.
     if "plugin" in raw:
         if not isinstance(raw["plugin"], dict):
             raise PluginManifestError(
                 f"'plugin' key in {path!r} must be a TOML table, "
                 f"not {type(raw['plugin']).__name__}"
             )
-        return raw["plugin"]
+        data = dict(raw["plugin"])
+        if "config_schema" in raw and "config_schema" not in data:
+            data["config_schema"] = raw["config_schema"]
+        return data
     return raw
 
 

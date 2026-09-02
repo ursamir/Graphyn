@@ -381,6 +381,10 @@ class PluginLoader:
 
         Node types come from ``manifest.node_types`` when set; otherwise they
         are extracted via AST from entry-point files (no exec_module).
+
+        Stubs attach a real ``Config`` (AST ``class Config`` and/or
+        ``plugin.toml`` ``config_schema``) and named ports so UI/API
+        validation does not ``extra_forbidden`` legitimate knobs.
         """
         from app.core.nodes.base import Node
         from app.core.nodes.metadata import NodeMetadata
@@ -396,6 +400,15 @@ class PluginLoader:
             )
 
         install_path = str(Path(plugin_dir).resolve())
+
+        from app.core.plugins.isolated_schema import (
+            config_class_for_spec,
+            ports_for_spec,
+            specs_from_entry_points,
+        )
+
+        ast_specs = specs_from_entry_points(plugin_dir, manifest)
+        toml_schemas = getattr(manifest, "config_schema", None) or {}
 
         def _isolated_process(self, inputs):  # noqa: ARG002
             raise RuntimeError(
@@ -413,13 +426,22 @@ class PluginLoader:
                         node_type,
                     )
                     continue
+                spec = ast_specs.get(node_type)
+                input_ports, output_ports = ports_for_spec(spec)
+                config_cls = config_class_for_spec(
+                    node_type,
+                    spec,
+                    toml_schemas.get(node_type) if isinstance(toml_schemas, dict) else None,
+                )
                 stub = type(
                     f"Isolated_{node_type}",
                     (Node,),
                     {
                         "node_type": node_type,
-                        "input_ports": {},
-                        "output_ports": {},
+                        "input_ports": input_ports,
+                        "output_ports": output_ports,
+                        "Config": config_cls,
+                        "_siso": False,
                         "metadata": NodeMetadata(
                             node_type=node_type,
                             label=node_type.replace("_", " ").title(),

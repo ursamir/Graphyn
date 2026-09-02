@@ -21,3 +21,13 @@ optional_dependencies = [
 
 runtime = "isolated"
 node_types = ["realtime_inference"]
+
+[config_schema.realtime_inference]
+model_path = { type = "string" }
+backend = { type = "string", default = "auto" }
+mode = { type = "string", default = "classification" }
+wake_word_threshold = { type = "number", default = 0.8 }
+batch_size = { type = "integer", default = 1 }
+adaptive = { type = "boolean", default = false }
+adaptive_skip_ratio = { type = "number", default = 0.5 }
+streaming_buffer_size = { type = "integer", default = 10 }

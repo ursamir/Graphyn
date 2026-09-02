@@ -22,3 +22,11 @@ optional_dependencies = [
 
 runtime = "isolated"
 node_types = ["edge_optimizer"]
+
+[config_schema.edge_optimizer]
+backend = { type = "string", default = "tflite" }
+quantization = { type = "string", default = "int8" }
+output_path = { type = "string", default = "workspace/artifacts/optimized" }
+representative_samples = { type = "integer", default = 100 }
+prune = { type = "boolean", default = false }
+operator_fusion = { type = "boolean", default = true }

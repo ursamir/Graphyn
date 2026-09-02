@@ -21,3 +21,22 @@ optional_dependencies = [
 
 runtime = "isolated"
 node_types = ["trainer", "model_builder"]
+
+[config_schema.trainer]
+backend = { type = "string", default = "auto" }
+device = { type = "string", default = "auto" }
+epochs = { type = "integer", default = 30 }
+batch_size = { type = "integer", default = 32 }
+output_path = { type = "string", default = "workspace/artifacts/models" }
+patience = { type = "integer", default = 5 }
+mixed_precision = { type = "boolean", default = false }
+min_val_accuracy = { type = "number", default = 0.0 }
+checkpoint_path = { type = "string", default = "" }
+
+[config_schema.model_builder]
+architecture = { type = "string", default = "ds_cnn" }
+filters = { type = "integer", default = 64 }
+num_layers = { type = "integer", default = 4 }
+dropout_rate = { type = "number", default = 0.25 }
+learning_rate = { type = "number", default = 0.001 }
+backend = { type = "string", default = "auto" }

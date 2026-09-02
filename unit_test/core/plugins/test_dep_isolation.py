@@ -144,6 +144,7 @@ def _isolated_toml(
     name: str = "iso-plugin",
     node_types: str = '["iso_node"]',
     extra_nodes_py: str = "",
+    extra_toml: str = "",
 ) -> Path:
     d = tmp_path / name
     d.mkdir(parents=True, exist_ok=True)
@@ -158,7 +159,8 @@ platform_version = ">=0.0"
 entry_points = ["nodes.py"]
 runtime = "isolated"
 node_types = {node_types}
-''',
+'''
+        + extra_toml,
         encoding="utf-8",
     )
     (d / "nodes.py").write_text(
@@ -525,3 +527,70 @@ def test_venv_manager_create_and_gc_no_pip_install(
     assert Path(py).exists()
     removed = mgr.gc_unused(set())
     assert "tiny-plugin" in removed
+
+def test_isolated_stub_exposes_ast_config_schema(tmp_path: Path, fresh_registry) -> None:
+    """Isolated stubs must accept real Config fields instead of extra_forbidden."""
+    extra = """
+from typing import ClassVar
+from app.core.nodes.config import NodeConfig
+from app.core.nodes.ports import InputPort, OutputPort
+
+class ModelBuilderNode:
+    node_type: ClassVar[str] = "iso_node"
+    input_ports = {
+        "input": InputPort(name="input", data_type=object, required=True),
+    }
+    output_ports = {
+        "output": OutputPort(name="output", data_type=object),
+    }
+    class Config(NodeConfig):
+        architecture: str = "ds_cnn"
+        filters: int = 64
+        num_layers: int = 4
+        dropout_rate: float = 0.25
+        learning_rate: float = 0.001
+        backend: str = "auto"
+"""
+    plugin_dir = _isolated_toml(tmp_path, extra_nodes_py=extra)
+    loader = PluginLoader(fresh_registry)
+    with patch.object(_VenvMgr, "ensure", side_effect=_mock_ensure):
+        loader.load(plugin_dir)
+    try:
+        cls = fresh_registry.get_class("iso_node")
+        cfg = cls.Config.model_validate({
+            "architecture": "ds_cnn",
+            "filters": 64,
+            "num_layers": 4,
+            "dropout_rate": 0.25,
+            "learning_rate": 0.001,
+            "backend": "keras",
+        })
+        assert cfg.architecture == "ds_cnn"
+        assert "input" in cls.input_ports
+        assert "output" in cls.output_ports
+        import pydantic
+        with pytest.raises(pydantic.ValidationError) as ei:
+            cls.Config.model_validate({"not_a_real_field": 1})
+        assert any(e["type"] == "extra_forbidden" for e in ei.value.errors())
+    finally:
+        get_runtime_registry().unregister_plugin("iso-plugin")
+
+
+def test_isolated_stub_config_schema_from_toml(tmp_path: Path, fresh_registry) -> None:
+    """plugin.toml config_schema is used when AST has no Config class."""
+    extra_toml = """
+[config_schema.iso_node]
+architecture = { type = "string", default = "ds_cnn" }
+filters = { type = "integer", default = 64 }
+"""
+    plugin_dir = _isolated_toml(tmp_path, extra_toml=extra_toml)
+    loader = PluginLoader(fresh_registry)
+    with patch.object(_VenvMgr, "ensure", side_effect=_mock_ensure):
+        loader.load(plugin_dir)
+    try:
+        cls = fresh_registry.get_class("iso_node")
+        cfg = cls.Config.model_validate({"architecture": "mobilenet", "filters": 32})
+        assert cfg.architecture == "mobilenet"
+        assert cfg.filters == 32
+    finally:
+        get_runtime_registry().unregister_plugin("iso-plugin")
