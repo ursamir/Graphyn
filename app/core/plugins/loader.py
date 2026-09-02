@@ -38,7 +38,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from app.core.nodes.discovery import AutoDiscovery
-from app.core.nodes.errors import DuplicateNodeTypeError
+from app.core.nodes.errors import DuplicateNodeTypeError, DuplicatePortTypeError
 from app.core.plugins.dependencies import DependencyChecker
 from app.core.plugins.errors import PluginCompatibilityError, PluginInstallError
 from app.core.plugins.manifest import PluginManifest, load_manifest
@@ -129,6 +129,9 @@ class PluginLoader:
         # instance so that the before/after registry snapshots cannot interleave
         # with a parallel install (Finding 1 fix).
         self._load_lock = threading.Lock()
+        # Plugin names successfully imported into this registry (auto-install
+        # then load_enabled_plugins must not re-fail on a second pass).
+        self._loaded_plugins: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -171,6 +174,14 @@ class PluginLoader:
         """
         # Step 1 — parse manifest (raises PluginManifestError on failure)
         manifest: PluginManifest = load_manifest(plugin_dir)
+
+        if manifest.name in self._loaded_plugins:
+            log.debug(
+                "PluginLoader: plugin '%s' already loaded — skipping",
+                manifest.name,
+            )
+            declared = list(manifest.node_types or [])
+            return [n for n in declared if n in self._registry._classes]
 
         # Step 2 — platform version compatibility
         self._check_platform_compat(manifest, plugin_dir)
@@ -226,6 +237,7 @@ class PluginLoader:
         )
 
         # Step 7 — return newly registered node_types
+        self._loaded_plugins.add(manifest.name)
         return new_node_types
 
     # ------------------------------------------------------------------
@@ -362,10 +374,12 @@ class PluginLoader:
                 try:
                     module = discovery._import_file(path, package_prefix=None)
                     discovery._process_module(module)
-                except DuplicateNodeTypeError as exc:
-                    # PL-06 fix: surface the duplicate node type name explicitly
+                except (DuplicateNodeTypeError, DuplicatePortTypeError) as exc:
+                    # Duplicate node or port types from a second entry point /
+                    # second load: keep the first registration and continue so
+                    # nodes.py can still register after types.py catalogued types.
                     log.warning(
-                        "PluginLoader: duplicate node type detected while loading "
+                        "PluginLoader: duplicate type detected while loading "
                         "entry point '%s' from plugin '%s': %s — "
                         "the first registration is kept.",
                         entry_point,
@@ -403,6 +417,15 @@ class PluginLoader:
         # any node types, the plugin is non-functional — raise rather than silently
         # returning an empty list.
         if manifest.entry_points and not new_types:
+            declared = list(manifest.node_types or [])
+            already = [n for n in declared if n in self._registry._classes]
+            if already:
+                log.debug(
+                    "PluginLoader: plugin '%s' node types already registered — "
+                    "skipping empty re-load.",
+                    manifest.name,
+                )
+                return already
             raise PluginInstallError(
                 f"Plugin '{manifest.name}' declared {len(manifest.entry_points)} "
                 "entry point(s) but no node types were registered. "
@@ -459,7 +482,7 @@ class PluginLoader:
             before: set[str] = set(self._registry._classes.keys())
             for node_type in names:
                 if node_type in self._registry._classes:
-                    log.warning(
+                    log.debug(
                         "PluginLoader: isolated node type '%s' already registered "
                         "— keeping the first registration.",
                         node_type,

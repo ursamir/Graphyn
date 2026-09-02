@@ -612,6 +612,20 @@ class PluginManager:
         for record in records:
             if not record.enabled:
                 continue
+            if record.name in self._loader._loaded_plugins:
+                log.debug(
+                    "Startup: plugin '%s' already loaded — skipping",
+                    record.name,
+                )
+                continue
+            declared = list((record.manifest or {}).get("node_types") or [])
+            if declared and all(nt in self._registry._classes for nt in declared):
+                log.debug(
+                    "Startup: plugin '%s' node types already in registry — skipping",
+                    record.name,
+                )
+                self._loader._loaded_plugins.add(record.name)
+                continue
             install_path = Path(record.install_path)
             try:
                 node_types = self._loader.load(install_path)
@@ -702,6 +716,7 @@ class PluginManager:
                 pass
 
         to_unregister = list(dict.fromkeys(to_unregister))
+        self._loader._loaded_plugins.discard(record.name)
         if to_unregister:
             log.warning(
                 "Unloading %d node type(s) from plugin '%s': %s. "

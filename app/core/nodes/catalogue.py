@@ -23,6 +23,13 @@ def _fqn(cls: type) -> str:
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
+def _package_prefix(module: str) -> str:
+    """Return the plugin/package prefix (everything before the last dotted segment)."""
+    if "." in module:
+        return module.rsplit(".", 1)[0]
+    return module
+
+
 class TypeCatalogue:
     """Maps fully-qualified type names to Python type objects.
 
@@ -42,12 +49,12 @@ class TypeCatalogue:
             TypeError: if type_class is not a concrete subclass of PortDataType
                        (the base class itself is rejected).
             DuplicatePortTypeError: if the fully-qualified name is already
-                       registered by a *different* class object.  If the same
-                       class object is already registered under any FQN (e.g.
-                       re-imported under a shorter module path), the call is a
-                       silent no-op so that plugin loaders can safely call
-                       register() without tracking which types they have already
-                       catalogued.
+                       registered by a *different* type from a *different*
+                       plugin/module (different package prefix).  Re-exec of
+                       the same plugin file produces a new class object with
+                       the same FQN; that is a silent no-op that keeps the
+                       first registration.  The same class object under any
+                       FQN is also a no-op.
         """
         with self._lock:
             # F2 fix: reject the abstract base class itself
@@ -59,17 +66,21 @@ class TypeCatalogue:
                 raise TypeError(
                     f"{type_class!r} is not a concrete subclass of PortDataType"
                 )
-            # F1 fix: if the same class object is already registered under any
-            # FQN (e.g. loaded via two different import paths), skip silently
-            # rather than creating a duplicate entry.
+            # Same class object already registered under any FQN (two import paths)
             for existing_cls in self._types.values():
                 if existing_cls is type_class:
                     return
             name = _fqn(type_class)
             if name in self._types:
+                existing = self._types[name]
+                existing_prefix = _package_prefix(existing.__module__)
+                new_prefix = _package_prefix(type_class.__module__)
+                if existing_prefix == new_prefix:
+                    # Same plugin re-exec: keep the first class object
+                    return
                 raise DuplicatePortTypeError(
                     f"PortDataType '{name}' is already registered "
-                    f"(existing: {self._types[name]!r}, new: {type_class!r})"
+                    f"(existing: {existing!r}, new: {type_class!r})"
                 )
             self._types[name] = type_class
 

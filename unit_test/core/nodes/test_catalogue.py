@@ -69,23 +69,41 @@ class TestTypeCatalogueDuplicateRaises:
         catalogue.register(_TestPortType)
         assert catalogue.resolve(_fqn(_TestPortType)) is _TestPortType
 
-    def test_register_different_class_same_fqn_raises(self):
-        """A *different* class object with the same FQN raises DuplicatePortTypeError."""
+    def test_register_two_class_objects_sharing_fqn_keeps_first(self):
+        """Two class objects with the same FQN: keep the first (plugin re-exec)."""
         import types
 
-        # Dynamically create a second class with the same __module__ and __qualname__
-        # as _TestPortType so that _fqn() returns the same string.
         DuplicateCls = types.new_class(
             "_TestPortType",
             bases=(PortDataType,),
         )
         DuplicateCls.__module__ = _TestPortType.__module__
         DuplicateCls.__qualname__ = _TestPortType.__qualname__
+        assert DuplicateCls is not _TestPortType
+        assert _fqn(DuplicateCls) == _fqn(_TestPortType)
 
         catalogue = TypeCatalogue()
         catalogue.register(_TestPortType)
+        catalogue.register(DuplicateCls)  # must not raise
+        assert catalogue.resolve(_fqn(_TestPortType)) is _TestPortType
+
+    def test_register_different_plugin_prefix_same_key_raises(self):
+        """FQN key already held by a type from a different package prefix raises."""
+        import types
+
+        other = types.new_class("ForeignDoc", bases=(PortDataType,))
+        other.__module__ = "_graphyn_plugin_other_deadbeef.types"
+        other.__qualname__ = "SharedDoc"
+
+        colliding = types.new_class("SharedDoc", bases=(PortDataType,))
+        colliding.__module__ = "_graphyn_plugin_mine_cafebabe.types"
+        colliding.__qualname__ = "SharedDoc"
+
+        catalogue = TypeCatalogue()
+        # Plant a foreign type under the colliding FQN (different module prefix).
+        catalogue._types[_fqn(colliding)] = other
         with pytest.raises(DuplicatePortTypeError):
-            catalogue.register(DuplicateCls)
+            catalogue.register(colliding)
 
     def test_register_non_port_data_type_raises_type_error(self):
         """Registering a non-PortDataType subclass raises TypeError."""

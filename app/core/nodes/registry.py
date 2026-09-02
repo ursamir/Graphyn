@@ -82,10 +82,8 @@ class NodeRegistry:
                     and issubclass(dt, PortDataType)
                     and dt is not PortDataType
                 ):
-                    # TypeCatalogue.register() is idempotent for the same class
-                    # object (returns early); DuplicatePortTypeError is only
-                    # raised for a *different* class with the same FQN, which
-                    # we propagate so the caller knows about the conflict.
+                    # TypeCatalogue.register() is idempotent for the same FQN
+                    # (keeps the first class, including plugin re-exec).
                     self.type_catalogue.register(dt)
 
     def unregister(self, node_type: str) -> None:

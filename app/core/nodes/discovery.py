@@ -326,12 +326,31 @@ class AutoDiscovery:
                 if parent
                 else f"_graphyn_plugin_{path_hash}.{stem}"
             )
+            existing = sys.modules.get(module_name)
+            if existing is not None:
+                existing_file = getattr(existing, "__file__", None)
+                try:
+                    if existing_file and Path(existing_file).resolve() == path.resolve():
+                        return existing
+                except OSError:
+                    pass
+
             spec = importlib.util.spec_from_file_location(module_name, path)
             module = importlib.util.module_from_spec(spec)
             # Register in sys.modules BEFORE exec_module so that intra-package
             # relative imports can resolve.  On failure, remove the broken stub
             # so that a subsequent retry (e.g. after fixing the plugin file)
             # does not silently return the empty stub.
+            if "." in module_name:
+                pkg_name = module_name.rsplit(".", 1)[0]
+                if pkg_name not in sys.modules:
+                    pkg = importlib.util.module_from_spec(
+                        importlib.util.spec_from_loader(pkg_name, loader=None)
+                    )
+                    pkg.__path__ = [str(path.parent)]  # type: ignore[attr-defined]
+                    pkg.__package__ = pkg_name
+                    sys.modules[pkg_name] = pkg
+                module.__package__ = pkg_name
             sys.modules[module_name] = module
             try:
                 spec.loader.exec_module(module)
@@ -375,16 +394,15 @@ class AutoDiscovery:
                 try:
                     self._registry.type_catalogue.register(obj)
                 except DuplicatePortTypeError:
-                    # Same class re-loaded under a different module path
-                    # (e.g. startup load_enabled_plugins + explicit install() call).
-                    # If the existing registration is the exact same class object,
-                    # skip silently; otherwise re-raise.
-                    fqn = f"{obj.__module__}.{obj.__qualname__}"
-                    existing = self._registry.type_catalogue._types.get(fqn)
-                    if existing is not None and existing is obj:
-                        pass  # same class object — skip silently
-                    else:
-                        raise
+                    # TypeCatalogue.register is idempotent for same-plugin re-exec
+                    # (keeps the first class). Cross-plugin FQN collisions still
+                    # raise; treat those as already-catalogued and keep the first
+                    # so a later entry point (nodes.py) can still register nodes.
+                    log.warning(
+                        "AutoDiscovery: duplicate port type '%s.%s' — keeping the first",
+                        obj.__module__,
+                        obj.__qualname__,
+                    )
 
             # Register Node subclasses
             if (
