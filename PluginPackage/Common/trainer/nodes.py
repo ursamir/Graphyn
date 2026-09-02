@@ -13,6 +13,7 @@ Migrated from app/core/nodes/ml/model_trainer.py and expanded with:
 import logging
 from pathlib import Path
 from typing import ClassVar
+from uuid import uuid4
 
 import numpy as np
 
@@ -74,10 +75,13 @@ class TrainerNode(Node):
     input_ports: ClassVar[dict] = {
         "model": InputPort(
             name="model",
-            data_type=object,
+            data_type=ModelArtifact,
             cardinality="single",
             required=True,
-            description="Compiled keras.Model or PyTorch nn.Module.",
+            description=(
+                "ModelArtifact from ModelBuilderNode (model_path on disk), "
+                "or an in-process compiled keras.Model / PyTorch nn.Module."
+            ),
         ),
         "dataset": InputPort(
             name="dataset",
@@ -207,6 +211,24 @@ class TrainerNode(Node):
                 return model.fit(**fit_kwargs)
         return model.fit(**fit_kwargs)
 
+
+    @staticmethod
+    def _keras_model_from_input(model):
+        """Load a Keras model from ModelArtifact.model_path, or return a live model.
+
+        Isolated workers pickle ModelArtifact (path + labels), never a live
+        keras.Model. The trainer venv has TensorFlow and loads from disk.
+        In-process callers may still pass a compiled keras.Model.
+        """
+        path = getattr(model, "model_path", None)
+        has_fit = callable(getattr(model, "fit", None))
+        if path and not has_fit:
+            import keras
+
+            log.info("TrainerNode (keras): loading compiled model from %s", path)
+            return keras.models.load_model(str(path))
+        return model
+
     # ── Keras training ────────────────────────────────────────────────────────
 
     def _train_keras(self, model, dataset, out_path: Path) -> ModelArtifact:
@@ -219,6 +241,8 @@ class TrainerNode(Node):
         """
         import keras
         import tensorflow as tf  # type: ignore
+
+        model = self._keras_model_from_input(model)
 
         if self.config.mixed_precision:
             keras.mixed_precision.set_global_policy("mixed_float16")
@@ -571,7 +595,7 @@ class TrainerNode(Node):
 
         Args:
             inputs: dict with keys:
-                "model"   — compiled keras.Model or PyTorch nn.Module
+                "model"   — ModelArtifact (isolated) or live keras.Model / nn.Module
                 "dataset" — DatasetArtifact (accessed by attribute name)
 
         Returns:
@@ -591,6 +615,7 @@ class TrainerNode(Node):
             ) from e
 
         if backend == "keras":
+            model = self._keras_model_from_input(model)
             artifact = self._train_keras(model, dataset, out_path)
         else:
             artifact = self._train_pytorch(model, dataset, out_path)
@@ -617,6 +642,7 @@ class ModelBuilderNode(Node):
         dropout_rate (float): Dropout before final Dense layer. Default: 0.25
         learning_rate (float): Adam learning rate. Default: 0.001
         backend (str): "keras" | "auto". Default: "auto"
+        output_path (str): Directory for compiled .keras files. Default: "workspace/artifacts/models"
     """
 
     node_type: ClassVar[str] = "model_builder"
@@ -653,8 +679,8 @@ class ModelBuilderNode(Node):
     output_ports: ClassVar[dict] = {
         "output": OutputPort(
             name="output",
-            data_type=object,
-            description="Compiled Keras model ready for TrainerNode.",
+            data_type=ModelArtifact,
+            description="ModelArtifact with compiled Keras model_path for TrainerNode.",
         )
     }
 
@@ -665,6 +691,7 @@ class ModelBuilderNode(Node):
         dropout_rate: float = 0.25
         learning_rate: float = 0.001
         backend: str = "auto"           # "keras" | "auto"
+        output_path: str = "workspace/artifacts/models"
 
     def _build_keras_model(self, input_shape: tuple, n_classes: int):
         """Build and compile a Keras model."""
@@ -786,4 +813,21 @@ class ModelBuilderNode(Node):
                 f"ModelBuilderNode: backend '{backend}' not supported. Use 'keras' or 'auto'."
             )
 
-        return {"output": model}
+        out_dir = Path(self.config.output_path)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise OSError(
+                f"ModelBuilderNode: cannot create output directory '{out_dir}': {e}"
+            ) from e
+
+        path = out_dir / f"compiled_{uuid4().hex}.keras"
+        model.save(str(path))
+        log.info("ModelBuilderNode: saved compiled model to %s", path)
+        labels = list(getattr(dataset, "labels", None) or [])
+        return {
+            "output": ModelArtifact(
+                model_path=str(path),
+                labels=labels,
+            )
+        }

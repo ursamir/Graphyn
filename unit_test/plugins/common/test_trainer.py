@@ -91,3 +91,103 @@ def test_process_smoke(installed_cls, tmp_path):
     )
     result = node.process({"model": model, "dataset": _FakeDataset()})
     assert "output" in result
+
+
+# ── ModelArtifact isolated path (no TensorFlow download) ─────────────────────
+
+import importlib.util
+from pathlib import Path as _Path
+from unittest.mock import MagicMock, patch
+
+from app.models.dataset_artifact import DatasetArtifact
+from app.models.model_artifact import ModelArtifact
+
+
+def _load_trainer_nodes():
+    path = _Path(__file__).resolve().parents[3] / "PluginPackage/Common/trainer/nodes.py"
+    spec = importlib.util.spec_from_file_location("graphyn_trainer_nodes_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_model_builder_returns_model_artifact(tmp_path):
+    """ModelBuilderNode must save on disk and return ModelArtifact, not a live keras Model."""
+    nodes = _load_trainer_nodes()
+    fake_model = MagicMock()
+
+    def _save(path):
+        _Path(path).write_bytes(b"fake-keras")
+
+    fake_model.save.side_effect = _save
+    dataset = DatasetArtifact(
+        labels=["yes", "no"],
+        n_classes=2,
+        input_shape=(4, 4, 1),
+    )
+    node = nodes.ModelBuilderNode(
+        config={"output_path": str(tmp_path / "models"), "backend": "keras"},
+        seed=0,
+    )
+    with patch.object(node, "_build_keras_model", return_value=fake_model):
+        result = node.process({"input": dataset})
+    art = result["output"]
+    assert isinstance(art, ModelArtifact)
+    saved = _Path(art.model_path)
+    assert saved.exists()
+    assert saved.suffix == ".keras"
+    assert art.labels == ["yes", "no"]
+    fake_model.save.assert_called_once()
+
+
+def test_model_builder_unique_filenames(tmp_path):
+    nodes = _load_trainer_nodes()
+    dataset = DatasetArtifact(labels=["a"], n_classes=1, input_shape=(2, 2, 1))
+
+    def _make():
+        fake = MagicMock()
+        fake.save.side_effect = lambda path: _Path(path).write_bytes(b"x")
+        node = nodes.ModelBuilderNode(
+            config={"output_path": str(tmp_path), "backend": "keras"},
+            seed=0,
+        )
+        with patch.object(node, "_build_keras_model", return_value=fake):
+            return node.process({"input": dataset})["output"].model_path
+
+    a, b = _make(), _make()
+    assert a != b
+    assert _Path(a).exists() and _Path(b).exists()
+
+
+def test_trainer_loads_model_artifact(tmp_path):
+    """TrainerNode must load keras.Model from ModelArtifact.model_path."""
+    nodes = _load_trainer_nodes()
+    compiled = tmp_path / "compiled.keras"
+    compiled.write_bytes(b"weights")
+    artifact = ModelArtifact(model_path=str(compiled), labels=["a", "b"])
+    loaded = object()
+    trained = ModelArtifact(model_path=str(tmp_path / "trained"), labels=["a", "b"])
+    node = nodes.TrainerNode(
+        config={"backend": "keras", "output_path": str(tmp_path / "out"), "epochs": 1},
+        seed=0,
+    )
+    fake_keras = MagicMock()
+    fake_keras.models.load_model.return_value = loaded
+    with patch.dict("sys.modules", {"keras": fake_keras, "keras.models": fake_keras.models}):
+        with patch.object(node, "_train_keras", return_value=trained) as train:
+            result = node.process({"model": artifact, "dataset": DatasetArtifact(labels=["a", "b"], n_classes=2)})
+    fake_keras.models.load_model.assert_called_with(str(compiled))
+    assert train.call_args[0][0] is loaded
+    assert result["output"] is trained
+
+
+def test_keras_model_from_input_passthrough_live_model():
+    nodes = _load_trainer_nodes()
+
+    class _Live:
+        def fit(self, *a, **k):
+            return None
+
+    live = _Live()
+    assert nodes.TrainerNode._keras_model_from_input(live) is live

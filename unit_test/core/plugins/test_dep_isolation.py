@@ -417,6 +417,34 @@ def test_restricted_unpickler_rejects_os_system(tmp_path: Path) -> None:
         load_isolated_outputs(payload)
 
 
+
+def test_restricted_unpickler_rejects_keras_functional() -> None:
+    """Host must fail-closed on keras worker outputs — never allowlist keras/TF."""
+    import io
+
+    from app.core.plugins.isolated_executor import _ALLOWED_PICKLE_MODULES
+
+    assert not any(m == "keras" or m.startswith("keras.") for m in _ALLOWED_PICKLE_MODULES)
+    assert not any(m == "tensorflow" or m.startswith("tensorflow.") for m in _ALLOWED_PICKLE_MODULES)
+
+    unpickler = RestrictedUnpickler(io.BytesIO(b""))
+    with pytest.raises(pickle.UnpicklingError, match="keras.src.models.functional.Functional"):
+        unpickler.find_class("keras.src.models.functional", "Functional")
+
+
+def test_restricted_unpickler_allows_model_artifact(tmp_path: Path) -> None:
+    from app.models.model_artifact import ModelArtifact
+
+    payload = tmp_path / "artifact.pkl"
+    art = ModelArtifact(model_path="/tmp/compiled.keras", labels=["yes", "no"])
+    with payload.open("wb") as fh:
+        pickle.dump({"output": art}, fh)
+    out = load_isolated_outputs(payload)
+    assert isinstance(out["output"], ModelArtifact)
+    assert out["output"].model_path.endswith("compiled.keras")
+    assert out["output"].labels == ["yes", "no"]
+
+
 def test_restricted_unpickler_allows_dict_and_numpy(tmp_path: Path) -> None:
     import numpy as np
 

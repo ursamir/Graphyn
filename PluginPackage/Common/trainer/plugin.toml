@@ -43,3 +43,4 @@ num_layers = { type = "integer", default = 4 }
 dropout_rate = { type = "number", default = 0.25 }
 learning_rate = { type = "number", default = 0.001 }
 backend = { type = "string", default = "auto" }
+output_path = { type = "string", default = "workspace/artifacts/models" }

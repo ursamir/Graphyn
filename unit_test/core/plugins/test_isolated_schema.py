@@ -30,6 +30,8 @@ def test_trainer_ast_output_is_model_artifact_without_importing_plugin() -> None
         evaluator.input_ports["model_artifact"].data_type,
     )
     builder = specs["model_builder"]
+    assert builder.output_ports["output"].data_type is ModelArtifact
+    assert trainer.input_ports["model"].data_type is ModelArtifact
     assert CompatibilityChecker.are_compatible(
         builder.output_ports["output"].data_type,
         trainer.input_ports["model"].data_type,
