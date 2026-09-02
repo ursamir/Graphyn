@@ -217,10 +217,12 @@ def _rebuild_graph_with_ids_triggers_conditions(
         if event_trigger is None:
             event_trigger = ir_node.event_trigger
         cfg = ir_node.config
-        if isinstance(cfg, MappingProxyType):
-            cfg = dict(cfg)
-        elif not isinstance(cfg, dict):
+        from app.core.ir.models import _deep_unfreeze
+        cfg = _deep_unfreeze(cfg)
+        if not isinstance(cfg, dict):
             cfg = dict(cfg) if cfg else {}
+        if event_trigger is not None:
+            event_trigger = _deep_unfreeze(event_trigger)
         new_nodes.append(
             IRNode(
                 id=new_id,

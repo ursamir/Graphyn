@@ -42,7 +42,7 @@
       "id": "code",
       "node_type": "python_code",
       "config": {
-        "source": "payload = inputs.get('input') or []\\nn = len(payload) if isinstance(payload, list) else 1\\noutput = [{'id': i, 'source': 'python_code'} for i in range(n)]\\n"
+        "source": "payload = inputs.get(\"input\") or []\nn = len(payload) if isinstance(payload, list) else 1\noutput = [{\"id\": i, \"source\": \"python_code\"} for i in range(n)]\n"
       },
       "label": null,
       "capability_metadata": null,

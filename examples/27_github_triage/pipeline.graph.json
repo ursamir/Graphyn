@@ -148,7 +148,7 @@
     },
     {
       "src_id": "pii",
-      "src_port": "output",
+      "src_port": "transcript",
       "dst_id": "llm",
       "dst_port": "input",
       "condition": null

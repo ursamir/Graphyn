@@ -25,12 +25,24 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def _deep_unfreeze(v: Any) -> Any:
+    """Recursively convert MappingProxyType/tuple containers to dict/list."""
+    if isinstance(v, MappingProxyType):
+        return {k: _deep_unfreeze(vv) for k, vv in v.items()}
+    if isinstance(v, dict):
+        return {k: _deep_unfreeze(vv) for k, vv in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_deep_unfreeze(i) for i in v]
+    return v
+
+
 def _deep_freeze(v: Any) -> Any:
     """Recursively wrap dicts in MappingProxyType and lists in tuple.
 
     Ensures that nested structures inside an IRNode config are fully
     immutable, not just the top-level mapping (P-23 fix extension).
     """
+    v = _deep_unfreeze(v)
     if isinstance(v, dict):
         return MappingProxyType({k: _deep_freeze(vv) for k, vv in v.items()})
     if isinstance(v, list):
@@ -141,6 +153,7 @@ class IRNode(BaseModel):
         """
         if v is None:
             return MappingProxyType({})
+        v = _deep_unfreeze(v)
         if not isinstance(v, dict):
             raise ValueError(
                 f"IRNode.config must be a dict, got {type(v).__name__}"

@@ -79,3 +79,10 @@ def test_http_error(installed_cls):
     with patch("httpx.post", return_value=mock_resp):
         with pytest.raises(RuntimeError, match="HTTP 500"):
             node.process({"input": {}})
+
+
+def test_mock_provider_no_network(installed_cls):
+    node = installed_cls(config={"url": "https://example.com/hook", "provider": "mock", "mock_response": {"status_code": 200, "body": {"ok": True}}}, seed=0)
+    out = node.process({"input": {"hello": "world"}})["output"]
+    assert out.ok is True
+    assert out.status_code == 200

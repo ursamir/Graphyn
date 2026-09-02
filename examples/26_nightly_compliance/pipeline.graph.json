@@ -134,7 +134,7 @@
     },
     {
       "src_id": "pii",
-      "src_port": "output",
+      "src_port": "transcript",
       "dst_id": "gate",
       "dst_port": "input",
       "condition": null

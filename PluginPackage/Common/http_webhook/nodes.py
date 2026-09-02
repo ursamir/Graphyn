@@ -86,13 +86,11 @@ class HttpWebhookNode(Node):
         timeout_s: float = 10.0
         hmac_secret: str = ""
         hmac_header: str = "X-Graphyn-Signature"
+        provider: str = "http"  # http | mock
+        mock_response: dict = {}
 
     def process(self, payload):
         url = (self.config.url or "").strip()
-        if not url:
-            raise RuntimeError(
-                "HttpWebhookNode: config.url is required (completion callback URL)."
-            )
         body_obj = _jsonable(payload)
         raw = json.dumps(body_obj, default=str).encode("utf-8")
         headers = {"Content-Type": "application/json"}
@@ -100,7 +98,30 @@ class HttpWebhookNode(Node):
         if secret:
             digest = hmac.new(secret, raw, hashlib.sha256).hexdigest()
             headers[self.config.hmac_header or "X-Graphyn-Signature"] = f"sha256={digest}"
-        status, text = self._post(url, raw, headers, self.config.timeout_s)
+        provider = (self.config.provider or "http").strip().lower()
+        mock = dict(self.config.mock_response or {})
+        timeout = min(max(float(self.config.timeout_s or 10.0), 0.05), 30.0)
+        if provider == "mock" or mock:
+            status = int(mock.get("status_code", mock.get("status", 200)))
+            mock_body = mock.get("body", mock.get("text", "{\"ok\":true,\"mock\":true}"))
+            text = mock_body if isinstance(mock_body, str) else json.dumps(mock_body, default=str)
+            ok = 200 <= int(status) < 300
+            if not ok:
+                raise RuntimeError(
+                    "HttpWebhookNode: POST %s failed with HTTP %s: %s" % (url or "mock://webhook", status, text[:200])
+                )
+            return WebhookReceipt(
+                url=url or "mock://webhook",
+                status_code=int(status),
+                ok=ok,
+                body=text[:4096],
+                metadata={"bytes": len(raw), "provider": "mock"},
+            )
+        if not url:
+            raise RuntimeError(
+                "HttpWebhookNode: config.url is required (completion callback URL)."
+            )
+        status, text = self._post(url, raw, headers, timeout)
         ok = 200 <= int(status) < 300
         if not ok:
             raise RuntimeError(

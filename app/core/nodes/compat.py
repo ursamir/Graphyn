@@ -79,31 +79,25 @@ class CompatibilityChecker:
         if out_origin is None and output_type is object:
             return True
 
-        # Rule 4a: Union / Optional handling.
-        # Optional[X] is Union[X, None]; Union[X, Y] has origin=Union.
-        # Two Union types are compatible if every output arg is compatible with
-        # at least one input arg (covariant subset check).
-        if out_origin is Union and in_origin is Union:
+        # Rule 4a-c: Union / Optional (typing.Union and PEP 604 X | Y).
+        _union_origins = {Union, getattr(types, "UnionType", None)}
+        out_is_union = out_origin in _union_origins
+        in_is_union = in_origin in _union_origins
+        if out_is_union and in_is_union:
             out_args = get_args(output_type)
             in_args = get_args(input_type)
-            # Guard: bare Union with no args (programmatically constructed) —
-            # vacuous all() would return True, which is wrong.
             if not out_args or not in_args:
                 return False
             return all(
                 any(CompatibilityChecker.are_compatible(oa, ia) for ia in in_args)
                 for oa in out_args
             )
-
-        # Rule 4b: output is Union, input is plain type — all output args must be compatible
-        if out_origin is Union and in_origin is None:
+        if out_is_union and not in_is_union:
             return all(
                 CompatibilityChecker.are_compatible(oa, input_type)
                 for oa in get_args(output_type)
             )
-
-        # Rule 4c: output is plain type, input is Union — output must be compatible with any arg
-        if out_origin is None and in_origin is Union:
+        if in_is_union and not out_is_union:
             return any(
                 CompatibilityChecker.are_compatible(output_type, ia)
                 for ia in get_args(input_type)

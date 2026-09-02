@@ -121,3 +121,9 @@ class TestCompatibilityReflexivityProperty:
     def test_are_compatible_reflexive(self, t):
         """For any non-None type T, are_compatible(T, T) returns True."""
         assert CompatibilityChecker.are_compatible(t, t) is True
+
+
+def test_list_compatible_with_pep604_optional_object():
+    from app.core.nodes.compat import CompatibilityChecker
+    assert CompatibilityChecker.are_compatible(list[str], object | None) is True
+    assert CompatibilityChecker.are_compatible(list, object | None) is True

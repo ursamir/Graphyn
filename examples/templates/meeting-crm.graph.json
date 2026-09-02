@@ -103,7 +103,14 @@
       "node_type": "http_webhook",
       "config": {
         "url": "https://example.com/webhooks/meeting-crm",
-        "timeout_s": 10.0
+        "timeout_s": 2.0,
+        "provider": "mock",
+        "mock_response": {
+          "status_code": 200,
+          "body": {
+            "ok": true
+          }
+        }
       },
       "label": null,
       "capability_metadata": null,
