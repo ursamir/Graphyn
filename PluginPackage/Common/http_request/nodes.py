@@ -106,8 +106,19 @@ class HttpRequestNode(Node):
         method = (self.config.method or "GET").upper()
         headers = {str(k): str(v) for k, v in dict(self.config.headers or {}).items()}
         auth_env = (self.config.auth_env or "").strip()
+        provider = (self.config.provider or "http").strip().lower()
         if auth_env:
-            token = os.environ.get(auth_env, "").strip()
+            try:
+                from app.core.secrets import resolve_secret
+                token = resolve_secret(auth_env)
+            except Exception:
+                token = os.environ.get(auth_env, "").strip()
+            if not token and provider != "mock":
+                raise RuntimeError(
+                    f"HttpRequestNode: auth_env={auth_env!r} is set but secret/env "
+                    f"{auth_env} is empty. Store it with `graphyn secrets set {auth_env}` "
+                    "or export the env var. Do not put API keys in Graph IR."
+                )
             if token:
                 prefix = self.config.auth_prefix if self.config.auth_prefix is not None else "Bearer "
                 headers[self.config.auth_header or "Authorization"] = f"{prefix}{token}"
@@ -116,7 +127,6 @@ class HttpRequestNode(Node):
         if json_body is None and payload is not None and method in {"POST", "PUT", "PATCH"}:
             json_body = _jsonable(payload) if not isinstance(payload, str) else None
         body = self.config.body or ""
-        provider = (self.config.provider or "http").strip().lower()
         if provider == "mock":
             mock = dict(self.config.mock_response or {})
             status = int(mock.get("status_code", mock.get("status", 200)))

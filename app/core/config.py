@@ -21,7 +21,9 @@ Reason To Change: New environment variables are added, directory layout
 
   GRAPHYN_HOME                    Default: ~/.graphyn/
   GRAPHYN_PROJECT_DIR             Default: workspace/
-  GRAPHYN_API_TOKEN               Default: "" (no auth)
+  GRAPHYN_API_TOKEN               Default: "" (no auth in development)
+  GRAPHYN_ENV                     Default: development
+  GRAPHYN_AUTH_REQUIRED           Default: "" (see auth_required())
   GRAPHYN_PLUGINS_DIR             Default: plugins/
   GRAPHYN_PLUGIN_AUTO_INSTALL     Default: "" (disabled)
   GRAPHYN_PLUGIN_INDEX_URL        Default: "" (no remote index)
@@ -274,11 +276,37 @@ def webhooks_path() -> Path:
 # Auth
 # ---------------------------------------------------------------------------
 
+def secrets_dir() -> Path:
+    """Return the named-secret directory: {graphyn_home}/secrets/ (mode 0700)."""
+    return graphyn_home() / "secrets"
+
+
+def graphyn_env() -> str:
+    """Return GRAPHYN_ENV (default development)."""
+    return _env("GRAPHYN_ENV", default="development").lower()
+
+
+def auth_required() -> bool:
+    """True when API/MCP must reject empty GRAPHYN_API_TOKEN (fail-closed).
+
+    GRAPHYN_AUTH_REQUIRED=1/true forces this on.
+    GRAPHYN_AUTH_REQUIRED=0/false forces it off.
+    Otherwise GRAPHYN_ENV in {production, prod, staging} requires a token.
+    Local default GRAPHYN_ENV=development stays convenient (auth optional).
+    """
+    flag = _env("GRAPHYN_AUTH_REQUIRED").lower()
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    if flag in ("0", "false", "no", "off"):
+        return False
+    return graphyn_env() in ("production", "prod", "staging")
+
+
 def api_token() -> str:
     """Return the Graphyn API token, or empty string if not configured.
 
     Override: GRAPHYN_API_TOKEN env var.
-    Empty string means no authentication required.
+    Empty string means no authentication required *unless* auth_required().
     """
     return _env("GRAPHYN_API_TOKEN")
 

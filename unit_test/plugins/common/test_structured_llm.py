@@ -67,3 +67,11 @@ def test_http_missing_key(installed_cls):
     node = installed_cls(config={"provider": "openai_compat", "json_schema": SCHEMA}, seed=0)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         node.process({"input": "hello"})
+
+
+def test_default_provider_is_not_mock(installed_cls, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    node = installed_cls(config={"json_schema": SCHEMA}, seed=0)
+    assert node.config.provider == "openai_compat"
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        node.process({"input": "hello"})

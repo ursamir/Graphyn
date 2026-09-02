@@ -1,16 +1,17 @@
 """AsrTranscribeNode — transcribe AudioSample objects to a typed Transcript.
 
 Providers:
-    mock           — deterministic offline transcript from duration/metadata (default)
-    openai_compat  — HTTP POST {base}/audio/transcriptions (OPENAI_API_KEY)
-    assemblyai     — AssemblyAI REST (ASSEMBLYAI_API_KEY)
+    openai_compat  — HTTP POST {base}/audio/transcriptions (OPENAI_API_KEY) [default]
+    assemblyai     — upload + create + POLL until completed (ASSEMBLYAI_API_KEY)
     deepgram       — Deepgram listen REST (DEEPGRAM_API_KEY)
+    mock           — deterministic offline transcript; only if provider=mock
 """
 from __future__ import annotations
 
 import importlib
 import logging
 import os
+import time
 from typing import Any, ClassVar
 
 import numpy as np
@@ -40,6 +41,14 @@ _PROVIDER_ENV = {
     "assemblyai": "ASSEMBLYAI_API_KEY",
     "deepgram": "DEEPGRAM_API_KEY",
 }
+
+
+def _resolve_key(env_key: str) -> str:
+    try:
+        from app.core.secrets import resolve_secret
+        return resolve_secret(env_key)
+    except Exception:
+        return os.environ.get(env_key, "").strip()
 
 
 def _duration_s(sample: AudioSample) -> float:
@@ -78,7 +87,7 @@ class AsrTranscribeNode(Node):
         label="ASR Transcribe",
         description=(
             "Transcribe audio to text with optional word timestamps. "
-            "Default mock provider is fully offline; HTTP providers need API keys."
+            "Default provider is openai_compat (OPENAI_API_KEY). Use provider=mock only for offline CI."
         ),
         category="Processing",
         version="1.0.0",
@@ -111,7 +120,7 @@ class AsrTranscribeNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: str = "mock"  # mock | openai_compat | assemblyai | deepgram
+        provider: str = "openai_compat"  # openai_compat | assemblyai | deepgram | mock
         language: str = "en"
         model: str = ""
         base_url: str = ""  # openai-compat override; else OPENAI_BASE_URL
@@ -122,7 +131,7 @@ class AsrTranscribeNode(Node):
         if not samples:
             return Transcript(text="", language=self.config.language, words=[], metadata={"empty": True})
 
-        provider = (self.config.provider or "mock").strip().lower()
+        provider = (self.config.provider or "openai_compat").strip().lower()
         if provider == "mock":
             return self._mock(samples)
         if provider not in _PROVIDER_ENV:
@@ -131,11 +140,12 @@ class AsrTranscribeNode(Node):
                 "Use mock, openai_compat, assemblyai, or deepgram."
             )
         env_key = _PROVIDER_ENV[provider]
-        api_key = os.environ.get(env_key, "").strip()
+        api_key = _resolve_key(env_key)
         if not api_key:
             raise RuntimeError(
-                f"AsrTranscribeNode: provider={provider!r} requires environment "
-                f"variable {env_key}. Set the key or use provider='mock' for offline runs."
+                f"AsrTranscribeNode: provider={provider!r} requires secret/env "
+                f"{env_key}. Store it with `graphyn secrets set {env_key}` or export "
+                f"the env var. Use provider='mock' only for offline CI."
             )
         return self._http_transcribe(provider, api_key, samples)
 
@@ -205,6 +215,18 @@ class AsrTranscribeNode(Node):
         resp.raise_for_status()
         return resp.json()
 
+    def _http_get(self, url: str, *, headers: dict, timeout=30.0) -> dict:
+        try:
+            import httpx
+        except ImportError as exc:
+            raise RuntimeError(
+                "AsrTranscribeNode: HTTP providers require the 'httpx' package. "
+                "Install httpx or use provider='mock'."
+            ) from exc
+        resp = httpx.get(url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        return resp.json()
+
     def _openai_compat(self, api_key: str, path: str, sample) -> Transcript:
         base = (self.config.base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         url = f"{base}/audio/transcriptions"
@@ -232,10 +254,11 @@ class AsrTranscribeNode(Node):
         return Transcript(text=text, language=str(body.get("language") or self.config.language), words=words, metadata={"provider": "openai_compat"})
 
     def _assemblyai(self, api_key: str, path: str) -> Transcript:
-        raise RuntimeError(
-            "AsrTranscribeNode: assemblyai HTTP upload is configured but requires a two-step "
-            "upload+transcript API. Use provider='mock' in tests, or call with a reachable API."
-        ) if not path else self._assemblyai_run(api_key, path)
+        if not path:
+            raise RuntimeError(
+                "AsrTranscribeNode: assemblyai requires AudioSample.path to a readable audio file."
+            )
+        return self._assemblyai_run(api_key, path)
 
     def _assemblyai_run(self, api_key: str, path: str) -> Transcript:
         headers = {"authorization": api_key}
@@ -247,12 +270,40 @@ class AsrTranscribeNode(Node):
                 timeout=self.config.timeout_s,
             )
         audio_url = up.get("upload_url")
-        body = self._http_post(
+        if not audio_url:
+            raise RuntimeError("AsrTranscribeNode: AssemblyAI upload did not return upload_url.")
+        created = self._http_post(
             "https://api.assemblyai.com/v2/transcript",
             headers={**headers, "content-type": "application/json"},
             json_body={"audio_url": audio_url, "language_code": self.config.language},
             timeout=self.config.timeout_s,
         )
+        tid = created.get("id")
+        if not tid:
+            raise RuntimeError(
+                "AsrTranscribeNode: AssemblyAI create-transcript JSON is not the final "
+                "transcript (missing id). Poll GET /v2/transcript/{id} until completed."
+            )
+        body = created
+        deadline = time.monotonic() + max(float(self.config.timeout_s or 30.0), 5.0)
+        while True:
+            status = str(body.get("status") or "").lower()
+            if status == "completed":
+                break
+            if status in ("error", "failed"):
+                raise RuntimeError(
+                    f"AsrTranscribeNode: AssemblyAI transcript failed: {body.get('error') or body}"
+                )
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"AsrTranscribeNode: AssemblyAI poll timed out waiting for transcript {tid}."
+                )
+            time.sleep(0.25)
+            body = self._http_get(
+                f"https://api.assemblyai.com/v2/transcript/{tid}",
+                headers=headers,
+                timeout=self.config.timeout_s,
+            )
         text = str(body.get("text") or "")
         words = []
         for w in body.get("words") or []:
@@ -264,7 +315,12 @@ class AsrTranscribeNode(Node):
                     speaker=str(w.get("speaker") or ""),
                 )
             )
-        return Transcript(text=text, language=self.config.language, words=words, metadata={"provider": "assemblyai", "id": body.get("id")})
+        return Transcript(
+            text=text,
+            language=self.config.language,
+            words=words,
+            metadata={"provider": "assemblyai", "id": tid, "status": "completed"},
+        )
 
     def _deepgram(self, api_key: str, path: str) -> Transcript:
         if not path:

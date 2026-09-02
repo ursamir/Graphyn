@@ -80,3 +80,9 @@ def test_http_mocked(installed_cls):
         out = node.process({"input": {"ignored": True}})["output"]
     assert out.ok is True
     mocked.assert_called_once()
+
+
+def test_default_provider_is_http(installed_cls):
+    node = installed_cls(config={"url": "https://example.com"}, seed=0)
+    assert node.config.provider == "http"
+    assert node.config.provider != "mock"

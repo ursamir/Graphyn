@@ -11,6 +11,7 @@ import {
   FolderKanban,
   Activity,
   Settings,
+  KeyRound,
   X,
 } from 'lucide-react'
 import { apiJson, getApiToken, setApiToken } from './api/client'
@@ -25,6 +26,7 @@ import TemplatesView from './features/templates/TemplatesView'
 import DataView from './features/data/DataView'
 import ProjectsView from './features/projects/ProjectsView'
 import SystemView from './features/system/SystemView'
+import SecretsView from './features/secrets/SecretsView'
 
 const NAV: Array<{ id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: 'builder', label: 'Builder', icon: Workflow },
@@ -35,6 +37,7 @@ const NAV: Array<{ id: AppView; label: string; icon: React.ComponentType<{ class
   { id: 'data', label: 'Data', icon: Database },
   { id: 'projects', label: 'Projects', icon: FolderKanban },
   { id: 'system', label: 'System', icon: Activity },
+  { id: 'secrets', label: 'Secrets', icon: KeyRound },
 ]
 
 const VIEW_IDS = new Set(NAV.map((n) => n.id))
@@ -188,6 +191,7 @@ export default function App() {
           {view === 'data' && <DataView />}
           {view === 'projects' && <ProjectsView />}
           {view === 'system' && <SystemView />}
+          {view === 'secrets' && <SecretsView />}
         </main>
 
         <ToastHost toasts={toasts} onDismiss={dismissToast} />

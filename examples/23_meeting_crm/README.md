@@ -20,3 +20,7 @@ python -m app.cli.main plugin install PluginPackage/Audio/dataset_ingest/ --upgr
 
 python -m app.cli.main run --graph examples/23_meeting_crm/pipeline.graph.json
 ```
+
+## Live vs mock
+
+Live: `pipeline.live.graph.json` uses openai_compat ASR+LLM (`OPENAI_API_KEY`). Keep `pipeline.graph.json` for mock CI.

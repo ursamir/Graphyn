@@ -12,6 +12,8 @@ def _check_auth(arguments, token=None, monkeypatch=None):
     if monkeypatch is not None:
         if token is None:
             monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
+            monkeypatch.setenv("GRAPHYN_ENV", "development")
+            monkeypatch.setenv("GRAPHYN_AUTH_REQUIRED", "0")
             monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
         else:
             monkeypatch.setenv("GRAPHYN_API_TOKEN", token)

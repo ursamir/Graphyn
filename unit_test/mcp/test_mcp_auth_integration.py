@@ -9,7 +9,8 @@ def _reload_auth(monkeypatch, token):
     """Reload auth module with a specific token env var."""
     if token is None:
         monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
-        monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
+        monkeypatch.setenv("GRAPHYN_ENV", "development")
+        monkeypatch.setenv("GRAPHYN_AUTH_REQUIRED", "0")
     else:
         monkeypatch.setenv("GRAPHYN_API_TOKEN", token)
     import app.mcp.auth as auth_mod

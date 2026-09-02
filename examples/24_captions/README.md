@@ -15,3 +15,7 @@ python -m app.cli.main plugin install PluginPackage/Common/caption_export/ --upg
 
 python -m app.cli.main run --graph examples/24_captions/pipeline.graph.json
 ```
+
+## Live vs mock
+
+Live: `pipeline.live.graph.json` uses Deepgram (`DEEPGRAM_API_KEY`). Mock CI: `pipeline.graph.json`.

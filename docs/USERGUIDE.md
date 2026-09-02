@@ -888,14 +888,33 @@ curl http://localhost:8001/api/v1/runs/abc12345/status
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `GRAPHYN_HOME` | `~/.graphyn` | Platform home (plugins, **secrets/**) |
 | `GRAPHYN_PROJECT_DIR` | `"workspace"` | Runtime data root |
-| `GRAPHYN_API_TOKEN` | `""` | Bearer token for API/MCP auth (unset = no auth) |
-| `GRAPHYN_PLUGINS_DIR` | `"plugins"` | Plugin directory |
-| `VITE_API_BASE_URL` | `http://localhost:8001` | Frontend API base URL |
+| `GRAPHYN_ENV` | `development` | `production`/`staging` fail-closes auth |
+| `GRAPHYN_AUTH_REQUIRED` | unset | `1` forces API/MCP to require a token |
+| `GRAPHYN_API_TOKEN` | `""` | Bearer token; empty forbidden when auth is required |
+| `GRAPHYN_PLUGINS_DIR` | `{GRAPHYN_HOME}/plugins/installed` | Plugin directory |
+| `VITE_API_BASE_URL` | `/api/v1` | Frontend API base (Vite/nginx proxy) |
 
 ### Authentication
 
-Set `GRAPHYN_API_TOKEN` to require authentication on all API and MCP requests:
+### Named secrets (live providers)
+
+Provider keys (`OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY`) live in `{GRAPHYN_HOME}/secrets/` (one file per name, mode 0600) or the process environment. Graph IR stores **names** (`auth_env`) never values.
+
+```bash
+export OPENAI_API_KEY=sk-...
+python -m app.cli.main secrets set OPENAI_API_KEY          # reads env or stdin, not argv
+python -m app.cli.main secrets list
+python -m app.cli.main run --graph examples/22_call_analytics/pipeline.live.graph.json
+```
+
+CI-safe mocks remain in `pipeline.graph.json` (`provider: mock`). Node defaults are live (`openai_compat` / real HTTP).
+
+### Authentication
+
+Set `GRAPHYN_API_TOKEN` to require authentication on all API and MCP requests.
+`GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production` **forbids** an empty token (deploy fail-closed).
 
 ```bash
 export GRAPHYN_API_TOKEN=my-secret-token

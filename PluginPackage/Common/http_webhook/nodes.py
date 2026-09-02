@@ -6,6 +6,7 @@ import hmac
 import importlib
 import json
 import logging
+import os
 from typing import Any, ClassVar
 
 from app.core.nodes.base import Node
@@ -84,9 +85,10 @@ class HttpWebhookNode(Node):
     class Config(NodeConfig):
         url: str = ""
         timeout_s: float = 10.0
-        hmac_secret: str = ""
+        hmac_secret: str = ""  # prefer hmac_env — do not put keys in Graph IR
+        hmac_env: str = ""
         hmac_header: str = "X-Graphyn-Signature"
-        provider: str = "http"  # http | mock
+        provider: str = "http"  # http | mock (mock only if explicit)
         mock_response: dict = {}
 
     def process(self, payload):
@@ -94,14 +96,22 @@ class HttpWebhookNode(Node):
         body_obj = _jsonable(payload)
         raw = json.dumps(body_obj, default=str).encode("utf-8")
         headers = {"Content-Type": "application/json"}
-        secret = (self.config.hmac_secret or "").encode("utf-8")
+        hmac_env = (getattr(self.config, "hmac_env", "") or "").strip()
+        secret_text = self.config.hmac_secret or ""
+        if hmac_env:
+            try:
+                from app.core.secrets import resolve_secret
+                secret_text = resolve_secret(hmac_env) or secret_text
+            except Exception:
+                secret_text = os.environ.get(hmac_env, "").strip() or secret_text
+        secret = secret_text.encode("utf-8") if secret_text else b""
         if secret:
             digest = hmac.new(secret, raw, hashlib.sha256).hexdigest()
             headers[self.config.hmac_header or "X-Graphyn-Signature"] = f"sha256={digest}"
         provider = (self.config.provider or "http").strip().lower()
         mock = dict(self.config.mock_response or {})
         timeout = min(max(float(self.config.timeout_s or 10.0), 0.05), 30.0)
-        if provider == "mock" or mock:
+        if provider == "mock":
             status = int(mock.get("status_code", mock.get("status", 200)))
             mock_body = mock.get("body", mock.get("text", "{\"ok\":true,\"mock\":true}"))
             text = mock_body if isinstance(mock_body, str) else json.dumps(mock_body, default=str)

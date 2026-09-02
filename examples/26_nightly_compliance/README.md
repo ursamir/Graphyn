@@ -18,3 +18,7 @@ Native Slack nodes are out of v1 — use `http_request` + `auth_env` (env var **
 ```bash
 python -m app.cli.main run --graph examples/26_nightly_compliance/pipeline.graph.json
 ```
+
+## Live vs mock
+
+Live: `pipeline.live.graph.json` uses openai_compat ASR and `http_request` + `auth_env=SLACK_BOT_TOKEN` (no native Slack node). Mock CI: `pipeline.graph.json`.

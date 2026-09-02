@@ -1134,6 +1134,55 @@ def cmd_plugin_info(args):
         sys.exit(1)
 
 
+# ─── Subcommand: secrets ─────────────────────────────────────────────────────
+
+def cmd_secrets_list(args):
+    """List stored secret names (never values)."""
+    from app.core.secrets import list_secret_names
+
+    names = list_secret_names()
+    if getattr(args, "json", False):
+        print(json.dumps({"names": names}))
+        return
+    if not names:
+        print("No secrets stored.")
+        return
+    for name in names:
+        print(name)
+
+
+def cmd_secrets_set(args):
+    """Store a named secret from process env or stdin — never from argv."""
+    from app.core.secrets import SecretError, set_secret
+
+    name = args.name
+    value = os.environ.get(name, "")
+    if not value:
+        if sys.stdin.isatty():
+            print(f"Enter value for {name} (stdin, not echoed back):", file=sys.stderr)
+        value = sys.stdin.read()
+    try:
+        stored = set_secret(name, value)
+    except SecretError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Stored secret {stored} (value not shown).")
+
+
+def cmd_secrets_delete(args):
+    from app.core.secrets import SecretError, delete_secret
+
+    try:
+        found = delete_secret(args.name)
+    except SecretError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if not found:
+        print(f"Error: secret {args.name!r} not found.", file=sys.stderr)
+        sys.exit(1)
+    print(f"Deleted secret {args.name}.")
+
+
 # ─── Subcommand: mcp ─────────────────────────────────────────────────────────
 
 def cmd_mcp(args):
@@ -1490,6 +1539,31 @@ def build_parser():
     )
     plugin_info_parser.set_defaults(func=cmd_plugin_info)
 
+    # ── secrets ──
+    secrets_parser = subparsers.add_parser(
+        "secrets",
+        help="Manage local named secrets (GRAPHYN_HOME/secrets)",
+        description=(
+            "File-per-secret store under GRAPHYN_HOME/secrets (mode 0600). "
+            "List returns names only. `set` reads the value from the process "
+            "environment variable of the same NAME, or from stdin — never argv."
+        ),
+    )
+    secrets_sub = secrets_parser.add_subparsers(dest="secrets_command", metavar="ACTION")
+    secrets_sub.required = True
+    secrets_list_parser = secrets_sub.add_parser("list", help="List secret names")
+    secrets_list_parser.add_argument("--json", action="store_true", help="JSON output")
+    secrets_list_parser.set_defaults(func=cmd_secrets_list)
+    secrets_set_parser = secrets_sub.add_parser(
+        "set",
+        help="Store a secret (value from env NAME or stdin, not argv)",
+    )
+    secrets_set_parser.add_argument("name", help="Secret name, e.g. OPENAI_API_KEY")
+    secrets_set_parser.set_defaults(func=cmd_secrets_set)
+    secrets_del_parser = secrets_sub.add_parser("delete", help="Delete a named secret")
+    secrets_del_parser.add_argument("name")
+    secrets_del_parser.set_defaults(func=cmd_secrets_delete)
+
     # ── mcp ── (Req 1.6, 8.1)
     mcp_parser = subparsers.add_parser(
         "mcp",
@@ -1497,7 +1571,8 @@ def build_parser():
         description=(
             "Start the Graphyn MCP server. "
             "Reads JSON-RPC from stdin, writes responses to stdout. "
-            "Set GRAPHYN_API_TOKEN to require authentication."
+            "Set GRAPHYN_API_TOKEN to require authentication. "
+            "GRAPHYN_AUTH_REQUIRED=1 or GRAPHYN_ENV=production forbids an empty token."
         ),
     )
     mcp_parser.set_defaults(func=cmd_mcp)

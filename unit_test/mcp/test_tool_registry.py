@@ -23,18 +23,20 @@ EXPECTED_TOOL_NAMES = {
     "install_plugin",
     "list_plugins",
     "manage_plugin",
+    "secrets_list",
+    "secrets_set",
 }
 
 
 def test_register_all_tools_calls_register_15_times():
-    """Req 25.6 — register_all_tools calls register_fn exactly 18 times."""
+    """Req 25.6 — register_all_tools calls register_fn exactly 20 times."""
     calls = []
     register_all_tools(lambda name, desc, schema, handler: calls.append(name))
-    assert len(calls) == 18, f"Expected 18 calls, got {len(calls)}: {calls}"
+    assert len(calls) == 20, f"Expected 20 calls, got {len(calls)}: {calls}"
 
 
 def test_register_all_tools_correct_names():
-    """Req 25.7 — registered tool names match the expected 18 names exactly."""
+    """Req 25.7 — registered tool names match the expected 20 names exactly."""
     registered = []
     register_all_tools(lambda name, desc, schema, handler: registered.append(name))
     assert set(registered) == EXPECTED_TOOL_NAMES, (

@@ -80,3 +80,56 @@ def test_http_provider_missing_key(installed_cls):
     node = installed_cls(config={"provider": "openai_compat"}, seed=0)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         node.process({"input": [_sample()]})
+
+
+def test_default_provider_is_not_mock(installed_cls, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    node = installed_cls(config={}, seed=0)
+    assert (node.config.provider or "").lower() != "mock"
+    assert node.config.provider == "openai_compat"
+    sample = _sample()
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        node.process({"input": [sample]})
+
+
+def test_assemblyai_polls_until_completed(installed_cls, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setenv("ASSEMBLYAI_API_KEY", "aa-test")
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFF....WAVEfmt ")
+    sample = _sample()
+    sample.path = str(wav)
+    node = installed_cls(config={"provider": "assemblyai", "timeout_s": 5}, seed=0)
+
+    upload = MagicMock()
+    upload.json.return_value = {"upload_url": "https://cdn.example/a"}
+    upload.raise_for_status = MagicMock()
+    created = MagicMock()
+    created.json.return_value = {"id": "tr_1", "status": "queued"}
+    created.raise_for_status = MagicMock()
+    done = MagicMock()
+    done.json.return_value = {
+        "id": "tr_1",
+        "status": "completed",
+        "text": "hello there",
+        "words": [{"text": "hello", "start": 0, "end": 400}, {"text": "there", "start": 400, "end": 800}],
+    }
+    done.raise_for_status = MagicMock()
+
+    def fake_post(url, **kwargs):
+        if url.endswith("/upload"):
+            return upload
+        if url.endswith("/transcript"):
+            return created
+        raise AssertionError(url)
+
+    def fake_get(url, **kwargs):
+        assert "tr_1" in url
+        return done
+
+    with patch("httpx.post", side_effect=fake_post), patch("httpx.get", side_effect=fake_get), patch("time.sleep"):
+        out = node.process({"input": [sample]})["output"]
+    assert out.text == "hello there"
+    assert out.metadata.get("status") == "completed"
+    assert len(out.words) == 2

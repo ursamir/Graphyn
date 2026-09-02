@@ -1,10 +1,10 @@
 # MCP Server
 
-The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 18 tools over stdio transport.
+The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 20 tools over stdio transport.
 
 **File:** `app/mcp/`  
 **Transport:** stdio (JSON-RPC on stdin/stdout, logs to stderr)  
-**Auth:** optional `GRAPHYN_API_TOKEN` env var
+**Auth:** `GRAPHYN_API_TOKEN`; fail-closed when `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production`
 
 ---
 
@@ -24,8 +24,8 @@ python -m app.mcp.server
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — 18 tools
-└── handlers/
+├── tool_registry.py   # register_all_tools() — 20 tools
+├── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
     │                  #   get_graph_capability_summary, get_event_schema
@@ -34,18 +34,19 @@ app/mcp/
     ├── run_control.py # pause_run, resume_run, cancel_run
     ├── provenance.py  # list_artifacts, get_artifact_lineage, replay_run
     ├── optimization.py # optimize_execution
-    └── plugins.py      # install_plugin, list_plugins, manage_plugin
+    ├── plugins.py      # install_plugin, list_plugins, manage_plugin
+    └── secrets.py      # secrets_list, secrets_set
 ```
 
 ---
 
 ## Authentication
 
-Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`. Empty token = no auth. Wrong/absent = `{"error_type": "unauthorized"}`.
+Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In development, empty token = no auth. `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production|staging` forbids an empty token (fail-closed). Wrong/absent = `{"error_type": "unauthorized"}`.
 
 ---
 
-## All 18 Tools
+## All 20 Tools
 
 | Tool | Handler | Delegates to |
 |---|---|---|
@@ -67,6 +68,8 @@ Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`
 | `install_plugin` | `plugins.py` | `PluginManager.install` + `load_enabled_plugins` |
 | `list_plugins` | `plugins.py` | `PluginManager.list_installed` |
 | `manage_plugin` | `plugins.py` | `enable` / `disable` / `uninstall` |
+| `secrets_list` | `secrets.py` | names only under GRAPHYN_HOME/secrets |
+| `secrets_set` | `secrets.py` | stores value; result does not echo it |
 
 ---
 
@@ -245,6 +248,19 @@ Install a plugin from a local path, git URL, HTTP archive, or index name. Reload
 5. `execute_pipeline` → `inspect_run`
 
 Native Slack/Email/GitHub nodes are out of v1; use `http_request` with `auth_env` (environment **variable names**, never secrets in IR) and `provider=mock` for tests.
+
+---
+
+
+### `secrets_list`
+
+Returns `{"names": ["OPENAI_API_KEY", ...]}`. Never returns values.
+
+### `secrets_set`
+
+**Arguments:** `name` (required), `value` (required; accepted for local MCP).
+
+**Returns:** `{"ok": true, "name": "..."}` — value is not echoed.
 
 ---
 

@@ -63,11 +63,10 @@ Fixed in code:
 **Detail:** Correct for single-worker; under high concurrency prefer an in-memory status cache coordinated with `run_control.py`.  
 **Workaround:** Poll status at ≥500ms.
 
-### AUTH-DEFAULT-1 — Auth off when token unset
+### (resolved) AUTH-DEFAULT-1 — Auth off when token unset
 
-**Files:** `app/api/main.py`, `app/core/config.py`, MCP auth  
-**Detail:** Empty `GRAPHYN_API_TOKEN` means allow-all. Fine for local dev; dangerous if deployed without setting the env var.  
-**Fix:** Require token in non-dev profiles / document hard.
+**Was:** Empty `GRAPHYN_API_TOKEN` meant allow-all even in deploy.  
+**Now:** `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production|staging` rejects empty tokens on API and MCP. Compose sets both. Local `GRAPHYN_ENV=development` stays optional-auth.
 
 ---
 

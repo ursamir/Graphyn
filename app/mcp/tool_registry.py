@@ -91,6 +91,14 @@ def register_all_tools(register: Callable) -> None:
         list_plugins_handler,
         manage_plugin_handler,
     )
+    from app.mcp.handlers.secrets import (
+        SECRETS_LIST_DESCRIPTION,
+        SECRETS_LIST_SCHEMA,
+        SECRETS_SET_DESCRIPTION,
+        SECRETS_SET_SCHEMA,
+        secrets_list_handler,
+        secrets_set_handler,
+    )
 
     register("list_nodes", LIST_NODES_DESCRIPTION, LIST_NODES_SCHEMA, list_nodes_handler)
     register("generate_graph", GENERATE_GRAPH_DESCRIPTION, GENERATE_GRAPH_SCHEMA, generate_graph_handler)
@@ -110,3 +118,5 @@ def register_all_tools(register: Callable) -> None:
     register("install_plugin", INSTALL_PLUGIN_DESCRIPTION, INSTALL_PLUGIN_SCHEMA, install_plugin_handler)
     register("list_plugins", LIST_PLUGINS_DESCRIPTION, LIST_PLUGINS_SCHEMA, list_plugins_handler)
     register("manage_plugin", MANAGE_PLUGIN_DESCRIPTION, MANAGE_PLUGIN_SCHEMA, manage_plugin_handler)
+    register("secrets_list", SECRETS_LIST_DESCRIPTION, SECRETS_LIST_SCHEMA, secrets_list_handler)
+    register("secrets_set", SECRETS_SET_DESCRIPTION, SECRETS_SET_SCHEMA, secrets_set_handler)

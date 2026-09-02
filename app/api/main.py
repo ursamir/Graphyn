@@ -38,8 +38,9 @@ from app.api.routers.ingest import router as ingest_router
 from app.api.routers.run_control import router as run_control_router
 from app.api.routers.artifacts import router as artifacts_router
 from app.api.routers.plugins import router as plugins_router
+from app.api.routers.secrets import router as secrets_router
 from app.api.observability import record_request
-from app.core.config import api_token, datasets_output_dir, datasets_input_dir, runs_dir
+from app.core.config import api_token, auth_required, datasets_output_dir, datasets_input_dir, runs_dir
 
 _logger = logging.getLogger(__name__)
 
@@ -73,10 +74,22 @@ except Exception as exc:
 _bearer = HTTPBearer(auto_error=False)
 
 
+_FAIL_CLOSED = (
+    "GRAPHYN_AUTH_REQUIRED=1 or GRAPHYN_ENV=production/staging forbids an empty "
+    "GRAPHYN_API_TOKEN. Set GRAPHYN_API_TOKEN and send Authorization: Bearer …"
+)
+
+
 def _auth_dep(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
     token = api_token()  # read on every call
     if not token:
-        return  # auth not configured — allow all
+        if auth_required():
+            raise HTTPException(
+                status_code=401,
+                detail=_FAIL_CLOSED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return  # development convenience — allow all
     if credentials is None:
         raise HTTPException(
             status_code=401,
@@ -95,6 +108,12 @@ def _auth_dep_request(request: Request) -> None:
     """Request-scoped auth check for non-router paths (e.g. static mounts)."""
     token = api_token()
     if not token:
+        if auth_required():
+            raise HTTPException(
+                status_code=401,
+                detail=_FAIL_CLOSED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         return
 
     auth_header = request.headers.get("Authorization", "")
@@ -146,6 +165,7 @@ app.include_router(ingest_router,      prefix="/api/v1", dependencies=_deps)
 app.include_router(run_control_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(artifacts_router,   prefix="/api/v1", dependencies=_deps)
 app.include_router(plugins_router,     prefix="/api/v1", dependencies=_deps)
+app.include_router(secrets_router,     prefix="/api/v1", dependencies=_deps)
 
 
 @app.middleware("http")

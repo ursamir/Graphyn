@@ -1,35 +1,30 @@
 # Deployment Guide
 
-This guide provides a baseline container deployment for Graphyn API.
+Baseline **Docker Compose** deploy for Graphyn API + UI. This repo does **not** ship a Helm chart.
 
-## Docker
+## Auth (fail-closed)
 
-Build image:
+Compose sets `GRAPHYN_ENV=production` and `GRAPHYN_AUTH_REQUIRED=1`. An empty `GRAPHYN_API_TOKEN` is **forbidden**: API and MCP reject every call with 401 / `unauthorized`.
 
-```bash
-docker build -t graphyn:local .
-```
-
-Run:
+Local CLI/SDK default remains `GRAPHYN_ENV=development` (auth optional).
 
 ```bash
-docker run --rm -p 8001:8001 \
-  -e GRAPHYN_API_TOKEN=secret \
-  -v "$(pwd)/workspace:/app/workspace" \
-  -v "$(pwd)/plugins:/app/plugins" \
-  graphyn:local
+export GRAPHYN_API_TOKEN=change-me
 ```
 
-API base:
+Put the same token in the UI **Settings** dialog (Bearer) after `docker compose up`.
 
-`http://localhost:8001/api/v1/`
-
-## Docker Compose
+## Docker Compose (API :8001 + UI :5173)
 
 ```bash
-docker compose up --build -d
-docker compose logs -f graphyn-api
+export GRAPHYN_API_TOKEN=change-me
+docker compose up --build
 ```
+
+- UI: `http://localhost:5173` (nginx; `/api`, `/files`, `/input-files`, `/run-files` proxy to the API)
+- API: `http://localhost:8001/api/v1/`
+- Named volume `graphyn-home` persists `GRAPHYN_HOME` (plugins + `secrets/` files, mode 0600)
+- `./workspace` is the project dir (`GRAPHYN_PROJECT_DIR`)
 
 Stop:
 
@@ -37,13 +32,20 @@ Stop:
 docker compose down
 ```
 
+## Secrets for live providers
+
+Do **not** put API keys in Graph IR. Store names only in graphs (`auth_env`, provider defaults).
+
+```bash
+# on the host, with GRAPHYN_HOME matching the volume if you exec into the API container
+echo "$OPENAI_API_KEY" | python -m app.cli.main secrets set OPENAI_API_KEY
+echo "$DEEPGRAM_API_KEY" | python -m app.cli.main secrets set DEEPGRAM_API_KEY
+python -m app.cli.main secrets list   # names only
+```
+
+REST: `GET/POST /api/v1/secrets` (Bearer required in this compose profile). List returns names only.
+
 ## GPU Safety Notes
 
 - Compose leaves `CUDA_VISIBLE_DEVICES` empty by default.
-- If GPU is shared with other processes, set a specific device:
-
-```bash
-CUDA_VISIBLE_DEVICES=1 docker compose up -d
-```
-
-- For heavy training/inference workloads, schedule jobs explicitly and avoid unbounded concurrent runs.
+- If GPU is shared, set a specific device: `CUDA_VISIBLE_DEVICES=1 docker compose up --build`

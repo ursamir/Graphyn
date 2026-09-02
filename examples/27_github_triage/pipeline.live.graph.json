@@ -1,0 +1,157 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "github_triage_live",
+    "seed": 42,
+    "description": "Live GitHub triage via http_request + auth_env=GITHUB_TOKEN (no native GitHub node). ASR/LLM use openai_compat. Edit repo URLs before running.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "github",
+      "triage",
+      "workflow"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "gh_list",
+      "node_type": "http_request",
+      "config": {
+        "provider": "http",
+        "method": "GET",
+        "url": "https://api.github.com/repos/example/app/issues",
+        "auth_env": "GITHUB_TOKEN"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "asr",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "openai_compat",
+        "language": "en"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "ingest",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/01_wake_word/data/wake_word",
+        "source_type": "filesystem",
+        "recursive": false,
+        "limit": 1
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "pii",
+      "node_type": "pii_redact",
+      "config": {
+        "engine": "auto"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "llm",
+      "node_type": "structured_llm",
+      "config": {
+        "provider": "openai_compat",
+        "schema_name": "triage",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "severity": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "severity",
+            "summary"
+          ]
+        }
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "branch",
+      "node_type": "if_switch",
+      "config": {
+        "jsonpath": "$.data.severity"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "gh_comment",
+      "node_type": "http_request",
+      "config": {
+        "provider": "http",
+        "method": "POST",
+        "url": "https://api.github.com/repos/example/app/issues/42/comments",
+        "auth_env": "GITHUB_TOKEN"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "ingest",
+      "src_port": "output",
+      "dst_id": "asr",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "asr",
+      "src_port": "output",
+      "dst_id": "pii",
+      "dst_port": "transcript",
+      "condition": null
+    },
+    {
+      "src_id": "pii",
+      "src_port": "transcript",
+      "dst_id": "llm",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "llm",
+      "src_port": "output",
+      "dst_id": "branch",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "branch",
+      "src_port": "true",
+      "dst_id": "gh_comment",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

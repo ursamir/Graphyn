@@ -11,3 +11,7 @@ done
 python -m app.cli.main plugin install PluginPackage/Audio/dataset_ingest/ --upgrade
 python -m app.cli.main run --graph examples/27_github_triage/pipeline.graph.json
 ```
+
+## Live vs mock
+
+Live: `pipeline.live.graph.json` uses `http_request` + `auth_env=GITHUB_TOKEN` (no native GitHub node) and openai_compat. Mock CI: `pipeline.graph.json`.

@@ -16,6 +16,7 @@ Not an audio-only builder. First-class surfaces for:
 | **Data** | `/data/inputs` + `/data/outputs` browser |
 | **Projects** | Project list/create + versions/spec |
 | **System** | Health, readiness, metrics, webhooks, cleanup |
+| **Secrets** | List names + set via `/api/v1/secrets` |
 
 ## Start
 
@@ -39,3 +40,7 @@ Optional: `VITE_API_BASE_URL=http://127.0.0.1:8001/api/v1`
 
 - Graph IR is the only pipeline language in the UI (no YAML-first flow).
 - Domain packs (audio annotation, quality gates, etc.) belong as plugins / optional modules — not the product identity.
+
+## Compose
+
+`docker compose up --build` serves this UI on port 5173. Set GRAPHYN_API_TOKEN and paste it in Settings. Nginx proxies `/api` to the API.

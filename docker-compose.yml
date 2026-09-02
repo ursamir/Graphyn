@@ -1,5 +1,15 @@
 version: "3.9"
 
+# Production-ish local deploy: API + UI. Auth is fail-closed.
+# You MUST set GRAPHYN_API_TOKEN (API/MCP reject empty tokens when AUTH_REQUIRED=1).
+#
+#   export GRAPHYN_API_TOKEN=change-me
+#   docker compose up --build
+#
+# UI: http://localhost:5173  (nginx proxies /api to the API)
+# API: http://localhost:8001/api/v1/
+# Docker Compose only — this repo does not ship a Helm chart.
+
 services:
   graphyn-api:
     build:
@@ -9,12 +19,28 @@ services:
     ports:
       - "8001:8001"
     environment:
-      # Set in shell/.env when needed
+      GRAPHYN_ENV: production
+      GRAPHYN_AUTH_REQUIRED: "1"
       GRAPHYN_API_TOKEN: ${GRAPHYN_API_TOKEN:-}
-      GRAPHYN_HOME: /app/workspace
-      # Keep GPU disabled by default to avoid disrupting shared hosts.
+      GRAPHYN_HOME: /data/graphyn-home
+      GRAPHYN_PROJECT_DIR: /app/workspace
       CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
     volumes:
+      - graphyn-home:/data/graphyn-home
       - ./workspace:/app/workspace
       - ./plugins:/app/plugins
     restart: unless-stopped
+
+  graphyn-ui:
+    build:
+      context: .
+      dockerfile: graphyn-ui/Dockerfile
+    container_name: graphyn-ui
+    ports:
+      - "5173:80"
+    depends_on:
+      - graphyn-api
+    restart: unless-stopped
+
+volumes:
+  graphyn-home:

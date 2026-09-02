@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "nightly_compliance_live",
+    "seed": 42,
+    "description": "Live nightly compliance: openai_compat ASR. Slack-style POST uses http_request with auth_env=SLACK_BOT_TOKEN (no native Slack node; do not put tokens in IR).",
+    "created_at": null,
+    "tags": [
+      "example",
+      "schedule",
+      "compliance",
+      "workflow"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "schedule",
+      "node_type": "schedule_trigger",
+      "config": {
+        "cron": "0 2 * * *",
+        "interval_s": 86400
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": {
+        "source_type": "timer",
+        "source_config": {
+          "cron": "0 2 * * *",
+          "interval_s": 86400
+        }
+      }
+    },
+    {
+      "id": "ingest",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/01_wake_word/data/wake_word",
+        "source_type": "filesystem",
+        "recursive": false,
+        "limit": 2
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "asr",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "openai_compat",
+        "language": "en"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "pii",
+      "node_type": "pii_redact",
+      "config": {
+        "engine": "auto"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "gate",
+      "node_type": "eval_gate",
+      "config": {
+        "check_empty_transcript": true,
+        "required_keys": [],
+        "pii_regex": ""
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "branch",
+      "node_type": "if_switch",
+      "config": {
+        "jsonpath": "$.text"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "slack",
+      "node_type": "http_request",
+      "config": {
+        "provider": "http",
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "auth_env": "SLACK_BOT_TOKEN",
+        "json_body": {
+          "channel": "#compliance",
+          "text": "compliance gate passed"
+        }
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "csv",
+      "node_type": "csv_table",
+      "config": {
+        "operation": "write",
+        "path": "examples/26_nightly_compliance/output/compliance.csv"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "ingest",
+      "src_port": "output",
+      "dst_id": "asr",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "asr",
+      "src_port": "output",
+      "dst_id": "pii",
+      "dst_port": "transcript",
+      "condition": null
+    },
+    {
+      "src_id": "pii",
+      "src_port": "transcript",
+      "dst_id": "gate",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "gate",
+      "src_port": "output",
+      "dst_id": "branch",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "branch",
+      "src_port": "true",
+      "dst_id": "slack",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "branch",
+      "src_port": "false",
+      "dst_id": "csv",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

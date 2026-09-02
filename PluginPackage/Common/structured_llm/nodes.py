@@ -86,7 +86,7 @@ class StructuredLlmNode(Node):
         label="Structured LLM",
         description=(
             "Extract JSON matching a schema from text. "
-            "Mock fills deterministic placeholders; openai_compat uses chat completions."
+            "Default provider is openai_compat (OPENAI_API_KEY). Use provider=mock only for offline CI."
         ),
         category="Processing",
         version="1.0.0",
@@ -119,7 +119,7 @@ class StructuredLlmNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: str = "mock"  # mock | openai_compat
+        provider: str = "openai_compat"  # openai_compat | mock
         json_schema: dict = {}
         schema_name: str = "extracted"
         model: str = "gpt-4o-mini"
@@ -129,7 +129,7 @@ class StructuredLlmNode(Node):
 
     def process(self, value):
         schema = self.config.json_schema or {"type": "object", "properties": {}}
-        provider = (self.config.provider or "mock").strip().lower()
+        provider = (self.config.provider or "openai_compat").strip().lower()
         text = _text_of(value)
         if provider == "mock":
             data = _fill_schema(schema)
@@ -144,11 +144,16 @@ class StructuredLlmNode(Node):
             raise RuntimeError(
                 f"StructuredLlmNode: unknown provider {provider!r}. Use mock or openai_compat."
             )
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        try:
+            from app.core.secrets import resolve_secret
+            api_key = resolve_secret("OPENAI_API_KEY")
+        except Exception:
+            api_key = os.environ.get("OPENAI_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError(
-                "StructuredLlmNode: provider='openai_compat' requires environment "
-                "variable OPENAI_API_KEY. Set the key or use provider='mock'."
+                "StructuredLlmNode: provider='openai_compat' requires secret/env "
+                "OPENAI_API_KEY. Store it with `graphyn secrets set OPENAI_API_KEY` "
+                "or export the env var. Use provider='mock' only for offline CI."
             )
         data = self._openai_extract(api_key, text, schema)
         return StructuredDocument(

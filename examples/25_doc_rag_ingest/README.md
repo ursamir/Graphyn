@@ -17,3 +17,7 @@ python -m app.cli.main plugin install PluginPackage/Common/object_store/ --upgra
 
 python -m app.cli.main run --graph examples/25_doc_rag_ingest/pipeline.graph.json
 ```
+
+## Live vs mock
+
+`pipeline.live.graph.json` is the same local-files path (no cloud providers).

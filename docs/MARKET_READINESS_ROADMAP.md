@@ -15,6 +15,29 @@ Use this prompt for future planning tasks:
 
 Deliver a production workflow platform for typed DAG pipelines (GraphIR) that is safe, operable, and usable across SDK, CLI, API, MCP, and UI.
 
+
+## Run a real local app (not mock-as-default)
+
+Graphyn is a local-first workflow OS. Audio is a pack, not the product identity. Live providers are the node defaults; `provider: mock` is opt-in for CI.
+
+```bash
+pip install -e .
+export OPENAI_API_KEY=...          # or DEEPGRAM_API_KEY
+python -m app.cli.main secrets set OPENAI_API_KEY
+python -m app.cli.main plugin install PluginPackage/Common/asr_transcribe/ --upgrade
+python -m app.cli.main run --graph examples/22_call_analytics/pipeline.live.graph.json
+```
+
+Deploy (fail-closed auth, API + UI, persisted GRAPHYN_HOME):
+
+```bash
+export GRAPHYN_API_TOKEN=change-me
+docker compose up --build
+# UI http://localhost:5173  API http://localhost:8001/api/v1/
+```
+
+No Helm chart is provided. MCP exposes 20 tools (`secrets_list`, `secrets_set` included). Never put API keys in Graph IR.
+
 ## Who Uses It
 
 - ML engineers building data/training/inference workflows.

@@ -44,7 +44,7 @@ Use this table to find the example that demonstrates a specific feature:
 | Capability-aware scheduling | 19 |
 | Retry + fault tolerance | 20 |
 | Runtime control (pause / resume / cancel) | 21 |
-| Call analytics (ASR → PII → LLM → webhook) | 22 |
+| Call analytics (ASR → PII → LLM → webhook; live Deepgram/OpenAI in pipeline.live.graph.json) | 22 |
 | Meeting CRM extract | 23 |
 | Caption export (SRT/VTT) | 24 |
 | Doc chunk ingest → object store | 25 |

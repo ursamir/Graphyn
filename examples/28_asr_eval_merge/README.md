@@ -9,3 +9,7 @@ done
 python -m app.cli.main plugin install PluginPackage/Audio/dataset_ingest/ --upgrade
 python -m app.cli.main run --graph examples/28_asr_eval_merge/pipeline.graph.json
 ```
+
+## Live vs mock
+
+Live: `pipeline.live.graph.json` uses openai_compat ASR (`OPENAI_API_KEY`). Mock CI: `pipeline.graph.json`.
