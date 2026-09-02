@@ -93,7 +93,7 @@ class SpeechEnhancerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "auto"           # "spectral" | "deepfilter" | "auto"
+        backend: str = "spectral"      # "spectral" | "deepfilter" | "auto" — default CPU, no torch
         denoise: bool = True
         dereverb: bool = False
         vocal_isolation: bool = False

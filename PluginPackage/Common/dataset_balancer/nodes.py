@@ -18,6 +18,7 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+from app.models.dataset_artifact import DatasetArtifact
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class DatasetBalancerNode(Node):
     input_ports: ClassVar[dict[str, InputPort]] = {
         "input": InputPort(
             name="input",
-            data_type=object,
+            data_type=DatasetArtifact,
             cardinality="single",
             required=True,
             description="DatasetArtifact from dataset_builder",
@@ -71,7 +72,7 @@ class DatasetBalancerNode(Node):
     output_ports: ClassVar[dict[str, OutputPort]] = {
         "output": OutputPort(
             name="output",
-            data_type=object,
+            data_type=DatasetArtifact,
             description="Balanced DatasetArtifact",
         )
     }

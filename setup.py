@@ -28,6 +28,8 @@ setup(
         "librosa~=0.10.2",
         "soundfile~=0.12.1",
         "noisereduce~=3.0.3",
+        "pyloudnorm>=0.1.1",
+        "webrtcvad~=2.0.10",
         "pydantic~=2.10.6",
         "httpx>=0.24.0",
         "python-multipart~=0.0.20",

@@ -77,7 +77,7 @@ class RealtimeInferenceNode(Node):
     input_ports: ClassVar[dict] = {
         "input": InputPort(
             name="input",
-            data_type=list,
+            data_type=list[FeatureArray],
             cardinality="single",
             required=True,
             description="List of FeatureArray objects.",
@@ -87,7 +87,7 @@ class RealtimeInferenceNode(Node):
     output_ports: ClassVar[dict] = {
         "output": OutputPort(
             name="output",
-            data_type=list,
+            data_type=list[PredictionResult],
             description="List of PredictionResult objects.",
         )
     }

@@ -7,9 +7,7 @@ Migrated from app/core/nodes/ml/model_evaluator.py and expanded with:
   - Absorbs confusion_matrix_node.py and training_curves_node.py logic
   - Saves metrics.json to output_path
 
-Import note: DatasetArtifact is accessed at runtime via attribute access on the
-dataset input — we do NOT import it at module level to avoid coupling to the
-dataset_builder plugin. The dataset port uses data_type=object.
+DatasetArtifact is the platform type ``app.models.dataset_artifact``.
 """
 # NOTE: No `from __future__ import annotations` — avoids Pydantic forward-ref issues.
 
@@ -24,6 +22,7 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+from app.models.dataset_artifact import DatasetArtifact
 from app.models.model_artifact import ModelArtifact
 
 log = logging.getLogger(__name__)
@@ -202,10 +201,10 @@ class EvaluatorNode(Node):
         ),
         "dataset": InputPort(
             name="dataset",
-            data_type=object,
+            data_type=DatasetArtifact,
             cardinality="single",
             required=True,
-            description="DatasetArtifact from DatasetBuilderNode (accessed by attribute at runtime).",
+            description="DatasetArtifact from DatasetBuilderNode.",
         ),
     }
 

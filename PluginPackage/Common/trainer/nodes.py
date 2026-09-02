@@ -5,12 +5,8 @@ Migrated from app/core/nodes/ml/model_trainer.py and expanded with:
   - PyTorch training loop with EarlyStopping and Adam optimizer
   - Mixed precision support (Keras mixed_float16 / torch.cuda.amp.autocast)
   - Backend auto-detection (prefers Keras/TF if available, else PyTorch)
-  - DatasetArtifact input (accessed by attribute name at runtime)
+  - DatasetArtifact input (platform type app.models.dataset_artifact)
   - Configurable output path, patience, batch size, epochs
-
-Import note: DatasetArtifact is accessed at runtime via attribute access on the
-dataset input — we do NOT import it at module level to avoid coupling to the
-dataset_builder plugin. The dataset port uses data_type=object.
 """
 # NOTE: No `from __future__ import annotations` — avoids Pydantic forward-ref issues.
 
@@ -24,6 +20,7 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+from app.models.dataset_artifact import DatasetArtifact
 from app.models.model_artifact import ModelArtifact
 
 log = logging.getLogger(__name__)
@@ -84,7 +81,7 @@ class TrainerNode(Node):
         ),
         "dataset": InputPort(
             name="dataset",
-            data_type=object,
+            data_type=DatasetArtifact,
             cardinality="single",
             required=True,
             description="DatasetArtifact from DatasetBuilderNode.",
@@ -646,7 +643,7 @@ class ModelBuilderNode(Node):
     input_ports: ClassVar[dict] = {
         "input": InputPort(
             name="input",
-            data_type=object,
+            data_type=DatasetArtifact,
             cardinality="single",
             required=True,
             description="DatasetArtifact from DatasetBuilderNode.",

@@ -128,3 +128,112 @@ def test_dataset_builder_ast_output_is_dataset_artifact_without_importing_plugin
         trainer.input_ports["input"].data_type,
     )
 
+
+
+def _specs(rel: str) -> dict:
+    path = repo_root() / rel
+    return specs_from_source(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def test_isolated_trainer_dataset_port_is_dataset_artifact() -> None:
+    trainer = _specs("PluginPackage/Common/trainer/nodes.py")["trainer"]
+    assert trainer.input_ports["dataset"].data_type is DatasetArtifact
+    builder = _specs("PluginPackage/Common/dataset_builder/nodes.py")["dataset_builder"]
+    assert CompatibilityChecker.are_compatible(
+        builder.output_ports["output"].data_type,
+        trainer.input_ports["dataset"].data_type,
+    )
+
+
+def test_isolated_realtime_inference_ports_are_platform_lists() -> None:
+    from typing import get_args, get_origin
+
+    from app.models.feature_array import FeatureArray
+    from app.models.prediction_result import PredictionResult
+
+    inf = _specs("PluginPackage/Common/realtime_inference/nodes.py")["realtime_inference"]
+    in_dt = inf.input_ports["input"].data_type
+    out_dt = inf.output_ports["output"].data_type
+    assert get_origin(in_dt) is list
+    assert get_args(in_dt) == (FeatureArray,)
+    assert get_origin(out_dt) is list
+    assert get_args(out_dt) == (PredictionResult,)
+    frontend = _specs("PluginPackage/Audio/feature_frontend/nodes.py")["feature_frontend"]
+    assert CompatibilityChecker.are_compatible(
+        frontend.output_ports["output"].data_type,
+        inf.input_ports["input"].data_type,
+    )
+
+
+def test_isolated_edge_optimizer_ports_are_platform_artifacts() -> None:
+    from app.models.deployment_artifact import DeploymentArtifact
+
+    edge = _specs("PluginPackage/Common/edge_optimizer/nodes.py")["edge_optimizer"]
+    assert edge.input_ports["input"].data_type is ModelArtifact
+    assert edge.output_ports["output"].data_type is DeploymentArtifact
+    evaluator = _specs("PluginPackage/Common/evaluator/nodes.py")["evaluator"]
+    assert CompatibilityChecker.are_compatible(
+        evaluator.output_ports["output"].data_type,
+        edge.input_ports["input"].data_type,
+    )
+
+
+_ISOLATED_PACKAGES = (
+    ("PluginPackage/Common/trainer", "trainer", ("trainer", "model_builder")),
+    ("PluginPackage/Common/edge_optimizer", "edge-optimizer", ("edge_optimizer",)),
+    ("PluginPackage/Common/realtime_inference", "realtime-inference", ("realtime_inference",)),
+)
+
+
+def test_isolated_stub_config_and_ports_match_ast(tmp_path: Path, fresh_registry) -> None:
+    """Host stubs must expose real Config fields and platform port types."""
+    from app.core.plugins.isolated_schema import config_class_for_spec, ports_for_spec
+    from app.core.plugins.loader import PluginLoader
+    from app.core.plugins.manifest import load_manifest
+    from app.core.plugins.venv_manager import PluginVenvManager as _VenvMgr
+    from unit_test.core.plugins.test_dep_isolation import _mock_ensure
+
+    loader = PluginLoader(fresh_registry)
+    loaded: list[str] = []
+    try:
+        with patch.object(_VenvMgr, "ensure", side_effect=_mock_ensure):
+            for rel, plugin_name, node_types in _ISOLATED_PACKAGES:
+                plugin_dir = repo_root() / rel
+                loader.load(plugin_dir)
+                loaded.append(plugin_name)
+                manifest = load_manifest(plugin_dir)
+                ast_specs = {
+                    k: v
+                    for path in (plugin_dir / ep for ep in manifest.entry_points)
+                    if path.is_file()
+                    for k, v in specs_from_source(
+                        path.read_text(encoding="utf-8"), filename=str(path)
+                    ).items()
+                }
+                for node_type in node_types:
+                    spec = ast_specs[node_type]
+                    cls = fresh_registry.get_class(node_type)
+                    ast_fields = {name for name, _t, _d in spec.config_fields}
+                    stub_fields = set(cls.Config.model_fields) - set(
+                        getattr(cls.Config.__bases__[0], "model_fields", {})
+                    )
+                    # NodeConfig may add shared fields; require every AST field present.
+                    missing = ast_fields - set(cls.Config.model_fields)
+                    assert not missing, f"{node_type} stub missing Config fields: {missing}"
+                    in_ports, out_ports = ports_for_spec(spec)
+                    assert set(cls.input_ports) == set(in_ports)
+                    assert set(cls.output_ports) == set(out_ports)
+                    for name, port in cls.input_ports.items():
+                        assert port.data_type == in_ports[name].data_type
+                    for name, port in cls.output_ports.items():
+                        assert port.data_type == out_ports[name].data_type
+                    # extra_forbidden: a real graph knob must not fail
+                    payload = {name: default for name, _t, default in spec.config_fields}
+                    if node_type == "realtime_inference":
+                        payload["model_path"] = "workspace/models/model.tflite"
+                    cls.Config.model_validate(payload)
+                    cfg_cls = config_class_for_spec(node_type, spec, None)
+                    cfg_cls.model_validate(payload)
+    finally:
+        for name in loaded:
+            get_runtime_registry().unregister_plugin(name)
