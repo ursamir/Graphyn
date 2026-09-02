@@ -20,10 +20,10 @@ dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
     "librosa>=0.10",
+    "noisereduce>=3.0,<4",
 ]
 
 optional_dependencies = [
-    "noisereduce>=3.0",
     "deepfilternet>=0.5",
     "torch>=2.0",
 ]

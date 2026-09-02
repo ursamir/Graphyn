@@ -1,6 +1,8 @@
 # Core
 numpy==1.26.4
+scipy==1.14.1
 librosa==0.10.2.post1
+noisereduce==3.0.3
 soundfile==0.12.1
 PyYAML==6.0.2
 

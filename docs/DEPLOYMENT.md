@@ -49,3 +49,8 @@ REST: `GET/POST /api/v1/secrets` (Bearer required in this compose profile). List
 
 - Compose leaves `CUDA_VISIBLE_DEVICES` empty by default.
 - If GPU is shared, set a specific device: `CUDA_VISIBLE_DEVICES=1 docker compose up --build`
+
+## Runtime extras (speech_enhancer)
+
+The default **spectral** backend for podcast-leveling uses `scipy` and `noisereduce` (3.x). Those packages are in `requirements.txt` / `setup.py` `install_requires`, so the Compose image already installs them via `pip install -r requirements.txt`. **Do not** add `torch` or `deepfilternet` to the base image; they remain optional for the DeepFilterNet backend.
+
