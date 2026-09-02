@@ -23,7 +23,8 @@ from typing import Any
 
 GENERATE_GRAPH_DESCRIPTION = (
     "Generate a validated GraphIR JSON document from a list of node specifications. "
-    "Optionally provide explicit edges; otherwise nodes are auto-chained in order."
+    "Optionally provide explicit edges (with optional condition) and node ids / event_trigger; "
+    "otherwise nodes are auto-chained in order."
 )
 
 GENERATE_GRAPH_SCHEMA = {
@@ -38,6 +39,15 @@ GENERATE_GRAPH_SCHEMA = {
                 "properties": {
                     "node_type": {"type": "string"},
                     "config": {"type": "object", "additionalProperties": True},
+                    "id": {
+                        "type": "string",
+                        "description": "Optional stable node id (alphanumeric, underscore, hyphen).",
+                    },
+                    "event_trigger": {
+                        "type": "object",
+                        "description": "Optional event trigger binding (source_type, source_config).",
+                        "additionalProperties": True,
+                    },
                 },
                 "required": ["node_type"],
             },
@@ -55,6 +65,10 @@ GENERATE_GRAPH_SCHEMA = {
                     "src_port": {"type": "string"},
                     "dst_id": {"type": "string"},
                     "dst_port": {"type": "string"},
+                    "condition": {
+                        "type": "string",
+                        "description": "Optional boolean condition expression on the source output dict.",
+                    },
                 },
                 "required": ["src_id", "src_port", "dst_id", "dst_port"],
             },
@@ -166,6 +180,90 @@ GET_EVENT_SCHEMA_SCHEMA = {
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
 
+
+def _schedule_event_trigger(spec: dict[str, Any]) -> dict[str, Any] | None:
+    """Preserve caller event_trigger, or derive one for schedule_trigger nodes."""
+    explicit = spec.get("event_trigger")
+    if isinstance(explicit, dict) and explicit:
+        return dict(explicit)
+    if spec.get("node_type") != "schedule_trigger":
+        return None
+    cfg = spec.get("config") or {}
+    return {
+        "source_type": "timer",
+        "source_config": {
+            "cron": cfg.get("cron") or "",
+            "interval_s": cfg.get("interval_s") if cfg.get("interval_s") is not None else cfg.get("interval", 0),
+        },
+    }
+
+
+def _rebuild_graph_with_ids_triggers_conditions(
+    graph: Any,
+    node_specs: list[dict[str, Any]],
+    edges: list[dict[str, Any]] | None,
+    current_ir_version: str,
+) -> Any:
+    """Re-apply node ids, event_trigger, and edge conditions dropped by Pipeline.to_ir()."""
+    from app.core.ir.models import GraphIR, IREdge, IRNode
+
+    id_map: dict[str, str] = {}
+    new_nodes = []
+    for spec, ir_node in zip(node_specs, graph.nodes):
+        requested = spec.get("id")
+        new_id = requested or ir_node.id
+        id_map[ir_node.id] = new_id
+        event_trigger = _schedule_event_trigger(spec)
+        if event_trigger is None:
+            event_trigger = ir_node.event_trigger
+        cfg = ir_node.config
+        if isinstance(cfg, MappingProxyType):
+            cfg = dict(cfg)
+        elif not isinstance(cfg, dict):
+            cfg = dict(cfg) if cfg else {}
+        new_nodes.append(
+            IRNode(
+                id=new_id,
+                node_type=ir_node.node_type,
+                config=cfg,
+                label=ir_node.label,
+                capability_metadata=ir_node.capability_metadata,
+                event_trigger=event_trigger,
+            )
+        )
+
+    if edges:
+        ir_edges = [
+            IREdge(
+                src_id=e["src_id"],
+                src_port=e["src_port"],
+                dst_id=e["dst_id"],
+                dst_port=e["dst_port"],
+                condition=e.get("condition"),
+            )
+            for e in edges
+        ]
+    else:
+        ir_edges = [
+            IREdge(
+                src_id=id_map.get(e.src_id, e.src_id),
+                src_port=e.src_port,
+                dst_id=id_map.get(e.dst_id, e.dst_id),
+                dst_port=e.dst_port,
+                condition=e.condition,
+            )
+            for e in graph.edges
+        ]
+
+    return GraphIR(
+        schema_version=current_ir_version,
+        metadata=graph.metadata,
+        nodes=new_nodes,
+        edges=ir_edges,
+        parameters=graph.parameters,
+    )
+
+
 def generate_graph_handler(arguments: dict[str, Any]) -> Any:
     """Generate a validated GraphIR from a node list (Req 3.1–3.5, 3.10, 3.12).
 
@@ -191,7 +289,6 @@ def generate_graph_handler(arguments: dict[str, Any]) -> Any:
         if isinstance(value, (list, tuple)):
             return [_to_plain_jsonable(v) for v in value]
         return value
-    from app.core.ir.models import GraphIR, IREdge
     from app.core.registry_runtime import get_registry
     from app.core.sdk import Pipeline, PipelineNode
 
@@ -261,37 +358,18 @@ def generate_graph_handler(arguments: dict[str, Any]) -> Any:
     # empty list most likely means the caller omitted edges rather than intending
     # a disconnected graph. Callers that genuinely want a disconnected graph must
     # pass at least one edge and then remove connections at the IR level.
-    if edges:
-        graph = pipeline.to_ir()
-        ir_edges = [
-            IREdge(
-                src_id=e["src_id"],
-                src_port=e["src_port"],
-                dst_id=e["dst_id"],
-                dst_port=e["dst_port"],
-            )
-            for e in edges
-        ]
-        # Rebuild GraphIR with explicit edges, preserving all other fields.
-        # GraphIR's model_validator checks edge references; catch validation errors.
-        try:
-            graph = GraphIR(
-                schema_version=CURRENT_IR_VERSION,
-                metadata=graph.metadata,
-                nodes=graph.nodes,
-                edges=ir_edges,
-                parameters=graph.parameters,
-            )
-        except Exception as exc:
-            return {
-                "error": True,
-                "error_type": "ir_validation_error",
-                "message": str(exc),
-                "errors": [str(exc)],
-            }
-    else:
-        # Req 3.2: auto-chained (output → input) by Pipeline._build_ir().
-        graph = pipeline.to_ir()
+    graph = pipeline.to_ir()
+    try:
+        graph = _rebuild_graph_with_ids_triggers_conditions(
+            graph, node_specs, edges if edges else None, CURRENT_IR_VERSION
+        )
+    except Exception as exc:
+        return {
+            "error": True,
+            "error_type": "ir_validation_error",
+            "message": str(exc),
+            "errors": [str(exc)],
+        }
 
     # ── Step 5: Validate via load_ir ──────────────────────────────────────────
     # Req 3.3: validate the final graph before returning.

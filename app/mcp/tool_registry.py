@@ -80,6 +80,17 @@ def register_all_tools(register: Callable) -> None:
         OPTIMIZE_EXECUTION_DESCRIPTION,
         OPTIMIZE_EXECUTION_SCHEMA,
     )
+    from app.mcp.handlers.plugins import (
+        INSTALL_PLUGIN_DESCRIPTION,
+        INSTALL_PLUGIN_SCHEMA,
+        LIST_PLUGINS_DESCRIPTION,
+        LIST_PLUGINS_SCHEMA,
+        MANAGE_PLUGIN_DESCRIPTION,
+        MANAGE_PLUGIN_SCHEMA,
+        install_plugin_handler,
+        list_plugins_handler,
+        manage_plugin_handler,
+    )
 
     register("list_nodes", LIST_NODES_DESCRIPTION, LIST_NODES_SCHEMA, list_nodes_handler)
     register("generate_graph", GENERATE_GRAPH_DESCRIPTION, GENERATE_GRAPH_SCHEMA, generate_graph_handler)
@@ -96,3 +107,6 @@ def register_all_tools(register: Callable) -> None:
     register("get_artifact_lineage", GET_ARTIFACT_LINEAGE_DESCRIPTION, GET_ARTIFACT_LINEAGE_SCHEMA, get_artifact_lineage_handler)
     register("replay_run", REPLAY_RUN_DESCRIPTION, REPLAY_RUN_SCHEMA, replay_run_handler)
     register("optimize_execution", OPTIMIZE_EXECUTION_DESCRIPTION, OPTIMIZE_EXECUTION_SCHEMA, optimize_execution_handler)
+    register("install_plugin", INSTALL_PLUGIN_DESCRIPTION, INSTALL_PLUGIN_SCHEMA, install_plugin_handler)
+    register("list_plugins", LIST_PLUGINS_DESCRIPTION, LIST_PLUGINS_SCHEMA, list_plugins_handler)
+    register("manage_plugin", MANAGE_PLUGIN_DESCRIPTION, MANAGE_PLUGIN_SCHEMA, manage_plugin_handler)

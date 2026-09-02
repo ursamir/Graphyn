@@ -2,6 +2,8 @@
 """Tests for app/mcp/handlers/graph.py — Req 12."""
 from __future__ import annotations
 
+import pytest
+
 from app.mcp.handlers.graph import (
     generate_graph_handler,
     validate_graph_handler,
@@ -142,3 +144,73 @@ class TestGetEventSchema:
         types = [e["type"] for e in result["event_types"]]
         assert "done" in types
         assert "error" in types
+
+
+def _ensure_dummy_node():
+    """Register a tiny SISO node on the global registry for generate_graph tests."""
+    from typing import ClassVar
+    from app.core.nodes import registry
+    from app.core.nodes.base import Node
+    from app.core.nodes.config import NodeConfig
+    from app.core.nodes.metadata import NodeMetadata
+    from app.core.nodes.ports import InputPort, OutputPort
+
+    if "wf_dummy" in registry:
+        return
+
+    class WfDummy(Node):
+        node_type: ClassVar[str] = "wf_dummy"
+        input_ports: ClassVar[dict] = {
+            "input": InputPort(name="input", data_type=object | None, required=False),
+        }
+        output_ports: ClassVar[dict] = {
+            "output": OutputPort(name="output", data_type=object),
+            "true": OutputPort(name="true", data_type=object),
+            "false": OutputPort(name="false", data_type=object),
+        }
+        metadata: ClassVar[NodeMetadata] = NodeMetadata(
+            node_type="wf_dummy",
+            label="WF Dummy",
+            description="Dummy node for MCP generate_graph tests.",
+            category="Test",
+        )
+
+        class Config(NodeConfig):
+            pass
+
+        def process(self, inputs):
+            return {"output": inputs.get("input"), "true": None, "false": None}
+
+    registry.register("wf_dummy", WfDummy, WfDummy.metadata)
+
+
+class TestGenerateGraphConditionAndTrigger:
+    def test_preserves_edge_condition(self):
+        _ensure_dummy_node()
+        result = generate_graph_handler({
+            "nodes": [
+                {"node_type": "wf_dummy", "id": "src"},
+                {"node_type": "wf_dummy", "id": "dst"},
+            ],
+            "edges": [{
+                "src_id": "src",
+                "src_port": "output",
+                "dst_id": "dst",
+                "dst_port": "input",
+                "condition": "output['output'] is not None",
+            }],
+        })
+        assert not result.get("error"), result
+        assert result["edges"][0]["condition"] == "output['output'] is not None"
+        assert result["nodes"][0]["id"] == "src"
+        assert result["nodes"][1]["id"] == "dst"
+
+    def test_preserves_event_trigger(self):
+        _ensure_dummy_node()
+        trigger = {"source_type": "timer", "source_config": {"cron": "0 * * * *"}}
+        result = generate_graph_handler({
+            "nodes": [{"node_type": "wf_dummy", "id": "sched", "event_trigger": trigger}],
+        })
+        assert not result.get("error"), result
+        assert result["nodes"][0]["event_trigger"]["source_type"] == "timer"
+        assert result["nodes"][0]["id"] == "sched"

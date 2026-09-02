@@ -1,0 +1,15 @@
+[plugin]
+name             = "python-code"
+version          = "1.0.0"
+description      = "Restricted Python snippet node. Sets output or defines process(inputs, config)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["python", "code", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["python_code"]

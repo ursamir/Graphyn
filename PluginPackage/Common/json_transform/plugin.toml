@@ -1,0 +1,15 @@
+[plugin]
+name             = "json-transform"
+version          = "1.0.0"
+description      = "Stdlib JSONPath/dotted-path extract and remap. No exec."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["json", "transform", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["json_transform"]

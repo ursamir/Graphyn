@@ -1,0 +1,15 @@
+[plugin]
+name             = "schedule-trigger"
+version          = "1.0.0"
+description      = "Source node that emits a tick payload; cron/interval metadata for event-driven runs."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["schedule", "trigger", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["schedule_trigger"]

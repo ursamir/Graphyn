@@ -9,10 +9,10 @@ Owns:             Re-export declarations for all MCP tool handlers and their
 Public Surface:   list_nodes_handler, generate_graph_handler,
                   validate_graph_handler, get_graph_schema_handler,
                   get_graph_capability_summary_handler, get_event_schema_handler,
-                  inspect_run_handler, and all *_DESCRIPTION / *_SCHEMA constants.
+                  inspect_run_handler, plugin handlers, and all *_DESCRIPTION / *_SCHEMA constants.
 Must NOT:         Contain handler logic — delegate to the individual handler
                   modules (discovery, graph, execution, artifacts, etc.).
-Dependencies:     app.mcp.handlers.{discovery, graph, artifacts}.
+Dependencies:     app.mcp.handlers.{discovery, graph, artifacts, plugins}.
 Reason To Change: New MCP tool handler is added or an existing one is renamed.
 """
 from __future__ import annotations
@@ -39,6 +39,15 @@ __all__ = [
     "inspect_run_handler",
     "INSPECT_RUN_DESCRIPTION",
     "INSPECT_RUN_SCHEMA",
+    "install_plugin_handler",
+    "list_plugins_handler",
+    "manage_plugin_handler",
+    "INSTALL_PLUGIN_DESCRIPTION",
+    "INSTALL_PLUGIN_SCHEMA",
+    "LIST_PLUGINS_DESCRIPTION",
+    "LIST_PLUGINS_SCHEMA",
+    "MANAGE_PLUGIN_DESCRIPTION",
+    "MANAGE_PLUGIN_SCHEMA",
 ]
 
 from app.mcp.handlers.discovery import (
@@ -67,4 +76,16 @@ from app.mcp.handlers.artifacts import (
     INSPECT_RUN_DESCRIPTION,
     INSPECT_RUN_SCHEMA,
     inspect_run_handler,
+)
+
+from app.mcp.handlers.plugins import (
+    INSTALL_PLUGIN_DESCRIPTION,
+    INSTALL_PLUGIN_SCHEMA,
+    LIST_PLUGINS_DESCRIPTION,
+    LIST_PLUGINS_SCHEMA,
+    MANAGE_PLUGIN_DESCRIPTION,
+    MANAGE_PLUGIN_SCHEMA,
+    install_plugin_handler,
+    list_plugins_handler,
+    manage_plugin_handler,
 )

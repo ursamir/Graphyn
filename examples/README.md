@@ -1,6 +1,6 @@
 # AudioBuilder — Examples
 
-This directory contains **25 production-grade examples** that cover the full feature set of the platform — from audio ML pipelines to agent-native MCP operation, parallel execution, provenance tracking, plugin development, and general-purpose workflow execution.
+This directory contains **28 production-grade examples** that cover the full feature set of the platform — from audio ML pipelines to agent-native MCP operation, parallel execution, provenance tracking, plugin development, and general-purpose workflow execution.
 
 ---
 
@@ -48,6 +48,9 @@ Use this table to find the example that demonstrates a specific feature:
 | Meeting CRM extract | 23 |
 | Caption export (SRT/VTT) | 24 |
 | Doc chunk ingest → object store | 25 |
+| Nightly compliance (schedule + IF + HTTP mock/CSV) | 26 |
+| GitHub triage via http_request + IF | 27 |
+| ASR + python_code fan-out → merge → CSV | 28 |
 
 ---
 

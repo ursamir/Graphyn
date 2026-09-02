@@ -18,7 +18,7 @@ Thin delegation shell — all business logic stays in SDK/core. No handler shoul
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — 15 tools
+├── tool_registry.py   # register_all_tools() — 18 tools
 └── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
@@ -27,7 +27,8 @@ app/mcp/
     ├── artifacts.py   # inspect_run
     ├── run_control.py # pause_run, resume_run, cancel_run
     ├── provenance.py  # list_artifacts, get_artifact_lineage, replay_run
-    └── optimization.py # optimize_execution
+    ├── optimization.py # optimize_execution
+    └── plugins.py      # install_plugin, list_plugins, manage_plugin
 ```
 
 ## Start
@@ -44,7 +45,7 @@ Transport: **stdio** — JSON-RPC on stdin/stdout. Logs to stderr only.
 
 Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`. Empty token = no auth. Wrong/absent = `{"error_type": "unauthorized"}`.
 
-## All 15 Tools
+## All 18 Tools
 
 | Tool | Handler | Delegates to |
 |---|---|---|
@@ -63,6 +64,9 @@ Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`
 | `get_artifact_lineage` | `provenance.py` | `ProvenanceStore.get_lineage()` |
 | `replay_run` | `provenance.py` | `load_ir_from_file()`, `get_backend().execute()`, `RunManager` |
 | `optimize_execution` | `optimization.py` | `PipelineGraph`, `_resolve_capability()` |
+| `install_plugin` | `plugins.py` | `PluginManager.install` + `load_enabled_plugins` |
+| `list_plugins` | `plugins.py` | `PluginManager.list_installed` |
+| `manage_plugin` | `plugins.py` | enable / disable / uninstall |
 
 ## `list_nodes` Dispatch (priority order)
 

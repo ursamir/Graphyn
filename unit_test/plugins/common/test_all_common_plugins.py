@@ -28,6 +28,16 @@ ALL_COMMON_PLUGINS = [
     ("PluginPackage/Common/doc_parse_chunk/", "doc_parse_chunk"),
     ("PluginPackage/Common/caption_export/", "caption_export"),
     ("PluginPackage/Common/object_store/", "object_store"),
+    ("PluginPackage/Common/http_request/", "http_request"),
+    ("PluginPackage/Common/if_switch/", "if_switch"),
+    ("PluginPackage/Common/set_map/", "set_map"),
+    ("PluginPackage/Common/json_transform/", "json_transform"),
+    ("PluginPackage/Common/schedule_trigger/", "schedule_trigger"),
+    ("PluginPackage/Common/python_code/", "python_code"),
+    ("PluginPackage/Common/error_catch/", "error_catch"),
+    ("PluginPackage/Common/merge/", "merge"),
+    ("PluginPackage/Common/wait_delay/", "wait_delay"),
+    ("PluginPackage/Common/csv_table/", "csv_table"),
 ]
 
 NEW_COMMON = {
@@ -39,6 +49,16 @@ NEW_COMMON = {
     "doc_parse_chunk",
     "caption_export",
     "object_store",
+    "http_request",
+    "if_switch",
+    "set_map",
+    "json_transform",
+    "schedule_trigger",
+    "python_code",
+    "error_catch",
+    "merge",
+    "wait_delay",
+    "csv_table",
 }
 
 

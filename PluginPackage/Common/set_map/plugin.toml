@@ -1,0 +1,15 @@
+[plugin]
+name             = "set-map"
+version          = "1.0.0"
+description      = "Copy, rename, and drop fields on dict/list payloads."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["transform", "map", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["set_map"]

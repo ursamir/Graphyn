@@ -1,0 +1,15 @@
+[plugin]
+name             = "if-switch"
+version          = "1.0.0"
+description      = "Branch on expression or JSONPath; true/false (and optional cases) outputs."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["logic", "branch", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["if_switch"]

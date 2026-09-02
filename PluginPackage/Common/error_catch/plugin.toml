@@ -1,0 +1,15 @@
+[plugin]
+name             = "error-catch"
+version          = "1.0.0"
+description      = "Passthrough node with an error port; NodeExecutor can continue on on_error_port."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["error", "catch", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["error_catch"]

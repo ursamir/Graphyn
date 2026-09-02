@@ -1,6 +1,6 @@
 # Plugin Nodes — Complete Reference
 
-**38 node types** across Audio + Common packages (`model_builder` ships inside the `trainer` plugin). For architecture, data types, and install patterns → `ARCHITECTURE.md`. Fresh-install gaps: see `docs/KNOWN_ISSUES.md` (PLUGIN-LOAD-1).
+**48 node types** across Audio + Common packages (`model_builder` ships inside the `trainer` plugin). For architecture, data types, and install patterns → `ARCHITECTURE.md`. Fresh-install gaps: see `docs/KNOWN_ISSUES.md` (PLUGIN-LOAD-1).
 
 ---
 
@@ -638,6 +638,138 @@ S3 requires boto3.
 
 ---
 
+
+### `http_request` — Generic HTTP
+**Category:** Output | **Version:** v1.0.0
+
+```python
+method: str = "GET"
+url: str = ""
+headers: dict = {}
+query: dict = {}
+json_body: dict | None = None
+timeout_s: float = 30.0
+retry: int = 0
+provider: str = "http"  # "http" | "mock"
+mock_response: dict = {}
+auth_env: str = ""      # env var NAME, e.g. GITHUB_TOKEN
+```
+
+**Ports:** optional `input` → `output: HttpResponse`
+
+---
+
+### `if_switch` — Branch
+**Category:** Logic | **Version:** v1.0.0
+
+```python
+expression: str = ""    # conditions.py against output dict
+jsonpath: str = ""
+cases: list = []
+```
+
+**Ports:** `input` → `true` + `false` + `cases` + `output: BranchResult`
+
+---
+
+### `set_map` — Copy / rename / drop
+**Category:** Transform | **Version:** v1.0.0
+
+```python
+copy: dict = {}
+rename: dict = {}
+drop: list = []
+set: dict = {}
+```
+
+**Ports:** `input` (dict or list) → `output: MappedPayload`
+
+---
+
+### `json_transform` — Dotted / JSONPath
+**Category:** Transform | **Version:** v1.0.0
+
+```python
+path: str = ""
+mappings: list = []  # [{"from": "$.a.b", "to": "b"}]
+pick: list = []
+```
+
+No `exec`. Stdlib-first.
+
+---
+
+### `schedule_trigger` — Cron / interval source
+**Category:** Input | **Version:** v1.0.0
+
+```python
+cron: str = ""
+interval_s: float = 0.0
+```
+
+**Ports:** none → `output: TickEvent`. Sets IR `event_trigger` when generated via MCP.
+
+---
+
+### `python_code` — Restricted snippet
+**Category:** Transform | **Version:** v1.0.0
+
+```python
+source: str = ""
+allowed_paths: list = []
+allow_network: bool = False
+```
+
+Signature `process(inputs, config)` or assign `output`. Blocks `os.system`, `subprocess`, `open` unless `allowed_paths`.
+
+---
+
+### `error_catch` — Error port
+**Category:** Logic | **Version:** v1.0.0
+
+```python
+on_error: str = "continue_error_output"
+on_error_port: str = "error"
+```
+
+**Ports:** `input` + `error` → `output` + `error`. NodeExecutor continues onto `on_error_port` instead of failing the DAG.
+
+---
+
+### `merge` — Append / combine_by_key
+**Category:** Transform | **Version:** v1.0.0
+
+```python
+mode: str = "append"  # "append" | "combine_by_key"
+key: str = "id"
+```
+
+**Ports:** `a` + `b` → `output: MergedPayload`
+
+---
+
+### `wait_delay` — Sleep
+**Category:** Logic | **Version:** v1.0.0
+
+```python
+seconds: float = 0.0
+max_seconds: float = 300.0  # tests should cap at 30s or 0
+```
+
+---
+
+### `csv_table` — CSV read/write
+**Category:** Output | **Version:** v1.0.0
+
+```python
+operation: str = "read"  # "read" | "write"
+path: str = ""
+```
+
+**Ports:** optional `input: list[dict]` → `output: CsvTableResult`
+
+---
+
 ## Capability Matrix
 
 | Node | GPU Req | Edge | Streaming | Realtime | Deterministic | Cacheable |
@@ -680,3 +812,13 @@ S3 requires boto3.
 | `doc_parse_chunk` | No | Yes | No | No | Yes | Yes |
 | `caption_export` | No | Yes | No | No | Yes | No |
 | `object_store` | No | Yes | No | No | Yes | No |
+| `http_request` | No | Yes | No | No | Yes | No |
+| `if_switch` | No | Yes | No | No | Yes | Yes |
+| `set_map` | No | Yes | No | No | Yes | Yes |
+| `json_transform` | No | Yes | No | No | Yes | Yes |
+| `schedule_trigger` | No | Yes | No | No | Yes | No |
+| `python_code` | No | Yes | No | No | Yes | No |
+| `error_catch` | No | Yes | No | No | Yes | No |
+| `merge` | No | Yes | No | No | Yes | Yes |
+| `wait_delay` | No | Yes | No | No | Yes | No |
+| `csv_table` | No | Yes | No | No | Yes | No |

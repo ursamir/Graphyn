@@ -1,0 +1,15 @@
+[plugin]
+name             = "wait-delay"
+version          = "1.0.0"
+description      = "Sleep for N seconds with a configurable cap (default 300s)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["wait", "delay", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["wait_delay"]

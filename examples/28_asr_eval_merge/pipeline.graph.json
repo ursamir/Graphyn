@@ -1,0 +1,130 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "asr_eval_merge",
+    "seed": 42,
+    "description": "Fan-out ingest to ASR + python_code, merge, eval_gate, csv_table.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "merge",
+      "asr",
+      "eval",
+      "workflow"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "ingest",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/01_wake_word/data/wake_word",
+        "source_type": "filesystem",
+        "recursive": false,
+        "limit": 2
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "asr",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "mock",
+        "language": "en"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "code",
+      "node_type": "python_code",
+      "config": {
+        "source": "payload = inputs.get('input') or []\\nn = len(payload) if isinstance(payload, list) else 1\\noutput = [{'id': i, 'source': 'python_code'} for i in range(n)]\\n"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "join",
+      "node_type": "merge",
+      "config": {
+        "mode": "append"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "gate",
+      "node_type": "eval_gate",
+      "config": {
+        "check_empty_transcript": false,
+        "fail_if_empty_list": false,
+        "required_keys": []
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "csv",
+      "node_type": "csv_table",
+      "config": {
+        "operation": "write",
+        "path": "examples/28_asr_eval_merge/output/merged.csv"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "ingest",
+      "src_port": "output",
+      "dst_id": "asr",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "ingest",
+      "src_port": "output",
+      "dst_id": "code",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "asr",
+      "src_port": "output",
+      "dst_id": "join",
+      "dst_port": "a",
+      "condition": null
+    },
+    {
+      "src_id": "code",
+      "src_port": "output",
+      "dst_id": "join",
+      "dst_port": "b",
+      "condition": null
+    },
+    {
+      "src_id": "join",
+      "src_port": "output",
+      "dst_id": "gate",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "gate",
+      "src_port": "output",
+      "dst_id": "csv",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

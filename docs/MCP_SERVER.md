@@ -1,6 +1,6 @@
 # MCP Server
 
-The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 15 tools over stdio transport.
+The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 18 tools over stdio transport.
 
 **File:** `app/mcp/`  
 **Transport:** stdio (JSON-RPC on stdin/stdout, logs to stderr)  
@@ -24,7 +24,7 @@ python -m app.mcp.server
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — 15 tools
+├── tool_registry.py   # register_all_tools() — 18 tools
 └── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
@@ -33,7 +33,8 @@ app/mcp/
     ├── artifacts.py   # inspect_run
     ├── run_control.py # pause_run, resume_run, cancel_run
     ├── provenance.py  # list_artifacts, get_artifact_lineage, replay_run
-    └── optimization.py # optimize_execution
+    ├── optimization.py # optimize_execution
+    └── plugins.py      # install_plugin, list_plugins, manage_plugin
 ```
 
 ---
@@ -44,7 +45,7 @@ Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`
 
 ---
 
-## All 15 Tools
+## All 18 Tools
 
 | Tool | Handler | Delegates to |
 |---|---|---|
@@ -63,6 +64,9 @@ Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`
 | `get_artifact_lineage` | `provenance.py` | `ProvenanceStore.get_lineage()` |
 | `replay_run` | `provenance.py` | `load_ir_from_file()`, `get_backend().execute()`, `RunManager` |
 | `optimize_execution` | `optimization.py` | `PipelineGraph`, `_resolve_capability()` |
+| `install_plugin` | `plugins.py` | `PluginManager.install` + `load_enabled_plugins` |
+| `list_plugins` | `plugins.py` | `PluginManager.list_installed` |
+| `manage_plugin` | `plugins.py` | `enable` / `disable` / `uninstall` |
 
 ---
 
@@ -92,7 +96,9 @@ Discover registered node types with full schemas and capability metadata.
 
 Build a validated `GraphIR` from a node list.
 
-**Arguments:** `nodes` (required), `edges` (optional — auto-chains if omitted), `seed`, `name`, `description`.
+**Arguments:** `nodes` (required; each may include `id`, `config`, `event_trigger`), `edges` (optional — auto-chains if omitted; each may include `condition`), `seed`, `name`, `description`.
+
+Node `id` and `event_trigger` and edge `condition` are preserved in the returned GraphIR (needed for IF branches and schedules).
 
 **Errors:** `unknown_node_type`, `invalid_node_config`, `ir_validation_error`
 
@@ -214,6 +220,34 @@ Analyze a graph and return hardware placement recommendations and wave analysis.
 
 ---
 
+### `install_plugin`
+
+Install a plugin from a local path, git URL, HTTP archive, or index name. Reloads enabled plugins so `list_nodes` sees new types in-process. Remote sources honor `GRAPHYN_PLUGIN_ALLOWED_SOURCES`.
+
+**Arguments:** `source` (required), `upgrade` (default false), `expected_sha256` (optional).
+
+**Returns:** `{name, version, enabled, node_types[]}`
+
+### `list_plugins`
+
+**Returns:** `{plugins: [{name, version, enabled, node_types[]}]}`
+
+### `manage_plugin`
+
+**Arguments:** `action` (`enable` | `disable` | `uninstall`), `name`.
+
+### Agent loop (n8n-style)
+
+1. `list_plugins` / `install_plugin` (local path or allowlisted source)
+2. `list_nodes` — search/list node types including newly installed
+3. `generate_graph` — branched edges (`condition`) and `event_trigger` for schedules
+4. `validate_graph`
+5. `execute_pipeline` → `inspect_run`
+
+Native Slack/Email/GitHub nodes are out of v1; use `http_request` with `auth_env` (environment **variable names**, never secrets in IR) and `provider=mock` for tests.
+
+---
+
 ## Error Contract
 
 All handlers return structured JSON — never raw exceptions.
@@ -236,3 +270,5 @@ All handlers return structured JSON — never raw exceptions.
 | `store_error` | `ArtifactStore` or `ProvenanceStore` raised |
 | `replay_error` | Unexpected error during replay setup |
 | `registry_error` | `registry.list_nodes()` failed in discovery handler |
+| `invalid_action` | `manage_plugin` action not enable/disable/uninstall |
+| `PluginInstallError` / `PluginNotFoundError` | plugin lifecycle failures |

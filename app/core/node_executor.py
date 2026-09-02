@@ -34,6 +34,31 @@ def _count_port_items(port_data: Any) -> int:
     return 1
 
 
+
+def _continue_error_output(node: Node, exc: Exception) -> dict[str, Any] | None:
+    """If the node opts into error-port continuation, return an error payload.
+
+    Used by error_catch / on_error=continue_error_output so failures can flow
+    downstream instead of aborting the DAG.
+    """
+    cfg = getattr(node, "config", None)
+    port = getattr(cfg, "on_error_port", None)
+    mode = getattr(cfg, "on_error", None)
+    if not port:
+        return None
+    if mode in ("fail", "raise"):
+        return None
+    if mode not in (None, "", "continue_error_output", "continue"):
+        return None
+    return {
+        str(port): {
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+    }
+
+
 class NodeExecutor:
     """Drives a single node through setup → (on_start → process → on_end)* → teardown.
 
@@ -151,6 +176,9 @@ class NodeExecutor:
                 # SA-NE4: if the policy marks this exception as non-retryable,
                 # surface it immediately without consuming remaining attempts.
                 if policy and not policy.is_retryable(exc):
+                    continued = _continue_error_output(node, exc)
+                    if continued is not None:
+                        return continued
                     if self._setup_done:
                         self.teardown()
                     raise
@@ -168,6 +196,9 @@ class NodeExecutor:
         # SA-NE1 fix: only call teardown() if setup() was previously called.
         # If on_start() raised on every attempt, setup() may have succeeded but
         # teardown() should still be guarded by _setup_done.
+        continued = _continue_error_output(node, last_exc)
+        if continued is not None:
+            return continued
         if self._setup_done:
             self.teardown()
         raise last_exc

@@ -1,0 +1,19 @@
+[plugin]
+name             = "http-request"
+version          = "1.0.0"
+description      = "Generic HTTP request node with mock provider, retries, and env-based auth."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["http", "request", "workflow", "common"]
+
+dependencies = []
+
+optional_dependencies = [
+    "httpx>=0.27",
+]
+
+runtime = "inprocess"
+node_types = ["http_request"]

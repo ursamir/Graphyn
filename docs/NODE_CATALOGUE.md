@@ -1,6 +1,6 @@
 # Node Catalogue
 
-All 38 production nodes live in `PluginPackage/`. There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
+All 48 production nodes live in `PluginPackage/`. There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
 
 For full config fields, port specs, and capability details → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
@@ -30,7 +30,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `voice_converter` | Generation | optional: speechbrain, torch |
 | `audio_generator` | Generation | optional: audiocraft, torch |
 
-## Common Plugins — `PluginPackage/Common/` (20 nodes)
+## Common Plugins — `PluginPackage/Common/` (30 nodes)
 
 | node_type | Category | Key Dependencies |
 |---|---|---|
@@ -54,6 +54,16 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `doc_parse_chunk` | Input | stdlib; optional: unstructured |
 | `caption_export` | Output | stdlib |
 | `object_store` | Output | stdlib; optional: boto3 |
+| `http_request` | Output | optional: httpx |
+| `if_switch` | Logic | stdlib |
+| `set_map` | Transform | stdlib |
+| `json_transform` | Transform | stdlib |
+| `schedule_trigger` | Input | stdlib |
+| `python_code` | Transform | stdlib (restricted exec) |
+| `error_catch` | Logic | stdlib |
+| `merge` | Transform | stdlib |
+| `wait_delay` | Logic | stdlib |
+| `csv_table` | Output | csv (stdlib) |
 
 ## Capability Matrix
 
@@ -97,6 +107,16 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `doc_parse_chunk` | No | Yes | No | No | Yes | Yes |
 | `caption_export` | No | Yes | No | No | Yes | No |
 | `object_store` | No | Yes | No | No | Yes | No |
+| `http_request` | No | Yes | No | No | Yes | No |
+| `if_switch` | No | Yes | No | No | Yes | Yes |
+| `set_map` | No | Yes | No | No | Yes | Yes |
+| `json_transform` | No | Yes | No | No | Yes | Yes |
+| `schedule_trigger` | No | Yes | No | No | Yes | No |
+| `python_code` | No | Yes | No | No | Yes | No |
+| `error_catch` | No | Yes | No | No | Yes | No |
+| `merge` | No | Yes | No | No | Yes | Yes |
+| `wait_delay` | No | Yes | No | No | Yes | No |
+| `csv_table` | No | Yes | No | No | Yes | No |
 
 ## Installing Nodes
 

@@ -1,0 +1,15 @@
+[plugin]
+name             = "csv-table"
+version          = "1.0.0"
+description      = "Read or write CSV files as list[dict]."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["csv", "table", "workflow", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["csv_table"]
