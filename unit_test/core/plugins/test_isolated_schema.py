@@ -182,6 +182,7 @@ def test_isolated_edge_optimizer_ports_are_platform_artifacts() -> None:
 
 _ISOLATED_PACKAGES = (
     ("PluginPackage/Common/trainer", "trainer", ("trainer", "model_builder")),
+    ("PluginPackage/Common/evaluator", "evaluator", ("evaluator",)),
     ("PluginPackage/Common/edge_optimizer", "edge-optimizer", ("edge_optimizer",)),
     ("PluginPackage/Common/realtime_inference", "realtime-inference", ("realtime_inference",)),
 )
@@ -239,3 +240,50 @@ def test_isolated_stub_config_and_ports_match_ast(tmp_path: Path, fresh_registry
     finally:
         for name in loaded:
             get_runtime_registry().unregister_plugin(name)
+
+
+def test_isolated_loader_sees_evaluator_as_isolated(tmp_path: Path, fresh_registry) -> None:
+    """Host loader must stub evaluator without pip-installing TensorFlow."""
+    from app.core.plugins.loader import PluginLoader
+    from app.core.plugins.venv_manager import PluginVenvManager as _VenvMgr
+    from unit_test.core.plugins.test_dep_isolation import _mock_ensure
+
+    captured: dict = {}
+
+    def capture_ensure(plugin_name, requirements, **kwargs):
+        captured["name"] = plugin_name
+        captured["reqs"] = list(requirements)
+        return _mock_ensure(plugin_name, requirements, **kwargs)
+
+    loader = PluginLoader(fresh_registry)
+    plugin_dir = repo_root() / "PluginPackage/Common/evaluator"
+    with patch.object(_VenvMgr, "ensure", side_effect=capture_ensure):
+        types = loader.load(plugin_dir)
+    try:
+        assert "evaluator" in types
+        cls = fresh_registry.get_class("evaluator")
+        assert getattr(cls, "_graphyn_isolated", False) is True
+        expected = {
+            "output_path",
+            "plot_confusion_matrix",
+            "plot_training_curves",
+            "compute_roc",
+            "compute_fairness",
+            "fairness_attribute_key",
+        }
+        missing = expected - set(cls.Config.model_fields)
+        assert not missing, missing
+        assert cls.output_ports["output"].data_type is ModelArtifact
+        assert cls.input_ports["model_artifact"].data_type is ModelArtifact
+        assert cls.input_ports["dataset"].data_type is DatasetArtifact
+        assert captured["name"] == "evaluator"
+        assert any(r.startswith("numpy") for r in captured["reqs"])
+        assert any("scikit-learn" in r for r in captured["reqs"])
+        assert any(r.startswith("tensorflow") for r in captured["reqs"])
+        assert any(r.startswith("keras") for r in captured["reqs"])
+        assert not any(
+            r.split("[")[0].split(">")[0].split("=")[0].strip().lower() == "torch"
+            for r in captured["reqs"]
+        )
+    finally:
+        get_runtime_registry().unregister_plugin("evaluator")

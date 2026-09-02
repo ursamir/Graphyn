@@ -14,6 +14,9 @@ dependencies = [
     "scikit-learn>=1.3",
 ]
 
+# Isolated venv extras (never installed into the host API image).
+# tensorflow (CPU wheels) + keras + plotting libs install on isolated load.
+# torch is skipped unless GRAPHYN_ISOLATED_INSTALL_TORCH=1.
 optional_dependencies = [
     "tensorflow>=2.13",
     "keras>=3.0",
@@ -21,3 +24,14 @@ optional_dependencies = [
     "matplotlib>=3.7",
     "seaborn>=0.12",
 ]
+
+runtime = "isolated"
+node_types = ["evaluator"]
+
+[config_schema.evaluator]
+output_path = { type = "string", default = "workspace/artifacts/evaluation" }
+plot_confusion_matrix = { type = "boolean", default = true }
+plot_training_curves = { type = "boolean", default = true }
+compute_roc = { type = "boolean", default = true }
+compute_fairness = { type = "boolean", default = false }
+fairness_attribute_key = { type = "string", default = "speaker_id" }

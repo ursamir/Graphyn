@@ -2,11 +2,26 @@
 """Bulk registration and metadata tests for all Common plugins."""
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 
 from app.core.plugins.manager import PluginManager
 from app.core.plugins.errors import PluginDependencyError, PluginInstallError
 from app.core.nodes.registry import NodeRegistry
+from app.core.plugins.venv_manager import PluginVenvManager
+
+
+@pytest.fixture(autouse=True)
+def _no_isolated_venv_pip():
+    """Isolated plugins must not pip-install TensorFlow during unit tests."""
+    with patch.object(
+        PluginVenvManager,
+        "ensure",
+        return_value=Path("/tmp/fake-venv/bin/python"),
+    ):
+        yield
 
 ALL_COMMON_PLUGINS = [
     ("PluginPackage/Common/dataset_builder/", "dataset_builder"),
