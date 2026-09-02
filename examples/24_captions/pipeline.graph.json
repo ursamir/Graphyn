@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "captions",
+    "seed": 42,
+    "description": "Captions: ingest audio, mock-transcribe with word timings, export SRT/VTT/JSON.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "asr",
+      "captions"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/01_wake_word/data/wake_word",
+        "source_type": "filesystem",
+        "recursive": false,
+        "limit": 2
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "asr_transcribe_1",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "mock",
+        "language": "en"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "caption_export_2",
+      "node_type": "caption_export",
+      "config": {
+        "output_dir": "examples/24_captions/output",
+        "basename": "captions",
+        "formats": [
+          "srt",
+          "vtt",
+          "json"
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "asr_transcribe_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "asr_transcribe_1",
+      "src_port": "output",
+      "dst_id": "caption_export_2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

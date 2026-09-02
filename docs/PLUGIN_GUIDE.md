@@ -1,6 +1,6 @@
 # Plugin Guide
 
-All 30 production nodes are implemented as plugins in `PluginPackage/`. This guide covers how to write new plugins, install them, and manage their lifecycle.
+All 38 production nodes are implemented as plugins in `PluginPackage/`. This guide covers how to write new plugins, install them, and manage their lifecycle.
 
 For the full node reference → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture and data flow → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
@@ -290,12 +290,12 @@ node.teardown()
 
 ## Registered Plugins
 
-All 30 plugins are complete. See `plugin-development.md` steering file for the full table, or `PluginPackage/NODES.md` for config fields and capabilities.
+All 38 plugins are complete. See `plugin-development.md` steering file for the full table, or `PluginPackage/NODES.md` for config fields and capabilities.
 
 ### Audio (`PluginPackage/Audio/`) — 18 nodes
 `dataset_ingest`, `stream_ingest`, `audio_conditioner`, `audio_quality_gate`, `audio_annotator`, `alignment_node`, `segmenter`, `augmentation_pipeline`, `speech_enhancer`, `speaker_separator`, `environment_simulator`, `feature_frontend`, `stream_processor`, `audio_event_detector`, `audio_classifier`, `speech_synthesizer`, `voice_converter`, `audio_generator`
 
-### Common (`PluginPackage/Common/`) — 12 nodes
-`dataset_builder`, `model_builder`, `trainer`, `evaluator`, `edge_optimizer`, `realtime_inference`, `dataset_balancer`, `dataset_versioner`, `experiment_tracker`, `deployment_packager`, `embedding_generator`, `multimodal_fusion`
+### Common (`PluginPackage/Common/`) — 20 nodes
+`dataset_builder`, `model_builder`, `trainer`, `evaluator`, `edge_optimizer`, `realtime_inference`, `dataset_balancer`, `dataset_versioner`, `experiment_tracker`, `deployment_packager`, `embedding_generator`, `multimodal_fusion`, `asr_transcribe`, `pii_redact`, `structured_llm`, `eval_gate`, `http_webhook`, `doc_parse_chunk`, `caption_export`, `object_store`
 
 **Trainer / ModelBuilder (Keras):** `select_keras_device()` picks `/GPU:0` or `/CPU:0`. GPUs with compute capability ≥12 (Blackwell, e.g. RTX 5070 Ti) default to CPU because this TensorFlow build cannot run Keras training on them (missing CUDA kernels / libdevice). CPU `fit` uses soft placement off + `tf.device("/CPU:0")`. Set `GRAPHYN_TF_FORCE_GPU=1` only to force a GPU attempt. `trainer.config.device`: `auto`|`cpu`|`gpu`.

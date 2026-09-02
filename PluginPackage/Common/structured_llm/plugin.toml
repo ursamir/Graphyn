@@ -1,0 +1,19 @@
+[plugin]
+name             = "structured-llm"
+version          = "1.0.0"
+description      = "Extract JSON matching a schema from text via mock or OpenAI-compatible chat completions."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["llm", "json", "extract", "common"]
+
+dependencies = []
+
+optional_dependencies = [
+    "httpx>=0.27",
+]
+
+runtime = "inprocess"
+node_types = ["structured_llm"]

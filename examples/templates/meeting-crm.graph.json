@@ -1,0 +1,151 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "meeting-crm",
+    "seed": 42,
+    "description": "Meeting CRM extract: ASR \u2192 PII redact \u2192 structured CRM fields \u2192 eval gate \u2192 webhook.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "asr",
+      "crm",
+      "llm"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/01_wake_word/data/wake_word",
+        "source_type": "filesystem",
+        "recursive": false,
+        "limit": 2
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "asr_transcribe_1",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "mock",
+        "language": "en"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "pii_redact_2",
+      "node_type": "pii_redact",
+      "config": {
+        "engine": "regex"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "structured_llm_3",
+      "node_type": "structured_llm",
+      "config": {
+        "provider": "mock",
+        "schema_name": "meeting_crm",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "pain": {
+              "type": "string"
+            },
+            "objections": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "next_step": {
+              "type": "string"
+            },
+            "owner": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pain",
+            "next_step",
+            "owner"
+          ]
+        }
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "eval_gate_4",
+      "node_type": "eval_gate",
+      "config": {
+        "check_empty_transcript": false,
+        "required_keys": [
+          "pain",
+          "next_step",
+          "owner"
+        ]
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "http_webhook_5",
+      "node_type": "http_webhook",
+      "config": {
+        "url": "https://example.com/webhooks/meeting-crm",
+        "timeout_s": 10.0
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "asr_transcribe_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "asr_transcribe_1",
+      "src_port": "output",
+      "dst_id": "pii_redact_2",
+      "dst_port": "transcript",
+      "condition": null
+    },
+    {
+      "src_id": "pii_redact_2",
+      "src_port": "transcript",
+      "dst_id": "structured_llm_3",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "structured_llm_3",
+      "src_port": "output",
+      "dst_id": "eval_gate_4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "eval_gate_4",
+      "src_port": "output",
+      "dst_id": "http_webhook_5",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

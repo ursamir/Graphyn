@@ -1,0 +1,21 @@
+[plugin]
+name             = "asr-transcribe"
+version          = "1.0.0"
+description      = "Adapter node: transcribe audio via mock or HTTP ASR providers (OpenAI-compatible, AssemblyAI, Deepgram)."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["asr", "speech", "transcript", "common"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "httpx>=0.27",
+]
+
+runtime = "inprocess"
+node_types = ["asr_transcribe"]

@@ -1,0 +1,19 @@
+[plugin]
+name             = "http-webhook"
+version          = "1.0.0"
+description      = "POST JSON to a completion callback URL. Optional HMAC signature and timeout."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["http", "webhook", "callback", "common"]
+
+dependencies = []
+
+optional_dependencies = [
+    "httpx>=0.27",
+]
+
+runtime = "inprocess"
+node_types = ["http_webhook"]

@@ -1,0 +1,15 @@
+[plugin]
+name             = "eval-gate"
+version          = "1.0.0"
+description      = "Hard-fail DAG gate: empty transcript, missing schema keys, optional residual PII regex."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["eval", "quality", "gate", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["eval_gate"]

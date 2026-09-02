@@ -1,6 +1,6 @@
 # Node Catalogue
 
-All 30 production nodes live in `PluginPackage/`. There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
+All 38 production nodes live in `PluginPackage/`. There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
 
 For full config fields, port specs, and capability details → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
@@ -30,7 +30,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `voice_converter` | Generation | optional: speechbrain, torch |
 | `audio_generator` | Generation | optional: audiocraft, torch |
 
-## Common Plugins — `PluginPackage/Common/` (12 nodes)
+## Common Plugins — `PluginPackage/Common/` (20 nodes)
 
 | node_type | Category | Key Dependencies |
 |---|---|---|
@@ -46,6 +46,14 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `deployment_packager` | ML | zipfile, json (stdlib) |
 | `embedding_generator` | Features | optional: torch, transformers, openl3, speechbrain |
 | `multimodal_fusion` | Features | optional: torch, transformers |
+| `asr_transcribe` | Processing | numpy; optional: httpx |
+| `pii_redact` | Processing | numpy; optional: presidio |
+| `structured_llm` | Processing | optional: httpx |
+| `eval_gate` | Quality | stdlib |
+| `http_webhook` | Output | optional: httpx |
+| `doc_parse_chunk` | Input | stdlib; optional: unstructured |
+| `caption_export` | Output | stdlib |
+| `object_store` | Output | stdlib; optional: boto3 |
 
 ## Capability Matrix
 
@@ -81,6 +89,14 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `deployment_packager` | No | No | No | No | Yes | Yes |
 | `embedding_generator` | Optional | No | No | No | Yes | Yes |
 | `multimodal_fusion` | Optional | No | No | Yes | No | No |
+| `asr_transcribe` | No | Yes | No | No | Yes | Yes |
+| `pii_redact` | No | Yes | No | No | Yes | Yes |
+| `structured_llm` | No | Yes | No | No | Yes | Yes |
+| `eval_gate` | No | Yes | No | No | Yes | No |
+| `http_webhook` | No | Yes | No | No | Yes | No |
+| `doc_parse_chunk` | No | Yes | No | No | Yes | Yes |
+| `caption_export` | No | Yes | No | No | Yes | No |
+| `object_store` | No | Yes | No | No | Yes | No |
 
 ## Installing Nodes
 

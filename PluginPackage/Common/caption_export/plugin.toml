@@ -1,0 +1,15 @@
+[plugin]
+name             = "caption-export"
+version          = "1.0.0"
+description      = "Export a word-timed / diarized transcript to SRT, VTT, or JSON files on disk."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["captions", "srt", "vtt", "export", "common"]
+
+dependencies = []
+
+runtime = "inprocess"
+node_types = ["caption_export"]

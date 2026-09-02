@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "doc-rag-ingest",
+    "seed": 42,
+    "description": "Doc RAG ingest: parse/chunk local markdown, quality-gate non-empty chunks, put into local object store.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "documents",
+      "rag",
+      "chunk"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "doc_parse_chunk_0",
+      "node_type": "doc_parse_chunk",
+      "config": {
+        "path": "data/docs",
+        "recursive": true,
+        "max_chars": 800
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "eval_gate_1",
+      "node_type": "eval_gate",
+      "config": {
+        "check_empty_transcript": false,
+        "fail_if_empty_list": true,
+        "required_keys": []
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "object_store_2",
+      "node_type": "object_store",
+      "config": {
+        "backend": "local",
+        "operation": "put",
+        "root": "output/object_store",
+        "prefix": "chunks"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "doc_parse_chunk_0",
+      "src_port": "output",
+      "dst_id": "eval_gate_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "eval_gate_1",
+      "src_port": "output",
+      "dst_id": "object_store_2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

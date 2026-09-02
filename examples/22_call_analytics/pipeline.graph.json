@@ -1,0 +1,183 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "call_analytics",
+    "seed": 42,
+    "description": "Call analytics: ingest audio, transcribe (mock ASR), redact PII, extract structured fields, gate, webhook.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "asr",
+      "pii",
+      "llm",
+      "call-analytics"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "dataset_ingest_0",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "examples/01_wake_word/data/wake_word",
+        "source_type": "filesystem",
+        "recursive": false,
+        "limit": 4
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "audio_conditioner_1",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000,
+        "mono": true
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "asr_transcribe_2",
+      "node_type": "asr_transcribe",
+      "config": {
+        "provider": "mock",
+        "language": "en"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "pii_redact_3",
+      "node_type": "pii_redact",
+      "config": {
+        "engine": "auto"
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "structured_llm_4",
+      "node_type": "structured_llm",
+      "config": {
+        "provider": "mock",
+        "schema_name": "call_analytics",
+        "json_schema": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "sentiment": {
+              "type": "string"
+            },
+            "topics": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "action_items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "customer_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "summary",
+            "sentiment"
+          ]
+        }
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "eval_gate_5",
+      "node_type": "eval_gate",
+      "config": {
+        "check_empty_transcript": false,
+        "required_keys": [
+          "summary",
+          "sentiment"
+        ],
+        "pii_regex": ""
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "http_webhook_6",
+      "node_type": "http_webhook",
+      "config": {
+        "url": "https://example.com/webhooks/call-analytics",
+        "timeout_s": 10.0,
+        "hmac_secret": ""
+      },
+      "label": null,
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "dataset_ingest_0",
+      "src_port": "output",
+      "dst_id": "audio_conditioner_1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "asr_transcribe_2",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "asr_transcribe_2",
+      "src_port": "output",
+      "dst_id": "pii_redact_3",
+      "dst_port": "transcript",
+      "condition": null
+    },
+    {
+      "src_id": "audio_conditioner_1",
+      "src_port": "output",
+      "dst_id": "pii_redact_3",
+      "dst_port": "audio",
+      "condition": null
+    },
+    {
+      "src_id": "pii_redact_3",
+      "src_port": "transcript",
+      "dst_id": "structured_llm_4",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "structured_llm_4",
+      "src_port": "output",
+      "dst_id": "eval_gate_5",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "eval_gate_5",
+      "src_port": "output",
+      "dst_id": "http_webhook_6",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {}
+}

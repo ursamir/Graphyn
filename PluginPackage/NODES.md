@@ -1,6 +1,6 @@
 # Plugin Nodes — Complete Reference
 
-**30 node types** across Audio + Common packages (`model_builder` ships inside the `trainer` plugin). For architecture, data types, and install patterns → `ARCHITECTURE.md`. Fresh-install gaps: see `docs/KNOWN_ISSUES.md` (PLUGIN-LOAD-1).
+**38 node types** across Audio + Common packages (`model_builder` ships inside the `trainer` plugin). For architecture, data types, and install patterns → `ARCHITECTURE.md`. Fresh-install gaps: see `docs/KNOWN_ISSUES.md` (PLUGIN-LOAD-1).
 
 ---
 
@@ -515,6 +515,129 @@ output_dim: int = 512
 
 ---
 
+
+### `asr_transcribe` — ASR adapter
+**Category:** Processing | **Version:** v1.0.0
+
+```python
+provider: str = "mock"       # "mock" | "openai_compat" | "assemblyai" | "deepgram"
+language: str = "en"
+model: str = ""
+base_url: str = ""           # OpenAI-compatible base; else OPENAI_BASE_URL
+timeout_s: float = 30.0
+```
+
+**Ports:** `input: list[AudioSample]` → `output: Transcript`
+**Env:** `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, `DEEPGRAM_API_KEY` (HTTP providers only; missing key raises). Mock is offline.
+
+---
+
+### `pii_redact` — PII redaction
+**Category:** Processing | **Version:** v1.0.0
+
+```python
+placeholder: str = ""        # empty → [ENTITY_TYPE]
+engine: str = "auto"         # "auto" | "regex" | "presidio"
+```
+
+**Ports:** `transcript` + optional `audio` → `transcript` + `audio` + `audit: RedactionAudit`
+Presidio is optional; import never fails if it is absent (regex: email, phone, card).
+
+---
+
+### `structured_llm` — JSON-schema extract
+**Category:** Processing | **Version:** v1.0.0
+
+```python
+provider: str = "mock"       # "mock" | "openai_compat"
+json_schema: dict = {}
+schema_name: str = "extracted"
+model: str = "gpt-4o-mini"
+base_url: str = ""
+timeout_s: float = 30.0
+```
+
+**Ports:** `input` (transcript/text) → `output: StructuredDocument`
+**Env:** `OPENAI_API_KEY` for `openai_compat`.
+
+---
+
+### `eval_gate` — Hard-fail quality gate
+**Category:** Quality | **Version:** v1.0.0
+
+```python
+check_empty_transcript: bool = True
+required_keys: list = []
+pii_regex: str = ""
+fail_if_empty_list: bool = True
+```
+
+**Ports:** `input` → `output` (passthrough) + `report: EvalReport`
+Raises `EvalGateError` on failure.
+
+---
+
+### `http_webhook` — Completion callback
+**Category:** Output | **Version:** v1.0.0
+
+```python
+url: str = ""
+timeout_s: float = 10.0
+hmac_secret: str = ""
+hmac_header: str = "X-Graphyn-Signature"
+```
+
+**Ports:** `input` (JSON payload) → `output: WebhookReceipt`
+
+---
+
+### `doc_parse_chunk` — Document chunker
+**Category:** Input | **Version:** v1.0.0
+
+```python
+path: str = ""
+recursive: bool = True
+max_chars: int = 1200
+use_unstructured: bool = False
+```
+
+**Ports:** optional `input` path → `output: list[Chunk]`
+Stdlib parser; optional `unstructured`. No vector DB.
+
+---
+
+### `caption_export` — SRT/VTT/JSON captions
+**Category:** Output | **Version:** v1.0.0
+
+```python
+output_dir: str = "output/captions"
+basename: str = "captions"
+formats: list = ["srt", "vtt", "json"]
+max_words_per_cue: int = 12
+```
+
+**Ports:** `input: Transcript` → `output: CaptionExportResult`
+
+---
+
+### `object_store` — Get / put / list
+**Category:** Output | **Version:** v1.0.0
+
+```python
+backend: str = "local"      # "local" | "s3"
+operation: str = "put"       # "get" | "put" | "list"
+root: str = "output/object_store"
+key: str = ""
+prefix: str = ""
+bucket: str = ""
+dest: str = ""
+```
+
+**Ports:** optional `input` (files or chunks) → `ObjectRef` / `list[ObjectRef]` / `ObjectList`
+S3 requires boto3.
+
+---
+
 ## Capability Matrix
 
 | Node | GPU Req | Edge | Streaming | Realtime | Deterministic | Cacheable |
@@ -549,3 +672,11 @@ output_dim: int = 512
 | `deployment_packager` | No | No | No | No | Yes | Yes |
 | `embedding_generator` | Optional | No | No | No | Yes | Yes |
 | `multimodal_fusion` | Optional | No | No | Yes | No | No |
+| `asr_transcribe` | No | Yes | No | No | Yes | Yes |
+| `pii_redact` | No | Yes | No | No | Yes | Yes |
+| `structured_llm` | No | Yes | No | No | Yes | Yes |
+| `eval_gate` | No | Yes | No | No | Yes | No |
+| `http_webhook` | No | Yes | No | No | Yes | No |
+| `doc_parse_chunk` | No | Yes | No | No | Yes | Yes |
+| `caption_export` | No | Yes | No | No | Yes | No |
+| `object_store` | No | Yes | No | No | Yes | No |

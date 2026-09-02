@@ -1,0 +1,19 @@
+[plugin]
+name             = "doc-parse-chunk"
+version          = "1.0.0"
+description      = "Ingest text/md/html/plain files and split into structure-aware chunks. No vector DB."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["document", "chunk", "ingest", "common"]
+
+dependencies = []
+
+optional_dependencies = [
+    "unstructured>=0.14",
+]
+
+runtime = "inprocess"
+node_types = ["doc_parse_chunk"]
