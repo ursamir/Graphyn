@@ -9,14 +9,16 @@ Config (and port maps) from:
   1. The nested ``class Config`` in entry-point source (AST, no exec)
   2. Optional ``config_schema`` JSON-Schema-like tables in plugin.toml
 
-Ports use ``object`` data types so host validation does not import plugin models.
+Ports use platform types from ``app.models`` when ``data_type=Name/Attribute``
+resolves to a known host type (e.g. ModelArtifact). Unknown plugin-local types
+stay ``object`` so the host never imports the plugin module.
 """
 from __future__ import annotations
 
 import ast
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import Field, create_model
 
@@ -40,6 +42,120 @@ _NAME_TYPES: dict[str, Any] = {
     "None": type(None),
     "NoneType": type(None),
 }
+
+# Names we try to import from app.models (skip silently if missing).
+_PLATFORM_TYPE_NAMES: tuple[str, ...] = (
+    "ModelArtifact",
+    "DatasetArtifact",
+    "DeploymentArtifact",
+    "AudioSample",
+    "FeatureArray",
+    "PredictionResult",
+    "ExperimentArtifact",
+    "EmbeddingVector",
+    "DataSample",
+    "TensorBatch",
+    "TFLiteArtifact",
+)
+
+_PLATFORM_PORT_TYPES: dict[str, Any] | None = None
+
+
+def _platform_port_types() -> dict[str, Any]:
+    """Import known platform port types from app.models (host-safe)."""
+    global _PLATFORM_PORT_TYPES
+    if _PLATFORM_PORT_TYPES is not None:
+        return _PLATFORM_PORT_TYPES
+    mapping: dict[str, Any] = {}
+    try:
+        import app.models as models
+    except Exception as exc:  # pragma: no cover
+        log.warning("isolated_schema: cannot import app.models: %s", exc)
+        _PLATFORM_PORT_TYPES = mapping
+        return mapping
+    for name in _PLATFORM_TYPE_NAMES:
+        obj = getattr(models, name, None)
+        if isinstance(obj, type):
+            mapping[name] = obj
+    _PLATFORM_PORT_TYPES = mapping
+    return mapping
+
+
+def _type_from_name(name: str) -> Any | None:
+    if name in _NAME_TYPES:
+        return _NAME_TYPES[name]
+    return _platform_port_types().get(name)
+
+
+def _resolve_port_data_type(node: ast.AST | None) -> Any | None:
+    """Resolve a port data_type AST node to a host type, or None if unknown."""
+    if node is None:
+        return None
+    if isinstance(node, ast.Name):
+        return _type_from_name(node.id)
+    if isinstance(node, ast.Attribute):
+        return _type_from_name(node.attr)
+    if isinstance(node, ast.Constant):
+        if node.value is None:
+            return type(None)
+        if isinstance(node.value, str):
+            return _type_from_name(node.value)
+        return None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        left = _resolve_port_data_type(node.left)
+        right = _resolve_port_data_type(node.right)
+        if left is None and right is None:
+            return None
+        if left is None:
+            left = object
+        if right is None:
+            right = object
+        try:
+            return left | right
+        except TypeError:
+            return None
+    if isinstance(node, ast.Subscript):
+        origin_name = ""
+        if isinstance(node.value, ast.Name):
+            origin_name = node.value.id
+        elif isinstance(node.value, ast.Attribute):
+            origin_name = node.value.attr
+        origin = _type_from_name(origin_name)
+        sl = node.slice
+        if isinstance(sl, ast.Tuple):
+            args = tuple(_resolve_port_data_type(e) for e in sl.elts)
+        else:
+            args = (_resolve_port_data_type(sl),)
+        if origin is list:
+            inner = args[0] if args else None
+            if inner is None:
+                return list
+            try:
+                return list[inner]
+            except TypeError:
+                return list
+        if origin is dict:
+            if len(args) >= 2 and args[0] is not None and args[1] is not None:
+                try:
+                    return dict[args[0], args[1]]
+                except TypeError:
+                    return dict
+            return dict
+        return origin
+    return None
+
+
+def _data_type_expr_from_call(val: ast.AST) -> ast.AST | None:
+    if not isinstance(val, ast.Call):
+        return None
+    for kw in val.keywords:
+        if kw.arg == "data_type":
+            return kw.value
+    # InputPort(name, data_type, ...) / OutputPort(name, data_type, ...)
+    if len(val.args) >= 2:
+        return val.args[1]
+    return None
+
 
 _JSON_TYPES: dict[str, Any] = {
     "string": str,
@@ -352,7 +468,17 @@ def _extract_input_ports(value: ast.AST) -> dict[str, InputPort]:
             cardinality = str(_kw_const(val, "cardinality", "single") or "single")
             description = str(_kw_const(val, "description", "") or "")
             name = str(_kw_const(val, "name", name) or name)
-        data_type: Any = object if required else (object | type(None))
+        fallback: Any = object if required else (object | type(None))
+        resolved = _resolve_port_data_type(_data_type_expr_from_call(val))
+        data_type: Any = fallback if resolved is None else resolved
+        if not required and data_type is not None:
+            # InputPort validator requires optional ports to accept None.
+            none_ok = data_type is type(None) or type(None) in get_args(data_type)
+            if not none_ok:
+                try:
+                    data_type = data_type | type(None)
+                except TypeError:
+                    data_type = object | type(None)
         try:
             ports[name] = InputPort(
                 name=name,
@@ -378,8 +504,10 @@ def _extract_output_ports(value: ast.AST) -> dict[str, OutputPort]:
         if isinstance(val, ast.Call):
             description = str(_kw_const(val, "description", "") or "")
             name = str(_kw_const(val, "name", name) or name)
+        resolved = _resolve_port_data_type(_data_type_expr_from_call(val))
+        data_type: Any = object if resolved is None else resolved
         try:
-            ports[name] = OutputPort(name=name, data_type=object, description=description)
+            ports[name] = OutputPort(name=name, data_type=data_type, description=description)
         except Exception as exc:
             log.warning("isolated_schema: skip output port %s: %s", name, exc)
     return ports

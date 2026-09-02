@@ -127,3 +127,11 @@ def test_list_compatible_with_pep604_optional_object():
     from app.core.nodes.compat import CompatibilityChecker
     assert CompatibilityChecker.are_compatible(list[str], object | None) is True
     assert CompatibilityChecker.are_compatible(list, object | None) is True
+
+
+def test_object_to_model_artifact_compat_3d():
+    """Rule 3d: object is a universal source; named ModelArtifact is reflexive."""
+    from app.models.model_artifact import ModelArtifact
+
+    assert CompatibilityChecker.are_compatible(object, ModelArtifact) is True
+    assert CompatibilityChecker.are_compatible(ModelArtifact, ModelArtifact) is True

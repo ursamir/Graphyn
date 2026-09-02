@@ -53,6 +53,15 @@ class CompatibilityChecker:
         out_origin = get_origin(output_type)
         in_origin = get_origin(input_type)
 
+        # Rule 3c: input is `object` — accepts anything (universal sink)
+        if in_origin is None and input_type is object:
+            return True
+
+        # Rule 3d: output is `object` — can flow into anything (universal source)
+        # Must run before issubclass(); issubclass(object, ModelArtifact) is False.
+        if out_origin is None and output_type is object:
+            return True
+
         # Rule 3: both plain (non-generic) classes
         if out_origin is None and in_origin is None:
             try:
@@ -70,14 +79,6 @@ class CompatibilityChecker:
                     return True
             except TypeError:
                 pass
-
-        # Rule 3c: input is `object` — accepts anything (universal sink)
-        if in_origin is None and input_type is object:
-            return True
-
-        # Rule 3d: output is `object` — can flow into anything (universal source)
-        if out_origin is None and output_type is object:
-            return True
 
         # Rule 4a-c: Union / Optional (typing.Union and PEP 604 X | Y).
         _union_origins = {Union, getattr(types, "UnionType", None)}

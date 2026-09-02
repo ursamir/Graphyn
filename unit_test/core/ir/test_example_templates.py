@@ -14,6 +14,7 @@ import pytest
 
 from app.core.example_templates import discover_example_graphs, examples_dir, repo_root
 from app.core.ir.loader import load_ir
+from app.core.nodes.compat import CompatibilityChecker
 from app.core.plugins.isolated_schema import (
     IsolatedNodeSpec,
     config_class_for_spec,
@@ -61,6 +62,7 @@ def _validate_graph_like_api(path: Path) -> None:
     """IR load + Config.model_validate (API Run instantiates nodes the same way)."""
     data = json.loads(path.read_text(encoding="utf-8"))
     graph = load_ir(data)
+    ports_by_id: dict = {}
     for node in graph.nodes:
         config_cls, in_ports, out_ports, _src = _config_and_ports(node.node_type)
         try:
@@ -70,15 +72,28 @@ def _validate_graph_like_api(path: Path) -> None:
                 f"{path.name}: extra_forbidden/config error on {node.node_type} "
                 f"id={node.id} via {_src}: {exc}"
             )
-        for edge in graph.edges:
-            if edge.src_id == node.id and edge.src_port not in out_ports:
-                pytest.fail(
-                    f"{path.name}: {node.node_type} missing output port {edge.src_port!r}"
-                )
-            if edge.dst_id == node.id and edge.dst_port not in in_ports:
-                pytest.fail(
-                    f"{path.name}: {node.node_type} missing input port {edge.dst_port!r}"
-                )
+        ports_by_id[node.id] = (in_ports, out_ports, node.node_type)
+    for edge in graph.edges:
+        if edge.src_id not in ports_by_id or edge.dst_id not in ports_by_id:
+            pytest.fail(f"{path.name}: edge references unknown node {edge.src_id!r} → {edge.dst_id!r}")
+        src_in, src_out, src_type = ports_by_id[edge.src_id]
+        dst_in, dst_out, dst_type = ports_by_id[edge.dst_id]
+        if edge.src_port not in src_out:
+            pytest.fail(
+                f"{path.name}: {src_type} missing output port {edge.src_port!r}"
+            )
+        if edge.dst_port not in dst_in:
+            pytest.fail(
+                f"{path.name}: {dst_type} missing input port {edge.dst_port!r}"
+            )
+        src_dt = src_out[edge.src_port].data_type
+        dst_dt = dst_in[edge.dst_port].data_type
+        if not CompatibilityChecker.are_compatible(src_dt, dst_dt):
+            pytest.fail(
+                f"{path.name}: incompatible {edge.src_id}.{edge.src_port} "
+                f"({src_type} produces {src_dt!r}) → {edge.dst_id}.{edge.dst_port} "
+                f"({dst_type} expects {dst_dt!r})"
+            )
 
 
 @pytest.mark.parametrize("path", _template_paths(), ids=lambda p: p.name)
