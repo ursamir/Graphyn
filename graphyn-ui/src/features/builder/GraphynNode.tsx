@@ -268,16 +268,14 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
         status === 'error' && 'border-rose-500',
       )}
     >
-      {inputs.map((p, i) => {
+      {inputs.flatMap((p, i) => {
         const top = `${((i + 1) / (inputs.length + 1)) * 100}%`
         const left = `${((i + 1) / (inputs.length + 1)) * 100}%`
         const title = `${p.name}${p.data_type ? ` (${p.data_type})` : ''}`
-        return (
-          <span key={`in-${p.name}`}>
-            <Handle id={p.name} type="target" position={Position.Left} style={{ top }} className="graphyn-handle graphyn-handle-in" title={title} />
-            <Handle id={`${p.name}::top`} type="target" position={Position.Top} style={{ left }} className="graphyn-handle graphyn-handle-in" title={`${title} (top)`} />
-          </span>
-        )
+        return [
+          <Handle key={`in-l-${p.name}`} id={p.name} type="target" position={Position.Left} style={{ top }} className="graphyn-handle graphyn-handle-in" title={title} />,
+          <Handle key={`in-t-${p.name}`} id={`${p.name}::top`} type="target" position={Position.Top} style={{ left }} className="graphyn-handle graphyn-handle-in" title={`${title} (top)`} />,
+        ]
       })}
 
       <div className="flex items-center gap-2.5 px-2.5 py-2.5">
@@ -329,16 +327,14 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
         </div>
       </div>
 
-      {outputs.map((p, i) => {
+      {outputs.flatMap((p, i) => {
         const top = `${((i + 1) / (outputs.length + 1)) * 100}%`
         const left = `${((i + 1) / (outputs.length + 1)) * 100}%`
         const title = `${p.name}${p.data_type ? ` (${p.data_type})` : ''}`
-        return (
-          <span key={`out-${p.name}`}>
-            <Handle id={p.name} type="source" position={Position.Right} style={{ top }} className="graphyn-handle graphyn-handle-out" title={title} />
-            <Handle id={`${p.name}::bottom`} type="source" position={Position.Bottom} style={{ left }} className="graphyn-handle graphyn-handle-out" title={`${title} (bottom)`} />
-          </span>
-        )
+        return [
+          <Handle key={`out-r-${p.name}`} id={p.name} type="source" position={Position.Right} style={{ top }} className="graphyn-handle graphyn-handle-out" title={title} />,
+          <Handle key={`out-b-${p.name}`} id={`${p.name}::bottom`} type="source" position={Position.Bottom} style={{ left }} className="graphyn-handle graphyn-handle-out" title={`${title} (bottom)`} />,
+        ]
       })}
     </div>
   )

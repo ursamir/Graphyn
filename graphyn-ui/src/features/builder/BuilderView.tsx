@@ -58,13 +58,14 @@ const defaultEdgeOptions = {
 function layoutLeftToRight<T extends { id: string; position: { x: number; y: number } }>(
   nodes: T[],
   edges: Array<{ source: string; target: string }>,
+  force = false,
 ): T[] {
   if (nodes.length === 0) return nodes
   const xs = nodes.map((n) => n.position.x)
   const ys = nodes.map((n) => n.position.y)
   const wide = Math.max(...xs) - Math.min(...xs)
   const tall = Math.max(...ys) - Math.min(...ys)
-  if (wide >= tall && wide > 80) return nodes
+  if (!force && wide >= tall && wide > 80) return nodes
   const ids = nodes.map((n) => n.id)
   const outgoing = new Map(ids.map((id) => [id, [] as string[]]))
   const incoming = new Map(ids.map((id) => [id, 0]))
@@ -304,6 +305,14 @@ function BuilderInner() {
     const nextNodes = graph.nodes.map((n, i) => {
       const entry = byType.get(n.node_type)
       const ports = catalogPorts(entry)
+      const namedIn = graph.edges.filter((e) => e.dst_id === n.id).map((e) => canonicalPort(e.dst_port, 'input'))
+      const namedOut = graph.edges.filter((e) => e.src_id === n.id).map((e) => canonicalPort(e.src_port, 'output'))
+      for (const name of namedIn) {
+        if (!ports.inputs.some((p) => p.name === name)) ports.inputs.push({ name })
+      }
+      for (const name of namedOut) {
+        if (!ports.outputs.some((p) => p.name === name)) ports.outputs.push({ name })
+      }
       return attachHandlers({
         id: n.id,
         type: 'graphyn',
@@ -315,8 +324,8 @@ function BuilderInner() {
           runtime: entry?.runtime,
           config: { ...defaultsFromSchema(entry), ...(n.config ?? {}) },
           schemaProps: entry?.config_schema?.properties ?? {},
-          inputs: ports.inputs.length ? ports.inputs : [{ name: 'input' }],
-          outputs: ports.outputs.length ? ports.outputs : [{ name: 'output' }],
+          inputs: ports.inputs,
+          outputs: ports.outputs,
           status: 'idle',
         },
       })
@@ -329,7 +338,7 @@ function BuilderInner() {
       targetHandle: e.dst_port,
       ...defaultEdgeOptions,
     }))
-    setNodes(layoutLeftToRight(nextNodes, nextEdges))
+    setNodes(layoutLeftToRight(nextNodes, nextEdges, Object.keys(positions).length === 0))
     setEdges(nextEdges)
     setRunHadErrors(false)
   }

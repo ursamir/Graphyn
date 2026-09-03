@@ -47,11 +47,11 @@ export interface NodeCatalogEntry {
     properties?: Record<string, Record<string, unknown>>
     required?: string[]
   }
-  input_ports?: PortDef[]
-  output_ports?: PortDef[]
+  input_ports?: PortDef[] | Record<string, Record<string, unknown>>
+  output_ports?: PortDef[] | Record<string, Record<string, unknown>>
   port_schema?: {
-    inputs?: PortDef[]
-    outputs?: PortDef[]
+    inputs?: PortDef[] | Record<string, Record<string, unknown>>
+    outputs?: PortDef[] | Record<string, Record<string, unknown>>
   }
   runtime?: string
 }
@@ -125,14 +125,34 @@ export function canonicalPort(handle: string | null | undefined, fallback: strin
   return raw.split('::')[0] || fallback
 }
 
+function normalizePorts(raw: unknown, fallback: string): PortDef[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((p) => {
+        if (typeof p === 'string') return { name: p }
+        if (p && typeof p === 'object' && 'name' in p) {
+          const rec = p as Record<string, unknown>
+          return { name: String(rec.name), data_type: rec.data_type ? String(rec.data_type) : undefined }
+        }
+        return null
+      })
+      .filter((p): p is PortDef => !!p && !!p.name)
+  }
+  if (raw && typeof raw === 'object') {
+    return Object.entries(raw as Record<string, unknown>).map(([name, spec]) => {
+      const rec = spec && typeof spec === 'object' ? (spec as Record<string, unknown>) : {}
+      const dt = rec.data_type ?? rec.type
+      return { name, data_type: dt != null ? String(dt) : undefined }
+    })
+  }
+  return [{ name: fallback }]
+}
+
 export function catalogPorts(entry?: NodeCatalogEntry): { inputs: PortDef[]; outputs: PortDef[] } {
-  const inputs =
-    entry?.input_ports ??
-    entry?.port_schema?.inputs ??
-    [{ name: 'input' }]
-  const outputs =
-    entry?.output_ports ??
-    entry?.port_schema?.outputs ??
-    [{ name: 'output' }]
-  return { inputs, outputs }
+  const inputs = normalizePorts(entry?.input_ports ?? entry?.port_schema?.inputs, 'input')
+  const outputs = normalizePorts(entry?.output_ports ?? entry?.port_schema?.outputs, 'output')
+  return {
+    inputs: inputs.length ? inputs : [{ name: 'input' }],
+    outputs: outputs.length ? outputs : [{ name: 'output' }],
+  }
 }
