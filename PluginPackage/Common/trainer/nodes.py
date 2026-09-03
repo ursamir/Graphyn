@@ -255,16 +255,32 @@ class TrainerNode(Node):
             ckpt_path = str(out_path / "checkpoints" / "best.keras")
         Path(ckpt_path).parent.mkdir(parents=True, exist_ok=True)
 
+        warmup = min(5, max(0, int(self.config.epochs) // 10))
+        es_kwargs = {
+            "monitor": "val_accuracy",
+            "mode": "max",
+            "patience": self.config.patience,
+            "restore_best_weights": True,
+            "verbose": 1,
+        }
+        try:
+            early_stop = keras.callbacks.EarlyStopping(
+                start_from_epoch=warmup, **es_kwargs
+            )
+        except TypeError:
+            early_stop = keras.callbacks.EarlyStopping(**es_kwargs)
+        log.info(
+            "TrainerNode (keras): EarlyStopping on val_accuracy "
+            "(patience=%d, start_from_epoch=%d)",
+            self.config.patience,
+            warmup,
+        )
         callbacks = [
-            keras.callbacks.EarlyStopping(
-                monitor="val_loss",
-                patience=self.config.patience,
-                restore_best_weights=True,
-                verbose=1,
-            ),
+            early_stop,
             keras.callbacks.ModelCheckpoint(
                 ckpt_path,
                 monitor="val_accuracy",
+                mode="max",
                 save_best_only=True,
                 verbose=1,
             ),
@@ -348,6 +364,16 @@ class TrainerNode(Node):
                 "TrainerNode (keras): training produced NaN loss. "
                 "Check learning rate, input data, and model initialization."
             )
+
+        # Prefer the val_accuracy checkpoint over EarlyStopping's restore,
+        # which used to lock in epoch-0 weights when val_loss never improved.
+        ckpt_file = Path(ckpt_path)
+        if ckpt_file.is_file():
+            try:
+                model = keras.models.load_model(ckpt_file)
+                log.info("TrainerNode (keras): loaded val_accuracy checkpoint %s", ckpt_path)
+            except Exception as exc:
+                log.warning("TrainerNode (keras): could not load checkpoint: %s", exc)
 
         # Save in .keras format
         keras_model_path = str(out_path / "model.keras")
@@ -442,8 +468,9 @@ class TrainerNode(Node):
             "val_accuracy": [],
         }
 
-        # EarlyStopping state
-        best_val_loss = float("inf")
+        # EarlyStopping on val_accuracy (not val_loss — epoch 0 often "wins" loss).
+        warmup = min(5, max(0, int(self.config.epochs) // 10))
+        best_val_acc = -1.0
         patience_counter = 0
         best_state: dict | None = None
 
@@ -547,18 +574,23 @@ class TrainerNode(Node):
                 )
                 break
 
-            # ── EarlyStopping ─────────────────────────────────────────────────
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
+            # ── EarlyStopping (val_accuracy, ignore warmup epochs) ───────────
+            if epoch < warmup:
+                if best_state is None:
+                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    best_val_acc = avg_val_acc
+                continue
+            if avg_val_acc > best_val_acc:
+                best_val_acc = avg_val_acc
                 patience_counter = 0
-                # Deep-copy state dict to CPU for safe storage
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             else:
                 patience_counter += 1
                 if patience_counter >= self.config.patience:
                     log.info(
-                        "TrainerNode (pytorch): EarlyStopping triggered at epoch %d (patience=%d).",
-                        epoch + 1, self.config.patience,
+                        "TrainerNode (pytorch): EarlyStopping triggered at epoch %d "
+                        "(patience=%d, best val_acc=%.4f).",
+                        epoch + 1, self.config.patience, best_val_acc,
                     )
                     break
 
