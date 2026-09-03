@@ -1,5 +1,5 @@
 import React from 'react'
-import { RefreshCw, Download } from 'lucide-react'
+import { RefreshCw, Download, MoreHorizontal, Upload } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
@@ -18,9 +18,12 @@ export default function TemplatesView() {
   const [latestMap, setLatestMap] = React.useState<Record<string, string | null>>({})
   const [selectedVersion, setSelectedVersion] = React.useState<Record<string, string>>({})
   const [saveName, setSaveName] = React.useState('')
+  const [saveOpen, setSaveOpen] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [syncing, setSyncing] = React.useState(false)
   const [filter, setFilter] = React.useState<'all' | 'examples' | 'saved'>('all')
+  const [menuFor, setMenuFor] = React.useState<string | null>(null)
+  const menuRef = React.useRef<HTMLDivElement | null>(null)
 
   const load = React.useCallback(async () => {
     setError(null)
@@ -56,6 +59,15 @@ export default function TemplatesView() {
   React.useEffect(() => {
     void load()
   }, [load])
+
+  React.useEffect(() => {
+    if (!menuFor) return
+    const onDoc = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuFor(null)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [menuFor])
 
   const importExamples = async () => {
     setSyncing(true)
@@ -115,6 +127,7 @@ export default function TemplatesView() {
         }),
       })
       pushToast(`Saved ${res.name}${res.version ? ` @ ${res.version}` : ''}`, 'success')
+      setSaveOpen(false)
       await load()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -140,6 +153,7 @@ export default function TemplatesView() {
           body: JSON.stringify({ name: saveName, yaml: text, description: file.name }),
         })
         pushToast(`Uploaded ${saveName}`, 'success')
+        setSaveOpen(false)
         await load()
       } catch (err) {
         pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -164,12 +178,12 @@ export default function TemplatesView() {
   const exampleCount = (names ?? []).filter(isExample).length
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-6">
+    <div className="h-full overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="Templates"
         description="Starter graphs and saved pipelines. Open one in Builder to run it."
         actions={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => void load()}>
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </button>
@@ -183,28 +197,34 @@ export default function TemplatesView() {
               <Download className="h-3.5 w-3.5" />
               {syncing ? 'Syncing…' : 'Sync examples'}
             </button>
+            {!saveOpen ? (
+              <button type="button" className="btn-primary" onClick={() => setSaveOpen(true)}>
+                Save from Builder
+              </button>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  placeholder="template-name"
+                  className="field-control mt-0 w-44 text-sm"
+                  autoFocus
+                />
+                <button type="button" className="btn-primary" onClick={() => void saveFromCanvas()}>
+                  Save
+                </button>
+                <button type="button" className="btn-quiet" onClick={uploadFile}>
+                  <Upload className="h-3.5 w-3.5" /> Upload
+                </button>
+                <button type="button" className="btn-quiet" onClick={() => setSaveOpen(false)}>
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         }
       />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
-
-      <section className="rounded-xl border border-ink-200 bg-white p-3 space-y-2">
-        <h3 className="text-sm font-semibold">Save current graph</h3>
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            value={saveName}
-            onChange={(e) => setSaveName(e.target.value)}
-            placeholder="template-name"
-            className="field-control mt-0 w-56 text-sm"
-          />
-          <button type="button" className="btn-secondary" onClick={() => void saveFromCanvas()}>
-            Save from Builder
-          </button>
-          <button type="button" className="btn-quiet" onClick={uploadFile}>
-            Upload .graph.json
-          </button>
-        </div>
-      </section>
 
       <div className="flex flex-wrap gap-1.5">
         {(
@@ -243,76 +263,116 @@ export default function TemplatesView() {
           }
         />
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((name) => (
-            <li key={name} className="flex flex-col rounded-2xl border border-ink-200/70 bg-white p-4 shadow-sm transition hover:shadow-soft">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-ink-950">
-                    {humanizeTemplateName(name)}
+        <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((name) => {
+            const versions = versionsMap[name] ?? []
+            const latest = latestMap[name]
+            return (
+              <li
+                key={name}
+                className="group flex items-start gap-3 rounded-xl border border-ink-200/70 bg-white px-3 py-2.5 shadow-sm transition hover:shadow-soft"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <div className="truncate text-sm font-semibold text-ink-950">
+                      {humanizeTemplateName(name)}
+                    </div>
+                    {isExample(name) && (
+                      <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-ink-500">
+                        Example
+                      </span>
+                    )}
                   </div>
-                  <div className="mt-0.5 text-[11px] text-ink-500">
-                    {(versionsMap[name] ?? []).length === 0
-                      ? 'Unversioned'
-                      : `Latest ${latestMap[name] ?? '—'}`}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-ink-500">
+                    {versions.length > 0 ? (
+                      <>
+                        <span>Latest {latest && latest !== 'unversioned' ? latest : versions[0]}</span>
+                        <select
+                          className="rounded-md border border-ink-200 bg-white px-1.5 py-0.5 text-[11px]"
+                          value={selectedVersion[name] ?? latest ?? ''}
+                          onChange={(e) =>
+                            setSelectedVersion((s) => ({ ...s, [name]: e.target.value }))
+                          }
+                        >
+                          {versions.map((v) => (
+                            <option key={v} value={v}>
+                              {v}
+                            </option>
+                          ))}
+                        </select>
+                      </>
+                    ) : (
+                      <span className="text-ink-300">—</span>
+                    )}
                   </div>
-                </div>
-                {isExample(name) && (
-                  <span className="shrink-0 rounded bg-accent-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-800">
-                    Example
-                  </span>
-                )}
-              </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {(versionsMap[name] ?? []).length > 0 ? (
-                  <select
-                    className="rounded border border-ink-200 px-2 py-1 text-xs"
-                    value={selectedVersion[name] ?? latestMap[name] ?? ''}
-                    onChange={(e) =>
-                      setSelectedVersion((s) => ({ ...s, [name]: e.target.value }))
-                    }
+                  <button
+                    type="button"
+                    className="btn-primary mt-2"
+                    onClick={() => void loadIntoBuilder(name)}
                   >
-                    {(versionsMap[name] ?? []).map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                <button type="button" className="btn-primary" onClick={() => void loadIntoBuilder(name)}>
-                  Open in Builder
-                </button>
-                <ConfirmButton
-                  label="Delete version"
-                  confirmLabel="Confirm"
-                  danger
-                  disabled={(versionsMap[name] ?? []).length === 0}
-                  onConfirm={() => {
-                    const ver = selectedVersion[name] || latestMap[name]
-                    if (!ver || ver === 'unversioned') return
-                    void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
-                      method: 'DELETE',
-                      query: { version: ver },
-                    })
-                      .then(load)
-                      .then(() => pushToast('Deleted version', 'success'))
-                      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
-                  }}
-                />
-                <ConfirmButton
-                  label="Delete"
-                  confirmLabel="Confirm delete"
-                  danger
-                  onConfirm={() =>
-                    void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
-                      .then(load)
-                      .then(() => pushToast(`Deleted ${humanizeTemplateName(name)}`, 'success'))
-                      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
-                  }
-                />
-              </div>
-            </li>
-          ))}
+                    Open in Builder
+                  </button>
+                </div>
+                <div className="relative shrink-0" ref={menuFor === name ? menuRef : undefined}>
+                  <button
+                    type="button"
+                    className="btn-icon"
+                    aria-label={`More actions for ${humanizeTemplateName(name)}`}
+                    onClick={() => setMenuFor((cur) => (cur === name ? null : name))}
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </button>
+                  {menuFor === name && (
+                    <div className="absolute right-0 z-20 mt-1 w-48 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
+                      {versions.length > 0 && (
+                        <ConfirmButton
+                          label="Delete version"
+                          confirmLabel="Confirm version"
+                          danger
+                          onConfirm={() => {
+                            const ver = selectedVersion[name] || latest
+                            if (!ver || ver === 'unversioned') return
+                            void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
+                              method: 'DELETE',
+                              query: { version: ver },
+                            })
+                              .then(load)
+                              .then(() => {
+                                setMenuFor(null)
+                                pushToast('Deleted version', 'success')
+                              })
+                              .catch((err) =>
+                                pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                              )
+                          }}
+                        />
+                      )}
+                      <div className={versions.length > 0 ? 'mt-1' : ''}>
+                        <ConfirmButton
+                          label="Delete"
+                          confirmLabel="Confirm delete"
+                          danger
+                          onConfirm={() =>
+                            void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
+                              method: 'DELETE',
+                            })
+                              .then(load)
+                              .then(() => {
+                                setMenuFor(null)
+                                pushToast(`Deleted ${humanizeTemplateName(name)}`, 'success')
+                              })
+                              .catch((err) =>
+                                pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                              )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>

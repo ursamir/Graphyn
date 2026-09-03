@@ -2,7 +2,7 @@ import React from 'react'
 import { Download, Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
+import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
 import {
   formatExecutionLine,
   formatLocaleDateTime,
@@ -371,15 +371,21 @@ export default function RunsView() {
           <EmptyState title="Select a run" description="Inspect logs, checkpoints, artifacts, and control active runs." />
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge status={runStatus} />
-              {status?.progress_pct != null && (
-                <span className="text-xs text-ink-500">{String(status.progress_pct)}%</span>
-              )}
-              {status?.current_node != null && (
-                <span className="text-xs text-ink-500">{humanNodeLabel(String(status.current_node))}</span>
-              )}
+            <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm">
+              <div className="flex flex-wrap items-center gap-3">
+                <StatusBadge status={runStatus} />
+                {status?.progress_pct != null && (
+                  <SlimProgress pct={Number(status.progress_pct)} />
+                )}
+                {status?.current_node != null && (
+                  <span className="text-sm text-ink-600">
+                    Current node{' '}
+                    <span className="font-medium text-ink-900">{humanNodeLabel(String(status.current_node))}</span>
+                  </span>
+                )}
+              </div>
             </div>
+
             <div className="flex flex-wrap gap-2">
               {['running'].includes(runStatus.toLowerCase()) && (
                 <button type="button" className="btn-secondary" onClick={() => void control(selected, 'pause')}>

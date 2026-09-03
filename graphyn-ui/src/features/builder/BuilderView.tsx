@@ -33,7 +33,7 @@ import {
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState } from '../../components/ui'
-import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, skipConsecutiveByText } from '../../lib/format'
+import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, skipConsecutiveByText, startCase } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   catalogPorts,
@@ -672,25 +672,19 @@ function BuilderInner() {
             placeholder="Search nodes…"
             className="w-full rounded-lg border border-ink-200 bg-ink-50 px-2.5 py-1.5 text-sm"
           />
-          <div className="mt-2 flex flex-wrap gap-1">
-            <button
-              type="button"
-              className={categoryFilter === 'all' ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
-              onClick={() => setCategoryFilter('all')}
-            >
-              All
-            </button>
+          <select
+            aria-label="Filter by category"
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="field-control mt-1.5"
+          >
+            <option value="all">All categories ({catalog.length})</option>
             {categories.map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                className={categoryFilter === cat ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
-                onClick={() => setCategoryFilter(cat)}
-              >
-                {cat}
-              </button>
+              <option key={cat} value={cat}>
+                {startCase(cat)} ({catalog.filter((n) => (n.category || 'Other') === cat).length})
+              </option>
             ))}
-          </div>
+          </select>
         </div>
         <div className="flex-1 overflow-y-auto p-1.5">
           {catalog.length === 0 ? (
@@ -739,11 +733,9 @@ function BuilderInner() {
                 : ([[categoryFilter, filtered]] as Array<[string, typeof filtered]>)
               ).map(([cat, items]) => (
                 <div key={cat}>
-                  {categoryFilter === 'all' && (
-                    <div className="px-2 pb-1 text-[11px] font-medium text-ink-400">
-                      {cat}
-                    </div>
-                  )}
+                  <div className="sticky top-0 z-[1] bg-white/95 px-2 py-1 text-[11px] font-medium text-ink-400 backdrop-blur">
+                    {startCase(cat)} · {items.length}
+                  </div>
                   <div className="space-y-0.5">
                     {items.map((n) => (
                       <button

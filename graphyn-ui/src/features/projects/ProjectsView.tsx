@@ -9,7 +9,6 @@ import {
   ErrorBanner,
   KeyValue,
   LoadingBlock,
-  PageHeader,
   StatusBadge,
 } from '../../components/ui'
 
@@ -29,6 +28,7 @@ export default function ProjectsView() {
   const [selected, setSelected] = React.useState<string | null>(null)
   const [tab, setTab] = React.useState<Tab>('versions')
   const [newName, setNewName] = React.useState('')
+  const nameRef = React.useRef<HTMLInputElement | null>(null)
   const [renameTo, setRenameTo] = React.useState('')
   const [cloneTo, setCloneTo] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
@@ -103,7 +103,11 @@ export default function ProjectsView() {
   }
 
   const create = async () => {
-    if (!newName.trim()) return
+    if (!newName.trim()) {
+      pushToast('Enter a project name first', 'error')
+      nameRef.current?.focus()
+      return
+    }
     try {
       await apiJson('/projects', { method: 'POST', body: JSON.stringify({ name: newName.trim() }) })
       pushToast(`Created ${newName}`, 'success')
@@ -293,19 +297,17 @@ export default function ProjectsView() {
 
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-[320px_1fr]">
-      <div className="overflow-y-auto border-r border-ink-200 p-4 space-y-3">
-        <PageHeader
-          title="Projects"
-          description="Dataset projects live under workspace/datasets/output. Create, open, rename, clone, or delete a project here."
-          actions={
-            <button type="button" className="btn-secondary" onClick={() => void load()} aria-label="Refresh">
-              <RefreshCw className="h-3.5 w-3.5" />
-            </button>
-          }
-        />
+      <div className="overflow-y-auto border-r border-ink-200 p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-ink-950">Projects</h2>
+          <button type="button" className="btn-icon" onClick={() => void load()} aria-label="Refresh">
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        </div>
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         <div className="flex gap-2">
           <input
+            ref={nameRef}
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="new-project"
@@ -319,15 +321,10 @@ export default function ProjectsView() {
         {loading || projects == null ? (
           <LoadingBlock />
         ) : projects.length === 0 ? (
-          <EmptyState
-            title="No dataset projects"
-            description="Nothing under workspace/datasets/output yet. Create a project to manage dataset versions."
-            action={
-              <button type="button" className="btn-primary" onClick={() => void create()}>
-                Create project
-              </button>
-            }
-          />
+          <p className="px-1 text-xs leading-relaxed text-ink-500">
+            Nothing under <code className="font-mono text-[11px]">workspace/datasets/output</code> yet.
+            Type a name above to create one.
+          </p>
         ) : (
           <ul className="space-y-2">
             {projects.map((p) => (
@@ -352,7 +349,19 @@ export default function ProjectsView() {
 
       <div className="overflow-y-auto p-4 space-y-4">
         {!selected ? (
-          <EmptyState title="Select a project" description="Open a dataset project to rename, clone, delete, or inspect versions." />
+          <div className="mx-auto max-w-md rounded-2xl border border-ink-200/80 bg-white px-6 py-8 shadow-sm">
+            <h3 className="text-lg font-semibold text-ink-950">Dataset projects</h3>
+            <p className="mt-2 text-sm leading-relaxed text-ink-500">
+              A project is a named folder under{' '}
+              <code className="font-mono text-[12px] text-ink-700">workspace/datasets/output</code>.
+              Versions, snapshots, and lineage live here so you can restore or compare dataset cuts.
+            </p>
+            <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-ink-700">
+              <li>Create a project with the name field on the left.</li>
+              <li>Run a pipeline or merge datasets into that folder.</li>
+              <li>Open the project to inspect versions, snapshots, and diffs.</li>
+            </ol>
+          </div>
         ) : (
           <>
             <div className="flex flex-wrap items-start justify-between gap-3">

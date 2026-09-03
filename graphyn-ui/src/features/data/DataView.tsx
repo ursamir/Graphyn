@@ -20,6 +20,17 @@ interface InputLabel {
   file_count: number
 }
 
+function humanizeDataError(err: unknown): { message: string; detail: string } {
+  const detail = err instanceof Error ? err.message : String(err)
+  if (/path is outside workspace/i.test(detail)) {
+    return {
+      message: "That dataset folder isn't inside the Graphyn workspace anymore — it may have been deleted.",
+      detail,
+    }
+  }
+  return { message: detail, detail }
+}
+
 export default function DataView() {
   const pushToast = useAppStore((s) => s.pushToast)
   const [outputs, setOutputs] = React.useState<OutputProject[]>([])
@@ -31,6 +42,7 @@ export default function DataView() {
   const [rows, setRows] = React.useState<Array<Record<string, unknown>>>([])
   const [stats, setStats] = React.useState<unknown>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const [errorDetail, setErrorDetail] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
 
   // ingest
@@ -46,6 +58,7 @@ export default function DataView() {
 
   const loadSources = React.useCallback(async () => {
     setError(null)
+    setErrorDetail(null)
     setLoading(true)
     try {
       const [out, inp] = await Promise.all([
@@ -60,7 +73,9 @@ export default function DataView() {
       }
       if (inp[0]) setLabel((l) => l || inp[0].label)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const h = humanizeDataError(err)
+      setError(h.message)
+      setErrorDetail(h.detail)
     } finally {
       setLoading(false)
     }
@@ -71,8 +86,16 @@ export default function DataView() {
   }, [loadSources])
 
   React.useEffect(() => {
+    let cancelled = false
     const run = async () => {
-      if (mode === 'outputs' && project && version) {
+      setError(null)
+      setErrorDetail(null)
+      if (mode === 'outputs') {
+        if (!project || !version) {
+          setRows([])
+          setStats(null)
+          return
+        }
         try {
           const [data, st] = await Promise.all([
             apiJson<Array<Record<string, unknown>>>(
@@ -82,21 +105,49 @@ export default function DataView() {
               `/data/outputs/${encodeURIComponent(project)}/${encodeURIComponent(version)}/stats`,
             ).catch(() => null),
           ])
+          if (cancelled) return
           setRows(data)
           setStats(st)
         } catch (err) {
-          setError(err instanceof Error ? err.message : String(err))
+          if (cancelled) return
+          const h = humanizeDataError(err)
+          setError(h.message)
+          setErrorDetail(h.detail)
+          setRows([])
+          setStats(null)
         }
-      } else if (mode === 'inputs' && label) {
+        return
+      }
+      if (mode === 'inputs') {
+        if (!label) {
+          setRows([])
+          setStats(null)
+          return
+        }
         try {
-          setRows(await apiJson(`/data/inputs/${encodeURIComponent(label)}`))
+          const data = await apiJson<Array<Record<string, unknown>>>(
+            `/data/inputs/${encodeURIComponent(label)}`,
+          )
+          if (cancelled) return
+          setRows(data)
           setStats(null)
         } catch (err) {
-          setError(err instanceof Error ? err.message : String(err))
+          if (cancelled) return
+          const h = humanizeDataError(err)
+          setError(h.message)
+          setErrorDetail(h.detail)
+          setRows([])
+          setStats(null)
         }
+        return
       }
+      setRows([])
+      setStats(null)
     }
     void run()
+    return () => {
+      cancelled = true
+    }
   }, [mode, project, version, label])
 
   const openFile = async (path: string, kind: 'files' | 'input-files') => {
@@ -283,7 +334,7 @@ export default function DataView() {
           </div>
         }
       />
-      {error && <ErrorBanner message={error} onRetry={() => void loadSources()} />}
+      {error && <ErrorBanner message={error} title={errorDetail ?? undefined} onRetry={() => void loadSources()} />}
 
       <div className="flex flex-wrap gap-2">
         {(
@@ -294,7 +345,7 @@ export default function DataView() {
             ['merge', 'Merge'],
           ] as const
         ).map(([m, label]) => (
-          <button key={m} type="button" className={mode === m ? 'btn-primary' : 'btn-secondary'} onClick={() => setMode(m)}>
+          <button key={m} type="button" className={mode === m ? 'btn-primary' : 'btn-secondary'} onClick={() => { setError(null); setErrorDetail(null); setMode(m) }}>
             {label}
           </button>
         ))}
@@ -338,10 +389,10 @@ export default function DataView() {
               />
             ) : (
             <div className="flex flex-wrap items-center gap-2">
-              <select value={project} onChange={(e) => { setProject(e.target.value); setVersion(outputs.find((o) => o.project === e.target.value)?.versions[0] ?? '') }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
+              <select value={project} onChange={(e) => { setError(null); setErrorDetail(null); setProject(e.target.value); setVersion(outputs.find((o) => o.project === e.target.value)?.versions[0] ?? '') }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
                 {outputs.map((o) => <option key={o.project} value={o.project}>{o.project}</option>)}
               </select>
-              <select value={version} onChange={(e) => setVersion(e.target.value)} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
+              <select value={version} onChange={(e) => { setError(null); setErrorDetail(null); setVersion(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
                 {versions.map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
               {project && version ? (
@@ -367,7 +418,7 @@ export default function DataView() {
               />
             ) : (
             <div className="flex flex-wrap items-center gap-2">
-            <select value={label} onChange={(e) => setLabel(e.target.value)} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
+            <select value={label} onChange={(e) => { setError(null); setErrorDetail(null); setLabel(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
               {inputs.map((i) => <option key={i.label} value={i.label}>{i.label} ({i.file_count})</option>)}
             </select>
               {label ? (
@@ -385,11 +436,17 @@ export default function DataView() {
           {mode === 'outputs' && outputs.length === 0 ? null : mode === 'inputs' && inputs.length === 0 ? null : rows.length === 0 ? (
             <EmptyState
               title="No rows"
-              description="Upload audio or ingest a dataset to see files here."
+              description={
+                mode === 'outputs'
+                  ? 'This version has no files yet. Run a pipeline or merge datasets to populate it.'
+                  : 'Upload audio or ingest a dataset to see files here.'
+              }
               action={
-                <button type="button" className="btn-primary" onClick={upload}>
-                  Upload a file
-                </button>
+                mode === 'inputs' ? (
+                  <button type="button" className="btn-primary" onClick={upload}>
+                    Upload a file
+                  </button>
+                ) : undefined
               }
             />
           ) : (

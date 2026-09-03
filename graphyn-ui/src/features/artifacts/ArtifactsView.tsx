@@ -2,7 +2,7 @@ import React from 'react'
 import { Copy, Download, Play, RefreshCw } from 'lucide-react'
 import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
+import { CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
 import { humanNodeLabel, shortRunId } from '../../lib/format'
 
 interface Artifact {
@@ -27,6 +27,72 @@ function findCopyablePath(data: unknown, depth = 0): string | null {
     }
   }
   return null
+}
+
+
+function lineageInputIds(lineage: unknown): Array<{ id: string; label: string }> {
+  if (!lineage || typeof lineage !== 'object') return []
+  const rec = lineage as Record<string, unknown>
+  const raw = rec.inputs
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((item) => {
+    if (typeof item === 'string' && item.trim()) {
+      return [{ id: item, label: item }]
+    }
+    if (item && typeof item === 'object') {
+      const o = item as Record<string, unknown>
+      const id = String(o.artifact_id ?? o.id ?? '').trim()
+      if (!id) return []
+      const label = String(o.node_type ?? o.artifact_type ?? o.name ?? id)
+      return [{ id, label }]
+    }
+    return []
+  })
+}
+
+function LineageList({
+  lineage,
+  onOpen,
+}: {
+  lineage: unknown
+  onOpen: (id: string) => void
+}) {
+  if (lineage == null) return <p className="text-sm text-ink-500">No lineage.</p>
+  const inputs = lineageInputIds(lineage)
+  const rest =
+    lineage && typeof lineage === 'object' && !Array.isArray(lineage)
+      ? Object.fromEntries(
+          Object.entries(lineage as Record<string, unknown>).filter(([k]) => k !== 'inputs'),
+        )
+      : lineage
+  return (
+    <div className="space-y-3">
+      {inputs.length > 0 ? (
+        <ul className="space-y-1.5">
+          {inputs.map((item) => (
+            <li
+              key={item.id}
+              className="flex items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2"
+            >
+              <button
+                type="button"
+                className="min-w-0 flex-1 truncate text-left text-sm font-medium text-ink-900 hover:text-accent-700"
+                onClick={() => onOpen(item.id)}
+              >
+                {item.label}
+              </button>
+              <CopyableMono value={item.id} />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-ink-400">No input artifacts.</p>
+      )}
+      {rest && typeof rest === 'object' && Object.keys(rest as object).length > 0 && (
+        <KeyValue data={rest} empty="No other lineage fields." />
+      )}
+    </div>
+  )
 }
 
 export default function ArtifactsView() {
@@ -134,7 +200,7 @@ export default function ArtifactsView() {
 
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
-      <div className="overflow-y-auto border-r border-ink-200 p-4">
+      <div className="overflow-y-auto border-r border-ink-300 bg-white p-4">
         <PageHeader
           title="Artifacts"
           description="Outputs from completed nodes — inspect lineage and replay a producing run."
@@ -218,7 +284,7 @@ export default function ArtifactsView() {
           </ul>
         )}
       </div>
-      <div className="overflow-y-auto p-4 space-y-3">
+      <div className="overflow-y-auto border-l border-ink-200/80 bg-ink-50/40 p-4 space-y-3">
         {!selected ? (
           <EmptyState title="Select an artifact" description="Inspect lineage and replay producing runs." />
         ) : (
@@ -249,7 +315,7 @@ export default function ArtifactsView() {
             <h3 className="text-sm font-semibold">Detail</h3>
             <KeyValue data={detail} />
             <h3 className="text-sm font-semibold">Lineage</h3>
-            <KeyValue data={lineage} />
+            <LineageList lineage={lineage} onOpen={(id) => void open(id)} />
           </>
         )}
       </div>

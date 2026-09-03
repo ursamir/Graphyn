@@ -1,6 +1,6 @@
 import React from 'react'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, ChevronRight, Info, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronRight, Copy, Info, X } from 'lucide-react'
 import { prettyScalar, startCase } from '../lib/format'
 
 export function EmptyState({
@@ -30,12 +30,12 @@ export function LoadingBlock({ label = 'Loading…' }: { label?: string }) {
   )
 }
 
-export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function ErrorBanner({ message, onRetry, title }: { message: string; onRetry?: () => void; title?: string }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-        <span>{message}</span>
+        <span title={title}>{message}</span>
       </div>
       {onRetry && (
         <button type="button" className="btn-secondary" onClick={onRetry}>
@@ -206,15 +206,124 @@ export function CollapsibleJson({
   )
 }
 
-function valueCell(value: unknown): React.ReactNode {
+function isScalar(value: unknown): boolean {
+  return value == null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+}
+
+function isFlatRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return Object.values(value).every(isScalar)
+}
+
+export function looksLikePath(value: string): boolean {
+  if (!value.includes('/')) return false
+  if (value.startsWith('/') || value.startsWith('./') || value.startsWith('../')) return true
+  if (/^[A-Za-z]:[\\/]/.test(value)) return true
+  if (value.startsWith('workspace/')) return true
+  return !/\s/.test(value) && value.length > 6
+}
+
+function isIdOrHashKey(key?: string): boolean {
+  if (!key) return false
+  return /(_id|_hash|^id$|^hash$|artifact_id|run_id|graph_hash|content_hash)$/i.test(key)
+}
+
+function middleTruncate(value: string, keep = 18): string {
+  if (value.length <= keep * 2 + 1) return value
+  return `${value.slice(0, keep)}…${value.slice(-keep)}`
+}
+
+export function CopyableMono({
+  value,
+  title,
+}: {
+  value: string
+  title?: string
+}) {
+  const [copied, setCopied] = React.useState(false)
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+      <code
+        className="min-w-0 break-all font-mono text-[11px] text-ink-800"
+        title={title ?? value}
+      >
+        <span className="sm:hidden">{middleTruncate(value)}</span>
+        <span className="hidden sm:inline">{value}</span>
+      </code>
+      <button
+        type="button"
+        className="btn-icon shrink-0"
+        title={copied ? 'Copied' : 'Copy'}
+        aria-label="Copy"
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          void navigator.clipboard.writeText(value).then(() => {
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1200)
+          })
+        }}
+      >
+        <Copy className="h-3 w-3" />
+      </button>
+    </span>
+  )
+}
+
+export function SlimProgress({ pct }: { pct: number }) {
+  const clamped = Math.max(0, Math.min(100, Number.isFinite(pct) ? pct : 0))
+  return (
+    <span className="inline-flex min-w-[8rem] items-center gap-2">
+      <span className="h-1.5 min-w-[5rem] flex-1 overflow-hidden rounded-full bg-ink-100">
+        <span className="block h-full rounded-full bg-accent-500" style={{ width: `${clamped}%` }} />
+      </span>
+      <span className="text-[11px] tabular-nums text-ink-500">{Math.round(clamped)}%</span>
+    </span>
+  )
+}
+
+function valueCell(value: unknown, key?: string): React.ReactNode {
+  if (key && key.toLowerCase() === 'status' && typeof value === 'string') {
+    return <StatusBadge status={value} />
+  }
+  if (key && /progress(_pct|pct|percent)?$/i.test(key) && typeof value === 'number') {
+    return <SlimProgress pct={value} />
+  }
+  if (typeof value === 'string' && (looksLikePath(value) || isIdOrHashKey(key))) {
+    return <CopyableMono value={value} />
+  }
   const scalar = prettyScalar(value)
   if (scalar) return <span className="break-words">{scalar}</span>
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="text-ink-400">None</span>
     if (value.every((v) => v == null || typeof v !== 'object')) {
-      return <span className="break-words">{value.map((v) => prettyScalar(v) || String(v)).join(', ')}</span>
+      const joined = value.map((v) => prettyScalar(v) || String(v))
+      if (joined.every((s) => looksLikePath(s))) {
+        return (
+          <div className="space-y-1">
+            {joined.map((s, i) => (
+              <div key={`${s}-${i}`}>
+                <CopyableMono value={s} />
+              </div>
+            ))}
+          </div>
+        )
+      }
+      return <span className="break-words">{joined.join(', ')}</span>
     }
     return <CollapsibleJson value={value} label={`${value.length} items`} />
+  }
+  if (isFlatRecord(value)) {
+    return (
+      <div className="space-y-1.5">
+        {Object.entries(value).map(([k, v]) => (
+          <div key={k} className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-start gap-2">
+            <span className="text-[11px] font-medium text-ink-400">{startCase(k)}</span>
+            <span className="min-w-0 text-sm text-ink-900">{valueCell(v, k)}</span>
+          </div>
+        ))}
+      </div>
+    )
   }
   if (value && typeof value === 'object') return <CollapsibleJson value={value} label="Details" />
   return <span className="text-ink-400">—</span>
@@ -235,7 +344,7 @@ export function KeyValue({ data, empty = 'No data' }: { data: unknown; empty?: s
             <ChevronRight className="mt-0.5 hidden h-3 w-3 shrink-0 text-ink-300 sm:block" />
             {startCase(k)}
           </dt>
-          <dd className="min-w-0 text-sm text-ink-900">{valueCell(v)}</dd>
+          <dd className="min-w-0 text-sm text-ink-900">{valueCell(v, k)}</dd>
         </div>
       ))}
     </dl>

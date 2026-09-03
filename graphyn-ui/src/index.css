@@ -28,6 +28,28 @@ body {
   box-sizing: border-box;
 }
 
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #a3b3c2 #e4e9ee;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: #e4e9ee;
+}
+*::-webkit-scrollbar-thumb {
+  background: #a3b3c2;
+  border-radius: 999px;
+  border: 2px solid #e4e9ee;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #768ea3;
+}
+
+
 .react-flow__attribution {
   display: none;
 }
