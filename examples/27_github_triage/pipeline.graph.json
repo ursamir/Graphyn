@@ -3,7 +3,7 @@
   "metadata": {
     "name": "github_triage",
     "seed": 42,
-    "description": "GitHub triage: mock HTTP issues \u2192 ASR/PII/LLM extract \u2192 IF \u2192 mock comment HTTP.",
+    "description": "GitHub triage: mock HTTP issues → ASR/PII/LLM extract → IF → mock comment HTTP.",
     "created_at": null,
     "tags": [
       "example",
@@ -49,7 +49,7 @@
       "id": "ingest",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/01_wake_word/data/wake_word",
+        "path": "workspace/datasets/input/wake-word/wake_word",
         "source_type": "filesystem",
         "recursive": false,
         "limit": 1

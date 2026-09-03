@@ -4,7 +4,8 @@ Bounded Context:  Graph Language / Templates
 Responsibility:   Discover example Graph IR files under examples/ and sync them
                   into the project templates directory for the console UI.
 Owns:             Example discovery, path rewriting, template sync helpers.
-Public Surface:   discover_example_graphs, rewrite_graph_paths, sync_example_templates
+Public Surface:   discover_example_graphs, rewrite_graph_paths, sync_example_templates,
+                  seed_example_input_datasets
 Must NOT:         Execute pipelines or mutate example sources.
 Dependencies:     pathlib, json, app.core.config.project_dir, app.core.workspace_paths
 Reason To Change: Example layout changes or template naming conventions change.
@@ -12,7 +13,9 @@ Reason To Change: Example layout changes or template naming conventions change.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -168,8 +171,54 @@ def discover_example_graphs() -> list[dict[str, Any]]:
     return found
 
 
-def rewrite_graph_paths(graph: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
-    """Rewrite absolute filesystem paths under the repo root to relative paths."""
+def seed_example_input_datasets() -> list[str]:
+    """Copy/symlink examples/<folder>/data into workspace/datasets/input/<slug>.
+
+    Existing destinations are left in place (exist_ok). Prefer a directory
+    symlink so E2E hosts keep a single copy of the seed wavs.
+    """
+    from app.core.config import datasets_input_dir
+    from app.core.workspace_paths import artifact_slug
+
+    dest_root = datasets_input_dir()
+    dest_root.mkdir(parents=True, exist_ok=True)
+    seeded: list[str] = []
+    root = examples_dir()
+    if not root.is_dir():
+        return seeded
+    for example_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        data = example_dir / "data"
+        if not data.is_dir():
+            continue
+        slug = artifact_slug(example_dir.name)
+        if slug in {"pipeline", "graph", "untitled"}:
+            continue
+        dest = dest_root / slug
+        if dest.exists() or dest.is_symlink():
+            if slug not in seeded:
+                seeded.append(slug)
+            continue
+        try:
+            os.symlink(data.resolve(), dest, target_is_directory=True)
+        except OSError:
+            shutil.copytree(data, dest)
+        seeded.append(slug)
+    return seeded
+
+
+def rewrite_graph_paths(
+    graph: dict[str, Any],
+    *,
+    root: Path | None = None,
+    slug: str | None = None,
+) -> dict[str, Any]:
+    """Rewrite repo-absolute paths, then retarget outputs and ingest into workspace.
+
+    Outputs go to ``workspace/artifacts/<slug>/...``. Sample ingest under
+    ``examples/**/data`` goes to ``workspace/datasets/input/<folder-slug>/...``.
+    """
+    from app.core.workspace_paths import _graph_name, rewire_graph_outputs
+
     root = (root or repo_root()).resolve()
     root_s = str(root)
     root_s_slash = root_s if root_s.endswith("/") else root_s + "/"
@@ -185,7 +234,9 @@ def rewrite_graph_paths(graph: dict[str, Any], *, root: Path | None = None) -> d
             return [rewrite_value(v) for v in value]
         return value
 
-    return rewrite_value(graph)  # type: ignore[return-value]
+    rewritten = rewrite_value(graph)
+    name = slug or _graph_name(rewritten)
+    return rewire_graph_outputs(rewritten, slug=name)
 
 
 def sync_example_templates(*, force: bool = True, prune_shards: bool = True) -> dict[str, Any]:
@@ -203,6 +254,7 @@ def sync_example_templates(*, force: bool = True, prune_shards: bool = True) -> 
     skipped: list[str] = []
     pruned: list[str] = []
     errors: list[dict[str, str]] = []
+    seeded = seed_example_input_datasets()
     discovered = discover_example_graphs()
     keep_ids = {item["id"] for item in discovered}
 
@@ -218,11 +270,8 @@ def sync_example_templates(*, force: bool = True, prune_shards: bool = True) -> 
             if not isinstance(data, dict) or "schema_version" not in data:
                 errors.append({"id": name, "error": "not a Graph IR document"})
                 continue
-            rewritten = rewrite_graph_paths(data, root=root)
-            from app.core.workspace_paths import rewire_graph_outputs
-
             # Template id (ex-01-wake-word) sanitizes to wake-word; see artifact_slug.
-            rewritten = rewire_graph_outputs(rewritten, slug=name)
+            rewritten = rewrite_graph_paths(data, root=root, slug=name)
             meta = rewritten.setdefault("metadata", {})
             if isinstance(meta, dict):
                 tags = list(meta.get("tags") or [])
@@ -242,13 +291,24 @@ def sync_example_templates(*, force: bool = True, prune_shards: bool = True) -> 
                     continue
                 cfg = node.get("config") or {}
                 path = cfg.get("path")
-                if isinstance(path, str) and path and not (root / path).exists() and not Path(path).exists():
-                    errors.append(
-                        {
-                            "id": name,
-                            "error": f"dataset_ingest path missing: {path}",
-                        }
-                    )
+                if isinstance(path, str) and path:
+                    from app.core.workspace_paths import ingest_dir_candidates, _dir_has_ingest_files
+
+                    ok = False
+                    for candidate in ingest_dir_candidates(path):
+                        try:
+                            if _dir_has_ingest_files(candidate) or candidate.is_dir():
+                                ok = True
+                                break
+                        except OSError:
+                            continue
+                    if not ok:
+                        errors.append(
+                            {
+                                "id": name,
+                                "error": f"dataset_ingest path missing: {path}",
+                            }
+                        )
             dest.write_text(json.dumps(rewritten, indent=2) + "\n", encoding="utf-8")
             written.append(name)
         except Exception as exc:
@@ -267,6 +327,7 @@ def sync_example_templates(*, force: bool = True, prune_shards: bool = True) -> 
         "skipped": skipped,
         "pruned": pruned,
         "errors": errors,
+        "seeded_input_datasets": seeded,
         "count_written": len(written),
         "count_pruned": len(pruned),
         "count_discovered": len(discovered),

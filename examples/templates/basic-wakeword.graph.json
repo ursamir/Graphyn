@@ -16,7 +16,7 @@
       "id": "dataset_ingest_0",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/01_wake_word/data/wake_word",
+        "path": "workspace/datasets/input/wake-word/wake_word",
         "source_type": "filesystem",
         "recursive": false
       },

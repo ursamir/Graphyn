@@ -12,7 +12,7 @@
       "id": "dataset_ingest_yes",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/02_speech_commands/data/yes",
+        "path": "workspace/datasets/input/speech-commands/yes",
         "recursive": false,
         "source_type": "filesystem"
       },
@@ -83,7 +83,7 @@
       "id": "dataset_ingest_no",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/02_speech_commands/data/no",
+        "path": "workspace/datasets/input/speech-commands/no",
         "recursive": false,
         "source_type": "filesystem"
       },
@@ -154,7 +154,7 @@
       "id": "dataset_ingest_up",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/02_speech_commands/data/up",
+        "path": "workspace/datasets/input/speech-commands/up",
         "recursive": false,
         "source_type": "filesystem"
       },
@@ -225,7 +225,7 @@
       "id": "dataset_ingest_down",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/02_speech_commands/data/down",
+        "path": "workspace/datasets/input/speech-commands/down",
         "recursive": false,
         "source_type": "filesystem"
       },

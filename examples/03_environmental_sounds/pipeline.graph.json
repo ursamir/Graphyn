@@ -17,7 +17,7 @@
       "id": "dataset_ingest_0",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/03_environmental_sounds/data/dog",
+        "path": "workspace/datasets/input/environmental-sounds/dog",
         "source_type": "filesystem",
         "recursive": false
       },

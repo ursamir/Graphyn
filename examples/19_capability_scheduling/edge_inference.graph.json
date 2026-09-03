@@ -13,7 +13,7 @@
       "node_type": "stream_ingest",
       "config": {
         "source": "file_stream",
-        "file_path": "examples/02_speech_commands/data/yes/4fd1443e_nohash_0.wav",
+        "file_path": "workspace/datasets/input/speech-commands/yes/4fd1443e_nohash_0.wav",
         "sample_rate": 16000,
         "duration_s": 5.0
       },

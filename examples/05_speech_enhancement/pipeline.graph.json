@@ -16,7 +16,7 @@
       "id": "dataset_ingest_0",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/05_speech_enhancement/data/clean_speech",
+        "path": "workspace/datasets/input/speech-enhancement/clean_speech",
         "source_type": "filesystem",
         "recursive": false
       },

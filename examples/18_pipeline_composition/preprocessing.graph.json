@@ -12,7 +12,7 @@
       "id": "dataset_ingest_0",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "examples/02_speech_commands/data/yes",
+        "path": "workspace/datasets/input/speech-commands/yes",
         "recursive": false,
         "source_type": "filesystem"
       },

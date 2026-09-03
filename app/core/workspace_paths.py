@@ -1,10 +1,11 @@
 # app/core/workspace_paths.py
 """
 Bounded Context:  Graph Language / Workspace
-Responsibility:   Rewrite pipeline output paths into workspace/artifacts/<slug>/.
+Responsibility:   Rewrite pipeline output paths into workspace/artifacts/<slug>/
+                  and sample ingest paths into workspace/datasets/input/<slug>/.
 Owns:             artifact_slug, rewire_graph_outputs, apply_output_rewire.
 Public Surface:   artifact_slug, rewire_graph_outputs, apply_output_rewire,
-                  ARTIFACTS_PREFIX.
+                  ARTIFACTS_PREFIX, DATASETS_INPUT_PREFIX.
 Must NOT:         Execute pipelines or write files.
 Dependencies:     copy, re, pathlib; GraphIR loader imported lazily.
 Reason To Change: Artifact layout or relocatable-output heuristics change.
@@ -32,18 +33,30 @@ from pathlib import Path
 from typing import Any
 
 ARTIFACTS_PREFIX = "workspace/artifacts"
+DATASETS_INPUT_PREFIX = "workspace/datasets/input"
 _MERITECH_PREFIXES = (
     "/home/meritech/Desktop/newAudio3/",
     "/home/meritech/Desktop/newAudio3",
 )
-_OUTPUT_KEYS = frozenset({"output_dir", "output_path", "model_path", "root"})
-_PATH_KEYS = frozenset({"output_dir", "output_path", "model_path", "path", "file_path", "root"})
+_OUTPUT_KEYS = frozenset({"output_dir", "output_path", "model_path", "root", "export_dir", "dest_dir"})
+_PATH_KEYS = frozenset({
+    "output_dir",
+    "output_path",
+    "model_path",
+    "path",
+    "file_path",
+    "root",
+    "export_dir",
+    "dest_dir",
+    "manifest_path",
+    "data_dir",
+})
 _GENERIC_TAILS = frozenset({"output", "outputs", "out"})
 _GENERIC_SLUGS = frozenset({"pipeline", "graph", "untitled"})
 _SAFE_SLUG_RE = re.compile(r"[^a-z0-9-]+")
 _EXAMPLES_OUTPUT_RE = re.compile(r"(?:^|/)examples/[^/]+/output(?:/(.*))?$", re.I)
 _EXAMPLES_FOLDER_RE = re.compile(r"(?:^|/)examples/([^/]+)/output(?:/|$)", re.I)
-_EXAMPLES_DATA_RE = re.compile(r"(?:^|/)examples/[^/]+/data(?:/|$)", re.I)
+_EXAMPLES_DATA_RE = re.compile(r"(?:^|/)examples/([^/]+)/data(?:/(.*))?$", re.I)
 _DATASETS_OUTPUT_RE = re.compile(r"(?:^|/)workspace/datasets/output(?:/(.*))?$", re.I)
 _OUTPUT_FILE_SUFFIXES = frozenset(
     {
@@ -108,14 +121,47 @@ def _normalize_artifacts(posix: str) -> str:
     return posix
 
 
+def _is_datasets_input_path(posix: str) -> bool:
+    padded = f"/{posix}"
+    return (
+        posix == DATASETS_INPUT_PREFIX
+        or posix.startswith(f"{DATASETS_INPUT_PREFIX}/")
+        or "/workspace/datasets/input/" in padded
+        or padded.endswith("/workspace/datasets/input")
+    )
+
+
+def _normalize_datasets_input(posix: str) -> str:
+    idx = posix.find(DATASETS_INPUT_PREFIX)
+    if idx >= 0:
+        return posix[idx:]
+    return posix
+
+
+def _examples_data_parts(posix: str) -> tuple[str, str] | None:
+    """Map examples/<folder>/data/<rest> → (artifact_slug(folder), rest)."""
+    match = _EXAMPLES_DATA_RE.search(_posix(posix))
+    if not match:
+        return None
+    folder = match.group(1)
+    rest = (match.group(2) or "").strip("/")
+    derived = artifact_slug(folder)
+    if not derived or _is_generic_slug(derived):
+        return None
+    return derived, rest
+
+
+def _join_datasets_input(slug: str, tail: str) -> str:
+    parts = [p for p in tail.split("/") if p]
+    if not parts:
+        return f"{DATASETS_INPUT_PREFIX}/{slug}"
+    return f"{DATASETS_INPUT_PREFIX}/{slug}/{'/'.join(parts)}"
+
+
 def _is_sample_data_path(posix: str) -> bool:
     if _EXAMPLES_OUTPUT_RE.search(posix):
         return False
-    if _EXAMPLES_DATA_RE.search(posix):
-        return True
-    if "/data/" in f"/{posix}/" and "/output/" not in posix:
-        return True
-    return False
+    return _examples_data_parts(posix) is not None
 
 
 def _relocatable_tail(posix: str) -> str | None:
@@ -313,6 +359,12 @@ def _rewrite_string(key: str, value: str, slug: str, node_type: str | None = Non
     stripped = strip_legacy_absolute_prefix(value)
     posix = _posix(stripped)
     effective = _effective_path_slug(posix, slug)
+    sample = _examples_data_parts(posix)
+    if sample:
+        src_slug, tail = sample
+        return _join_datasets_input(src_slug, tail)
+    if _is_datasets_input_path(posix):
+        return _normalize_datasets_input(posix)
     if _is_dataset_directory_ingest(key, posix, node_type):
         stable = _stable_dataset_artifact(posix)
         if stable:
@@ -341,14 +393,17 @@ def _rewrite_value(key: str, value: Any, slug: str, node_type: str | None = None
 
 
 def rewire_graph_outputs(graph: dict[str, Any], *, slug: str) -> dict[str, Any]:
-    """Return a copy of graph with output paths under workspace/artifacts/<slug>.
+    """Return a copy of graph with runtime paths under the workspace tree.
 
-    Input dataset paths under examples/**/data are left in place (after
-    stripping a legacy meritech absolute prefix). Dataset directories for
-    ingest under examples/**/output or workspace/artifacts/*/dataset retarget
-    to the stable <slug>/dataset/<tail> (never latest/). Generic names
-    (pipeline, graph, untitled) never relocate paths; the slug is taken from
-    example folders or existing artifact paths.
+    Sample ingest under examples/**/data maps to
+    workspace/datasets/input/<slug-from-example-folder>/<tail> (graphs never
+    display examples/ after rewire). Outputs under examples/**/output map to
+    workspace/artifacts/<slug>/<tail>. Dataset directories for ingest under
+    examples/**/output or workspace/artifacts/*/dataset retarget to the
+    stable <slug>/dataset/<tail> (never latest/). Generic names
+    (pipeline, graph, untitled) never relocate artifact paths; the slug is
+    taken from example folders or existing artifact paths. Ingest slugs come
+    from the examples/ folder that owns the data, not the consuming graph.
     """
     if not isinstance(graph, dict):
         return graph
@@ -475,8 +530,8 @@ def scope_outputs_to_run(graph: Any, run_id: str) -> Any:
     """Insert ``/runs/<run_id>/`` after the artifact slug on output paths.
 
     Leaves ``latest/`` model/infer inputs, ``dataset_ingest`` paths,
-    paths already under ``/runs/``, and ``examples/**/data`` ingest paths
-    unchanged. Dataset trees under artifacts stay at the stable
+    paths already under ``/runs/``, and ``workspace/datasets/input`` ingest
+    paths unchanged. Dataset trees under artifacts stay at the stable
     ``<slug>/dataset/`` location (never rewritten into ``runs/<id>/``).
     """
     rid = str(run_id).strip()
@@ -629,8 +684,76 @@ def publish_latest(slug: str, run_id: str) -> str:
     return latest_rel
 
 
+def _dir_has_ingest_files(path: Path) -> bool:
+    """True when *path* is a directory that contains at least one file."""
+    try:
+        if not path.is_dir():
+            return False
+        for child in path.rglob("*"):
+            if child.is_file():
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _example_data_dirs_for_slug(slug: str) -> list[Path]:
+    """Bundled examples/<folder>/data whose folder slug matches *slug*."""
+    from app.core.example_templates import examples_dir, repo_root
+
+    out: list[Path] = []
+    seen: set[str] = set()
+    roots = []
+    try:
+        roots.append(examples_dir())
+    except Exception:
+        pass
+    roots.append(repo_root() / "examples")
+    for root in roots:
+        try:
+            if not root.is_dir():
+                continue
+            for folder in sorted(root.iterdir()):
+                if not folder.is_dir():
+                    continue
+                if artifact_slug(folder.name) != slug:
+                    continue
+                data = folder / "data"
+                key = str(data)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(data)
+        except OSError:
+            continue
+    return out
+
+
+def _input_slug_and_tail(posix: str) -> tuple[str, str] | None:
+    text = _posix(posix)
+    sample = _examples_data_parts(text)
+    if sample:
+        return sample
+    normalized = text
+    idx = normalized.find(DATASETS_INPUT_PREFIX)
+    if idx >= 0:
+        normalized = normalized[idx:]
+    marker = DATASETS_INPUT_PREFIX + "/"
+    if normalized.startswith(marker):
+        rest = [p for p in normalized[len(marker):].split("/") if p]
+        if not rest:
+            return None
+        return rest[0], "/".join(rest[1:])
+    return None
+
+
 def ingest_dir_candidates(raw: str) -> list[Path]:
-    """Filesystem locations to try for a dataset_ingest path."""
+    """Filesystem locations to try for a dataset_ingest path.
+
+    Workspace graphs point at ``workspace/datasets/input/...``. If that tree is
+    missing or empty, candidates include the bundled ``examples/**/data`` seed
+    so ingest still runs on hosts that only ship example wavs.
+    """
     from app.core.config import project_dir
     from app.core.example_templates import examples_dir, repo_root
 
@@ -669,32 +792,50 @@ def ingest_dir_candidates(raw: str) -> list[Path]:
             sp = stripped.parts
             if sp and sp[0] == "workspace":
                 add(project_dir() / Path(*sp[1:]))
+    mapped = _input_slug_and_tail(text)
+    if mapped:
+        slug, tail = mapped
+        tail_parts = [p for p in tail.split("/") if p]
+        for data_dir in _example_data_dirs_for_slug(slug):
+            add(data_dir.joinpath(*tail_parts) if tail_parts else data_dir)
     needle = text.replace("_", "-")
     if "speech-command" in needle:
         add(examples_dir() / "02_speech_commands" / "data")
         add(repo_root() / "examples" / "02_speech_commands" / "data")
+        if mapped:
+            _slug, tail = mapped
+            tail_parts = [p for p in tail.split("/") if p]
+            if tail_parts:
+                add(examples_dir() / "02_speech_commands" / "data" / Path(*tail_parts))
+                add(repo_root() / "examples" / "02_speech_commands" / "data" / Path(*tail_parts))
     return out
 
 
 def resolve_ingest_dir(raw: str) -> Path:
     """Return an existing directory for ingest, or raise FileNotFoundError.
 
-    Does **not** create empty folders — ingest reads audio. Missing ``latest/``
-    falls back to the same path without ``latest``, then bundled
-    ``examples/02_speech_commands/data`` for speech-commands graphs.
+    Does **not** create empty folders — ingest reads audio. Prefers a
+    non-empty workspace input dir; if that path is missing or empty, falls
+    back to bundled ``examples/**/data`` (including
+    ``examples/02_speech_commands/data`` for speech-commands graphs).
+    Missing ``latest/`` falls back to the same path without ``latest``.
     """
     tried: list[str] = []
+    empty: list[Path] = []
     for candidate in ingest_dir_candidates(raw):
         tried.append(str(candidate))
         try:
-            if candidate.is_dir():
+            if not candidate.is_dir():
+                continue
+            if _dir_has_ingest_files(candidate):
                 return candidate
+            empty.append(candidate)
         except OSError:
             continue
     hint = (
         "Ingest reads audio; empty folders are not created. "
-        "Run the Speech Commands preprocess template first, or set path to "
-        "examples/02_speech_commands/data (the wavs on the host). "
+        "Copy or symlink bundled example wavs into workspace/datasets/input "
+        "(template sync does this), or keep the seed tree under examples/. "
         f"Tried: {tried[:8]}"
     )
     raise FileNotFoundError(hint)
