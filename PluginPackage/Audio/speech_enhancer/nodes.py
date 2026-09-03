@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -93,13 +94,13 @@ class SpeechEnhancerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "spectral"      # "spectral" | "deepfilter" | "auto" — default CPU, no torch
-        denoise: bool = True
-        dereverb: bool = False
-        vocal_isolation: bool = False
-        telephony_mode: bool = False    # 300 Hz–3400 Hz bandpass
-        stationary_noise: bool = True   # spectral backend: stationary vs non-stationary
-        prop_decrease: float = 0.75     # spectral backend: noise reduction strength [0,1]
+        backend: Literal["spectral", "deepfilter", "auto"] = Field(default='spectral', title="Backend", description="Implementation backend. One of: spectral, deepfilter, auto.")
+        denoise: bool = Field(default=True, title="Denoise", description="Enable denoise.")
+        dereverb: bool = Field(default=False, title="Dereverb", description="Enable dereverb.")
+        vocal_isolation: bool = Field(default=False, title="Vocal Isolation", description="Enable vocal isolation.")
+        telephony_mode: bool = Field(default=False, title="Telephony Mode", description="Enable telephony mode.")
+        stationary_noise: bool = Field(default=True, title="Stationary Noise", description="Enable stationary noise.")
+        prop_decrease: float = Field(default=0.75, title="Prop Decrease", description="Prop Decrease.")
 
     # ── setup: resolve backend once ──────────────────────────────────────────
 

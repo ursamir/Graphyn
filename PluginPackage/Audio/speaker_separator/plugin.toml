@@ -26,3 +26,12 @@ optional_dependencies = [
     "speechbrain>=0.5",
     "torch>=2.0",
 ]
+
+[config_schema.speaker_separator]
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: pyannote, speechbrain, auto.", enum = ["pyannote", "speechbrain", "auto"] }
+num_speakers = { type = "integer", title = "Num Speakers", default = 0, description = "Num Speakers." }
+min_speakers = { type = "integer", title = "Min Speakers", default = 1, description = "Min Speakers." }
+max_speakers = { type = "integer", title = "Max Speakers", default = 10, description = "Max Speakers." }
+output_mode = { type = "string", title = "Output Mode", default = "per_speaker", description = "Output Mode. One of: per_speaker, diarization_only.", enum = ["per_speaker", "diarization_only"] }
+auth_token = { type = "string", title = "Auth Token", default = "", description = "Auth Token." }
+min_segment_s = { type = "number", title = "Min Segment S", default = 0.5, description = "Min Segment S." }

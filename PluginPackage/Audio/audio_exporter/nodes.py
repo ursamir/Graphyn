@@ -19,6 +19,7 @@ import logging
 import random
 from pathlib import Path
 from typing import ClassVar
+from pydantic import Field
 
 import numpy as np
 
@@ -85,11 +86,11 @@ class AudioExporterNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = "output"
-        split_ratios: dict = {"train": 0.70, "val": 0.15, "test": 0.15}
-        version_tag: str = "v1"
-        random_seed: int = 42
-        append: bool = False
+        output_dir: str = Field(default="workspace/artifacts/audio_export", title="Output Dir", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split Ratios", description="Split Ratios.")
+        version_tag: str = Field(default='v1', title="Version Tag", description="Version Tag.")
+        random_seed: int = Field(default=42, title="Random Seed", description="RNG seed for reproducible splits and sampling.")
+        append: bool = Field(default=False, title="Append", description="Enable append.")
 
     # ── SISO process ──────────────────────────────────────────────────────────
 

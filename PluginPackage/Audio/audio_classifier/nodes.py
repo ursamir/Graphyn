@@ -14,7 +14,8 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -83,10 +84,10 @@ class AudioClassifierNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str = ""            # empty = built-in YAMNet
-        backend: str = "auto"           # "yamnet" | "tflite" | "pytorch" | "auto"
-        top_k: int = 1
-        sample_rate: int = 16000
+        model_path: str = Field(default='', title="Model Path", description="Model file under workspace/artifacts, or empty for a built-in model.")
+        backend: Literal["yamnet", "tflite", "pytorch", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: yamnet, tflite, pytorch, auto.")
+        top_k: int = Field(default=1, title="Top K", description="Top K.")
+        sample_rate: int = Field(default=16000, title="Sample Rate", description="Audio sample rate in Hz.")
 
         from pydantic import field_validator
 

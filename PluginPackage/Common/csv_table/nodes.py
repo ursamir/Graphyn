@@ -5,7 +5,8 @@ import csv
 import importlib
 import logging
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -80,9 +81,9 @@ class CsvTableNode(Node):
     }
 
     class Config(NodeConfig):
-        operation: str = "read"  # read | write
-        path: str = ""
-        encoding: str = "utf-8"
+        operation: Literal["read", "write"] = Field(default='read', title="Operation", description="Operation to perform. One of: read, write.")
+        path: str = Field(default='', title="Path", description="Path under workspace/datasets/input (or another workspace path).")
+        encoding: str = Field(default='utf-8', title="Encoding", description="Encoding.")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

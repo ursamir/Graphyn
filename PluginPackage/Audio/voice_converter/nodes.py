@@ -11,7 +11,8 @@ import copy
 import logging
 import threading
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -74,12 +75,12 @@ class VoiceConverterNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "auto"               # "speechbrain" | "knnvc" | "auto"
-        conversion_type: str = "timbre"     # "timbre" | "accent" | "gender" | "style"
+        backend: Literal["speechbrain", "knnvc", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: speechbrain, knnvc, auto.")
+        conversion_type: Literal["timbre", "accent", "gender", "style"] = Field(default='timbre', title="Conversion Type", description="Conversion Type. One of: timbre, accent, gender, style.")
         # NOTE: conversion_type is stored in metadata for lineage tracking.
         # Backend-specific conversion behaviour per type is reserved for future implementation.
-        target_speaker: str = ""            # speaker ID or reference audio path
-        pitch_shift_semitones: float = 0.0  # additional pitch shift
+        target_speaker: str = Field(default='', title="Target Speaker", description="Target Speaker.")
+        pitch_shift_semitones: float = Field(default=0.0, title="Pitch Shift Semitones", description="Pitch Shift Semitones.")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

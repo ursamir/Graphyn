@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import librosa
 import numpy as np
@@ -87,15 +88,15 @@ class SegmenterNode(Node):
     }
 
     class Config(NodeConfig):
-        mode: str = "fixed"              # "fixed" | "silence" | "vad" | "event" | "speaker_turn"
-        window_ms: int = 1000
-        overlap: float = 0.0            # [0, 1) — applies to fixed, silence, vad
-        vad_aggressiveness: int = 2
-        silence_threshold_db: float = 40.0
-        event_threshold_db: float = -30.0   # dB below peak to consider as event onset
-        event_min_gap_ms: int = 200          # minimum silence gap between events
-        min_segment_ms: int = 100
-        max_segment_ms: int = 30000
+        mode: Literal["fixed", "silence", "vad", "event", "speaker_turn"] = Field(default='fixed', title="Mode", description="Operating mode. One of: fixed, silence, vad, event, speaker_turn.")
+        window_ms: int = Field(default=1000, title="Window MS", description="Window MS.")
+        overlap: float = Field(default=0.0, title="Overlap", description="Overlap.")
+        vad_aggressiveness: int = Field(default=2, title="VAD Aggressiveness", description="VAD Aggressiveness.")
+        silence_threshold_db: float = Field(default=40.0, title="Silence Threshold DB", description="Silence Threshold DB.")
+        event_threshold_db: float = Field(default=-30.0, title="Event Threshold DB", description="Event Threshold DB.")
+        event_min_gap_ms: int = Field(default=200, title="Event Min Gap MS", description="Event Min Gap MS.")
+        min_segment_ms: int = Field(default=100, title="Min Segment MS", description="Min Segment MS.")
+        max_segment_ms: int = Field(default=30000, title="Max Segment MS", description="Max Segment MS.")
 
         @pydantic.field_validator("overlap")
         @classmethod

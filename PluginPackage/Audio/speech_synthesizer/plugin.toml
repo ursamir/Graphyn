@@ -27,3 +27,12 @@ optional_dependencies = [
     "TTS>=0.22",
     "torch>=2.0",
 ]
+
+[config_schema.speech_synthesizer]
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: coqui, espeak, auto.", enum = ["coqui", "espeak", "auto"] }
+model_name = { type = "string", title = "Model Name", default = "tts_models/en/ljspeech/tacotron2-DDC", description = "Model Name." }
+language = { type = "string", title = "Language", default = "en", description = "BCP-47 / ISO language code (e.g. en)." }
+speaker = { type = "string", title = "Speaker", default = "", description = "Speaker." }
+reference_audio = { type = "string", title = "Reference Audio", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
+sample_rate = { type = "integer", title = "Sample Rate", default = 22050, description = "Audio sample rate in Hz." }
+speed = { type = "number", title = "Speed", default = 1.0, description = "Speed." }

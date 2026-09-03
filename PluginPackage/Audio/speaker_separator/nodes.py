@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import Field
 
@@ -87,16 +87,16 @@ class SpeakerSeparatorNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "auto"           # "pyannote" | "speechbrain" | "auto"
-        num_speakers: int = 0           # 0 = auto-detect
-        min_speakers: int = 1
-        max_speakers: int = 10
-        output_mode: str = "per_speaker"  # "per_speaker" | "diarization_only"
-        auth_token: str = Field(default="", exclude=True)
+        backend: Literal["pyannote", "speechbrain", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: pyannote, speechbrain, auto.")
+        num_speakers: int = Field(default=0, title="Num Speakers", description="Num Speakers.")
+        min_speakers: int = Field(default=1, title="Min Speakers", description="Min Speakers.")
+        max_speakers: int = Field(default=10, title="Max Speakers", description="Max Speakers.")
+        output_mode: Literal["per_speaker", "diarization_only"] = Field(default='per_speaker', title="Output Mode", description="Output Mode. One of: per_speaker, diarization_only.")
+        auth_token: str = Field(default='', title="Auth Token", description="Auth Token.", exclude=True)
         # auth_token is excluded from serialisation to prevent secret leakage.
         # Use the HUGGINGFACE_TOKEN environment variable instead of embedding
         # the token in saved pipeline files.
-        min_segment_s: float = 0.5      # discard segments shorter than this
+        min_segment_s: float = Field(default=0.5, title="Min Segment S", description="Min Segment S.")
 
     # ── setup ─────────────────────────────────────────────────────────────────
 

@@ -28,3 +28,11 @@ optional_dependencies = [
     "ctc-forced-aligner>=2.0",
     "torch>=2.0",
 ]
+
+[config_schema.alignment_node]
+backend = { type = "string", title = "Backend", default = "ctc", description = "Implementation backend. One of: ctc, mfa, auto.", enum = ["ctc", "mfa", "auto"] }
+language = { type = "string", title = "Language", default = "en", description = "BCP-47 / ISO language code (e.g. en)." }
+level = { type = "string", title = "Level", default = "word", description = "Level. One of: word, phoneme, char.", enum = ["word", "phoneme", "char"] }
+model_path = { type = "string", title = "Model Path", default = "", description = "Model file under workspace/artifacts, or empty for a built-in model." }
+device = { type = "string", title = "Device", default = "cpu", description = "Compute device. GPU is used only when available and allowed. One of: cpu, cuda.", enum = ["cpu", "cuda"] }
+mfa_timeout_s = { type = "integer", title = "MFA Timeout S", default = 300, description = "MFA Timeout S." }

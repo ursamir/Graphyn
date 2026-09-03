@@ -27,3 +27,12 @@ optional_dependencies = [
     "deepfilternet>=0.5",
     "torch>=2.0",
 ]
+
+[config_schema.speech_enhancer]
+backend = { type = "string", title = "Backend", default = "spectral", description = "Implementation backend. One of: spectral, deepfilter, auto.", enum = ["spectral", "deepfilter", "auto"] }
+denoise = { type = "boolean", title = "Denoise", default = true, description = "Enable denoise." }
+dereverb = { type = "boolean", title = "Dereverb", default = false, description = "Enable dereverb." }
+vocal_isolation = { type = "boolean", title = "Vocal Isolation", default = false, description = "Enable vocal isolation." }
+telephony_mode = { type = "boolean", title = "Telephony Mode", default = false, description = "Enable telephony mode." }
+stationary_noise = { type = "boolean", title = "Stationary Noise", default = true, description = "Enable stationary noise." }
+prop_decrease = { type = "number", title = "Prop Decrease", default = 0.75, description = "Prop Decrease." }

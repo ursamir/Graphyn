@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 import pydantic
@@ -114,18 +115,18 @@ class EnvironmentSimulatorNode(Node):
     }
 
     class Config(NodeConfig):
-        preset: str = "room"                        # "room"|"car"|"office"|"outdoor"|"custom"
-        room_dimensions: list = [5.0, 4.0, 3.0]    # metres [x, y, z]
-        rt60: float = 0.4                           # reverberation time (seconds)
-        mic_position: list = [2.5, 2.0, 1.5]       # [x, y, z]
-        source_position: list = [1.0, 1.0, 1.5]    # [x, y, z]
-        snr_db: float = 0.0                         # 0 = no noise added
-        copies_per_sample: int = 1
+        preset: Literal["room", "car", "office", "outdoor", "custom"] = Field(default='room', title="Preset", description="Preset. One of: room, car, office, outdoor, custom.")
+        room_dimensions: list = Field(default=[5.0, 4.0, 3.0], title="Room Dimensions", description="Room Dimensions.")
+        rt60: float = Field(default=0.4, title="Rt60", description="Rt60.")
+        mic_position: list = Field(default=[2.5, 2.0, 1.5], title="Mic Position", description="Mic Position.")
+        source_position: list = Field(default=[1.0, 1.0, 1.5], title="Source Position", description="Source Position.")
+        snr_db: float = Field(default=0.0, title="SNR DB", description="SNR DB.")
+        copies_per_sample: int = Field(default=1, title="Copies Per Sample", description="Copies Per Sample.")
         # NOTE: copies_per_sample > 1 only produces diverse augmentations when
         # snr_db > 0 (noise is randomised per copy). With snr_db=0 all copies
         # are acoustically identical (same deterministic RIR convolution).
-        max_rir_length_ms: float = 500.0            # truncate RIR to this length
-        preserve_length: bool = False               # if True, trim output to original length
+        max_rir_length_ms: float = Field(default=500.0, title="Max Rir Length MS", description="Max Rir Length MS.")
+        preserve_length: bool = Field(default=False, title="Preserve Length", description="Enable preserve length.")
 
         @pydantic.field_validator("room_dimensions", "mic_position", "source_position")
         @classmethod

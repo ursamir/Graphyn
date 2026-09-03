@@ -18,3 +18,11 @@ optional_dependencies = [
     "tensorflow>=2.13",
     "torch>=2.0",
 ]
+
+[config_schema.dataset_builder]
+split_ratios = { type = "object", title = "Split Ratios", default = { train = 0.7, val = 0.15, test = 0.15 }, description = "Split Ratios." }
+shuffle = { type = "boolean", title = "Shuffle", default = true, description = "Shuffle samples before splitting." }
+stratify = { type = "boolean", title = "Stratify", default = true, description = "Stratify train/val/test splits by label." }
+output_format = { type = "string", title = "Output Format", default = "numpy", description = "Output Format. One of: numpy, tensorflow, pytorch.", enum = ["numpy", "tensorflow", "pytorch"] }
+fixed_length = { type = "integer", title = "Fixed Length", default = 0, description = "Fixed Length." }
+random_seed = { type = "integer", title = "Random Seed", default = 42, description = "RNG seed for reproducible splits and sampling." }

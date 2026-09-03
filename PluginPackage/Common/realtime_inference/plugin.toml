@@ -23,11 +23,11 @@ runtime = "isolated"
 node_types = ["realtime_inference"]
 
 [config_schema.realtime_inference]
-model_path = { type = "string" }
-backend = { type = "string", default = "auto" }
-mode = { type = "string", default = "classification" }
-wake_word_threshold = { type = "number", default = 0.8 }
-batch_size = { type = "integer", default = 1 }
-adaptive = { type = "boolean", default = false }
-adaptive_skip_ratio = { type = "number", default = 0.5 }
-streaming_buffer_size = { type = "integer", default = 10 }
+model_path = { type = "string", title = "Model Path", description = "Model file under workspace/artifacts, or empty for a built-in model." }
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: tflite, pytorch, onnx, auto.", enum = ["tflite", "pytorch", "onnx", "auto"] }
+mode = { type = "string", title = "Mode", default = "classification", description = "Operating mode. One of: classification, wake_word, streaming_asr.", enum = ["classification", "wake_word", "streaming_asr"] }
+wake_word_threshold = { type = "number", title = "Wake Word Threshold", default = 0.8, description = "Wake Word Threshold." }
+batch_size = { type = "integer", title = "Batch Size", default = 1, description = "Mini-batch size." }
+adaptive = { type = "boolean", title = "Adaptive", default = false, description = "Enable adaptive." }
+adaptive_skip_ratio = { type = "number", title = "Adaptive Skip Ratio", default = 0.5, description = "Adaptive Skip Ratio." }
+streaming_buffer_size = { type = "integer", title = "Streaming Buffer Size", default = 10, description = "Streaming Buffer Size." }

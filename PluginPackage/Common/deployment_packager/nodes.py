@@ -17,7 +17,7 @@ import os
 import tarfile
 import zipfile
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -86,7 +86,7 @@ _FASTAPI_SERVER = """\
 #!/usr/bin/env python3
 \"\"\"FastAPI inference server for edge deployment.\"\"\"
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import numpy as np
 import json
 from pathlib import Path
@@ -175,11 +175,11 @@ class DeploymentPackagerNode(Node):
     }
 
     class Config(NodeConfig):
-        target: str = "mobile"          # "mobile" | "mcu" | "docker" | "edge"
-        output_path: str = "workspace/artifacts/packages"
-        include_inference_script: bool = True
-        include_metadata: bool = True
-        package_name: str = ""          # auto-derived from model_format + target if empty
+        target: Literal["mobile", "mcu", "docker", "edge"] = Field(default='mobile', title="Target", description="Target. One of: mobile, mcu, docker, edge.")
+        output_path: str = Field(default='workspace/artifacts/packages', title="Output Path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        include_inference_script: bool = Field(default=True, title="Include Inference Script", description="Enable include inference script.")
+        include_metadata: bool = Field(default=True, title="Include Metadata", description="Enable include metadata.")
+        package_name: str = Field(default='', title="Package Name", description="Package Name.")
 
     # ── SISO process ──────────────────────────────────────────────────────────
 

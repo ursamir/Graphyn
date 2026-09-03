@@ -9,7 +9,8 @@ Fusion strategies:
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -102,14 +103,14 @@ class MultimodalFusionNode(Node):
     }
 
     class Config(NodeConfig):
-        fusion_type: str = "concat"     # "concat" | "attention" | "late" | "cross_attention"
-        audio_dim: int = 768
-        text_dim: int = 768             # reserved: used when PyTorch backend is implemented
-        output_dim: int = 512
-        backend: str = "numpy"          # "pytorch" | "numpy"
+        fusion_type: Literal["concat", "attention", "late", "cross_attention"] = Field(default='concat', title="Fusion Type", description="Fusion Type. One of: concat, attention, late, cross_attention.")
+        audio_dim: int = Field(default=768, title="Audio Dim", description="Audio Dim.")
+        text_dim: int = Field(default=768, title="Text Dim", description="Text Dim.")
+        output_dim: int = Field(default=512, title="Output Dim", description="Output Dim.")
+        backend: Literal["numpy", "pytorch"] = Field(default='numpy', title="Backend", description="Implementation backend. One of: numpy, pytorch.")
         # NOTE: backend="pytorch" is reserved for future implementation.
         # All fusion strategies currently use pure numpy regardless of this setting.
-        normalize: bool = True
+        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude.")
 
     # ── multi-port process ────────────────────────────────────────────────────
 

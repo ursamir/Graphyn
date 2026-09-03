@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import librosa
 import numpy as np
 
-from pydantic import field_validator
+from pydantic import field_validator, Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -81,34 +81,34 @@ class AudioConditionerNode(Node):
     }
 
     class Config(NodeConfig):
-        target_sample_rate: int = 16000
+        target_sample_rate: int = Field(default=16000, title="Target Sample Rate", description="Resample audio to this rate (Hz).")
 
-        mono: bool = True
+        mono: bool = Field(default=True, title="Mono", description="Downmix to a single channel.")
 
-        trim_silence: bool = True
-        trim_threshold_db: float = 40.0
+        trim_silence: bool = Field(default=True, title="Trim Silence", description="Enable trim silence.")
+        trim_threshold_db: float = Field(default=40.0, title="Trim Threshold DB", description="Trim Threshold DB.")
 
-        normalize: bool = True
-        normalize_method: str = "peak"   # "peak" | "rms" | "lufs"
-        target_level_db: float = -1.0
-        target_lufs: float = -23.0       # EBU R128 broadcast standard
+        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude.")
+        normalize_method: Literal["peak", "rms", "lufs"] = Field(default='peak', title="Normalize Method", description="Loudness normalization method. One of: peak, rms, lufs.")
+        target_level_db: float = Field(default=-1.0, title="Target Level DB", description="Target Level DB.")
+        target_lufs: float = Field(default=-23.0, title="Target LUFS", description="Target LUFS.")
 
-        remove_dc_offset: bool = True
+        remove_dc_offset: bool = Field(default=True, title="Remove Dc Offset", description="Enable remove dc offset.")
 
-        preemphasis: bool = False
-        preemphasis_coeff: float = 0.97
+        preemphasis: bool = Field(default=False, title="Preemphasis", description="Enable preemphasis.")
+        preemphasis_coeff: float = Field(default=0.97, title="Preemphasis Coeff", description="Preemphasis Coeff.")
 
         # Dynamic range compression (absorbed from compress.py)
-        compress: bool = False
-        compress_threshold_db: float = -20.0
-        compress_ratio: float = 4.0
+        compress: bool = Field(default=False, title="Compress", description="Enable compress.")
+        compress_threshold_db: float = Field(default=-20.0, title="Compress Threshold DB", description="Compress Threshold DB.")
+        compress_ratio: float = Field(default=4.0, title="Compress Ratio", description="Compress Ratio.")
 
-        limiter: bool = True
-        skip_clipped: bool = False
+        limiter: bool = Field(default=True, title="Limiter", description="Enable limiter.")
+        skip_clipped: bool = Field(default=False, title="Skip Clipped", description="Enable skip clipped.")
 
         # 0 = process all at once; N = process in batches of N (chunked iteration,
         # not lazy/generator-based — both paths call _condition_one() per sample)
-        batch_size: int = 0
+        batch_size: int = Field(default=0, title="Batch Size", description="Mini-batch size.")
 
         @field_validator("compress_ratio")
         @classmethod

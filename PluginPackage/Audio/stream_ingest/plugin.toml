@@ -18,3 +18,15 @@ optional_dependencies = [
     "sounddevice>=0.4",
     "websockets>=11.0",
 ]
+
+[config_schema.stream_ingest]
+source = { type = "string", title = "Source", default = "microphone", description = "Source. One of: microphone, websocket, file_stream.", enum = ["microphone", "websocket", "file_stream"] }
+device_id = { type = "integer", title = "Device ID", default = 0, description = "Device ID." }
+websocket_url = { type = "string", title = "Websocket URL", default = "", description = "Websocket URL." }
+file_path = { type = "string", title = "File Path", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
+chunk_ms = { type = "integer", title = "Chunk MS", default = 100, description = "Chunk MS." }
+sample_rate = { type = "integer", title = "Sample Rate", default = 16000, description = "Audio sample rate in Hz." }
+channels = { type = "integer", title = "Channels", default = 1, description = "Channels." }
+buffer_size = { type = "integer", title = "Buffer Size", default = 10, description = "Buffer Size." }
+duration_s = { type = "number", title = "Duration S", default = 5.0, description = "Duration S." }
+label = { type = "string", title = "Label", default = "", description = "Label." }

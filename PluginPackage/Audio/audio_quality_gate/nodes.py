@@ -8,7 +8,8 @@ Absorbs: duration_filter.py (duration check), command_validator.py (duration + a
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import librosa
 import numpy as np
@@ -95,21 +96,21 @@ class AudioQualityGateNode(Node):
     }
 
     class Config(NodeConfig):
-        min_snr_db: float = 10.0
-        max_clipping_ratio: float = 0.01
-        min_duration_s: float = 0.1
-        max_duration_s: float = 60.0
-        min_lufs: float = -70.0
-        max_lufs: float = -10.0
-        min_bandwidth_hz: float = 1000.0
-        rejection_policy: str = "skip"   # "skip" | "warn" | "raise"
-        check_snr: bool = True
-        check_clipping: bool = True
-        check_silence: bool = True       # RMS-below-threshold silence check
-        silence_rms_threshold: float = 0.001  # RMS below this → rejected as silent
-        check_duration: bool = True
-        check_lufs: bool = False          # requires pyloudnorm
-        check_bandwidth: bool = True
+        min_snr_db: float = Field(default=10.0, title="Min SNR DB", description="Min SNR DB.")
+        max_clipping_ratio: float = Field(default=0.01, title="Max Clipping Ratio", description="Max Clipping Ratio.")
+        min_duration_s: float = Field(default=0.1, title="Min Duration S", description="Min Duration S.")
+        max_duration_s: float = Field(default=60.0, title="Max Duration S", description="Max Duration S.")
+        min_lufs: float = Field(default=-70.0, title="Min LUFS", description="Min LUFS.")
+        max_lufs: float = Field(default=-10.0, title="Max LUFS", description="Max LUFS.")
+        min_bandwidth_hz: float = Field(default=1000.0, title="Min Bandwidth HZ", description="Min Bandwidth HZ.")
+        rejection_policy: Literal["skip", "warn", "raise"] = Field(default='skip', title="Rejection Policy", description="What to do when a sample fails quality checks. One of: skip, warn, raise.")
+        check_snr: bool = Field(default=True, title="Check SNR", description="Enable check snr.")
+        check_clipping: bool = Field(default=True, title="Check Clipping", description="Enable check clipping.")
+        check_silence: bool = Field(default=True, title="Check Silence", description="Enable check silence.")
+        silence_rms_threshold: float = Field(default=0.001, title="Silence RMS Threshold", description="Silence RMS Threshold.")
+        check_duration: bool = Field(default=True, title="Check Duration", description="Enable check duration.")
+        check_lufs: bool = Field(default=False, title="Check LUFS", description="Enable check lufs.")
+        check_bandwidth: bool = Field(default=True, title="Check Bandwidth", description="Enable check bandwidth.")
 
     # ── multi-port process ────────────────────────────────────────────────────
 

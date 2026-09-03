@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -78,12 +79,12 @@ class DatasetBalancerNode(Node):
     }
 
     class Config(NodeConfig):
-        strategy: str = "oversample"    # "oversample"|"undersample"|"weighted"|"synthetic"
-        target_count: int = 0           # 0 = match majority class
-        balance_by: str = "class"       # "class" | "speaker" | "duration"
-        speaker_key: str = "speaker_id"
-        jitter_std: float = 0.0         # Gaussian noise std for oversample copies
-        random_seed: int = 42
+        strategy: Literal["oversample", "undersample", "weighted", "synthetic"] = Field(default='oversample', title="Strategy", description="Resampling / balancing strategy. One of: oversample, undersample, weighted, synthetic.")
+        target_count: int = Field(default=0, title="Target Count", description="Target Count.")
+        balance_by: Literal["class", "speaker", "duration"] = Field(default='class', title="Balance By", description="Balance By. One of: class, speaker, duration.")
+        speaker_key: str = Field(default='speaker_id', title="Speaker Key", description="Speaker Key.")
+        jitter_std: float = Field(default=0.0, title="Jitter Std", description="Jitter Std.")
+        random_seed: int = Field(default=42, title="Random Seed", description="RNG seed for reproducible splits and sampling.")
 
     # ── SISO process ──────────────────────────────────────────────────────────
 

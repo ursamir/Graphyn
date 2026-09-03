@@ -12,7 +12,8 @@ import importlib
 import logging
 import os
 import time
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -120,11 +121,11 @@ class AsrTranscribeNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: str = "openai_compat"  # openai_compat | assemblyai | deepgram | mock
-        language: str = "en"
-        model: str = ""
-        base_url: str = ""  # openai-compat override; else OPENAI_BASE_URL
-        timeout_s: float = 30.0
+        provider: Literal["openai_compat", "assemblyai", "deepgram", "mock"] = Field(default='openai_compat', title="Provider", description="Remote or local service provider. One of: openai_compat, assemblyai, deepgram, mock.")
+        language: str = Field(default='en', title="Language", description="BCP-47 / ISO language code (e.g. en).")
+        model: str = Field(default='', title="Model", description="Model.")
+        base_url: str = Field(default='', title="Base URL", description="Base URL.")
+        timeout_s: float = Field(default=30.0, title="Timeout S", description="Timeout in seconds.")
 
     def process(self, audio):
         samples = _coerce_samples(audio)

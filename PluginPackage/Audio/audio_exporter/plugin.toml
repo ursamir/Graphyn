@@ -13,3 +13,10 @@ dependencies = [
     "numpy>=1.24",
     "soundfile>=0.12",
 ]
+
+[config_schema.audio_exporter]
+output_dir = { type = "string", title = "Output Dir", default = "workspace/artifacts/audio_export", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
+split_ratios = { type = "object", title = "Split Ratios", default = { train = 0.7, val = 0.15, test = 0.15 }, description = "Split Ratios." }
+version_tag = { type = "string", title = "Version Tag", default = "v1", description = "Version Tag." }
+random_seed = { type = "integer", title = "Random Seed", default = 42, description = "RNG seed for reproducible splits and sampling." }
+append = { type = "boolean", title = "Append", default = false, description = "Enable append." }

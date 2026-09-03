@@ -28,3 +28,9 @@ optional_dependencies = [
     "torch>=2.0",
     "onnxruntime>=1.16",
 ]
+
+[config_schema.audio_classifier]
+model_path = { type = "string", title = "Model Path", default = "", description = "Model file under workspace/artifacts, or empty for a built-in model." }
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: yamnet, tflite, pytorch, auto.", enum = ["yamnet", "tflite", "pytorch", "auto"] }
+top_k = { type = "integer", title = "Top K", default = 1, description = "Top K." }
+sample_rate = { type = "integer", title = "Sample Rate", default = 16000, description = "Audio sample rate in Hz." }

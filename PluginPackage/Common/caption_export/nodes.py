@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -165,10 +166,10 @@ class CaptionExportNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = "output/captions"
-        basename: str = "captions"
-        formats: list = ["srt", "vtt", "json"]
-        max_words_per_cue: int = 12
+        output_dir: str = Field(default="workspace/artifacts/captions", title="Output Dir", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        basename: str = Field(default='captions', title="Basename", description="Basename.")
+        formats: list = Field(default=['srt', 'vtt', 'json'], title="Formats", description="Formats.")
+        max_words_per_cue: int = Field(default=12, title="Max Words Per Cue", description="Max Words Per Cue.")
 
     def process(self, transcript):
         if transcript is None:

@@ -13,3 +13,9 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["caption_export"]
+
+[config_schema.caption_export]
+output_dir = { type = "string", title = "Output Dir", default = "workspace/artifacts/captions", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
+basename = { type = "string", title = "Basename", default = "captions", description = "Basename." }
+formats = { type = "array", title = "Formats", default = ["srt", "vtt", "json"], description = "Formats." }
+max_words_per_cue = { type = "integer", title = "Max Words Per Cue", default = 12, description = "Max Words Per Cue." }

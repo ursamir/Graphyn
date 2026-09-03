@@ -12,7 +12,8 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -80,13 +81,13 @@ class SpeechSynthesizerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "auto"           # "coqui" | "espeak" | "auto"
-        model_name: str = "tts_models/en/ljspeech/tacotron2-DDC"
-        language: str = "en"
-        speaker: str = ""               # speaker ID for multi-speaker models
-        reference_audio: str = ""       # path to reference audio for voice cloning
-        sample_rate: int = 22050
-        speed: float = 1.0
+        backend: Literal["coqui", "espeak", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: coqui, espeak, auto.")
+        model_name: str = Field(default='tts_models/en/ljspeech/tacotron2-DDC', title="Model Name", description="Model Name.")
+        language: str = Field(default='en', title="Language", description="BCP-47 / ISO language code (e.g. en).")
+        speaker: str = Field(default='', title="Speaker", description="Speaker.")
+        reference_audio: str = Field(default='', title="Reference Audio", description="Path under workspace/datasets/input (or another workspace path).")
+        sample_rate: int = Field(default=22050, title="Sample Rate", description="Audio sample rate in Hz.")
+        speed: float = Field(default=1.0, title="Speed", description="Speed.")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

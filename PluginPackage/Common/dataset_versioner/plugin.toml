@@ -12,3 +12,9 @@ tags = ["ml", "dataset", "versioning", "lineage", "governance"]
 dependencies = [
     "numpy>=1.24",
 ]
+
+[config_schema.dataset_versioner]
+output_dir = { type = "string", title = "Output Dir", default = "workspace/datasets/versioned", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
+version_tag = { type = "string", title = "Version Tag", default = "", description = "Version Tag." }
+include_metadata = { type = "boolean", title = "Include Metadata", default = true, description = "Enable include metadata." }
+create_snapshot = { type = "boolean", title = "Create Snapshot", default = false, description = "Enable create snapshot." }

@@ -21,7 +21,8 @@ Labels are loaded from {model_path_dir}/labels.txt (same as original).
 import logging
 import warnings
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -93,14 +94,14 @@ class RealtimeInferenceNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str               # required — no default
-        backend: str = "auto"         # "tflite" | "pytorch" | "onnx" | "auto"
-        mode: str = "classification"  # "classification" | "wake_word" | "streaming_asr"
-        wake_word_threshold: float = 0.8
-        batch_size: int = 1
-        adaptive: bool = False        # skip frames under CPU load
-        adaptive_skip_ratio: float = 0.5   # fraction of frames to skip when adaptive=True
-        streaming_buffer_size: int = 10    # frames to buffer before emitting in streaming_asr mode
+        model_path: str = Field(..., title="Model Path", description="Model file under workspace/artifacts, or empty for a built-in model.")
+        backend: Literal["tflite", "pytorch", "onnx", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: tflite, pytorch, onnx, auto.")
+        mode: Literal["classification", "wake_word", "streaming_asr"] = Field(default='classification', title="Mode", description="Operating mode. One of: classification, wake_word, streaming_asr.")
+        wake_word_threshold: float = Field(default=0.8, title="Wake Word Threshold", description="Wake Word Threshold.")
+        batch_size: int = Field(default=1, title="Batch Size", description="Mini-batch size.")
+        adaptive: bool = Field(default=False, title="Adaptive", description="Enable adaptive.")
+        adaptive_skip_ratio: float = Field(default=0.5, title="Adaptive Skip Ratio", description="Adaptive Skip Ratio.")
+        streaming_buffer_size: int = Field(default=10, title="Streaming Buffer Size", description="Streaming Buffer Size.")
 
     # ── backend detection ─────────────────────────────────────────────────────
 

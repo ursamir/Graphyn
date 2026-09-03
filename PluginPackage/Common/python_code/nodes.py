@@ -9,6 +9,7 @@ import logging
 import math
 from pathlib import Path
 from typing import Any, ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -131,9 +132,9 @@ class PythonCodeNode(Node):
     }
 
     class Config(NodeConfig):
-        source: str = ""
-        allowed_paths: list = []
-        allow_network: bool = False
+        source: str = Field(default='', title="Source", description="Source.")
+        allowed_paths: list = Field(default=[], title="Allowed Paths", description="Allowed Paths.")
+        allow_network: bool = Field(default=False, title="Allow Network", description="Enable allow network.")
 
     def process(self, inputs):
         source = self.config.source or ""

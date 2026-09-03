@@ -26,21 +26,21 @@ runtime = "isolated"
 node_types = ["trainer", "model_builder"]
 
 [config_schema.trainer]
-backend = { type = "string", default = "auto" }
-device = { type = "string", default = "auto" }
-epochs = { type = "integer", default = 30 }
-batch_size = { type = "integer", default = 32 }
-output_path = { type = "string", default = "workspace/artifacts/models" }
-patience = { type = "integer", default = 5 }
-mixed_precision = { type = "boolean", default = false }
-min_val_accuracy = { type = "number", default = 0.0 }
-checkpoint_path = { type = "string", default = "" }
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: keras, pytorch, auto.", enum = ["keras", "pytorch", "auto"] }
+device = { type = "string", title = "Device", default = "auto", description = "Compute device. GPU is used only when available and allowed. One of: auto, cpu, gpu.", enum = ["auto", "cpu", "gpu"] }
+epochs = { type = "integer", title = "Epochs", default = 30, description = "Maximum training epochs (early stopping may halt sooner)." }
+batch_size = { type = "integer", title = "Batch Size", default = 32, description = "Mini-batch size." }
+output_path = { type = "string", title = "Output Path", default = "workspace/artifacts/models", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
+patience = { type = "integer", title = "Patience", default = 5, description = "EarlyStopping patience (monitors val_accuracy)." }
+mixed_precision = { type = "boolean", title = "Mixed Precision", default = false, description = "Enable mixed-precision training when the backend supports it." }
+min_val_accuracy = { type = "number", title = "Min Val Accuracy", default = 0.0, description = "Warn if best validation accuracy is below this threshold (0 disables)." }
+checkpoint_path = { type = "string", title = "Checkpoint Path", default = "", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
 
 [config_schema.model_builder]
-architecture = { type = "string", default = "ds_cnn" }
-filters = { type = "integer", default = 64 }
-num_layers = { type = "integer", default = 4 }
-dropout_rate = { type = "number", default = 0.25 }
-learning_rate = { type = "number", default = 0.001 }
-backend = { type = "string", default = "auto" }
-output_path = { type = "string", default = "workspace/artifacts/models" }
+architecture = { type = "string", title = "Architecture", default = "ds_cnn", description = "Model architecture. One of: ds_cnn, mobilenet, simple_cnn.", enum = ["ds_cnn", "mobilenet", "simple_cnn"] }
+filters = { type = "integer", title = "Filters", default = 64, description = "Base convolution filter count." }
+num_layers = { type = "integer", title = "Num Layers", default = 4, description = "Number of blocks/layers in the architecture." }
+dropout_rate = { type = "number", title = "Dropout Rate", default = 0.25, description = "Dropout probability before the classifier head." }
+learning_rate = { type = "number", title = "Learning Rate", default = 0.001, description = "Optimizer learning rate." }
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: keras, auto.", enum = ["keras", "auto"] }
+output_path = { type = "string", title = "Output Path", default = "workspace/artifacts/models", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }

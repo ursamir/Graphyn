@@ -5,6 +5,7 @@ import importlib
 import logging
 import re
 from typing import Any, ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -89,9 +90,9 @@ class JsonTransformNode(Node):
     }
 
     class Config(NodeConfig):
-        mappings: list = []  # [{"from": "$.a.b", "to": "b"}]
-        pick: list = []
-        path: str = ""
+        mappings: list = Field(default=[], title="Mappings", description="Mappings.")
+        pick: list = Field(default=[], title="Pick", description="Pick.")
+        path: str = Field(default='', title="Path", description="Path under workspace/datasets/input (or another workspace path).")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

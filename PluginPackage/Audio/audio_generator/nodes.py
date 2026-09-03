@@ -10,10 +10,10 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
-from pydantic import field_validator
+from pydantic import field_validator, Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -81,14 +81,14 @@ class AudioGeneratorNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "auto"           # "musicgen" | "audiogen" | "auto"
-        model_size: str = "small"       # "small" | "medium" | "large"
-        duration_s: float = 5.0
-        prompt: str = ""                # default prompt when input is empty
-        conditioning_audio: str = ""    # path to melody/style conditioning audio
-        temperature: float = 1.0
-        top_k: int = 250
-        guidance_scale: float = 3.0
+        backend: Literal["musicgen", "audiogen", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: musicgen, audiogen, auto.")
+        model_size: Literal["small", "medium", "large"] = Field(default='small', title="Model Size", description="Model Size. One of: small, medium, large.")
+        duration_s: float = Field(default=5.0, title="Duration S", description="Duration S.")
+        prompt: str = Field(default='', title="Prompt", description="Prompt.")
+        conditioning_audio: str = Field(default='', title="Conditioning Audio", description="Path under workspace/datasets/input (or another workspace path).")
+        temperature: float = Field(default=1.0, title="Temperature", description="Temperature.")
+        top_k: int = Field(default=250, title="Top K", description="Top K.")
+        guidance_scale: float = Field(default=3.0, title="Guidance Scale", description="Guidance Scale.")
 
         @field_validator("model_size")
         @classmethod

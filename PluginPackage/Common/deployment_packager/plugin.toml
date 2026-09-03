@@ -12,3 +12,10 @@ tags = ["ml", "deployment", "packaging", "tflite", "docker", "edge", "mcu"]
 dependencies = [
     "numpy>=1.24",
 ]
+
+[config_schema.deployment_packager]
+target = { type = "string", title = "Target", default = "mobile", description = "Target. One of: mobile, mcu, docker, edge.", enum = ["mobile", "mcu", "docker", "edge"] }
+output_path = { type = "string", title = "Output Path", default = "workspace/artifacts/packages", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
+include_inference_script = { type = "boolean", title = "Include Inference Script", default = true, description = "Enable include inference script." }
+include_metadata = { type = "boolean", title = "Include Metadata", default = true, description = "Enable include metadata." }
+package_name = { type = "string", title = "Package Name", default = "", description = "Package Name." }

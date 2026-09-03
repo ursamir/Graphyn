@@ -20,7 +20,8 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -108,12 +109,12 @@ class AlignmentNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "ctc"       # "ctc" | "mfa" | "auto"
-        language: str = "en"
-        level: str = "word"        # "word" | "phoneme" | "char"
-        model_path: str = ""       # optional custom model path
-        device: str = "cpu"        # "cpu" | "cuda"
-        mfa_timeout_s: int = 300   # MFA subprocess timeout in seconds
+        backend: Literal["ctc", "mfa", "auto"] = Field(default='ctc', title="Backend", description="Implementation backend. One of: ctc, mfa, auto.")
+        language: str = Field(default='en', title="Language", description="BCP-47 / ISO language code (e.g. en).")
+        level: Literal["word", "phoneme", "char"] = Field(default='word', title="Level", description="Level. One of: word, phoneme, char.")
+        model_path: str = Field(default='', title="Model Path", description="Model file under workspace/artifacts, or empty for a built-in model.")
+        device: Literal["cpu", "cuda"] = Field(default='cpu', title="Device", description="Compute device. GPU is used only when available and allowed. One of: cpu, cuda.")
+        mfa_timeout_s: int = Field(default=300, title="MFA Timeout S", description="MFA Timeout S.")
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 

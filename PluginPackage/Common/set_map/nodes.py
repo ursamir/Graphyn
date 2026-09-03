@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import logging
 from typing import Any, ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -65,10 +66,10 @@ class SetMapNode(Node):
     }
 
     class Config(NodeConfig):
-        copy_fields: dict = {}
-        rename: dict = {}
-        drop: list = []
-        set: dict = {}
+        copy_fields: dict = Field(default={}, title="Copy Fields", description="Copy Fields.")
+        rename: dict = Field(default={}, title="Rename", description="Rename.")
+        drop: list = Field(default=[], title="Drop", description="Drop.")
+        set: dict = Field(default={}, title="Set", description="Set.")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

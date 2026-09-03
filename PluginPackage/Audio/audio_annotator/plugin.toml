@@ -19,3 +19,11 @@ tags = [
 dependencies = [
     "numpy>=1.24",
 ]
+
+[config_schema.audio_annotator]
+annotation_mode = { type = "string", title = "Annotation Mode", default = "passthrough", description = "Annotation Mode. One of: passthrough, auto, taxonomy, weak.", enum = ["passthrough", "auto", "taxonomy", "weak"] }
+taxonomy = { type = "object", title = "Taxonomy", default = {  }, description = "Taxonomy." }
+confidence_threshold = { type = "number", title = "Confidence Threshold", default = 0.5, description = "Confidence Threshold." }
+auto_rules = { type = "array", title = "Auto Rules", default = [], description = "Auto Rules." }
+weak_labels = { type = "array", title = "Weak Labels", default = [], description = "Weak Labels." }
+propagate_metadata = { type = "boolean", title = "Propagate Metadata", default = true, description = "Enable propagate metadata." }

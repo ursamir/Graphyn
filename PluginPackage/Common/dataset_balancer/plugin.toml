@@ -12,3 +12,11 @@ tags = ["ml", "dataset", "balancing", "oversampling", "undersampling"]
 dependencies = [
     "numpy>=1.24",
 ]
+
+[config_schema.dataset_balancer]
+strategy = { type = "string", title = "Strategy", default = "oversample", description = "Resampling / balancing strategy. One of: oversample, undersample, weighted, synthetic.", enum = ["oversample", "undersample", "weighted", "synthetic"] }
+target_count = { type = "integer", title = "Target Count", default = 0, description = "Target Count." }
+balance_by = { type = "string", title = "Balance By", default = "class", description = "Balance By. One of: class, speaker, duration.", enum = ["class", "speaker", "duration"] }
+speaker_key = { type = "string", title = "Speaker Key", default = "speaker_id", description = "Speaker Key." }
+jitter_std = { type = "number", title = "Jitter Std", default = 0.0, description = "Jitter Std." }
+random_seed = { type = "integer", title = "Random Seed", default = 42, description = "RNG seed for reproducible splits and sampling." }

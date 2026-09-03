@@ -13,3 +13,9 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["eval_gate"]
+
+[config_schema.eval_gate]
+check_empty_transcript = { type = "boolean", title = "Check Empty Transcript", default = true, description = "Enable check empty transcript." }
+required_keys = { type = "array", title = "Required Keys", default = [], description = "Required Keys." }
+pii_regex = { type = "string", title = "PII Regex", default = "", description = "PII Regex." }
+fail_if_empty_list = { type = "boolean", title = "Fail If Empty List", default = true, description = "Enable fail if empty list." }

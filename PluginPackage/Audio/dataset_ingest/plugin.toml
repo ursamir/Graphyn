@@ -19,3 +19,18 @@ optional_dependencies = [
     "datasets>=2.14",
     "boto3>=1.28",
 ]
+
+[config_schema.dataset_ingest]
+source_type = { type = "string", title = "Source Type", default = "filesystem", description = "Where to load the dataset from. One of: filesystem, huggingface, s3, zip, tar, manifest.", enum = ["filesystem", "huggingface", "s3", "zip", "tar", "manifest"] }
+path = { type = "string", title = "Path", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
+manifest_path = { type = "string", title = "Manifest Path", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
+recursive = { type = "boolean", title = "Recursive", default = true, description = "Walk subdirectories." }
+limit = { type = "integer", title = "Limit", default = 0, description = "Maximum items to load (0 = no limit)." }
+label_override = { type = "string", title = "Label Override", default = "", description = "Label Override." }
+hf_split = { type = "string", title = "Hf Split", default = "train", description = "Hf Split." }
+hf_audio_column = { type = "string", title = "Hf Audio Column", default = "audio", description = "Hf Audio Column." }
+hf_label_column = { type = "string", title = "Hf Label Column", default = "label", description = "Hf Label Column." }
+lazy = { type = "boolean", title = "Lazy", default = false, description = "Enable lazy." }
+resume_from = { type = "string", title = "Resume From", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
+validate_integrity = { type = "boolean", title = "Validate Integrity", default = false, description = "Enable validate integrity." }
+deduplicate = { type = "boolean", title = "Deduplicate", default = false, description = "Enable deduplicate." }

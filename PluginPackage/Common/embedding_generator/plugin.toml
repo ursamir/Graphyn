@@ -31,3 +31,11 @@ optional_dependencies = [
     "speechbrain>=0.5",
     "openl3>=0.4",
 ]
+
+[config_schema.embedding_generator]
+model = { type = "string", title = "Model", default = "wav2vec2", description = "Model. One of: wav2vec2, hubert, clap, yamnet, xvector, openl3.", enum = ["wav2vec2", "hubert", "clap", "yamnet", "xvector", "openl3"] }
+model_name_or_path = { type = "string", title = "Model Name Or Path", default = "", description = "Model Name Or Path." }
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: pytorch, tensorflow, auto.", enum = ["pytorch", "tensorflow", "auto"] }
+pooling = { type = "string", title = "Pooling", default = "mean", description = "Pooling. One of: mean, cls, last, none.", enum = ["mean", "cls", "last", "none"] }
+normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize feature or audio amplitude." }
+layer = { type = "integer", title = "Layer", default = -1, description = "Layer." }

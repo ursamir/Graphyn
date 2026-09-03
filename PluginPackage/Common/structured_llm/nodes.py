@@ -5,7 +5,8 @@ import importlib
 import json
 import logging
 import os
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -119,13 +120,13 @@ class StructuredLlmNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: str = "openai_compat"  # openai_compat | mock
-        json_schema: dict = {}
-        schema_name: str = "extracted"
-        model: str = "gpt-4o-mini"
-        base_url: str = ""
-        timeout_s: float = 30.0
-        system_prompt: str = "Extract JSON matching the provided schema. Reply with JSON only."
+        provider: Literal["openai_compat", "mock"] = Field(default='openai_compat', title="Provider", description="Remote or local service provider. One of: openai_compat, mock.")
+        json_schema: dict = Field(default={}, title="Json Schema", description="Json Schema.")
+        schema_name: str = Field(default='extracted', title="Schema Name", description="Schema Name.")
+        model: str = Field(default='gpt-4o-mini', title="Model", description="Model.")
+        base_url: str = Field(default='', title="Base URL", description="Base URL.")
+        timeout_s: float = Field(default=30.0, title="Timeout S", description="Timeout in seconds.")
+        system_prompt: str = Field(default='Extract JSON matching the provided schema. Reply with JSON only.', title="System Prompt", description="System Prompt.")
 
     def process(self, value):
         schema = self.config.json_schema or {"type": "object", "properties": {}}

@@ -20,3 +20,7 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["pii_redact"]
+
+[config_schema.pii_redact]
+placeholder = { type = "string", title = "Placeholder", default = "", description = "Placeholder." }
+engine = { type = "string", title = "Engine", default = "auto", description = "Engine. One of: auto, regex, presidio.", enum = ["auto", "regex", "presidio"] }

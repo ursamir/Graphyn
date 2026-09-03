@@ -5,7 +5,8 @@ import importlib
 import logging
 import shutil
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -105,13 +106,13 @@ class ObjectStoreNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "local"  # local | s3
-        operation: str = "put"  # get | put | list
-        root: str = "output/object_store"
-        key: str = ""
-        prefix: str = ""
-        bucket: str = ""
-        dest: str = ""  # local dest for get
+        backend: Literal["local", "s3"] = Field(default='local', title="Backend", description="Implementation backend. One of: local, s3.")
+        operation: Literal["get", "put", "list"] = Field(default='put', title="Operation", description="Operation to perform. One of: get, put, list.")
+        root: str = Field(default="workspace/artifacts/object_store", title="Root", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        key: str = Field(default='', title="Key", description="Key.")
+        prefix: str = Field(default='', title="Prefix", description="Prefix.")
+        bucket: str = Field(default='', title="Bucket", description="Bucket.")
+        dest: str = Field(default='', title="Dest", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
 
     def process(self, value):
         backend = (self.config.backend or "local").lower()

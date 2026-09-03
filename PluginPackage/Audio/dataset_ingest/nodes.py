@@ -12,7 +12,8 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import librosa
 import numpy as np
@@ -85,19 +86,19 @@ class DatasetIngestNode(Node):
     }
 
     class Config(NodeConfig):
-        source_type: str = "filesystem"  # "filesystem" | "huggingface" | "s3" | "zip" | "tar" | "manifest"
-        path: str = ""
-        manifest_path: str = ""
-        recursive: bool = True
-        limit: int = 0
-        label_override: str = ""
-        hf_split: str = "train"
-        hf_audio_column: str = "audio"
-        hf_label_column: str = "label"
-        lazy: bool = False               # reserved: generator-based loading (not yet implemented)
-        resume_from: str = ""            # path to resume checkpoint file (one path per line)
-        validate_integrity: bool = False  # compute SHA256; verify .sha256 sidecar if present
-        deduplicate: bool = False
+        source_type: Literal["filesystem", "huggingface", "s3", "zip", "tar", "manifest"] = Field(default='filesystem', title="Source Type", description="Where to load the dataset from. One of: filesystem, huggingface, s3, zip, tar, manifest.")
+        path: str = Field(default='', title="Path", description="Path under workspace/datasets/input (or another workspace path).")
+        manifest_path: str = Field(default='', title="Manifest Path", description="Path under workspace/datasets/input (or another workspace path).")
+        recursive: bool = Field(default=True, title="Recursive", description="Walk subdirectories.")
+        limit: int = Field(default=0, title="Limit", description="Maximum items to load (0 = no limit).")
+        label_override: str = Field(default='', title="Label Override", description="Label Override.")
+        hf_split: str = Field(default='train', title="Hf Split", description="Hf Split.")
+        hf_audio_column: str = Field(default='audio', title="Hf Audio Column", description="Hf Audio Column.")
+        hf_label_column: str = Field(default='label', title="Hf Label Column", description="Hf Label Column.")
+        lazy: bool = Field(default=False, title="Lazy", description="Enable lazy.")
+        resume_from: str = Field(default='', title="Resume From", description="Path under workspace/datasets/input (or another workspace path).")
+        validate_integrity: bool = Field(default=False, title="Validate Integrity", description="Enable validate integrity.")
+        deduplicate: bool = Field(default=False, title="Deduplicate", description="Enable deduplicate.")
 
     # ── process (multi-port / source node signature) ──────────────────────────
 

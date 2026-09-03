@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import importlib
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -52,9 +53,9 @@ class ErrorCatchNode(Node):
     }
 
     class Config(NodeConfig):
-        on_error: str = "continue_error_output"
-        on_error_port: str = "error"
-        fail_on_error_input: bool = False
+        on_error: Literal["continue_error_output", "continue", "fail", "raise"] = Field(default='continue_error_output', title="On Error", description="How the executor handles process() failures. One of: continue_error_output, continue, fail, raise.")
+        on_error_port: str = Field(default='error', title="On Error Port", description="On Error Port.")
+        fail_on_error_input: bool = Field(default=False, title="Fail On Error Input", description="Enable fail on error input.")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

@@ -25,3 +25,13 @@ optional_dependencies = [
     "torch>=2.0",
     "soundfile>=0.12",
 ]
+
+[config_schema.audio_generator]
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: musicgen, audiogen, auto.", enum = ["musicgen", "audiogen", "auto"] }
+model_size = { type = "string", title = "Model Size", default = "small", description = "Model Size. One of: small, medium, large.", enum = ["small", "medium", "large"] }
+duration_s = { type = "number", title = "Duration S", default = 5.0, description = "Duration S." }
+prompt = { type = "string", title = "Prompt", default = "", description = "Prompt." }
+conditioning_audio = { type = "string", title = "Conditioning Audio", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
+temperature = { type = "number", title = "Temperature", default = 1.0, description = "Temperature." }
+top_k = { type = "integer", title = "Top K", default = 250, description = "Top K." }
+guidance_scale = { type = "number", title = "Guidance Scale", default = 3.0, description = "Guidance Scale." }

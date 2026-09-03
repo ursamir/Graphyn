@@ -13,3 +13,8 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["json_transform"]
+
+[config_schema.json_transform]
+mappings = { type = "array", title = "Mappings", default = [], description = "Mappings." }
+pick = { type = "array", title = "Pick", default = [], description = "Pick." }
+path = { type = "string", title = "Path", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }

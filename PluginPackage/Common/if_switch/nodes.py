@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import logging
 from typing import Any, ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -120,9 +121,9 @@ class IfSwitchNode(Node):
     }
 
     class Config(NodeConfig):
-        expression: str = ""
-        jsonpath: str = ""
-        cases: list = []  # [{"name": "high", "expression": "output['score'] > 10"}]
+        expression: str = Field(default='', title="Expression", description="Expression.")
+        jsonpath: str = Field(default='', title="Jsonpath", description="Jsonpath.")
+        cases: list = Field(default=[], title="Cases", description="Cases.")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

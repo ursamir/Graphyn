@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import importlib
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -63,8 +64,8 @@ class MergeNode(Node):
     }
 
     class Config(NodeConfig):
-        mode: str = "append"  # append | combine_by_key
-        key: str = "id"
+        mode: Literal["append", "combine_by_key"] = Field(default='append', title="Mode", description="Operating mode. One of: append, combine_by_key.")
+        key: str = Field(default='id', title="Key", description="Key.")
 
     def process(self, inputs):
         a = inputs.get("a") if isinstance(inputs, dict) else None

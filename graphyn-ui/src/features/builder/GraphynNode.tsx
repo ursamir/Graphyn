@@ -16,6 +16,25 @@ export type GraphynNodeData = {
   onChangeConfig?: (key: string, value: unknown) => void
   onDelete?: () => void
   onValidateConfig?: () => void
+  onOpenInspector?: () => void
+}
+
+function unwrapSchema(def: Record<string, unknown>): Record<string, unknown> {
+  if (def.enum || def.type) return def
+  const anyOf = def.anyOf as Record<string, unknown>[] | undefined
+  if (!Array.isArray(anyOf)) return def
+  const useful = anyOf.find((x) => x && x.type !== 'null')
+  if (!useful) return def
+  return { ...def, ...useful }
+}
+
+function schemaType(def: Record<string, unknown>): string {
+  const t = unwrapSchema(def).type
+  if (Array.isArray(t)) {
+    const nonNull = t.find((x) => x !== 'null')
+    return String(nonNull ?? 'string')
+  }
+  return String(t ?? 'string')
 }
 
 function isObjectSchema(def: Record<string, unknown>): boolean {
@@ -31,7 +50,7 @@ function isObjectSchema(def: Record<string, unknown>): boolean {
 
 function formatValue(def: Record<string, unknown>, value: unknown): string {
   if (value == null) return ''
-  const type = String(def.type ?? 'string')
+  const type = schemaType(def)
   if (type === 'object' || isObjectSchema(def) || (type === 'array' && typeof value === 'object')) {
     try {
       return JSON.stringify(value, null, 0)
@@ -48,7 +67,7 @@ function formatValue(def: Record<string, unknown>, value: unknown): string {
 }
 
 function parseValue(def: Record<string, unknown>, raw: string): unknown {
-  const type = String(def.type ?? 'string')
+  const type = schemaType(def)
   if (type === 'number' || type === 'integer') return raw === '' ? 0 : Number(raw)
   if (type === 'boolean') return raw === 'true'
   if (type === 'object' || isObjectSchema(def)) {
@@ -64,32 +83,40 @@ function parseValue(def: Record<string, unknown>, raw: string): unknown {
   return raw
 }
 
+export function ConfigFieldEditor(
+  props: { fieldKey: string; def: Record<string, unknown>; value: unknown; onChange: (v: unknown) => void },
+) {
+  return fieldEditor(props.fieldKey, props.def, props.value, props.onChange)
+}
+
 function fieldEditor(
   _key: string,
   def: Record<string, unknown>,
   value: unknown,
   onChange: (v: unknown) => void,
 ) {
-  const type = String(def.type ?? 'string')
+  const type = schemaType(def)
   if (type === 'boolean') {
     return (
       <input
         type="checkbox"
         checked={Boolean(value)}
+        title={schemaFieldHint(def)}
         onChange={(e) => onChange(e.target.checked)}
         onMouseDown={(e) => e.stopPropagation()}
       />
     )
   }
-  if (Array.isArray(def.enum)) {
+  if (Array.isArray(unwrapSchema(def).enum)) {
     return (
       <select
         className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 text-[11px]"
         value={String(value ?? '')}
+        title={schemaFieldHint(def)}
         onChange={(e) => onChange(e.target.value)}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {(def.enum as unknown[]).map((opt) => (
+        {((unwrapSchema(def).enum as unknown[]) ?? []).map((opt) => (
           <option key={String(opt)} value={String(opt)}>
             {String(opt)}
           </option>
@@ -125,9 +152,29 @@ function fieldEditor(
     )
   }
 
+  if (type === 'number' || type === 'integer') {
+    return (
+      <input
+        type="number"
+        step={type === 'integer' ? 1 : 'any'}
+        className="mt-0.5 w-full overflow-x-auto rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
+        value={value == null || value === '' ? '' : Number(value)}
+        title={formatValue(def, value)}
+        onChange={(e) => {
+          try {
+            onChange(parseValue(def, e.target.value))
+          } catch {
+            /* keep typing */
+          }
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      />
+    )
+  }
+
   return (
     <input
-      className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
+      className="mt-0.5 w-full overflow-x-auto rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
       value={formatValue(def, value)}
       title={formatValue(def, value)}
       onChange={(e) => {
@@ -152,6 +199,8 @@ const STATUS_EDGE: Record<string, string> = {
 export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeData>) {
   const props = data.schemaProps ?? {}
   const entries = Object.entries(props)
+  const shown = entries.length <= 6 ? entries : entries.slice(0, 5)
+  const hiddenCount = Math.max(0, entries.length - shown.length)
   const inputs = data.inputs?.length ? data.inputs : [{ name: 'input' }]
   const outputs = data.outputs?.length ? data.outputs : [{ name: 'output' }]
   const status = data.status ?? 'idle'
@@ -161,7 +210,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
     <div
       title={data.nodeType}
       className={clsx(
-        'min-w-[280px] max-w-[340px] overflow-visible rounded-lg border bg-white shadow-sm',
+        'min-w-[300px] max-w-[380px] overflow-visible rounded-lg border bg-white shadow-sm',
         selected ? 'border-accent-500 shadow-md ring-2 ring-accent-200' : 'border-ink-200',
         status === 'running' && 'border-accent-400',
         status === 'success' && 'border-emerald-500',
@@ -200,6 +249,18 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
               )}
             </div>
             <div className="flex shrink-0 gap-1">
+              {data.onOpenInspector && entries.length > 0 && (
+                <button
+                  type="button"
+                  className="text-[10px] text-accent-700 hover:underline"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    data.onOpenInspector?.()
+                  }}
+                >
+                  edit
+                </button>
+              )}
               {data.onValidateConfig && (
                 <button
                   type="button"
@@ -227,11 +288,11 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
             </div>
           </div>
 
-          <div className="max-h-40 space-y-1 overflow-y-auto border-t border-ink-100 px-2.5 py-1.5">
+          <div className="max-h-40 space-y-1 overflow-x-auto overflow-y-auto border-t border-ink-100 px-2.5 py-1.5">
             {entries.length === 0 ? (
               <div className="text-[11px] text-ink-400">No config</div>
             ) : (
-              entries.map(([key, def]) => (
+              shown.map(([key, def]) => (
                 <label key={key} className="block text-[11px] text-ink-600" title={schemaFieldHint(def)}>
                   <span className="font-medium">{schemaFieldLabel(key, def)}</span>
                   {fieldEditor(key, def, data.config?.[key] ?? def.default, (v) =>
@@ -239,6 +300,18 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
                   )}
                 </label>
               ))
+            )}
+            {hiddenCount > 0 && (
+              <button
+                type="button"
+                className="text-[10px] text-accent-700 hover:underline"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  data.onOpenInspector?.()
+                }}
+              >
+                +{hiddenCount} more — edit all
+              </button>
             )}
           </div>
         </div>

@@ -9,6 +9,7 @@ import collections
 import logging
 import time
 from typing import ClassVar
+from pydantic import Field
 
 import numpy as np
 
@@ -77,12 +78,12 @@ class StreamProcessorNode(Node):
     }
 
     class Config(NodeConfig):
-        window_ms: int = 1000
-        hop_ms: int = 500
-        target_latency_ms: int = 200
-        max_buffer_size: int = 100
-        sample_rate: int = 16000
-        overlap_add: bool = False
+        window_ms: int = Field(default=1000, title="Window MS", description="Window MS.")
+        hop_ms: int = Field(default=500, title="Hop MS", description="Hop MS.")
+        target_latency_ms: int = Field(default=200, title="Target Latency MS", description="Target Latency MS.")
+        max_buffer_size: int = Field(default=100, title="Max Buffer Size", description="Max Buffer Size.")
+        sample_rate: int = Field(default=16000, title="Sample Rate", description="Audio sample rate in Hz.")
+        overlap_add: bool = Field(default=False, title="Overlap Add", description="Enable overlap add.")
 
     def __init__(self, config=None, seed: int = 0, observer=None):
         super().__init__(config=config, seed=seed, observer=observer)

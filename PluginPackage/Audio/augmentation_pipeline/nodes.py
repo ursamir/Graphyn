@@ -16,6 +16,7 @@ import io
 import logging
 import os
 from typing import Any, ClassVar
+from pydantic import Field
 
 import librosa
 import numpy as np
@@ -88,15 +89,8 @@ class AugmentationPipelineNode(Node):
     }
 
     class Config(NodeConfig):
-        copies_per_sample: int = 1
-        augmentations: list = [
-            {"type": "gain", "apply_prob": 0.5, "gain_db": [-6, 6]},
-            {"type": "pitch_shift", "apply_prob": 0.3, "semitones": [-2, 2]},
-            {"type": "time_stretch", "apply_prob": 0.3, "rate": [0.9, 1.1]},
-            {"type": "speed_perturb", "apply_prob": 0.3, "speed_factor": [0.9, 1.1]},
-            {"type": "codec_degrade", "apply_prob": 0.2, "codec": "mp3", "bitrate": 32},
-            {"type": "eq", "apply_prob": 0.2, "bands": [{"freq": 1000, "gain_db": 3, "q": 1.0}]},
-        ]
+        copies_per_sample: int = Field(default=1, title="Copies Per Sample", description="Copies Per Sample.")
+        augmentations: list = Field(default=[{'type': 'gain', 'apply_prob': 0.5, 'gain_db': [-6, 6]}, {'type': 'pitch_shift', 'apply_prob': 0.3, 'semitones': [-2, 2]}, {'type': 'time_stretch', 'apply_prob': 0.3, 'rate': [0.9, 1.1]}, {'type': 'speed_perturb', 'apply_prob': 0.3, 'speed_factor': [0.9, 1.1]}, {'type': 'codec_degrade', 'apply_prob': 0.2, 'codec': 'mp3', 'bitrate': 32}, {'type': 'eq', 'apply_prob': 0.2, 'bands': [{'freq': 1000, 'gain_db': 3, 'q': 1.0}]}], title="Augmentations", description="Augmentations.")
 
     def __init__(self, config=None, seed: int = 0, observer=None):
         super().__init__(config=config, seed=seed, observer=observer)

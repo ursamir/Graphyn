@@ -5,6 +5,7 @@ import importlib
 import logging
 import re
 from typing import Any, ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -116,10 +117,10 @@ class EvalGateNode(Node):
     }
 
     class Config(NodeConfig):
-        check_empty_transcript: bool = True
-        required_keys: list = []
-        pii_regex: str = ""
-        fail_if_empty_list: bool = True
+        check_empty_transcript: bool = Field(default=True, title="Check Empty Transcript", description="Enable check empty transcript.")
+        required_keys: list = Field(default=[], title="Required Keys", description="Required Keys.")
+        pii_regex: str = Field(default='', title="PII Regex", description="PII Regex.")
+        fail_if_empty_list: bool = Field(default=True, title="Fail If Empty List", description="Enable fail if empty list.")
 
     def process(self, inputs: dict) -> dict:
         value = (inputs or {}).get("input")

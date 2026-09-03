@@ -15,6 +15,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar
+from pydantic import Field
 
 import numpy as np
 
@@ -81,10 +82,10 @@ class DatasetVersionerNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = "workspace/datasets/versioned"
-        version_tag: str = ""           # auto-generated from hash if empty
-        include_metadata: bool = True
-        create_snapshot: bool = False   # copy arrays to versioned .npz
+        output_dir: str = Field(default='workspace/datasets/versioned', title="Output Dir", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        version_tag: str = Field(default='', title="Version Tag", description="Version Tag.")
+        include_metadata: bool = Field(default=True, title="Include Metadata", description="Enable include metadata.")
+        create_snapshot: bool = Field(default=False, title="Create Snapshot", description="Enable create snapshot.")
 
     # ── SISO process ──────────────────────────────────────────────────────────
 

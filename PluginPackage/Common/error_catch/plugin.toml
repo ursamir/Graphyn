@@ -13,3 +13,8 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["error_catch"]
+
+[config_schema.error_catch]
+on_error = { type = "string", title = "On Error", default = "continue_error_output", description = "How the executor handles process() failures. One of: continue_error_output, continue, fail, raise.", enum = ["continue_error_output", "continue", "fail", "raise"] }
+on_error_port = { type = "string", title = "On Error Port", default = "error", description = "On Error Port." }
+fail_on_error_input = { type = "boolean", title = "Fail On Error Input", default = false, description = "Enable fail on error input." }

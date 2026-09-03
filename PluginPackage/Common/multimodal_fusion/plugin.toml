@@ -25,3 +25,11 @@ dependencies = [
 optional_dependencies = [
     "torch>=2.0",
 ]
+
+[config_schema.multimodal_fusion]
+fusion_type = { type = "string", title = "Fusion Type", default = "concat", description = "Fusion Type. One of: concat, attention, late, cross_attention.", enum = ["concat", "attention", "late", "cross_attention"] }
+audio_dim = { type = "integer", title = "Audio Dim", default = 768, description = "Audio Dim." }
+text_dim = { type = "integer", title = "Text Dim", default = 768, description = "Text Dim." }
+output_dim = { type = "integer", title = "Output Dim", default = 512, description = "Output Dim." }
+backend = { type = "string", title = "Backend", default = "numpy", description = "Implementation backend. One of: numpy, pytorch.", enum = ["numpy", "pytorch"] }
+normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize feature or audio amplitude." }

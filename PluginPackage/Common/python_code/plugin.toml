@@ -13,3 +13,8 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["python_code"]
+
+[config_schema.python_code]
+source = { type = "string", title = "Source", default = "", description = "Source." }
+allowed_paths = { type = "array", title = "Allowed Paths", default = [], description = "Allowed Paths." }
+allow_network = { type = "boolean", title = "Allow Network", default = false, description = "Enable allow network." }

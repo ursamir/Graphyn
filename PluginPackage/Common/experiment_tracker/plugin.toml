@@ -16,3 +16,10 @@ dependencies = [
 optional_dependencies = [
     "mlflow>=2.0",
 ]
+
+[config_schema.experiment_tracker]
+backend = { type = "string", title = "Backend", default = "json", description = "Implementation backend. One of: json, mlflow.", enum = ["json", "mlflow"] }
+experiment_name = { type = "string", title = "Experiment Name", default = "default", description = "Experiment Name." }
+tracking_uri = { type = "string", title = "Tracking Uri", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
+log_artifacts = { type = "boolean", title = "Log Artifacts", default = true, description = "Enable log artifacts." }
+output_dir = { type = "string", title = "Output Dir", default = "workspace/runs", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }

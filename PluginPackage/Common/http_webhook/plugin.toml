@@ -17,3 +17,12 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["http_webhook"]
+
+[config_schema.http_webhook]
+url = { type = "string", title = "URL", default = "", description = "HTTP URL." }
+timeout_s = { type = "number", title = "Timeout S", default = 10.0, description = "Timeout in seconds." }
+hmac_secret = { type = "string", title = "HMAC Secret", default = "", description = "HMAC Secret." }
+hmac_env = { type = "string", title = "HMAC Env", default = "", description = "HMAC Env." }
+hmac_header = { type = "string", title = "HMAC Header", default = "X-Graphyn-Signature", description = "HMAC Header." }
+provider = { type = "string", title = "Provider", default = "http", description = "Remote or local service provider. One of: http, mock.", enum = ["http", "mock"] }
+mock_response = { type = "object", title = "Mock Response", default = {  }, description = "Mock Response." }

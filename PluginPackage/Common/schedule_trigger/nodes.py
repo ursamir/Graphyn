@@ -5,6 +5,7 @@ import importlib
 import logging
 import time
 from typing import Any, ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -47,8 +48,8 @@ class ScheduleTriggerNode(Node):
     }
 
     class Config(NodeConfig):
-        cron: str = ""
-        interval_s: float = 0.0
+        cron: str = Field(default='', title="Cron", description="Cron.")
+        interval_s: float = Field(default=0.0, title="Interval S", description="Interval S.")
 
     def process(self, inputs):
         return {"output": TickEvent(

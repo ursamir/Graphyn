@@ -28,3 +28,12 @@ optional_dependencies = [
     "tflite-runtime>=2.14",
     "torch>=2.0",
 ]
+
+[config_schema.audio_event_detector]
+model_path = { type = "string", title = "Model Path", default = "", description = "Model file under workspace/artifacts, or empty for a built-in model." }
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: yamnet, tflite, pytorch, auto.", enum = ["yamnet", "tflite", "pytorch", "auto"] }
+threshold = { type = "number", title = "Threshold", default = 0.5, description = "Threshold." }
+event_types = { type = "array", title = "Event Types", default = [], description = "Event Types." }
+min_event_duration_ms = { type = "number", title = "Min Event Duration MS", default = 100.0, description = "Min Event Duration MS." }
+frame_hop_ms = { type = "number", title = "Frame Hop MS", default = 480.0, description = "Frame Hop MS." }
+merge_tolerance_ms = { type = "number", title = "Merge Tolerance MS", default = 10.0, description = "Merge Tolerance MS." }

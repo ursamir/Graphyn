@@ -21,7 +21,8 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -88,12 +89,12 @@ class EdgeOptimizerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "tflite"          # "tflite" | "onnx" | "auto"
-        quantization: str = "int8"       # "float32" | "float16" | "int8"
-        output_path: str = "workspace/artifacts/optimized"
-        representative_samples: int = 100
-        prune: bool = False              # reserved for future — not yet implemented
-        operator_fusion: bool = True     # TFLite: enable default optimizations
+        backend: Literal["tflite", "onnx", "auto"] = Field(default='tflite', title="Backend", description="Implementation backend. One of: tflite, onnx, auto.")
+        quantization: Literal["float32", "float16", "int8"] = Field(default='int8', title="Quantization", description="Weight/activation quantization mode. One of: float32, float16, int8.")
+        output_path: str = Field(default='workspace/artifacts/optimized', title="Output Path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        representative_samples: int = Field(default=100, title="Representative Samples", description="Representative Samples.")
+        prune: bool = Field(default=False, title="Prune", description="Enable prune.")
+        operator_fusion: bool = Field(default=True, title="Operator Fusion", description="Enable operator fusion.")
 
     def __init__(self, config=None, seed: int = 0, observer=None) -> None:
         super().__init__(config=config, seed=seed, observer=observer)

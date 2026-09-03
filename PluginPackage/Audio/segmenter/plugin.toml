@@ -17,3 +17,14 @@ dependencies = [
 optional_dependencies = [
     "webrtcvad>=2.0",
 ]
+
+[config_schema.segmenter]
+mode = { type = "string", title = "Mode", default = "fixed", description = "Operating mode. One of: fixed, silence, vad, event, speaker_turn.", enum = ["fixed", "silence", "vad", "event", "speaker_turn"] }
+window_ms = { type = "integer", title = "Window MS", default = 1000, description = "Window MS." }
+overlap = { type = "number", title = "Overlap", default = 0.0, description = "Overlap." }
+vad_aggressiveness = { type = "integer", title = "VAD Aggressiveness", default = 2, description = "VAD Aggressiveness." }
+silence_threshold_db = { type = "number", title = "Silence Threshold DB", default = 40.0, description = "Silence Threshold DB." }
+event_threshold_db = { type = "number", title = "Event Threshold DB", default = -30.0, description = "Event Threshold DB." }
+event_min_gap_ms = { type = "integer", title = "Event Min Gap MS", default = 200, description = "Event Min Gap MS." }
+min_segment_ms = { type = "integer", title = "Min Segment MS", default = 100, description = "Min Segment MS." }
+max_segment_ms = { type = "integer", title = "Max Segment MS", default = 30000, description = "Max Segment MS." }

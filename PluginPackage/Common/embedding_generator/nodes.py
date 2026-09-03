@@ -13,7 +13,8 @@ Absorbs: speaker_embedder.py (as model="xvector")
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -89,12 +90,12 @@ class EmbeddingGeneratorNode(Node):
     }
 
     class Config(NodeConfig):
-        model: str = "wav2vec2"         # "wav2vec2"|"hubert"|"clap"|"yamnet"|"xvector"|"openl3"
-        model_name_or_path: str = ""    # overrides model if set
-        backend: str = "auto"           # "pytorch" | "tensorflow" | "auto"
-        pooling: str = "mean"           # "mean" | "cls" | "last" | "none"
-        normalize: bool = True
-        layer: int = -1                 # -1 = last hidden state
+        model: Literal["wav2vec2", "hubert", "clap", "yamnet", "xvector", "openl3"] = Field(default='wav2vec2', title="Model", description="Model. One of: wav2vec2, hubert, clap, yamnet, xvector, openl3.")
+        model_name_or_path: str = Field(default='', title="Model Name Or Path", description="Model Name Or Path.")
+        backend: Literal["pytorch", "tensorflow", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: pytorch, tensorflow, auto.")
+        pooling: Literal["mean", "cls", "last", "none"] = Field(default='mean', title="Pooling", description="Pooling. One of: mean, cls, last, none.")
+        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude.")
+        layer: int = Field(default=-1, title="Layer", description="Layer.")
 
     # ── setup ─────────────────────────────────────────────────────────────────
 

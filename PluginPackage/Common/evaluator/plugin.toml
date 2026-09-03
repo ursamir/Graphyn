@@ -29,9 +29,9 @@ runtime = "isolated"
 node_types = ["evaluator"]
 
 [config_schema.evaluator]
-output_path = { type = "string", default = "workspace/artifacts/evaluation" }
-plot_confusion_matrix = { type = "boolean", default = true }
-plot_training_curves = { type = "boolean", default = true }
-compute_roc = { type = "boolean", default = true }
-compute_fairness = { type = "boolean", default = false }
-fairness_attribute_key = { type = "string", default = "speaker_id" }
+output_path = { type = "string", title = "Output Path", default = "workspace/artifacts/evaluation", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
+plot_confusion_matrix = { type = "boolean", title = "Plot Confusion Matrix", default = true, description = "Enable plot confusion matrix." }
+plot_training_curves = { type = "boolean", title = "Plot Training Curves", default = true, description = "Enable plot training curves." }
+compute_roc = { type = "boolean", title = "Compute Roc", default = true, description = "Enable compute roc." }
+compute_fairness = { type = "boolean", title = "Compute Fairness", default = false, description = "Enable compute fairness." }
+fairness_attribute_key = { type = "string", title = "Fairness Attribute Key", default = "speaker_id", description = "Fairness Attribute Key." }

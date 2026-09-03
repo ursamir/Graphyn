@@ -12,7 +12,8 @@ import copy
 import logging
 import operator
 import re
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -106,14 +107,14 @@ class AudioAnnotatorNode(Node):
     }
 
     class Config(NodeConfig):
-        annotation_mode: str = "passthrough"  # "passthrough" | "auto" | "taxonomy" | "weak"
-        taxonomy: dict = {}
-        confidence_threshold: float = 0.5
-        auto_rules: list = []
+        annotation_mode: Literal["passthrough", "auto", "taxonomy", "weak"] = Field(default='passthrough', title="Annotation Mode", description="Annotation Mode. One of: passthrough, auto, taxonomy, weak.")
+        taxonomy: dict = Field(default={}, title="Taxonomy", description="Taxonomy.")
+        confidence_threshold: float = Field(default=0.5, title="Confidence Threshold", description="Confidence Threshold.")
+        auto_rules: list = Field(default=[], title="Auto Rules", description="Auto Rules.")
         # auto_rules evaluation: first matching rule wins (short-circuit).
         # Each rule dict: {"field": str, "op": str, "value": any, "label": str, "confidence": float}
-        weak_labels: list = []
-        propagate_metadata: bool = True
+        weak_labels: list = Field(default=[], title="Weak Labels", description="Weak Labels.")
+        propagate_metadata: bool = Field(default=True, title="Propagate Metadata", description="Enable propagate metadata.")
 
     # ── SISO process ──────────────────────────────────────────────────────────
 

@@ -13,3 +13,8 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["if_switch"]
+
+[config_schema.if_switch]
+expression = { type = "string", title = "Expression", default = "", description = "Expression." }
+jsonpath = { type = "string", title = "Jsonpath", default = "", description = "Jsonpath." }
+cases = { type = "array", title = "Cases", default = [], description = "Cases." }

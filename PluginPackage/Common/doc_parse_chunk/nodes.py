@@ -8,6 +8,7 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -168,10 +169,10 @@ class DocParseChunkNode(Node):
     }
 
     class Config(NodeConfig):
-        path: str = ""
-        recursive: bool = True
-        max_chars: int = 1200
-        use_unstructured: bool = False
+        path: str = Field(default='', title="Path", description="Path under workspace/datasets/input (or another workspace path).")
+        recursive: bool = Field(default=True, title="Recursive", description="Walk subdirectories.")
+        max_chars: int = Field(default=1200, title="Max Chars", description="Max Chars.")
+        use_unstructured: bool = Field(default=False, title="Use Unstructured", description="Enable use unstructured.")
 
     def process(self, value):
         paths: list[Path] = []

@@ -13,3 +13,7 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["wait_delay"]
+
+[config_schema.wait_delay]
+seconds = { type = "number", title = "Seconds", default = 0.0, description = "Seconds." }
+max_seconds = { type = "number", title = "Max Seconds", default = 300.0, description = "Max Seconds." }

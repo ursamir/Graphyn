@@ -6,7 +6,8 @@ import json
 import logging
 import os
 import time
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 from urllib.parse import urlencode
 
 from app.core.nodes.base import Node
@@ -86,19 +87,19 @@ class HttpRequestNode(Node):
     }
 
     class Config(NodeConfig):
-        method: str = "GET"
-        url: str = ""
-        headers: dict = {}
-        query: dict = {}
-        json_body: dict | list | None = None
-        body: str = ""
-        timeout_s: float = 30.0
-        retry: int = 0
-        provider: str = "http"
-        mock_response: dict = {}
-        auth_env: str = ""
-        auth_header: str = "Authorization"
-        auth_prefix: str = "Bearer "
+        method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = Field(default='GET', title="Method", description="HTTP method. One of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.")
+        url: str = Field(default='', title="URL", description="HTTP URL.")
+        headers: dict = Field(default={}, title="Headers", description="Headers.")
+        query: dict = Field(default={}, title="Query", description="Query.")
+        json_body: dict | list | None = Field(default=None, title="Json Body", description="Json Body.")
+        body: str = Field(default='', title="Body", description="Body.")
+        timeout_s: float = Field(default=30.0, title="Timeout S", description="Timeout in seconds.")
+        retry: int = Field(default=0, title="Retry", description="Retry.")
+        provider: Literal["http", "mock"] = Field(default='http', title="Provider", description="Remote or local service provider. One of: http, mock.")
+        mock_response: dict = Field(default={}, title="Mock Response", description="Mock Response.")
+        auth_env: str = Field(default='', title="Auth Env", description="Auth Env.")
+        auth_header: str = Field(default='Authorization', title="Auth Header", description="Auth Header.")
+        auth_prefix: str = Field(default='Bearer ', title="Auth Prefix", description="Auth Prefix.")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

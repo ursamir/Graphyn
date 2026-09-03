@@ -4,7 +4,8 @@ from __future__ import annotations
 import importlib
 import logging
 import re
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -235,8 +236,8 @@ class PiiRedactNode(Node):
     }
 
     class Config(NodeConfig):
-        placeholder: str = ""  # empty → [ENTITY_TYPE]
-        engine: str = "auto"  # auto | regex | presidio
+        placeholder: str = Field(default='', title="Placeholder", description="Placeholder.")
+        engine: Literal["auto", "regex", "presidio"] = Field(default='auto', title="Engine", description="Engine. One of: auto, regex, presidio.")
 
     def process(self, inputs: dict) -> dict:
         transcript = (inputs or {}).get("transcript")

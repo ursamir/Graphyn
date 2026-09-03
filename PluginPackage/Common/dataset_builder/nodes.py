@@ -17,7 +17,8 @@ imports (`.types`) — they break under that loader.
 # NOTE: No `from __future__ import annotations` — avoids Pydantic forward-ref issues.
 
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import importlib
 
@@ -99,12 +100,12 @@ class DatasetBuilderNode(Node):
     }
 
     class Config(NodeConfig):
-        split_ratios: dict = {"train": 0.7, "val": 0.15, "test": 0.15}
-        shuffle: bool = True
-        stratify: bool = True          # stratified split by label
-        output_format: str = "numpy"   # "numpy" | "tensorflow" | "pytorch"
-        fixed_length: int = 0          # 0 = no padding; N = pad/truncate to N frames
-        random_seed: int = 42
+        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split Ratios", description="Split Ratios.")
+        shuffle: bool = Field(default=True, title="Shuffle", description="Shuffle samples before splitting.")
+        stratify: bool = Field(default=True, title="Stratify", description="Stratify train/val/test splits by label.")
+        output_format: Literal["numpy", "tensorflow", "pytorch"] = Field(default='numpy', title="Output Format", description="Output Format. One of: numpy, tensorflow, pytorch.")
+        fixed_length: int = Field(default=0, title="Fixed Length", description="Fixed Length.")
+        random_seed: int = Field(default=42, title="Random Seed", description="RNG seed for reproducible splits and sampling.")
 
     # ── helpers ──────────────────────────────────────────────────────────────
 

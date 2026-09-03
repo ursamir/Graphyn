@@ -27,3 +27,9 @@ optional_dependencies = [
     "knnvc>=0.1",
     "soundfile>=0.12",
 ]
+
+[config_schema.voice_converter]
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: speechbrain, knnvc, auto.", enum = ["speechbrain", "knnvc", "auto"] }
+conversion_type = { type = "string", title = "Conversion Type", default = "timbre", description = "Conversion Type. One of: timbre, accent, gender, style.", enum = ["timbre", "accent", "gender", "style"] }
+target_speaker = { type = "string", title = "Target Speaker", default = "", description = "Target Speaker." }
+pitch_shift_semitones = { type = "number", title = "Pitch Shift Semitones", default = 0.0, description = "Pitch Shift Semitones." }

@@ -15,7 +15,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -85,11 +86,11 @@ class ExperimentTrackerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: str = "json"           # "json" | "mlflow"
-        experiment_name: str = "default"
-        tracking_uri: str = ""          # MLflow tracking URI
-        log_artifacts: bool = True
-        output_dir: str = "workspace/runs"
+        backend: Literal["json", "mlflow"] = Field(default='json', title="Backend", description="Implementation backend. One of: json, mlflow.")
+        experiment_name: str = Field(default='default', title="Experiment Name", description="Experiment Name.")
+        tracking_uri: str = Field(default='', title="Tracking Uri", description="Path under workspace/datasets/input (or another workspace path).")
+        log_artifacts: bool = Field(default=True, title="Log Artifacts", description="Enable log artifacts.")
+        output_dir: str = Field(default='workspace/runs', title="Output Dir", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 

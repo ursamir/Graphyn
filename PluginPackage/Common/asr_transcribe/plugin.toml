@@ -19,3 +19,10 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["asr_transcribe"]
+
+[config_schema.asr_transcribe]
+provider = { type = "string", title = "Provider", default = "openai_compat", description = "Remote or local service provider. One of: openai_compat, assemblyai, deepgram, mock.", enum = ["openai_compat", "assemblyai", "deepgram", "mock"] }
+language = { type = "string", title = "Language", default = "en", description = "BCP-47 / ISO language code (e.g. en)." }
+model = { type = "string", title = "Model", default = "", description = "Model." }
+base_url = { type = "string", title = "Base URL", default = "", description = "Base URL." }
+timeout_s = { type = "number", title = "Timeout S", default = 30.0, description = "Timeout in seconds." }

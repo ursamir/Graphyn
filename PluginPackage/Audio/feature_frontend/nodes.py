@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import librosa
 import numpy as np
-from pydantic import field_validator
+from pydantic import field_validator, Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -93,7 +93,7 @@ class FeatureFrontendNode(Node):
     )
 
     class Config(NodeConfig):
-        feature_type: str = "log_mel"
+        feature_type: Literal["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"] = Field(default='log_mel', title="Feature Type", description="Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw.")
         # Supported: "log_mel" | "mfcc" | "spectrogram" | "chroma"
         #            | "zcr" | "spectral_centroid" | "spectral_rolloff" | "raw"
 
@@ -117,32 +117,32 @@ class FeatureFrontendNode(Node):
                 )
             return normalized
 
-        sample_rate: int = 16000
+        sample_rate: int = Field(default=16000, title="Sample Rate", description="Audio sample rate in Hz.")
 
-        fixed_length: int = 0
+        fixed_length: int = Field(default=0, title="Fixed Length", description="Fixed Length.")
         # 0 = variable length (default); N = pad/truncate time axis to exactly N frames.
         # Use this in inference pipelines to match the fixed input shape the model was
         # trained with (e.g. fixed_length=101 for a 1-second clip at 16kHz/hop=160).
 
-        n_fft: int = 512
-        hop_length: int = 160
-        win_length: int = 400
+        n_fft: int = Field(default=512, title="N Fft", description="N Fft.")
+        hop_length: int = Field(default=160, title="Hop Length", description="Hop Length.")
+        win_length: int = Field(default=400, title="Win Length", description="Win Length.")
 
-        n_mels: int = 80
-        n_mfcc: int = 13
+        n_mels: int = Field(default=80, title="N Mels", description="N Mels.")
+        n_mfcc: int = Field(default=13, title="N Mfcc", description="N Mfcc.")
 
-        fmin: float = 0.0
-        fmax: float | None = None
+        fmin: float = Field(default=0.0, title="Fmin", description="Fmin.")
+        fmax: float | None = Field(default=None, title="Fmax", description="Fmax.")
 
-        log_scale: bool = True
+        log_scale: bool = Field(default=True, title="Log Scale", description="Enable log scale.")
 
-        normalize: bool = True
+        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude.")
 
-        center: bool = True
+        center: bool = Field(default=True, title="Center", description="Enable center.")
 
         # Delta / delta-delta (applies to mfcc; also stacked onto log_mel if set)
-        delta: bool = False
-        delta_delta: bool = False
+        delta: bool = Field(default=False, title="Delta", description="Enable delta.")
+        delta_delta: bool = Field(default=False, title="Delta Delta", description="Enable delta delta.")
 
     # ── normalization ─────────────────────────────────────────────────────────
 

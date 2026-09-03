@@ -5,6 +5,7 @@ import importlib
 import logging
 import time
 from typing import Any, ClassVar
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -48,8 +49,8 @@ class WaitDelayNode(Node):
     }
 
     class Config(NodeConfig):
-        seconds: float = 0.0
-        max_seconds: float = 300.0
+        seconds: float = Field(default=0.0, title="Seconds", description="Seconds.")
+        max_seconds: float = Field(default=300.0, title="Max Seconds", description="Max Seconds.")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

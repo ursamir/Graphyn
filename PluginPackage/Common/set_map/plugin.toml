@@ -13,3 +13,9 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["set_map"]
+
+[config_schema.set_map]
+copy_fields = { type = "object", title = "Copy Fields", default = {  }, description = "Copy Fields." }
+rename = { type = "object", title = "Rename", default = {  }, description = "Rename." }
+drop = { type = "array", title = "Drop", default = [], description = "Drop." }
+set = { type = "object", title = "Set", default = {  }, description = "Set." }

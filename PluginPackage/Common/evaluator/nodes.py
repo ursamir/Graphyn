@@ -15,6 +15,7 @@ import json
 import logging
 from pathlib import Path
 from typing import ClassVar
+from pydantic import Field
 
 import numpy as np
 
@@ -217,12 +218,12 @@ class EvaluatorNode(Node):
     }
 
     class Config(NodeConfig):
-        output_path: str = "workspace/artifacts/evaluation"
-        plot_confusion_matrix: bool = True
-        plot_training_curves: bool = True
-        compute_roc: bool = True
-        compute_fairness: bool = False
-        fairness_attribute_key: str = "speaker_id"  # metadata key for fairness grouping
+        output_path: str = Field(default='workspace/artifacts/evaluation', title="Output Path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        plot_confusion_matrix: bool = Field(default=True, title="Plot Confusion Matrix", description="Enable plot confusion matrix.")
+        plot_training_curves: bool = Field(default=True, title="Plot Training Curves", description="Enable plot training curves.")
+        compute_roc: bool = Field(default=True, title="Compute Roc", description="Enable compute roc.")
+        compute_fairness: bool = Field(default=False, title="Compute Fairness", description="Enable compute fairness.")
+        fairness_attribute_key: str = Field(default='speaker_id', title="Fairness Attribute Key", description="Fairness Attribute Key.")
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 

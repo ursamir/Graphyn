@@ -17,3 +17,12 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["structured_llm"]
+
+[config_schema.structured_llm]
+provider = { type = "string", title = "Provider", default = "openai_compat", description = "Remote or local service provider. One of: openai_compat, mock.", enum = ["openai_compat", "mock"] }
+json_schema = { type = "object", title = "Json Schema", default = {  }, description = "Json Schema." }
+schema_name = { type = "string", title = "Schema Name", default = "extracted", description = "Schema Name." }
+model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Model." }
+base_url = { type = "string", title = "Base URL", default = "", description = "Base URL." }
+timeout_s = { type = "number", title = "Timeout S", default = 30.0, description = "Timeout in seconds." }
+system_prompt = { type = "string", title = "System Prompt", default = "Extract JSON matching the provided schema. Reply with JSON only.", description = "System Prompt." }

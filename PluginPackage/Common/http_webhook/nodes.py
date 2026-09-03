@@ -7,7 +7,8 @@ import importlib
 import json
 import logging
 import os
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -83,13 +84,13 @@ class HttpWebhookNode(Node):
     }
 
     class Config(NodeConfig):
-        url: str = ""
-        timeout_s: float = 10.0
-        hmac_secret: str = ""  # prefer hmac_env — do not put keys in Graph IR
-        hmac_env: str = ""
-        hmac_header: str = "X-Graphyn-Signature"
-        provider: str = "http"  # http | mock (mock only if explicit)
-        mock_response: dict = {}
+        url: str = Field(default='', title="URL", description="HTTP URL.")
+        timeout_s: float = Field(default=10.0, title="Timeout S", description="Timeout in seconds.")
+        hmac_secret: str = Field(default='', title="HMAC Secret", description="HMAC Secret.")
+        hmac_env: str = Field(default='', title="HMAC Env", description="HMAC Env.")
+        hmac_header: str = Field(default='X-Graphyn-Signature', title="HMAC Header", description="HMAC Header.")
+        provider: Literal["http", "mock"] = Field(default='http', title="Provider", description="Remote or local service provider. One of: http, mock.")
+        mock_response: dict = Field(default={}, title="Mock Response", description="Mock Response.")
 
     def process(self, payload):
         url = (self.config.url or "").strip()

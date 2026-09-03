@@ -30,14 +30,14 @@ import {
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState } from '../../components/ui'
-import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, skipConsecutiveByText } from '../../lib/format'
+import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, skipConsecutiveByText } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   catalogPorts,
   type GraphIR,
   type NodeCatalogEntry,
 } from '../../types/graph'
-import GraphynNode, { type GraphynNodeData } from './GraphynNode'
+import GraphynNode, { ConfigFieldEditor, type GraphynNodeData } from './GraphynNode'
 
 const nodeTypes = { graphyn: GraphynNode }
 
@@ -95,6 +95,7 @@ function BuilderInner() {
   const [logHeight, setLogHeight] = React.useState(220)
   const [logCollapsed, setLogCollapsed] = React.useState(false)
   const [runHadErrors, setRunHadErrors] = React.useState(false)
+  const [inspectorId, setInspectorId] = React.useState<string | null>(null)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
   const abortRef = React.useRef<AbortController | null>(null)
   const nodesRef = React.useRef(nodes)
@@ -138,7 +139,9 @@ function BuilderInner() {
         onDelete: () => {
           setNodes((nds) => nds.filter((n) => n.id !== node.id))
           setEdges((eds) => eds.filter((e) => e.source !== node.id && e.target !== node.id))
+          setInspectorId((id) => (id === node.id ? null : id))
         },
+        onOpenInspector: () => setInspectorId(node.id),
         onValidateConfig: () => {
           void (async () => {
             try {
@@ -761,7 +764,8 @@ function BuilderInner() {
           )}
         </div>
 
-        <div className="relative min-h-0 flex-1 bg-canvas">
+        <div className="relative flex min-h-0 flex-1 bg-canvas">
+          <div className="relative min-h-0 min-w-0 flex-1">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -792,6 +796,57 @@ function BuilderInner() {
                 </button>
               </div>
             </div>
+          )}
+          </div>
+          {inspectorId && nodes.find((n) => n.id === inspectorId) && (
+            <aside className="z-20 flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-ink-200 bg-white">
+              {(() => {
+                const node = nodes.find((n) => n.id === inspectorId)
+                if (!node) return null
+                const entries = Object.entries(node.data.schemaProps ?? {})
+                return (
+                  <>
+                    <div className="flex items-start justify-between gap-2 border-b border-ink-100 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate font-display text-sm font-bold text-ink-950">
+                          {node.data.label || node.data.nodeType}
+                        </div>
+                        <div className="truncate text-[11px] text-ink-400">{node.data.nodeType}</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-[11px] text-ink-400 hover:text-ink-800"
+                        onClick={() => setInspectorId(null)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2">
+                      {entries.length === 0 ? (
+                        <div className="text-sm text-ink-400">No config fields</div>
+                      ) : (
+                        entries.map(([key, def]) => (
+                          <label key={key} className="block text-[12px] text-ink-700" title={schemaFieldHint(def)}>
+                            <span className="font-medium">{schemaFieldLabel(key, def)}</span>
+                            {schemaFieldHint(def) ? (
+                              <span className="mt-0.5 block text-[10px] leading-snug text-ink-400">
+                                {schemaFieldHint(def)}
+                              </span>
+                            ) : null}
+                            <ConfigFieldEditor
+                              fieldKey={key}
+                              def={def}
+                              value={node.data.config?.[key] ?? def.default}
+                              onChange={(v) => node.data.onChangeConfig?.(key, v)}
+                            />
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )
+              })()}
+            </aside>
           )}
         </div>
 

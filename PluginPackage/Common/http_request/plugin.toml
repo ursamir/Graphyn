@@ -17,3 +17,18 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["http_request"]
+
+[config_schema.http_request]
+method = { type = "string", title = "Method", default = "GET", description = "HTTP method. One of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.", enum = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] }
+url = { type = "string", title = "URL", default = "", description = "HTTP URL." }
+headers = { type = "object", title = "Headers", default = {  }, description = "Headers." }
+query = { type = "object", title = "Query", default = {  }, description = "Query." }
+json_body = { type = "object", title = "Json Body", description = "Json Body." }
+body = { type = "string", title = "Body", default = "", description = "Body." }
+timeout_s = { type = "number", title = "Timeout S", default = 30.0, description = "Timeout in seconds." }
+retry = { type = "integer", title = "Retry", default = 0, description = "Retry." }
+provider = { type = "string", title = "Provider", default = "http", description = "Remote or local service provider. One of: http, mock.", enum = ["http", "mock"] }
+mock_response = { type = "object", title = "Mock Response", default = {  }, description = "Mock Response." }
+auth_env = { type = "string", title = "Auth Env", default = "", description = "Auth Env." }
+auth_header = { type = "string", title = "Auth Header", default = "Authorization", description = "Auth Header." }
+auth_prefix = { type = "string", title = "Auth Prefix", default = "Bearer ", description = "Auth Prefix." }

@@ -6,7 +6,8 @@ and file-based streaming (librosa) for testing without hardware.
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -70,16 +71,16 @@ class StreamIngestNode(Node):
     }
 
     class Config(NodeConfig):
-        source: str = "microphone"      # "microphone" | "websocket" | "file_stream"
-        device_id: int = 0
-        websocket_url: str = ""         # WebSocket URL for source="websocket"
-        file_path: str = ""             # local file path for source="file_stream"
-        chunk_ms: int = 100
-        sample_rate: int = 16000
-        channels: int = 1
-        buffer_size: int = 10           # number of chunks to buffer before returning
-        duration_s: float = 5.0        # total capture duration (microphone/file_stream)
-        label: str = ""
+        source: Literal["microphone", "websocket", "file_stream"] = Field(default='microphone', title="Source", description="Source. One of: microphone, websocket, file_stream.")
+        device_id: int = Field(default=0, title="Device ID", description="Device ID.")
+        websocket_url: str = Field(default='', title="Websocket URL", description="Websocket URL.")
+        file_path: str = Field(default='', title="File Path", description="Path under workspace/datasets/input (or another workspace path).")
+        chunk_ms: int = Field(default=100, title="Chunk MS", description="Chunk MS.")
+        sample_rate: int = Field(default=16000, title="Sample Rate", description="Audio sample rate in Hz.")
+        channels: int = Field(default=1, title="Channels", description="Channels.")
+        buffer_size: int = Field(default=10, title="Buffer Size", description="Buffer Size.")
+        duration_s: float = Field(default=5.0, title="Duration S", description="Duration S.")
+        label: str = Field(default='', title="Label", description="Label.")
 
     # ── process (multi-port / source node signature) ──────────────────────────
 

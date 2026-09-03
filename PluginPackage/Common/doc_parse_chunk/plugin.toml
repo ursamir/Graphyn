@@ -17,3 +17,9 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["doc_parse_chunk"]
+
+[config_schema.doc_parse_chunk]
+path = { type = "string", title = "Path", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
+recursive = { type = "boolean", title = "Recursive", default = true, description = "Walk subdirectories." }
+max_chars = { type = "integer", title = "Max Chars", default = 1200, description = "Max Chars." }
+use_unstructured = { type = "boolean", title = "Use Unstructured", default = false, description = "Enable use unstructured." }

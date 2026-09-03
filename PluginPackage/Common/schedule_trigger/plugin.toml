@@ -13,3 +13,7 @@ dependencies = []
 
 runtime = "inprocess"
 node_types = ["schedule_trigger"]
+
+[config_schema.schedule_trigger]
+cron = { type = "string", title = "Cron", default = "", description = "Cron." }
+interval_s = { type = "number", title = "Interval S", default = 0.0, description = "Interval S." }

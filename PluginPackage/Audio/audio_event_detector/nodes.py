@@ -18,7 +18,8 @@ from __future__ import annotations
 import copy
 import logging
 import threading
-from typing import ClassVar
+from typing import ClassVar, Literal
+from pydantic import Field
 
 import numpy as np
 
@@ -96,13 +97,13 @@ class AudioEventDetectorNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str = ""            # empty = built-in YAMNet
-        backend: str = "auto"           # "yamnet" | "tflite" | "pytorch" | "auto"
-        threshold: float = 0.5
-        event_types: list = []          # empty = all events
-        min_event_duration_ms: float = 100.0
-        frame_hop_ms: float = 480.0     # YAMNet default: 0.48s hop
-        merge_tolerance_ms: float = 10.0  # consecutive-event merge gap tolerance
+        model_path: str = Field(default='', title="Model Path", description="Model file under workspace/artifacts, or empty for a built-in model.")
+        backend: Literal["yamnet", "tflite", "pytorch", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: yamnet, tflite, pytorch, auto.")
+        threshold: float = Field(default=0.5, title="Threshold", description="Threshold.")
+        event_types: list = Field(default=[], title="Event Types", description="Event Types.")
+        min_event_duration_ms: float = Field(default=100.0, title="Min Event Duration MS", description="Min Event Duration MS.")
+        frame_hop_ms: float = Field(default=480.0, title="Frame Hop MS", description="Frame Hop MS.")
+        merge_tolerance_ms: float = Field(default=10.0, title="Merge Tolerance MS", description="Merge Tolerance MS.")
 
     # ── multi-port process ────────────────────────────────────────────────────
 
