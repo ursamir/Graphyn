@@ -104,7 +104,7 @@
       "id": "audio_exporter_6",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "examples/02_speech_commands/output/speech_commands",
+        "output_dir": "workspace/artifacts/speech-commands/speech_commands",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,

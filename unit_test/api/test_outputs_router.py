@@ -99,3 +99,59 @@ class TestListRunOutputs:
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("application/zip")
         assert len(resp.content) > 0
+
+
+class TestOutputDirAndCsv:
+    def test_lists_graph_output_dir_under_artifacts(self, api_client, tmp_path, monkeypatch):
+        ws, _home = _isolate_jail(tmp_path, monkeypatch)
+        run_id = "outdir1"
+        run_dir = ws / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "meta.json").write_text(json.dumps({"run_id": run_id, "status": "completed"}))
+        art = ws / "artifacts" / "wake-word"
+        art.mkdir(parents=True)
+        (art / "features.json").write_text("{}", encoding="utf-8")
+        graph = {
+            "nodes": [
+                {
+                    "id": "exporter_0",
+                    "node_type": "dataset_exporter",
+                    "config": {"output_dir": "workspace/artifacts/wake-word"},
+                }
+            ]
+        }
+        (run_dir / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
+        with patch("app.core.artifact_store.ArtifactStore") as store_cls:
+            store_cls.return_value.list.return_value = []
+            resp = api_client.get(f"/api/v1/runs/{run_id}/outputs")
+        assert resp.status_code == 200
+        names = {row["name"] for row in resp.json()}
+        assert "features.json" in names
+
+    def test_csv_is_downloadable(self, api_client, tmp_path, monkeypatch):
+        ws, _home = _isolate_jail(tmp_path, monkeypatch)
+        target = ws / "artifacts" / "nightly-compliance"
+        target.mkdir(parents=True)
+        csv_path = target / "compliance.csv"
+        csv_path.write_text("ok,1\n", encoding="utf-8")
+        resp = api_client.get("/api/v1/outputs/file", params={"path": str(csv_path)})
+        assert resp.status_code == 200
+        assert b"ok" in resp.content
+
+    def test_examples_output_stays_inside_jail(self, api_client, tmp_path, monkeypatch):
+        _isolate_jail(tmp_path, monkeypatch)
+        from app.core.example_templates import examples_dir
+
+        out_dir = examples_dir() / "01_wake_word" / "output"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / "jail_probe.json"
+        target.write_text('{"jail": true}', encoding="utf-8")
+        try:
+            resp = api_client.get(
+                "/api/v1/outputs/file",
+                params={"path": "examples/01_wake_word/output/jail_probe.json"},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["jail"] is True
+        finally:
+            target.unlink(missing_ok=True)

@@ -89,7 +89,7 @@
       "id": "audio_exporter_5",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "examples/04_speaker_verification/output/speaker_verification",
+        "output_dir": "workspace/artifacts/speaker-verification/speaker_verification",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,

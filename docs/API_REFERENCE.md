@@ -470,8 +470,11 @@ List downloadable files for a run (auth required). Sources:
 
 1. Files under the run directory
 2. Paths on `ArtifactRecord`s for that run
-3. Directories from node config `output_path` / `model_path` on the stored `graph.json`
-4. Legacy `examples/06_speech_commands_e2e/output` when those files exist
+3. Directories from node config `output_dir` / `output_path` / `model_path` / output-like `path` on the stored `graph.json`
+4. `workspace/artifacts/` (bind-mounted project artifacts; prefer `<slug>/` then a capped walk of the tree)
+5. Legacy `examples/06_speech_commands_e2e/output` when those files exist
+
+Pipeline graphs should write under `workspace/artifacts/<name>/`, not into `examples/`.
 
 **Response:**
 ```json
@@ -492,7 +495,7 @@ Zip of the listed files as an attachment.
 
 Download one file as an attachment. Query: `path`.
 
-Resolved path must sit under `project_dir()`, `graphyn_home()`, or repo `examples/`. `..` is rejected. Allowed types: images, json, keras, tflite, zip (plus SavedModel companions: pb/h5/txt/npy).
+Resolved path must sit under `project_dir()`, `graphyn_home()`, or repo `examples/`. `..` is rejected. Allowed types: images, json, csv, markdown, audio (wav/flac/mp3/webm), keras, tflite, onnx, zip (plus SavedModel companions: pb/h5/txt/npy).
 
 **Errors:** `400` traversal or directory, `403` outside jail (e.g. `/etc/passwd`), `404` missing, `415` disallowed type.
 

@@ -101,6 +101,10 @@ examples/05_speech_enhancement/data/
 
 ---
 
+## Pipeline outputs
+
+Pipeline **outputs** belong in `workspace/artifacts/<name>/` (Compose bind-mounts `./workspace` as `GRAPHYN_PROJECT_DIR`). Do **not** write into the image's `examples/` tree — sample **inputs** stay under `examples/<n>_*/data/`. The console Downloads tab lists files from those artifact folders.
+
 ## Pipeline Format
 
 All pipelines are defined as **IR JSON** (`.graph.json`) — the canonical, versioned, runtime-agnostic format.

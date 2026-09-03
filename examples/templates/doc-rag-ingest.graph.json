@@ -43,7 +43,7 @@
       "config": {
         "backend": "local",
         "operation": "put",
-        "root": "output/object_store",
+        "root": "workspace/artifacts/doc-rag-ingest/object_store",
         "prefix": "chunks"
       },
       "label": null,

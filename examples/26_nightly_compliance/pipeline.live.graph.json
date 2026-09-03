@@ -108,7 +108,7 @@
       "node_type": "csv_table",
       "config": {
         "operation": "write",
-        "path": "examples/26_nightly_compliance/output/compliance.csv"
+        "path": "workspace/artifacts/nightly-compliance/compliance.csv"
       },
       "label": null,
       "capability_metadata": null,

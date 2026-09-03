@@ -93,7 +93,7 @@
       "id": "audio_exporter_5",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "examples/03_environmental_sounds/output/environmental_sounds",
+        "output_dir": "workspace/artifacts/environmental-sounds/environmental_sounds",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,

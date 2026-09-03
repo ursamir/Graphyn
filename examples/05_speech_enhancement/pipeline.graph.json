@@ -3,7 +3,7 @@
   "metadata": {
     "name": "speech_enhancement_clean",
     "seed": 42,
-    "description": "Speech enhancement \u2014 clean pass (no degradation).",
+    "description": "Speech enhancement — clean pass (no degradation).",
     "created_at": null,
     "tags": [
       "audio",
@@ -64,7 +64,7 @@
       "id": "audio_exporter_4",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "examples/05_speech_enhancement/output/speech_enhancement",
+        "output_dir": "workspace/artifacts/speech-enhancement/speech_enhancement",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,

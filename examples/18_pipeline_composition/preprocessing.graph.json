@@ -12,7 +12,7 @@
       "id": "dataset_ingest_0",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/yes",
+        "path": "examples/02_speech_commands/data/yes",
         "recursive": false,
         "source_type": "filesystem"
       },

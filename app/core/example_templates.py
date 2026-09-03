@@ -6,7 +6,7 @@ Responsibility:   Discover example Graph IR files under examples/ and sync them
 Owns:             Example discovery, path rewriting, template sync helpers.
 Public Surface:   discover_example_graphs, rewrite_graph_paths, sync_example_templates
 Must NOT:         Execute pipelines or mutate example sources.
-Dependencies:     pathlib, json, app.core.config.project_dir
+Dependencies:     pathlib, json, app.core.config.project_dir, app.core.workspace_paths
 Reason To Change: Example layout changes or template naming conventions change.
 """
 from __future__ import annotations
@@ -219,6 +219,10 @@ def sync_example_templates(*, force: bool = True, prune_shards: bool = True) -> 
                 errors.append({"id": name, "error": "not a Graph IR document"})
                 continue
             rewritten = rewrite_graph_paths(data, root=root)
+            from app.core.workspace_paths import rewire_graph_outputs
+
+            # Template id (ex-01-wake-word) sanitizes to wake-word; see artifact_slug.
+            rewritten = rewire_graph_outputs(rewritten, slug=name)
             meta = rewritten.setdefault("metadata", {})
             if isinstance(meta, dict):
                 tags = list(meta.get("tags") or [])

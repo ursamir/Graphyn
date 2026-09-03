@@ -101,9 +101,11 @@ def _build_graph_from_payload(payload: dict):
     from app.core.ir.loader import load_ir
     from app.core.ir.yaml_shim import yaml_config_to_ir
 
+    from app.core.workspace_paths import apply_output_rewire
+
     if _is_ir_payload(payload):
         # IR JSON path (Req 4.7.1, 4.7.3)
-        graph = load_ir(payload)
+        graph = apply_output_rewire(load_ir(payload))
         return graph, None
     else:
         # YAML path (Req 4.7.2, 4.7.4)
@@ -112,7 +114,7 @@ def _build_graph_from_payload(payload: dict):
             raw = yaml.safe_load(yaml_str)
         except yaml.YAMLError as exc:
             raise HTTPException(status_code=422, detail=f"YAML parse error: {exc}")
-        graph = yaml_config_to_ir(raw)
+        graph = apply_output_rewire(yaml_config_to_ir(raw))
         return graph, "YAML pipeline input is deprecated. Use IR JSON format."
 
 
@@ -131,7 +133,8 @@ def validate_pipeline_config(payload: dict = Body(...)):
         # IR JSON validation (Req 4.8.1, 4.8.3, 4.8.4)
         try:
             from app.core.ir.loader import load_ir
-            graph = load_ir(payload)
+            from app.core.workspace_paths import apply_output_rewire
+            graph = apply_output_rewire(load_ir(payload))
             return {"valid": True, "node_count": len(graph.nodes)}
         except Exception as exc:
             return JSONResponse(
@@ -393,6 +396,11 @@ def save_template(payload: SaveTemplateRequest):
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid IR JSON template: {exc}")
 
+    from app.core.workspace_paths import rewire_graph_outputs
+
+    parsed = rewire_graph_outputs(parsed, slug=payload.name)
+    body = json.dumps(parsed, indent=2, ensure_ascii=False) + "\n"
+
     version = payload.version or datetime.now(timezone.utc).strftime("v%Y%m%dT%H%M%SZ")
     if not _SAFE_VERSION_RE.match(version):
         raise HTTPException(status_code=400, detail="Invalid template version")
@@ -400,11 +408,11 @@ def save_template(payload: SaveTemplateRequest):
     template_dir = _templates_dir() / payload.name
     template_dir.mkdir(parents=True, exist_ok=True)
     path = _template_version_path(payload.name, version)
-    path.write_text(payload.yaml, encoding="utf-8")
+    path.write_text(body, encoding="utf-8")
 
     # Backward-compat latest pointer for older clients.
     legacy_path = _templates_dir() / f"{payload.name}.graph.json"
-    legacy_path.write_text(payload.yaml, encoding="utf-8")
+    legacy_path.write_text(body, encoding="utf-8")
 
     meta = _read_template_meta(payload.name)
     versions = meta.get("versions", {})

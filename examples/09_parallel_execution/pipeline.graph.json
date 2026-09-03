@@ -12,7 +12,7 @@
       "id": "dataset_ingest_yes",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/yes",
+        "path": "examples/02_speech_commands/data/yes",
         "recursive": false,
         "source_type": "filesystem"
       },
@@ -65,7 +65,7 @@
       "id": "audio_exporter_yes",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "/home/meritech/Desktop/newAudio3/examples/09_parallel_execution/output/yes",
+        "output_dir": "workspace/artifacts/parallel-execution/yes",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,
@@ -83,7 +83,7 @@
       "id": "dataset_ingest_no",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/no",
+        "path": "examples/02_speech_commands/data/no",
         "recursive": false,
         "source_type": "filesystem"
       },
@@ -136,7 +136,7 @@
       "id": "audio_exporter_no",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "/home/meritech/Desktop/newAudio3/examples/09_parallel_execution/output/no",
+        "output_dir": "workspace/artifacts/parallel-execution/no",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,
@@ -154,7 +154,7 @@
       "id": "dataset_ingest_up",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/up",
+        "path": "examples/02_speech_commands/data/up",
         "recursive": false,
         "source_type": "filesystem"
       },
@@ -207,7 +207,7 @@
       "id": "audio_exporter_up",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "/home/meritech/Desktop/newAudio3/examples/09_parallel_execution/output/up",
+        "output_dir": "workspace/artifacts/parallel-execution/up",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,
@@ -225,7 +225,7 @@
       "id": "dataset_ingest_down",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/down",
+        "path": "examples/02_speech_commands/data/down",
         "recursive": false,
         "source_type": "filesystem"
       },
@@ -278,7 +278,7 @@
       "id": "audio_exporter_down",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "/home/meritech/Desktop/newAudio3/examples/09_parallel_execution/output/down",
+        "output_dir": "workspace/artifacts/parallel-execution/down",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,

@@ -43,6 +43,15 @@ function defaultsFromSchema(entry?: NodeCatalogEntry): Record<string, unknown> {
   for (const [k, v] of Object.entries(props)) {
     if (v && typeof v === 'object' && 'default' in v) cfg[k] = v.default
   }
+  const nodeType = entry?.node_type || 'node'
+  for (const key of ['output_dir', 'output_path'] as const) {
+    if (key in props) {
+      const current = cfg[key]
+      if (current === undefined || current === null || current === '') {
+        cfg[key] = `workspace/artifacts/builder/${nodeType}`
+      }
+    }
+  }
   return cfg
 }
 

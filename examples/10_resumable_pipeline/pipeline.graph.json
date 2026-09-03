@@ -12,7 +12,7 @@
       "id": "dataset_ingest_0",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "/home/meritech/Desktop/newAudio3/examples/02_speech_commands/data/yes",
+        "path": "examples/02_speech_commands/data/yes",
         "recursive": false,
         "source_type": "filesystem"
       },
@@ -92,7 +92,7 @@
       "id": "audio_exporter_5",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "/home/meritech/Desktop/newAudio3/examples/10_resumable_pipeline/output",
+        "output_dir": "workspace/artifacts/resumable-pipeline",
         "split_ratios": {
           "train": 0.7,
           "val": 0.15,

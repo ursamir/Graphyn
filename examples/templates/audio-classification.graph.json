@@ -3,7 +3,7 @@
   "metadata": {
     "name": "audio-classification",
     "seed": 42,
-    "description": "Starter: ingest \u2192 condition \u2192 segment \u2192 augment \u2192 export (modern PluginPackage types).",
+    "description": "Starter: ingest → condition → segment → augment → export (modern PluginPackage types).",
     "created_at": null,
     "tags": [
       "example",
@@ -71,7 +71,7 @@
       "id": "audio_exporter_4",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "workspace/datasets/output/audio_classification",
+        "output_dir": "workspace/artifacts/audio-classification/audio_classification",
         "version_tag": "v1",
         "split_ratios": {
           "train": 0.7,

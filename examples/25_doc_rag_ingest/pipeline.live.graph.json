@@ -3,7 +3,7 @@
   "metadata": {
     "name": "doc_rag_ingest_live",
     "seed": 42,
-    "description": "Doc RAG ingest: parse/chunk local markdown, quality-gate non-empty chunks, put into local object store. Local files only \u2014 already a live path (no mock providers).",
+    "description": "Doc RAG ingest: parse/chunk local markdown, quality-gate non-empty chunks, put into local object store. Local files only — already a live path (no mock providers).",
     "created_at": null,
     "tags": [
       "example",
@@ -43,7 +43,7 @@
       "config": {
         "backend": "local",
         "operation": "put",
-        "root": "examples/25_doc_rag_ingest/output/store",
+        "root": "workspace/artifacts/doc-rag-ingest/store",
         "prefix": "chunks"
       },
       "label": null,

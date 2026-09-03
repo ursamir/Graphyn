@@ -54,7 +54,7 @@
       "id": "audio_exporter_3",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "workspace/datasets/output/podcast-leveled",
+        "output_dir": "workspace/artifacts/podcast-leveling/podcast-leveled",
         "version_tag": "v1",
         "split_ratios": {
           "train": 0.8,

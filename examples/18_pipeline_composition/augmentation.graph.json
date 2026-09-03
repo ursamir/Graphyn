@@ -68,7 +68,7 @@
       "id": "dataset_versioner_3",
       "node_type": "dataset_versioner",
       "config": {
-        "output_dir": "/home/meritech/Desktop/newAudio3/examples/18_pipeline_composition/output",
+        "output_dir": "workspace/artifacts/pipeline-composition",
         "version_tag": "v1"
       },
       "label": null,

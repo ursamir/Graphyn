@@ -79,7 +79,7 @@
       "id": "audio_exporter_4",
       "node_type": "audio_exporter",
       "config": {
-        "output_dir": "workspace/datasets/output/speech_recognition",
+        "output_dir": "workspace/artifacts/speech-recognition/speech_recognition",
         "version_tag": "v1",
         "split_ratios": {
           "train": 0.8,

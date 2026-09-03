@@ -62,9 +62,9 @@ export function emptyGraph(name = 'pipeline', seed = 42): GraphIR {
     metadata: {
       name,
       seed,
-      description: '',
+      description: 'Outputs belong in workspace/artifacts/<name>/ (bind-mounted).',
       created_at: null,
-      tags: [],
+      tags: ['workspace-artifacts'],
     },
     nodes: [],
     edges: [],
@@ -96,9 +96,9 @@ export function buildGraphFromCanvas(
     metadata: {
       name,
       seed,
-      description: '',
+      description: 'Outputs belong in workspace/artifacts/<name>/ (bind-mounted).',
       created_at: null,
-      tags: [],
+      tags: ['workspace-artifacts'],
     },
     nodes: nodes.map((n) => ({
       id: n.id,

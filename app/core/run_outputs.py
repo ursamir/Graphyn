@@ -45,6 +45,12 @@ ALLOWED_SUFFIXES = frozenset(
         ".index",
         ".onnx",
         ".ckpt",
+        ".csv",
+        ".wav",
+        ".flac",
+        ".mp3",
+        ".webm",
+        ".md",
     }
 )
 
@@ -263,6 +269,23 @@ def _paths_from_artifact_record(record: Any) -> list[Path]:
     return paths
 
 
+def _looks_like_output_path(key: str, value: str) -> bool:
+    posix = value.replace("\\", "/").strip()
+    if not posix:
+        return False
+    if key in ("output_path", "model_path", "output_dir", "root"):
+        return True
+    if key != "path":
+        return False
+    lowered = posix.lower()
+    if "/data/" in f"/{lowered}/" and "/output/" not in lowered:
+        return False
+    if "workspace/artifacts" in lowered or "/output/" in f"/{lowered}/" or lowered.endswith("/output"):
+        return True
+    suffix = Path(posix).suffix.lower()
+    return suffix in ALLOWED_SUFFIXES
+
+
 def _output_paths_from_graph(graph: dict[str, Any]) -> list[Path]:
     found: list[Path] = []
     nodes = graph.get("nodes") or []
@@ -274,11 +297,42 @@ def _output_paths_from_graph(graph: dict[str, Any]) -> list[Path]:
         config = node.get("config") or {}
         if not isinstance(config, dict):
             continue
-        for key in ("output_path", "model_path"):
+        for key in ("output_path", "model_path", "output_dir", "path", "root"):
             value = config.get(key)
-            if isinstance(value, str) and value.strip():
+            if isinstance(value, str) and value.strip() and _looks_like_output_path(key, value):
                 found.append(Path(value))
     return found
+
+
+def _artifact_dirs_from_graph(graph: dict[str, Any]) -> list[Path]:
+    """Folders under project artifacts/ referenced by the graph (plus slug)."""
+    roots: list[Path] = []
+    try:
+        art = artifacts_dir()
+    except Exception:
+        return roots
+    roots.append(art)
+    slugs: set[str] = set()
+    meta = graph.get("metadata") if isinstance(graph, dict) else None
+    if isinstance(meta, dict) and meta.get("name"):
+        from app.core.workspace_paths import artifact_slug
+
+        slugs.add(artifact_slug(str(meta["name"])))
+    for raw in _output_paths_from_graph(graph):
+        posix = str(raw).replace("\\", "/")
+        marker = "workspace/artifacts/"
+        if marker in posix:
+            rest = posix.split(marker, 1)[1]
+            slug = rest.split("/", 1)[0]
+            if slug:
+                slugs.add(slug)
+        elif posix.startswith("artifacts/"):
+            slug = posix.split("/", 2)[1] if posix.count("/") >= 1 else ""
+            if slug:
+                slugs.add(slug)
+    for slug in slugs:
+        roots.append(art / slug)
+    return roots
 
 
 def _load_run_graph(run_dir: Path) -> dict[str, Any]:
@@ -316,8 +370,9 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
     Sources:
       (a) files under the run directory
       (b) ArtifactRecord paths for the run
-      (c) node config output_path / model_path on the stored graph
-      (d) legacy Example 6 output dir when those files exist
+      (c) node config output_dir / output_path / model_path / output-like path
+      (d) workspace/artifacts (graph slug folder, then the whole tree)
+      (e) legacy Example 6 output dir when those files exist
     """
     collected: list[Path] = []
     collected.extend(_walk_allowed_files(run_dir, limit=_MAX_LISTED_FILES))
@@ -336,14 +391,29 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
 
     graph = _load_run_graph(run_dir)
     for raw in _output_paths_from_graph(graph):
-        for base in (Path.cwd(), project_dir(), repo_root()):
-            candidate = raw if raw.is_absolute() else base / raw
+        bases: list[Path] = []
+        if raw.is_absolute():
+            bases.append(raw)
+        else:
+            parts = raw.parts
+            if parts and parts[0] == "workspace":
+                bases.append(project_dir() / Path(*parts[1:]))
+            bases.extend((Path.cwd() / raw, project_dir() / raw, repo_root() / raw))
+        for candidate in bases:
             remaining = _MAX_LISTED_FILES - len(collected)
             if remaining <= 0:
                 break
             collected.extend(_walk_allowed_files(candidate, limit=remaining))
-            if raw.is_absolute():
-                break
+
+    for extra in _artifact_dirs_from_graph(graph):
+        remaining = _MAX_LISTED_FILES - len(collected)
+        if remaining <= 0:
+            break
+        collected.extend(_walk_allowed_files(extra, limit=remaining))
+
+    remaining = _MAX_LISTED_FILES - len(collected)
+    if remaining > 0:
+        collected.extend(_walk_allowed_files(artifacts_dir(), limit=remaining))
 
     legacy = repo_root() / LEGACY_EXAMPLE_OUTPUT
     remaining = _MAX_LISTED_FILES - len(collected)

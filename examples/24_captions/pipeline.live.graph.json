@@ -41,7 +41,7 @@
       "id": "caption_export_2",
       "node_type": "caption_export",
       "config": {
-        "output_dir": "examples/24_captions/output",
+        "output_dir": "workspace/artifacts/captions",
         "basename": "captions",
         "formats": [
           "srt",
