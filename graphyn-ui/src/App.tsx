@@ -64,6 +64,24 @@ const NAV_GROUPS: Array<{
 
 const VIEW_IDS = new Set(NAV_GROUPS.flatMap((g) => g.items.map((n) => n.id)))
 
+const VIEW_LABEL: Record<AppView, string> = {
+  builder: 'Builder',
+  templates: 'Templates',
+  runs: 'Runs',
+  plugins: 'Plugins',
+  data: 'Data',
+  artifacts: 'Artifacts',
+  projects: 'Projects',
+  secrets: 'Secrets',
+  system: 'System',
+}
+
+const JUMP_KEYS: Record<string, AppView> = {
+  b: 'builder',
+  t: 'templates',
+  r: 'runs',
+}
+
 function parseHash(): { view?: AppView; runId?: string } {
   const raw = window.location.hash.replace(/^#\/?/, '')
   if (!raw) return {}
@@ -184,6 +202,36 @@ export default function App() {
     if (narrow) setNavOpen(false)
   }
 
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      const typing =
+        !!el &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.tagName === 'SELECT' ||
+          el.isContentEditable)
+      if (settingsOpen) return
+      const metaK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'
+      const slash = e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey
+      if (metaK || (slash && !typing)) {
+        if (view === 'builder') {
+          e.preventDefault()
+          document.getElementById('builder-catalog-search')?.focus()
+        }
+        return
+      }
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return
+      const dest = JUMP_KEYS[e.key.toLowerCase()]
+      if (dest) {
+        e.preventDefault()
+        go(dest)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [view, settingsOpen, narrow])
+
   const chipLabel = isRunning
     ? statusMessage && statusMessage !== 'Running…'
       ? statusMessage
@@ -216,10 +264,21 @@ export default function App() {
             </div>
             <div className="min-w-0 leading-tight">
               <div className="font-display text-base font-extrabold tracking-tight text-ink-950">Graphyn</div>
-              <div className="truncate text-[11px] text-ink-500">Typed DAG workflows</div>
+              <div className="truncate text-[11px] text-ink-500">{VIEW_LABEL[view]}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <span
+              className={
+                bootStatus === 401
+                  ? 'hidden rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-medium text-amber-900 sm:inline'
+                  : bootError
+                    ? 'hidden rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-medium text-rose-800 sm:inline'
+                    : 'hidden rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-800 sm:inline'
+              }
+            >
+              {bootStatus === 401 ? 'Sign in required' : bootError ? "Can't reach the API" : 'Connected'}
+            </span>
             {isRunning && (
               <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900">
                 {chipLabel}

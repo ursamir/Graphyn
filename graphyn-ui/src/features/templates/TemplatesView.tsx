@@ -88,10 +88,8 @@ export default function TemplatesView() {
         { query: { version } },
       )
       if (!data.graph) throw new Error('Template has no graph payload')
-      // Store graph then switch view — Builder is unmounted on Templates, so a
-      // window event would be lost before the listener attaches.
       useAppStore.getState().loadGraphIntoBuilder(data.graph)
-      pushToast(`Loaded ${name}${version ? ` @ ${version}` : ''}`, 'success')
+      pushToast(`Loaded ${humanizeTemplateName(name)}${version ? ` @ ${version}` : ''}`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -157,75 +155,73 @@ export default function TemplatesView() {
     'speech-recognition',
     'basic-wakeword',
   ])
+  const isExample = (name: string) => isExampleTemplate(name) || starters.has(name)
   const filtered = (names ?? []).filter((name) => {
-    if (filter === 'examples') return isExampleTemplate(name) || starters.has(name)
-    if (filter === 'saved') return !isExampleTemplate(name) && !starters.has(name)
+    if (filter === 'examples') return isExample(name)
+    if (filter === 'saved') return !isExample(name)
     return true
   })
+  const exampleCount = (names ?? []).filter(isExample).length
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Templates"
-        description="Starter graphs and saved pipelines. Import examples, then open one in Builder."
+        description="Starter graphs and saved pipelines. Open one in Builder to run it."
         actions={
           <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-secondary" onClick={() => void load()}>
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
             <button
               type="button"
-              className="btn-primary"
+              className="btn-secondary"
               disabled={syncing}
               onClick={() => void importExamples()}
               title="Copy example graphs into templates"
             >
               <Download className="h-3.5 w-3.5" />
-              {syncing ? 'Importing…' : 'Import examples'}
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => void load()}>
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+              {syncing ? 'Syncing…' : 'Sync examples'}
             </button>
           </div>
         }
       />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
-        <h3 className="text-sm font-semibold">Create / version template</h3>
-        <input
-          value={saveName}
-          onChange={(e) => setSaveName(e.target.value)}
-          placeholder="template-name"
-          className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
-        />
-        <div className="flex flex-wrap gap-2">
-          <button type="button" className="btn-primary" onClick={() => void saveFromCanvas()}>
-            Save from Builder canvas
+      <section className="rounded-xl border border-ink-200 bg-white p-3 space-y-2">
+        <h3 className="text-sm font-semibold">Save current graph</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={saveName}
+            onChange={(e) => setSaveName(e.target.value)}
+            placeholder="template-name"
+            className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+          />
+          <button type="button" className="btn-secondary" onClick={() => void saveFromCanvas()}>
+            Save from Builder
           </button>
-          <button type="button" className="btn-secondary" onClick={uploadFile}>
+          <button type="button" className="btn-quiet" onClick={uploadFile}>
             Upload .graph.json
           </button>
         </div>
       </section>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-1.5">
         {(
           [
-            ['all', 'All'],
-            ['examples', 'Examples'],
-            ['saved', 'My templates'],
+            ['all', 'All', names?.length ?? 0],
+            ['examples', 'Examples', exampleCount],
+            ['saved', 'Saved', Math.max(0, (names?.length ?? 0) - exampleCount)],
           ] as const
-        ).map(([id, label]) => (
+        ).map(([id, label, count]) => (
           <button
             key={id}
             type="button"
-            className={filter === id ? 'btn-primary' : 'btn-secondary'}
+            className={filter === id ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
             onClick={() => setFilter(id)}
           >
             {label}
-            {names && id === 'examples'
-              ? ` (${names.filter((n) => isExampleTemplate(n) || starters.has(n)).length})`
-              : names && id === 'all'
-                ? ` (${names.length})`
-                : ''}
+            {names ? ` ${count}` : ''}
           </button>
         ))}
       </div>
@@ -237,39 +233,37 @@ export default function TemplatesView() {
           title={filter === 'examples' ? 'No example templates' : 'No templates'}
           description={
             filter === 'examples'
-              ? 'Import example graphs from the repo, then open one in builder.'
-              : 'Import examples, save from Builder, or upload a graph file.'
+              ? 'Sync example graphs from the repo, then open one in Builder.'
+              : 'Sync examples, save from Builder, or upload a graph file.'
           }
           action={
-            <button type="button" className="btn-primary" onClick={() => void importExamples()}>
-              Import examples
+            <button type="button" className="btn-secondary" onClick={() => void importExamples()}>
+              Sync examples
             </button>
           }
         />
       ) : (
-        <ul className="space-y-2">
+        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map((name) => (
-            <li
-              key={name}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2"
-            >
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{humanizeTemplateName(name)}</span>
-                  {(isExampleTemplate(name) || starters.has(name)) && (
-                    <span className="rounded bg-accent-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-800">
-                      example
-                    </span>
-                  )}
+            <li key={name} className="flex flex-col rounded-xl border border-ink-200 bg-white p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate font-display text-sm font-bold text-ink-950">
+                    {humanizeTemplateName(name)}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-ink-500">
+                    {(versionsMap[name] ?? []).length === 0
+                      ? 'Unversioned'
+                      : `Latest ${latestMap[name] ?? '—'}`}
+                  </div>
                 </div>
-                <div className="font-mono text-[10px] text-ink-400">{name}</div>
-                <div className="text-[11px] text-ink-500">
-                  {(versionsMap[name] ?? []).length === 0
-                    ? 'legacy flat file (unversioned)'
-                    : `latest: ${latestMap[name] ?? '—'}`}
-                </div>
+                {isExample(name) && (
+                  <span className="shrink-0 rounded bg-accent-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-800">
+                    Example
+                  </span>
+                )}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 {(versionsMap[name] ?? []).length > 0 ? (
                   <select
                     className="rounded border border-ink-200 px-2 py-1 text-xs"
@@ -286,7 +280,7 @@ export default function TemplatesView() {
                   </select>
                 ) : null}
                 <button type="button" className="btn-primary" onClick={() => void loadIntoBuilder(name)}>
-                  Open in builder
+                  Open in Builder
                 </button>
                 <ConfirmButton
                   label="Delete version"
@@ -312,7 +306,7 @@ export default function TemplatesView() {
                   onConfirm={() =>
                     void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
                       .then(load)
-                      .then(() => pushToast(`Deleted ${name}`, 'success'))
+                      .then(() => pushToast(`Deleted ${humanizeTemplateName(name)}`, 'success'))
                       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
                   }
                 />

@@ -6,6 +6,7 @@ import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, Load
 import {
   formatExecutionLine,
   formatLocaleDateTime,
+  formatRelativeTime,
   formatRunMetric,
   humanizeTemplateName,
   humanNodeLabel,
@@ -298,32 +299,43 @@ export default function RunsView() {
             }
           />
         ) : (
-          <ul className="space-y-2">
-            {runs.map((r) => (
+          <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white">
+            {runs.map((r) => {
+              const metric = formatRunMetric(r.metrics)
+              return (
               <li key={r.run_id}>
                 <button
                   type="button"
                   onClick={() => void open(r.run_id)}
-                  className={`w-full rounded-xl border px-3 py-2 text-left ${
+                  className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-2 text-left sm:grid-cols-[minmax(0,1.4fr)_auto_minmax(4rem,auto)_auto_auto] ${
                     selected === r.run_id
-                      ? 'border-accent-400 bg-accent-50'
-                      : 'border-ink-200 bg-white hover:bg-ink-50'
+                      ? 'bg-accent-50'
+                      : 'hover:bg-ink-50'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="truncate text-sm font-medium text-ink-900">
-                      {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : 'Pipeline'}
-                    </div>
-                    <StatusBadge status={String(r.status ?? 'unknown')} />
+                  <div className="truncate text-sm font-medium text-ink-900">
+                    {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : 'Pipeline'}
                   </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-ink-500">
-                    <span className="font-mono" title={r.run_id}>{shortRunId(r.run_id)}</span>
-                    <span>{formatLocaleDateTime(r.created_at)}</span>
-                    {formatRunMetric(r.metrics) ? <span>{formatRunMetric(r.metrics)}</span> : null}
+                  <StatusBadge status={String(r.status ?? 'unknown')} />
+                  <div className="hidden truncate text-[11px] text-ink-600 sm:block">
+                    {metric ?? ''}
+                  </div>
+                  <div
+                    className="hidden text-[11px] text-ink-500 sm:block"
+                    title={formatLocaleDateTime(r.created_at)}
+                  >
+                    {formatRelativeTime(r.created_at)}
+                  </div>
+                  <div className="font-mono text-[11px] text-ink-400" title={r.run_id}>
+                    {shortRunId(r.run_id)}
+                  </div>
+                  <div className="col-span-2 flex items-center gap-2 text-[11px] text-ink-500 sm:hidden">
+                    {metric ? <span>{metric}</span> : null}
+                    <span title={formatLocaleDateTime(r.created_at)}>{formatRelativeTime(r.created_at)}</span>
                   </div>
                 </button>
               </li>
-            ))}
+            )})}
           </ul>
         )}
         <div className="mt-3 flex gap-2">

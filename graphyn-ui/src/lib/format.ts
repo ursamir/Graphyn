@@ -174,6 +174,23 @@ export function formatLocaleDateTime(iso?: string | null): string {
   }
 }
 
+/** Compact relative time for run lists (falls back to locale datetime after a week). */
+export function formatRelativeTime(iso?: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const diff = Math.round((Date.now() - d.getTime()) / 1000)
+  const abs = Math.abs(diff)
+  const ago = diff >= 0
+  const suffix = ago ? 'ago' : 'from now'
+  if (abs < 45) return ago ? 'just now' : 'in a moment'
+  if (abs < 90) return `1m ${suffix}`
+  if (abs < 3600) return `${Math.round(abs / 60)}m ${suffix}`
+  if (abs < 86400) return `${Math.round(abs / 3600)}h ${suffix}`
+  if (abs < 86400 * 7) return `${Math.round(abs / 86400)}d ${suffix}`
+  return formatLocaleDateTime(iso)
+}
+
 export function shortRunId(id: string): string {
   if (!id) return '—'
   if (id.length > 12) return id.slice(0, 8)

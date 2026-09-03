@@ -22,6 +22,10 @@ import {
   Square,
   BookmarkPlus,
   MoreHorizontal,
+  ChevronDown,
+  ChevronUp,
+  AlertTriangle,
+  ExternalLink,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -36,6 +40,11 @@ import {
 import GraphynNode, { type GraphynNodeData } from './GraphynNode'
 
 const nodeTypes = { graphyn: GraphynNode }
+
+function slugifyName(raw: string): string {
+  const s = raw.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return s || 'pipeline'
+}
 
 function defaultsFromSchema(entry?: NodeCatalogEntry): Record<string, unknown> {
   const props = entry?.config_schema?.properties ?? {}
@@ -67,6 +76,7 @@ function BuilderInner() {
   const addLog = useAppStore((s) => s.addLog)
   const clearLogs = useAppStore((s) => s.clearLogs)
   const logs = useAppStore((s) => s.logs)
+  const lastRunId = useAppStore((s) => s.lastRunId)
   const setLastRunId = useAppStore((s) => s.setLastRunId)
   const setStatusMessage = useAppStore((s) => s.setStatusMessage)
   const pushToast = useAppStore((s) => s.pushToast)
@@ -76,16 +86,31 @@ function BuilderInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphynNodeData>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [filter, setFilter] = React.useState('')
+  const [categoryFilter, setCategoryFilter] = React.useState('all')
   const [templateName, setTemplateName] = React.useState('')
   const [graphName, setGraphName] = React.useState('pipeline')
   const [moreOpen, setMoreOpen] = React.useState(false)
+  const [compact, setCompact] = React.useState(false)
   const [showRawLogs, setShowRawLogs] = React.useState(false)
+  const [logHeight, setLogHeight] = React.useState(220)
+  const [logCollapsed, setLogCollapsed] = React.useState(false)
+  const [runHadErrors, setRunHadErrors] = React.useState(false)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
   const abortRef = React.useRef<AbortController | null>(null)
   const nodesRef = React.useRef(nodes)
   const edgesRef = React.useRef(edges)
+  const logBodyRef = React.useRef<HTMLDivElement | null>(null)
+  const stickToBottomRef = React.useRef(true)
   nodesRef.current = nodes
   edgesRef.current = edges
+
+  React.useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1080px)')
+    const apply = () => setCompact(mq.matches)
+    apply()
+    mq.addEventListener('change', apply)
+    return () => mq.removeEventListener('change', apply)
+  }, [])
 
   React.useEffect(() => {
     if (!moreOpen) return
@@ -95,7 +120,6 @@ function BuilderInner() {
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [moreOpen])
-
 
   const attachHandlers = React.useCallback(
     (node: Node<GraphynNodeData>): Node<GraphynNodeData> => ({
@@ -209,8 +233,9 @@ function BuilderInner() {
   const pendingGraph = useAppStore((s) => s.pendingGraph)
 
   const loadGraph = (graph: GraphIR) => {
-    const loadedName = (graph.metadata?.name || '').trim()
-    setGraphName(loadedName || 'pipeline')
+    const loadedName = slugifyName(graph.metadata?.name || '')
+    setGraphName(loadedName)
+    if (/^[A-Za-z0-9_-]+$/.test(loadedName)) setTemplateName(loadedName)
     if (typeof graph.metadata?.seed === 'number') setSeed(graph.metadata.seed)
     const byType = new Map(catalog.map((c) => [c.node_type, c]))
     const ui = graph.ui?.positions
@@ -246,6 +271,7 @@ function BuilderInner() {
     }))
     setNodes(nextNodes)
     setEdges(nextEdges)
+    setRunHadErrors(false)
   }
 
   React.useEffect(() => {
@@ -298,6 +324,8 @@ function BuilderInner() {
 
   const handleRun = async () => {
     clearLogs()
+    setRunHadErrors(false)
+    setLogCollapsed(false)
     setIsRunning(true)
     setStatusMessage('Running…')
     setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'idle' } })))
@@ -378,6 +406,7 @@ function BuilderInner() {
           }
         }
       }
+      setRunHadErrors(hadError)
       setStatusMessage(hadError ? 'Run finished with errors' : 'Run complete')
       pushToast(hadError ? 'Run finished with errors' : 'Run complete', hadError ? 'error' : 'success')
       if (runId) setLastRunId(runId)
@@ -386,6 +415,7 @@ function BuilderInner() {
       if (err instanceof ApiError && err.status === 0) return
       const msg = err instanceof Error ? err.message : String(err)
       addLog(msg, 'error')
+      setRunHadErrors(true)
       setStatusMessage(msg)
       pushToast(msg, 'error')
     } finally {
@@ -415,7 +445,7 @@ function BuilderInner() {
     })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = 'pipeline.graph.json'
+    a.download = `${graphName || 'pipeline'}.graph.json`
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -438,7 +468,8 @@ function BuilderInner() {
   }
 
   const saveTemplate = async () => {
-    if (!/^[A-Za-z0-9_-]+$/.test(templateName)) {
+    const name = templateName.trim() || graphName
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) {
       pushToast('Template name must match [A-Za-z0-9_-]+', 'error')
       return
     }
@@ -447,50 +478,152 @@ function BuilderInner() {
       const res = await apiJson<{ name: string; version?: string }>('/pipelines/templates', {
         method: 'POST',
         body: JSON.stringify({
-          name: templateName,
+          name,
           yaml: JSON.stringify(graph),
           description: 'Saved from Graphyn Builder',
         }),
       })
+      setTemplateName(name)
       pushToast(`Template saved: ${res.name}${res.version ? ` @ ${res.version}` : ''}`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
   }
 
+  const categories = React.useMemo(() => {
+    const set = new Set<string>()
+    for (const n of catalog) {
+      if (n.category) set.add(n.category)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [catalog])
+
   const filtered = catalog.filter((n) => {
+    if (categoryFilter !== 'all' && (n.category || 'Other') !== categoryFilter) return false
     const q = filter.toLowerCase()
     if (!q) return true
     return (
       n.node_type.toLowerCase().includes(q) ||
       (n.label ?? '').toLowerCase().includes(q) ||
-      (n.category ?? '').toLowerCase().includes(q)
+      (n.category ?? '').toLowerCase().includes(q) ||
+      humanNodeLabel(n.node_type).toLowerCase().includes(q)
     )
   })
 
-  const byCategory = React.useMemo(() => {
-    const map = new Map<string, NodeCatalogEntry[]>()
-    for (const n of filtered) {
-      const cat = n.category || 'Other'
-      if (!map.has(cat)) map.set(cat, [])
-      map.get(cat)!.push(n)
+  const prettyLogs = skipConsecutiveByText(logs, (l) => (showRawLogs ? l.raw || l.message : l.message))
+  const errorLogs = prettyLogs.filter((l) => l.level === 'error' || /fail|error/i.test(l.message))
+
+  React.useEffect(() => {
+    const el = logBodyRef.current
+    if (!el || logCollapsed) return
+    if (stickToBottomRef.current) el.scrollTop = el.scrollHeight
+  }, [logs, logCollapsed, showRawLogs, logHeight])
+
+  const focusLogErrors = () => {
+    setLogCollapsed(false)
+    requestAnimationFrame(() => {
+      const first = logBodyRef.current?.querySelector('[data-log-error="1"]')
+      if (first instanceof HTMLElement) {
+        first.focus()
+        first.scrollIntoView({ block: 'center' })
+      } else {
+        logBodyRef.current?.scrollIntoView({ block: 'nearest' })
+      }
+    })
+  }
+
+  const onLogResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = logHeight
+    const onMove = (ev: PointerEvent) => {
+      const max = Math.round(window.innerHeight * 0.5)
+      const next = Math.min(max, Math.max(80, startH + (startY - ev.clientY)))
+      setLogHeight(next)
+      setLogCollapsed(false)
     }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [filtered])
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  const secondaryActions = (
+    <>
+      <button
+        type="button"
+        className="btn-quiet"
+        onClick={() => {
+          if (!window.confirm('Clear the canvas?')) return
+          setNodes([])
+          setEdges([])
+          setGraphName('pipeline')
+          setRunHadErrors(false)
+          clearLogs()
+          setMoreOpen(false)
+        }}
+      >
+        <Trash2 className="h-3.5 w-3.5" /> Clear
+      </button>
+      <button
+        type="button"
+        disabled={nodes.length === 0 || isRunning}
+        className="btn-quiet"
+        onClick={() => {
+          void handleRunAsync()
+          setMoreOpen(false)
+        }}
+      >
+        Run in background
+      </button>
+      <label className="flex items-center gap-1.5 px-1 text-xs text-ink-500">
+        <Hash className="h-3.5 w-3.5" />
+        Seed
+        <input
+          type="number"
+          value={seed}
+          onChange={(e) => setSeed(Number(e.target.value) || 0)}
+          className="w-16 rounded border border-ink-200 px-1 py-0.5 font-mono text-xs"
+          title="Graph seed"
+        />
+      </label>
+    </>
+  )
 
   return (
     <div className="flex h-full min-h-0">
-      <aside className="flex w-72 shrink-0 flex-col border-r border-ink-200 bg-white/80 backdrop-blur">
-        <div className="border-b border-ink-100 p-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-ink-500">Node catalog</div>
+      <aside className="flex w-64 shrink-0 flex-col border-r border-ink-200 bg-white">
+        <div className="sticky top-0 z-10 border-b border-ink-100 bg-white p-2">
           <input
+            id="builder-catalog-search"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Search nodes…"
-            className="mt-2 w-full rounded-lg border border-ink-200 bg-ink-50 px-2.5 py-1.5 text-sm"
+            className="w-full rounded-lg border border-ink-200 bg-ink-50 px-2.5 py-1.5 text-sm"
           />
+          <div className="mt-2 flex flex-wrap gap-1">
+            <button
+              type="button"
+              className={categoryFilter === 'all' ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+              onClick={() => setCategoryFilter('all')}
+            >
+              All
+            </button>
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                className={categoryFilter === cat ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+                onClick={() => setCategoryFilter(cat)}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-2">
+        <div className="flex-1 overflow-y-auto p-1.5">
           {catalog.length === 0 ? (
             <div className="px-1 py-2">
               <EmptyState
@@ -520,42 +653,35 @@ function BuilderInner() {
                 }
               />
             </div>
-          ) : byCategory.length === 0 ? (
-            <div className="px-2 py-6 text-sm text-ink-500">No nodes match the search.</div>
+          ) : filtered.length === 0 ? (
+            <div className="px-2 py-6 text-sm text-ink-500">No nodes match.</div>
           ) : (
-            byCategory.map(([cat, items]) => (
-              <div key={cat} className="mb-3">
-                <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                  {cat}
-                </div>
-                <div className="space-y-1">
-                  {items.map((n) => (
-                    <button
-                      key={n.node_type}
-                      type="button"
-                      onClick={() => addNode(n)}
-                      className="w-full rounded-lg border border-transparent px-2 py-1.5 text-left hover:border-ink-200 hover:bg-ink-50"
-                    >
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <div className="text-sm font-medium text-ink-900">{n.label || humanNodeLabel(n.node_type)}</div>
-                        {isIsolatedRuntime(n.runtime, n.node_type) && (
-                          <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
-                            Isolated
-                          </span>
-                        )}
-                      </div>
-                      <div className="font-mono text-[10px] text-ink-400">{n.node_type}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))
+            <div className="space-y-0.5">
+              {filtered.map((n) => (
+                <button
+                  key={n.node_type}
+                  type="button"
+                  title={n.node_type}
+                  onClick={() => addNode(n)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-ink-50"
+                >
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-900">
+                    {n.label || humanNodeLabel(n.node_type)}
+                  </span>
+                  {isIsolatedRuntime(n.runtime, n.node_type) && (
+                    <span className="shrink-0 rounded bg-ink-100 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-ink-500">
+                      Iso
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
           )}
         </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200 bg-white/70 px-3 py-2 backdrop-blur">
+        <div className="relative z-30 flex flex-wrap items-center gap-1.5 border-b border-ink-200 bg-white px-2 py-1.5">
           {!isRunning ? (
             <button
               type="button"
@@ -573,80 +699,69 @@ function BuilderInner() {
           <button type="button" onClick={() => void handleValidate()} className="btn-secondary">
             <CheckCircle2 className="h-3.5 w-3.5" /> Validate
           </button>
-          <div className="relative ml-auto" ref={moreRef}>
+          <input
+            value={graphName}
+            onChange={(e) => setGraphName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '-'))}
+            onBlur={() => setGraphName((n) => slugifyName(n))}
+            placeholder="graph-name"
+            className="w-36 rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm font-medium text-ink-900"
+            title="Graph name — used as the artifact slug on Run"
+            aria-label="Graph name"
+          />
+          <div className="flex items-center gap-1">
+            <input
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              placeholder="template-name"
+              className="w-36 rounded-lg border border-ink-200 px-2 py-1 text-xs"
+              title="Name used when saving a template"
+              aria-label="Template name"
+            />
+            <button type="button" className="btn-secondary" onClick={() => void saveTemplate()}>
+              <BookmarkPlus className="h-3.5 w-3.5" /> Save template
+            </button>
+          </div>
+          <button type="button" className="btn-secondary" onClick={importIr}>
+            <Upload className="h-3.5 w-3.5" /> Import
+          </button>
+          <button type="button" className="btn-secondary" onClick={exportIr}>
+            <Download className="h-3.5 w-3.5" /> Export
+          </button>
+          {runHadErrors && !isRunning && (
             <button
               type="button"
-              className="btn-quiet"
-              onClick={() => setMoreOpen((o) => !o)}
-              aria-expanded={moreOpen}
+              className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-semibold text-rose-900 hover:bg-rose-200"
+              onClick={focusLogErrors}
             >
-              <MoreHorizontal className="h-3.5 w-3.5" /> More
+              <AlertTriangle className="h-3 w-3" />
+              Run finished with errors
             </button>
-            {moreOpen && (
-              <div
-                className="absolute right-0 z-50 mt-1 w-64 rounded-xl border border-ink-200 bg-white p-2 shadow-lg"
-                onMouseDown={(e) => e.stopPropagation()}
-                onPointerDown={(e) => e.stopPropagation()}
+          )}
+          {!compact && <div className="ml-auto flex flex-wrap items-center gap-1">{secondaryActions}</div>}
+          {compact && (
+            <div className="relative ml-auto" ref={moreRef}>
+              <button
+                type="button"
+                className="btn-quiet"
+                onClick={() => setMoreOpen((o) => !o)}
+                aria-expanded={moreOpen}
               >
-                <button type="button" className="btn-quiet w-full justify-start" onClick={() => { importIr(); setMoreOpen(false) }}>
-                  <Upload className="h-3.5 w-3.5" /> Import
-                </button>
-                <button type="button" className="btn-quiet w-full justify-start" onClick={() => { exportIr(); setMoreOpen(false) }}>
-                  <Download className="h-3.5 w-3.5" /> Export
-                </button>
-                <div className="mt-1 flex items-center gap-1 px-1">
-                  <input
-                    value={templateName}
-                    onChange={(e) => setTemplateName(e.target.value)}
-                    placeholder="template-name"
-                    className="min-w-0 flex-1 rounded-lg border border-ink-200 px-2 py-1 text-xs"
-                  />
-                  <button type="button" className="btn-quiet shrink-0" onClick={() => void saveTemplate()}>
-                    <BookmarkPlus className="h-3.5 w-3.5" /> Save
-                  </button>
+                <MoreHorizontal className="h-3.5 w-3.5" /> More
+              </button>
+              {moreOpen && (
+                <div
+                  className="absolute right-0 z-50 mt-1 w-56 rounded-xl border border-ink-200 bg-white p-2 shadow-lg"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <div className="flex flex-col items-stretch gap-1">{secondaryActions}</div>
                 </div>
-                <button
-                  type="button"
-                  className="btn-quiet w-full justify-start"
-                  onClick={() => {
-                    if (!window.confirm('Clear the canvas?')) return
-                    setNodes([])
-                    setEdges([])
-                    setGraphName('pipeline')
-                    clearLogs()
-                    setMoreOpen(false)
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" /> Clear
-                </button>
-                <button
-                  type="button"
-                  disabled={nodes.length === 0 || isRunning}
-                  className="btn-quiet w-full justify-start"
-                  onClick={() => {
-                    void handleRunAsync()
-                    setMoreOpen(false)
-                  }}
-                >
-                  Run in background
-                </button>
-                <label className="mt-1 flex items-center gap-2 px-2 py-1 text-xs text-ink-500">
-                  <Hash className="h-3.5 w-3.5" />
-                  Seed
-                  <input
-                    type="number"
-                    value={seed}
-                    onChange={(e) => setSeed(Number(e.target.value) || 0)}
-                    className="w-16 rounded border border-ink-200 px-1 py-0.5 font-mono text-xs"
-                    title="Graph seed"
-                  />
-                </label>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
 
-        <div className="relative min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1 bg-canvas">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -680,39 +795,92 @@ function BuilderInner() {
           )}
         </div>
 
-        <div className="h-40 border-t border-ink-200 bg-ink-950 px-3 py-2 text-ink-100">
-          <div className="mb-1 flex items-center justify-between">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-              Execution log
-            </div>
-            <button
-              type="button"
-              className="text-[11px] font-medium text-ink-400 hover:text-ink-100"
-              onClick={() => setShowRawLogs((v) => !v)}
-            >
-              {showRawLogs ? 'Pretty' : 'Raw'}
-            </button>
-          </div>
-          <div className="h-[7.5rem] overflow-y-auto font-mono text-[11px]">
-            {logs.length === 0 ? (
-              <div className="text-ink-500">No events yet.</div>
-            ) : (
-              skipConsecutiveByText(logs, (l) => (showRawLogs ? l.raw || l.message : l.message)).map((l, i) => (
-                <div
-                  key={`${l.ts}-${i}`}
-                  className={
-                    l.level === 'error'
-                      ? 'text-rose-300'
-                      : l.level === 'success'
-                        ? 'text-accent-300'
-                        : 'text-ink-200'
-                  }
-                >
-                  {showRawLogs ? l.raw || l.message : l.message}
-                </div>
-              ))
+        <div className="relative z-20 border-t border-ink-200 bg-ink-950 text-ink-100">
+          <div
+            className="absolute inset-x-0 -top-1 z-30 h-2 cursor-row-resize"
+            onPointerDown={onLogResize}
+            title="Drag to resize log"
+          />
+          <div className="flex items-center gap-2 px-3 py-1">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Execution log</div>
+            {errorLogs.length > 0 && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-500/30"
+                onClick={focusLogErrors}
+              >
+                {errorLogs.length} {errorLogs.length === 1 ? 'error' : 'errors'}
+              </button>
             )}
+            <div className="ml-auto flex items-center gap-2">
+              {lastRunId && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-accent-300 hover:text-accent-200"
+                  onClick={() => openRun(lastRunId)}
+                >
+                  <ExternalLink className="h-3 w-3" /> Open run
+                </button>
+              )}
+              <button
+                type="button"
+                className="text-[11px] font-medium text-ink-400 hover:text-ink-100"
+                onClick={() => setShowRawLogs((v) => !v)}
+              >
+                {showRawLogs ? 'Pretty' : 'Raw'}
+              </button>
+              <button
+                type="button"
+                className="text-ink-400 hover:text-ink-100"
+                aria-label={logCollapsed ? 'Expand log' : 'Collapse log'}
+                onClick={() => setLogCollapsed((v) => !v)}
+              >
+                {logCollapsed ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              </button>
+            </div>
           </div>
+          {!logCollapsed && (
+            <div
+              ref={logBodyRef}
+              style={{ height: logHeight }}
+              className="overflow-y-auto px-3 pb-2 font-mono text-[11px]"
+              onScroll={(e) => {
+                const el = e.currentTarget
+                stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32
+              }}
+            >
+              {errorLogs.length > 0 && (
+                <div className="sticky top-0 z-10 mb-1 rounded bg-rose-950/90 px-2 py-1 text-[11px] text-rose-100">
+                  <button type="button" className="hover:underline" onClick={focusLogErrors}>
+                    Jump to error
+                  </button>
+                </div>
+              )}
+              {prettyLogs.length === 0 ? (
+                <div className="text-ink-500">No events yet.</div>
+              ) : (
+                prettyLogs.map((l, i) => {
+                  const isErr = l.level === 'error' || /fail|error/i.test(l.message)
+                  return (
+                    <div
+                      key={`${l.ts}-${i}`}
+                      data-log-error={isErr ? '1' : undefined}
+                      tabIndex={isErr ? -1 : undefined}
+                      className={
+                        isErr
+                          ? 'rounded bg-rose-500/10 px-1 text-rose-300 outline-none'
+                          : l.level === 'success'
+                            ? 'text-accent-300'
+                            : 'text-ink-200'
+                      }
+                    >
+                      {showRawLogs ? l.raw || l.message : l.message}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

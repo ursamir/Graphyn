@@ -40,7 +40,6 @@ function formatValue(def: Record<string, unknown>, value: unknown): string {
     }
   }
   if (Array.isArray(value) && type === 'array') {
-    // primitive array → comma list; object array → JSON
     if (value.every((v) => typeof v !== 'object' || v == null)) return value.join(',')
     return JSON.stringify(value)
   }
@@ -85,7 +84,7 @@ function fieldEditor(
   if (Array.isArray(def.enum)) {
     return (
       <select
-        className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-1 text-[11px]"
+        className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 text-[11px]"
         value={String(value ?? '')}
         onChange={(e) => onChange(e.target.value)}
         onMouseDown={(e) => e.stopPropagation()}
@@ -128,7 +127,7 @@ function fieldEditor(
 
   return (
     <input
-      className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-1 font-mono text-[11px] text-ink-800"
+      className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
       value={formatValue(def, value)}
       onChange={(e) => {
         try {
@@ -142,20 +141,30 @@ function fieldEditor(
   )
 }
 
+const STATUS_EDGE: Record<string, string> = {
+  idle: 'bg-ink-300',
+  running: 'bg-accent-500',
+  success: 'bg-emerald-500',
+  error: 'bg-rose-500',
+}
+
 export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeData>) {
   const props = data.schemaProps ?? {}
   const entries = Object.entries(props)
   const inputs = data.inputs?.length ? data.inputs : [{ name: 'input' }]
   const outputs = data.outputs?.length ? data.outputs : [{ name: 'output' }]
+  const status = data.status ?? 'idle'
+  const isolated = data.runtime === 'isolated' || data.nodeType.startsWith('Isolated_')
 
   return (
     <div
+      title={data.nodeType}
       className={clsx(
-        'min-w-[220px] max-w-[300px] rounded-xl border bg-white shadow-sm transition-shadow',
+        'min-w-[196px] max-w-[248px] overflow-hidden rounded-lg border bg-white shadow-sm',
         selected ? 'border-accent-500 shadow-md ring-2 ring-accent-200' : 'border-ink-200',
-        data.status === 'running' && 'border-accent-400',
-        data.status === 'success' && 'border-emerald-500',
-        data.status === 'error' && 'border-rose-500',
+        status === 'running' && 'border-accent-400',
+        status === 'success' && 'border-emerald-500',
+        status === 'error' && 'border-rose-500',
       )}
     >
       {inputs.map((p, i) => (
@@ -165,71 +174,73 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
           type="target"
           position={Position.Top}
           style={{ left: `${((i + 1) / (inputs.length + 1)) * 100}%` }}
-          className="!h-2.5 !w-2.5 !bg-ink-500"
+          className="!h-3 !w-3 !border-2 !border-white !bg-ink-700"
           title={`${p.name}${p.data_type ? ` (${p.data_type})` : ''}`}
         />
       ))}
 
-      <div className="border-b border-ink-100 px-3 py-2">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <div className="font-display text-sm font-bold text-ink-950">{data.label || data.nodeType}</div>
-              {(data.runtime === 'isolated' || data.nodeType.startsWith('Isolated_')) && (
-                <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
-                  Isolated
-                </span>
+      <div className="flex">
+        <div className={clsx('w-1 shrink-0 self-stretch', STATUS_EDGE[status] ?? STATUS_EDGE.idle)} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2 px-2.5 py-1.5">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <div className="truncate font-display text-[13px] font-bold leading-tight text-ink-950">
+                  {data.label || data.nodeType}
+                </div>
+                {isolated && (
+                  <span className="shrink-0 rounded bg-ink-100 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-ink-600">
+                    Iso
+                  </span>
+                )}
+              </div>
+              {data.category && (
+                <div className="truncate text-[10px] text-ink-400">{data.category}</div>
               )}
             </div>
-            <div className="font-mono text-[10px] text-ink-400">{data.nodeType.replace(/^Isolated_/, '')}</div>
+            <div className="flex shrink-0 gap-1">
+              {data.onValidateConfig && (
+                <button
+                  type="button"
+                  className="text-[10px] text-accent-700 hover:underline"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    data.onValidateConfig?.()
+                  }}
+                >
+                  check
+                </button>
+              )}
+              {data.onDelete && (
+                <button
+                  type="button"
+                  className="text-[10px] text-ink-400 hover:text-rose-600"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    data.onDelete?.()
+                  }}
+                >
+                  remove
+                </button>
+              )}
+            </div>
           </div>
-          <div className="flex gap-1">
-            {data.onValidateConfig && (
-              <button
-                type="button"
-                className="text-[10px] text-accent-700 hover:underline"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  data.onValidateConfig?.()
-                }}
-              >
-                check
-              </button>
-            )}
-            {data.onDelete && (
-              <button
-                type="button"
-                className="text-[10px] text-ink-400 hover:text-rose-600"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  data.onDelete?.()
-                }}
-              >
-                remove
-              </button>
+
+          <div className="max-h-40 space-y-1 overflow-y-auto border-t border-ink-100 px-2.5 py-1.5">
+            {entries.length === 0 ? (
+              <div className="text-[11px] text-ink-400">No config</div>
+            ) : (
+              entries.map(([key, def]) => (
+                <label key={key} className="block text-[11px] text-ink-600" title={schemaFieldHint(def)}>
+                  <span className="font-medium">{schemaFieldLabel(key, def)}</span>
+                  {fieldEditor(key, def, data.config?.[key] ?? def.default, (v) =>
+                    data.onChangeConfig?.(key, v),
+                  )}
+                </label>
+              ))
             )}
           </div>
         </div>
-        {data.category && (
-          <div className="mt-1 inline-block rounded bg-ink-100 px-1.5 py-0.5 text-[10px] text-ink-600">
-            {data.category}
-          </div>
-        )}
-      </div>
-
-      <div className="max-h-48 space-y-1 overflow-y-auto px-3 py-2">
-        {entries.length === 0 ? (
-          <div className="text-[11px] text-ink-400">No config fields</div>
-        ) : (
-          entries.map(([key, def]) => (
-            <label key={key} className="block text-[11px] text-ink-600" title={schemaFieldHint(def)}>
-              <span className="font-medium">{schemaFieldLabel(key, def)}</span>
-              {fieldEditor(key, def, data.config?.[key] ?? def.default, (v) =>
-                data.onChangeConfig?.(key, v),
-              )}
-            </label>
-          ))
-        )}
       </div>
 
       {outputs.map((p, i) => (
@@ -239,7 +250,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
           type="source"
           position={Position.Bottom}
           style={{ left: `${((i + 1) / (outputs.length + 1)) * 100}%` }}
-          className="!h-2.5 !w-2.5 !bg-accent-600"
+          className="!h-3 !w-3 !border-2 !border-white !bg-accent-600"
           title={`${p.name}${p.data_type ? ` (${p.data_type})` : ''}`}
         />
       ))}
