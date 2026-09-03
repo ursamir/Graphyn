@@ -72,10 +72,10 @@
       "config": {
         "backend": "keras",
         "device": "auto",
-        "epochs": 30,
+        "epochs": 50,
         "batch_size": 32,
         "output_path": "workspace/artifacts/speech-commands",
-        "patience": 5
+        "patience": 15
       },
       "label": null,
       "capability_metadata": null,
