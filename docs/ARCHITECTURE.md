@@ -56,6 +56,7 @@
 │                                                                     │
 │  app/core/node_executor.py                                          │
 │  └── NodeExecutor             per-node lifecycle driver + retry     │
+│  app/core/write_paths.py      mkdir jailed write dirs before process│
 │                                                                     │
 │  app/core/executor.py                                               │
 │  └── ParallelExecutor         wave-based asyncio + ThreadPool       │
@@ -250,6 +251,7 @@ User Input (IR JSON / SDK nodes)
     │   └── MISS → NodeExecutor.execute(inputs)
     │              ├── node.setup() [once]
     │              ├── node.on_start()
+    │              ├── ensure_node_write_dirs (write configs, not ports)
     │              ├── node.process(inputs)  ← or process_stream()
     │              ├── node.on_end()
     │              └── retry on failure (RetryPolicy)

@@ -236,8 +236,10 @@ class NodeExecutor:
     def _process(self, node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
         """Run ``node.process`` in-process or via an isolated plugin worker."""
         from app.core.plugins.hydrate import coerce_node_inputs
+        from app.core.write_paths import ensure_node_write_dirs
 
         inputs = coerce_node_inputs(inputs, type(node))
+        ensure_node_write_dirs(node)
         spec = self._isolated_spec()
         if spec is not None:
             from app.core.plugins.isolated_executor import run_isolated_node
@@ -281,9 +283,12 @@ class NodeExecutor:
                 f"Isolated node type {self._node_type_name(node)!r} cannot "
                 "stream in-process; use NodeExecutor.execute() (worker)."
             )
+        from app.core.write_paths import ensure_node_write_dirs
+
         node._current_run_id = self._run_id  # type: ignore[attr-defined]
         started = False
         try:
+            ensure_node_write_dirs(node)
             node.on_start()
             started = True
             async for item in node.process_stream(inputs):

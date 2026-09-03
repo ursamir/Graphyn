@@ -57,6 +57,9 @@ def _run(job: dict[str, Any]) -> None:
     node_cls = registry.get_class(node_type)
     inputs = coerce_node_inputs(inputs, node_cls)
     node = node_cls(config=config, seed=seed)
+    from app.core.write_paths import ensure_node_write_dirs
+
+    ensure_node_write_dirs(node)
     node.setup()
     try:
         outputs = node.process(inputs) or {}
