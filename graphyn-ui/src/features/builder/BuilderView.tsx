@@ -26,6 +26,7 @@ import {
   ChevronUp,
   AlertTriangle,
   ExternalLink,
+  X,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -90,10 +91,9 @@ function BuilderInner() {
   const [templateName, setTemplateName] = React.useState('')
   const [graphName, setGraphName] = React.useState('pipeline')
   const [moreOpen, setMoreOpen] = React.useState(false)
-  const [compact, setCompact] = React.useState(false)
   const [showRawLogs, setShowRawLogs] = React.useState(false)
-  const [logHeight, setLogHeight] = React.useState(220)
-  const [logCollapsed, setLogCollapsed] = React.useState(false)
+  const [logHeight, setLogHeight] = React.useState(148)
+  const [logCollapsed, setLogCollapsed] = React.useState(true)
   const [runHadErrors, setRunHadErrors] = React.useState(false)
   const [inspectorId, setInspectorId] = React.useState<string | null>(null)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
@@ -106,12 +106,8 @@ function BuilderInner() {
   edgesRef.current = edges
 
   React.useEffect(() => {
-    const mq = window.matchMedia('(max-width: 1080px)')
-    const apply = () => setCompact(mq.matches)
-    apply()
-    mq.addEventListener('change', apply)
-    return () => mq.removeEventListener('change', apply)
-  }, [])
+    if (isRunning) setLogCollapsed(false)
+  }, [isRunning])
 
   React.useEffect(() => {
     if (!moreOpen) return
@@ -659,24 +655,47 @@ function BuilderInner() {
           ) : filtered.length === 0 ? (
             <div className="px-2 py-6 text-sm text-ink-500">No nodes match.</div>
           ) : (
-            <div className="space-y-0.5">
-              {filtered.map((n) => (
-                <button
-                  key={n.node_type}
-                  type="button"
-                  title={n.node_type}
-                  onClick={() => addNode(n)}
-                  className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition hover:bg-ink-50"
-                >
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-900">
-                    {n.label || humanNodeLabel(n.node_type)}
-                  </span>
-                  {isIsolatedRuntime(n.runtime, n.node_type) && (
-                    <span className="shrink-0 rounded bg-ink-100 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-ink-500">
-                      Iso
-                    </span>
+            <div className="space-y-3">
+              {(categoryFilter === 'all'
+                ? Array.from(
+                    filtered.reduce((m, n) => {
+                      const cat = n.category || 'Other'
+                      const arr = m.get(cat) ?? []
+                      arr.push(n)
+                      m.set(cat, arr)
+                      return m
+                    }, new Map<string, typeof filtered>()),
+                  )
+                : ([[categoryFilter, filtered]] as Array<[string, typeof filtered]>)
+              ).map(([cat, items]) => (
+                <div key={cat}>
+                  {categoryFilter === 'all' && (
+                    <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-400">
+                      {cat}
+                    </div>
                   )}
-                </button>
+                  <div className="space-y-0.5">
+                    {items.map((n) => (
+                      <button
+                        key={n.node_type}
+                        type="button"
+                        title={n.node_type}
+                        onClick={() => addNode(n)}
+                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition hover:bg-ink-50"
+                      >
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-500/80" />
+                        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-900">
+                          {n.label || humanNodeLabel(n.node_type)}
+                        </span>
+                        {isIsolatedRuntime(n.runtime, n.node_type) && (
+                          <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-ink-500">
+                            Iso
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -707,29 +726,10 @@ function BuilderInner() {
             onChange={(e) => setGraphName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '-'))}
             onBlur={() => setGraphName((n) => slugifyName(n))}
             placeholder="graph-name"
-            className="w-36 rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm font-medium text-ink-900"
+            className="w-40 rounded-lg border border-ink-200/80 bg-ink-50/60 px-2.5 py-1.5 text-sm font-medium text-ink-900 outline-none focus:border-accent-400 focus:bg-white focus:ring-2 focus:ring-accent-200/70"
             title="Graph name — used as the artifact slug on Run"
             aria-label="Graph name"
           />
-          <div className="flex items-center gap-1">
-            <input
-              value={templateName}
-              onChange={(e) => setTemplateName(e.target.value)}
-              placeholder="template-name"
-              className="w-36 rounded-lg border border-ink-200 px-2 py-1 text-xs"
-              title="Name used when saving a template"
-              aria-label="Template name"
-            />
-            <button type="button" className="btn-secondary" onClick={() => void saveTemplate()}>
-              <BookmarkPlus className="h-3.5 w-3.5" /> Save template
-            </button>
-          </div>
-          <button type="button" className="btn-secondary" onClick={importIr}>
-            <Upload className="h-3.5 w-3.5" /> Import
-          </button>
-          <button type="button" className="btn-secondary" onClick={exportIr}>
-            <Download className="h-3.5 w-3.5" /> Export
-          </button>
           {runHadErrors && !isRunning && (
             <button
               type="button"
@@ -737,31 +737,49 @@ function BuilderInner() {
               onClick={focusLogErrors}
             >
               <AlertTriangle className="h-3 w-3" />
-              Run finished with errors
+              Errors
             </button>
           )}
-          {!compact && <div className="ml-auto flex flex-wrap items-center gap-1">{secondaryActions}</div>}
-          {compact && (
-            <div className="relative ml-auto" ref={moreRef}>
-              <button
-                type="button"
-                className="btn-quiet"
-                onClick={() => setMoreOpen((o) => !o)}
-                aria-expanded={moreOpen}
+          <div className="relative ml-auto" ref={moreRef}>
+            <button
+              type="button"
+              className="btn-quiet"
+              onClick={() => setMoreOpen((o) => !o)}
+              aria-expanded={moreOpen}
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </button>
+            {moreOpen && (
+              <div
+                className="absolute right-0 z-50 mt-1 w-64 rounded-2xl border border-ink-200 bg-white p-2 shadow-soft"
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
               >
-                <MoreHorizontal className="h-3.5 w-3.5" /> More
-              </button>
-              {moreOpen && (
-                <div
-                  className="absolute right-0 z-50 mt-1 w-56 rounded-xl border border-ink-200 bg-white p-2 shadow-lg"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onPointerDown={(e) => e.stopPropagation()}
-                >
-                  <div className="flex flex-col items-stretch gap-1">{secondaryActions}</div>
+                <div className="mb-2 space-y-1 border-b border-ink-100 px-1 pb-2">
+                  <input
+                    value={templateName}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                    placeholder="template-name"
+                    className="field-control mt-0 text-xs"
+                    title="Name used when saving a template"
+                    aria-label="Template name"
+                  />
+                  <button type="button" className="btn-secondary w-full justify-start" onClick={() => { void saveTemplate(); setMoreOpen(false) }}>
+                    <BookmarkPlus className="h-3.5 w-3.5" /> Save template
+                  </button>
                 </div>
-              )}
-            </div>
-          )}
+                <div className="flex flex-col items-stretch gap-0.5">
+                  <button type="button" className="btn-quiet w-full justify-start" onClick={() => { importIr(); setMoreOpen(false) }}>
+                    <Upload className="h-3.5 w-3.5" /> Import graph
+                  </button>
+                  <button type="button" className="btn-quiet w-full justify-start" onClick={() => { exportIr(); setMoreOpen(false) }}>
+                    <Download className="h-3.5 w-3.5" /> Export graph
+                  </button>
+                  {secondaryActions}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="relative flex min-h-0 flex-1 bg-canvas">
@@ -781,9 +799,9 @@ function BuilderInner() {
           </ReactFlow>
           {nodes.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
-              <div className="pointer-events-auto max-w-sm rounded-2xl border border-ink-200 bg-white/95 px-6 py-5 text-center shadow-sm">
-                <div className="font-display text-base font-bold text-ink-900">Empty canvas</div>
-                <p className="mt-1 text-sm text-ink-500">Add a node from the catalog, or open Templates.</p>
+              <div className="pointer-events-auto max-w-sm rounded-3xl border border-ink-200/80 bg-white/90 px-8 py-7 text-center shadow-soft backdrop-blur">
+                <div className="font-display text-lg font-bold tracking-tight text-ink-950">Start a pipeline</div>
+                <p className="mt-2 text-sm leading-relaxed text-ink-500">Pick a node from the left, or open a template and run it.</p>
                 <button
                   type="button"
                   className="btn-primary mt-3"
@@ -799,7 +817,7 @@ function BuilderInner() {
           )}
           </div>
           {inspectorId && nodes.find((n) => n.id === inspectorId) && (
-            <aside className="z-20 flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-ink-200 bg-white">
+            <aside className="z-20 flex w-[380px] shrink-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur">
               {(() => {
                 const node = nodes.find((n) => n.id === inspectorId)
                 if (!node) return null
@@ -815,10 +833,11 @@ function BuilderInner() {
                       </div>
                       <button
                         type="button"
-                        className="text-[11px] text-ink-400 hover:text-ink-800"
+                        className="btn-icon"
+                        aria-label="Close inspector"
                         onClick={() => setInspectorId(null)}
                       >
-                        Close
+                        <X className="h-4 w-4" />
                       </button>
                     </div>
                     <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2">

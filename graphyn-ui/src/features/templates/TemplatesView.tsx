@@ -195,7 +195,7 @@ export default function TemplatesView() {
             value={saveName}
             onChange={(e) => setSaveName(e.target.value)}
             placeholder="template-name"
-            className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+            className="field-control mt-0 w-56 text-sm"
           />
           <button type="button" className="btn-secondary" onClick={() => void saveFromCanvas()}>
             Save from Builder
@@ -245,7 +245,7 @@ export default function TemplatesView() {
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map((name) => (
-            <li key={name} className="flex flex-col rounded-xl border border-ink-200 bg-white p-3">
+            <li key={name} className="flex flex-col rounded-2xl border border-ink-200/70 bg-white p-4 shadow-sm transition hover:shadow-soft">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="truncate font-display text-sm font-bold text-ink-950">

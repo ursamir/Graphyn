@@ -55,6 +55,19 @@ const PANEL_LABELS: Record<string, string> = {
   provenance: 'Provenance',
 }
 
+
+function provenanceRows(data: unknown): Array<Record<string, unknown>> | null {
+  if (Array.isArray(data)) return data.filter((x) => x && typeof x === 'object') as Array<Record<string, unknown>>
+  if (data && typeof data === 'object') {
+    const rec = data as Record<string, unknown>
+    for (const key of ['records', 'provenance', 'nodes', 'items']) {
+      const v = rec[key]
+      if (Array.isArray(v)) return v.filter((x) => x && typeof x === 'object') as Array<Record<string, unknown>>
+    }
+  }
+  return null
+}
+
 export default function RunsView() {
   const focusRunId = useAppStore((s) => s.focusRunId)
   const lastRunId = useAppStore((s) => s.lastRunId)
@@ -515,7 +528,33 @@ export default function RunsView() {
                 <KeyValue data={artifacts} empty="No artifact records for this run." />
               </div>
             )}
-            {panel === 'provenance' && <KeyValue data={provenance} empty="No provenance." />}
+            {panel === 'provenance' && (() => {
+              const rows = provenanceRows(provenance)
+              if (!rows || rows.length === 0) {
+                return <KeyValue data={provenance} empty="No lineage recorded for this run." />
+              }
+              return (
+                <ol className="space-y-2">
+                  {rows.map((row, i) => {
+                    const label = humanNodeLabel(String(row.node_id ?? row.node_type ?? row.node ?? `step ${i + 1}`))
+                    const when = String(row.created_at ?? row.ts ?? '')
+                    const kind = String(row.artifact_type ?? row.type ?? '')
+                    return (
+                      <li key={String(row.artifact_id ?? i)} className="flex gap-3 rounded-2xl border border-ink-200/70 bg-white px-3 py-2.5 shadow-sm">
+                        <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-accent-500" />
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium text-ink-900">{label}</div>
+                          <div className="mt-0.5 text-[11px] text-ink-500">
+                            {kind ? `${kind} · ` : ''}
+                            {when || shortRunId(String(row.artifact_id ?? ''))}
+                          </div>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ol>
+              )
+            })()}
           </>
         )}
       </div>

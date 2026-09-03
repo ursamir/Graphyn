@@ -227,7 +227,7 @@ const STATUS_EDGE: Record<string, string> = {
 export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeData>) {
   const props = data.schemaProps ?? {}
   const entries = Object.entries(props)
-  const shown = entries.length <= 6 ? entries : entries.slice(0, 5)
+  const shown = entries.slice(0, 3)
   const hiddenCount = Math.max(0, entries.length - shown.length)
   const inputs = data.inputs?.length ? data.inputs : [{ name: 'input' }]
   const outputs = data.outputs?.length ? data.outputs : [{ name: 'output' }]
@@ -322,7 +322,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
             </div>
           </div>
 
-          <div className="max-h-40 space-y-1 overflow-x-auto overflow-y-auto border-t border-ink-100 px-2.5 py-1.5">
+          <div className="max-h-36 space-y-1.5 overflow-x-auto overflow-y-auto border-t border-ink-100/80 px-3 py-2">
             {entries.length === 0 ? (
               <div className="text-[11px] text-ink-400">No config</div>
             ) : (
@@ -344,7 +344,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
                   data.onOpenInspector?.()
                 }}
               >
-                +{hiddenCount} more — edit all
+                +{hiddenCount} more
               </button>
             )}
           </div>

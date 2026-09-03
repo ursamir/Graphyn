@@ -1,5 +1,5 @@
 import React from 'react'
-import { Download, RefreshCw, PackagePlus } from 'lucide-react'
+import { Download, RefreshCw, PackagePlus, MoreHorizontal } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
@@ -56,6 +56,7 @@ export default function PluginsView() {
   const [searchState, setSearchState] = React.useState<'idle' | 'ok' | 'empty' | 'error'>('idle')
   const [error, setError] = React.useState<string | null>(null)
   const [expanded, setExpanded] = React.useState<string | null>(null)
+  const [menuFor, setMenuFor] = React.useState<string | null>(null)
   const [depStatus, setDepStatus] = React.useState<DepStatus | null>(null)
   const pollRef = React.useRef<number | null>(null)
   const sourceRef = React.useRef<HTMLInputElement | null>(null)
@@ -184,7 +185,7 @@ export default function PluginsView() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-6">
+    <div className="h-full overflow-y-auto p-8 space-y-6">
       <PageHeader
         title="Plugins"
         description="Install node packs, manage dependencies, and enable isolated runtimes."
@@ -196,7 +197,7 @@ export default function PluginsView() {
       />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+      <section className="surface-card space-y-3 p-5">
         <h3 className="text-sm font-semibold">Install</h3>
         <input
           ref={sourceRef}
@@ -225,7 +226,7 @@ export default function PluginsView() {
         </details>
       </section>
 
-      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+      <section className="surface-card space-y-3 p-5">
         <h3 className="text-sm font-semibold">Search index</h3>
         <div className="flex gap-2">
           <input
@@ -258,7 +259,7 @@ export default function PluginsView() {
           ))}
       </section>
 
-      <section className="rounded-2xl border border-ink-200 bg-white p-4">
+      <section className="surface-card p-5">
         <h3 className="mb-2 text-sm font-semibold">Installed ({plugins?.length ?? '…'})</h3>
         {plugins === null ? (
           <LoadingBlock />
@@ -296,35 +297,52 @@ export default function PluginsView() {
                         )}
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-1">
-                      <button type="button" className="btn-secondary" onClick={() => void toggleDeps(p.name)}>
-                        Deps
+                    <div className="relative">
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        aria-label={`Actions for ${p.name}`}
+                        onClick={() => setMenuFor((m) => (m === p.name ? null : p.name))}
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
                       </button>
-                      {isolated && (
-                        <button type="button" className="btn-secondary" onClick={() => void installDeps(p.name, true)}>
-                          Install extras (TensorFlow, …)
-                        </button>
+                      {menuFor === p.name && (
+                        <div className="absolute right-0 z-20 mt-1 w-52 rounded-2xl border border-ink-200 bg-white p-1.5 shadow-soft">
+                          <button type="button" className="btn-quiet w-full justify-start" onClick={() => { void toggleDeps(p.name); setMenuFor(null) }}>
+                            Dependencies
+                          </button>
+                          {isolated && (
+                            <button type="button" className="btn-quiet w-full justify-start" onClick={() => { void installDeps(p.name, true); setMenuFor(null) }}>
+                              Install extras
+                            </button>
+                          )}
+                          {p.enabled === false ? (
+                            <button type="button" className="btn-quiet w-full justify-start" onClick={() => { void setEnabled(p.name, true); setMenuFor(null) }}>
+                              Enable
+                            </button>
+                          ) : (
+                            <button type="button" className="btn-quiet w-full justify-start" onClick={() => { void setEnabled(p.name, false); setMenuFor(null) }}>
+                              Disable
+                            </button>
+                          )}
+                          <div className="mt-1 border-t border-ink-100 pt-1">
+                            <ConfirmButton
+                              label="Uninstall"
+                              confirmLabel="Confirm uninstall"
+                              danger
+                              onConfirm={() =>
+                                void apiJson(`/plugins/${encodeURIComponent(p.name)}`, { method: 'DELETE' })
+                                  .then(afterMutation)
+                                  .then(() => {
+                                    setMenuFor(null)
+                                    pushToast(`Uninstalled ${p.name}`, 'success')
+                                  })
+                                  .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
+                              }
+                            />
+                          </div>
+                        </div>
                       )}
-                      {p.enabled === false ? (
-                        <button type="button" className="btn-secondary" onClick={() => void setEnabled(p.name, true)}>
-                          Enable
-                        </button>
-                      ) : (
-                        <button type="button" className="btn-quiet" onClick={() => void setEnabled(p.name, false)}>
-                          Disable
-                        </button>
-                      )}
-                      <ConfirmButton
-                        label="Uninstall"
-                        confirmLabel="Confirm uninstall"
-                        danger
-                        onConfirm={() =>
-                          void apiJson(`/plugins/${encodeURIComponent(p.name)}`, { method: 'DELETE' })
-                            .then(afterMutation)
-                            .then(() => pushToast(`Uninstalled ${p.name}`, 'success'))
-                            .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
-                        }
-                      />
                     </div>
                   </div>
                   {isolated && (

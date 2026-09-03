@@ -277,6 +277,7 @@ export default function App() {
                     : 'hidden rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-800 sm:inline'
               }
             >
+              <span className={bootError || bootStatus === 401 ? '' : 'inline-block h-1.5 w-1.5 rounded-full bg-emerald-500'} />
               {bootStatus === 401 ? 'Sign in required' : bootError ? "Can't reach the API" : 'Connected'}
             </span>
             {isRunning && (
