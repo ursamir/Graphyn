@@ -268,18 +268,13 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <span
-              className={
-                bootStatus === 401
-                  ? 'hidden rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-medium text-amber-900 sm:inline'
-                  : bootError
-                    ? 'hidden rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-medium text-rose-800 sm:inline'
-                    : 'hidden rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-800 sm:inline'
-              }
-            >
-              <span className={bootError || bootStatus === 401 ? '' : 'inline-block h-1.5 w-1.5 rounded-full bg-emerald-500'} />
-              {bootStatus === 401 ? 'Sign in required' : bootError ? "Can't reach the API" : 'Connected'}
-            </span>
+            {bootStatus === 401 ? (
+              <span className="hidden text-[12px] font-medium text-amber-800 sm:inline">Sign in required</span>
+            ) : bootError ? (
+              <span className="hidden text-[12px] font-medium text-rose-700 sm:inline">Can't reach the API</span>
+            ) : (
+              <span className="hidden text-[12px] text-ink-400 sm:inline">Connected</span>
+            )}
             {isRunning && (
               <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900">
                 {chipLabel}

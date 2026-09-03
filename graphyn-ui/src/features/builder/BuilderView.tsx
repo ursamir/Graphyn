@@ -10,6 +10,8 @@ import ReactFlow, {
   type Connection,
   type Edge,
   type Node,
+  MarkerType,
+  ConnectionLineType,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import {
@@ -41,6 +43,14 @@ import {
 import GraphynNode, { ConfigFieldEditor, type GraphynNodeData } from './GraphynNode'
 
 const nodeTypes = { graphyn: GraphynNode }
+
+const EDGE_STYLE = { stroke: '#3a4b5b', strokeWidth: 2.4 }
+const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 18, height: 18, color: '#3a4b5b' }
+const defaultEdgeOptions = {
+  type: 'smoothstep' as const,
+  style: EDGE_STYLE,
+  markerEnd: EDGE_MARKER,
+}
 
 function slugifyName(raw: string): string {
   const s = raw.trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
@@ -202,7 +212,7 @@ function BuilderInner() {
           /* soft check */
         }
       }
-      setEdges((eds) => addEdge({ ...connection, id: `${connection.source}-${outPort}->${connection.target}-${inPort}` }, eds))
+      setEdges((eds) => addEdge({ ...connection, id: `${connection.source}-${outPort}->${connection.target}-${inPort}`, ...defaultEdgeOptions }, eds))
     },
     [setEdges, pushToast],
   )
@@ -267,6 +277,7 @@ function BuilderInner() {
       target: e.dst_id,
       sourceHandle: e.src_port,
       targetHandle: e.dst_port,
+      ...defaultEdgeOptions,
     }))
     setNodes(nextNodes)
     setEdges(nextEdges)
@@ -788,12 +799,15 @@ function BuilderInner() {
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
+            defaultEdgeOptions={defaultEdgeOptions}
+            connectionLineStyle={{ stroke: '#159288', strokeWidth: 2.4 }}
+            connectionLineType={ConnectionLineType.SmoothStep}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={(c) => void onConnect(c)}
             fitView
           >
-            <Background gap={18} color="#c9d3dc" />
+            <Background gap={22} size={1} color="#c5d0da" />
             <Controls />
             <MiniMap pannable zoomable />
           </ReactFlow>

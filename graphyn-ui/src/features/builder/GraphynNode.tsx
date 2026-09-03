@@ -129,15 +129,18 @@ function fieldEditor(
   const widget = String(unwrapSchema(def).widget ?? '')
   if (widget === 'textarea' || widget === 'json') {
     return (
-      <textarea
-        className="field-control font-mono text-[10px]"
-        rows={3}
-        defaultValue={formatValue(def, value)}
-        title={schemaFieldHint(def)}
-        onBlur={(e) => onChange(parseValue(def, e.target.value))}
-        onMouseDown={(e) => e.stopPropagation()}
-        spellCheck={false}
-      />
+      <div className="code-field">
+        <span className="code-field-tag">JSON</span>
+        <textarea
+          className="field-control mt-0 rounded-t-none font-mono text-[10px] leading-4"
+          rows={3}
+          defaultValue={formatValue(def, value)}
+          title={schemaFieldHint(def)}
+          onBlur={(e) => onChange(parseValue(def, e.target.value))}
+          onMouseDown={(e) => e.stopPropagation()}
+          spellCheck={false}
+        />
+      </div>
     )
   }
   if (widget === 'password' || widget === 'secret') {
@@ -162,8 +165,10 @@ function fieldEditor(
 
   if (complex) {
     return (
-      <textarea
-        className="field-control font-mono text-[10px]"
+      <div className="code-field">
+        <span className="code-field-tag">JSON</span>
+        <textarea
+        className="field-control mt-0 rounded-t-none font-mono text-[10px] leading-4"
         rows={3}
         defaultValue={formatValue(def, value)}
         onBlur={(e) => {
@@ -177,6 +182,7 @@ function fieldEditor(
         onMouseDown={(e) => e.stopPropagation()}
         spellCheck={false}
       />
+      </div>
     )
   }
 
@@ -238,8 +244,8 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
     <div
       title={data.nodeType}
       className={clsx(
-        'min-w-[300px] max-w-[380px] overflow-visible rounded-2xl border bg-white shadow-soft',
-        selected ? 'border-accent-500 shadow-soft ring-2 ring-accent-200' : 'border-ink-200/80',
+        'graphyn-node min-w-[280px] max-w-[340px] overflow-visible rounded-[18px] border bg-white',
+        selected ? 'is-selected border-accent-500' : 'border-ink-200/90',
         status === 'running' && 'border-accent-400',
         status === 'success' && 'border-emerald-500',
         status === 'error' && 'border-rose-500',
@@ -252,7 +258,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
           type="target"
           position={Position.Top}
           style={{ left: `${((i + 1) / (inputs.length + 1)) * 100}%` }}
-          className="!h-3 !w-3 !border-2 !border-white !bg-ink-700"
+          className="graphyn-handle graphyn-handle-in"
           title={`${p.name}${p.data_type ? ` (${p.data_type})` : ''}`}
         />
       ))}
@@ -260,7 +266,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
       <div className="flex">
         <div className={clsx('w-1 shrink-0 self-stretch', STATUS_EDGE[status] ?? STATUS_EDGE.idle)} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2 bg-gradient-to-r from-ink-50/80 to-white px-3 py-2">
+          <div className="flex items-start justify-between gap-2 border-b border-ink-100/80 px-3 py-2.5">
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
                 <div className="truncate font-display text-[13px] font-bold leading-tight text-ink-950">
@@ -358,7 +364,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
           type="source"
           position={Position.Bottom}
           style={{ left: `${((i + 1) / (outputs.length + 1)) * 100}%` }}
-          className="!h-3 !w-3 !border-2 !border-white !bg-accent-600"
+          className="graphyn-handle graphyn-handle-out"
           title={`${p.name}${p.data_type ? ` (${p.data_type})` : ''}`}
         />
       ))}
