@@ -110,14 +110,19 @@ export function buildGraphFromCanvas(
     })),
     edges: edges.map((e) => ({
       src_id: e.source,
-      src_port: e.sourceHandle || 'output',
+      src_port: canonicalPort(e.sourceHandle, 'output'),
       dst_id: e.target,
-      dst_port: e.targetHandle || 'input',
+      dst_port: canonicalPort(e.targetHandle, 'input'),
       condition: null,
     })),
     parameters: {},
     ui: { positions },
   }
+}
+
+export function canonicalPort(handle: string | null | undefined, fallback: string): string {
+  const raw = (handle || fallback).trim() || fallback
+  return raw.split('::')[0] || fallback
 }
 
 export function catalogPorts(entry?: NodeCatalogEntry): { inputs: PortDef[]; outputs: PortDef[] } {

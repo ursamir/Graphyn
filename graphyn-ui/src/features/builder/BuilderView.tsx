@@ -39,10 +39,13 @@ import {
   catalogPorts,
   type GraphIR,
   type NodeCatalogEntry,
+  canonicalPort,
 } from '../../types/graph'
-import GraphynNode, { ConfigFieldEditor, type GraphynNodeData } from './GraphynNode'
+import GraphynNode, { ConfigFieldEditor, categoryLook, type GraphynNodeData } from './GraphynNode'
+import DeletableEdge from './DeletableEdge'
 
 const nodeTypes = { graphyn: GraphynNode }
+const edgeTypes = { default: DeletableEdge }
 
 const EDGE_STYLE = { stroke: '#555555', strokeWidth: 2.75 }
 const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 14, height: 14, color: '#555555' }
@@ -236,8 +239,8 @@ function BuilderInner() {
       if (!connection.source || !connection.target) return
       const sourceNode = nodesRef.current.find((n) => n.id === connection.source)
       const targetNode = nodesRef.current.find((n) => n.id === connection.target)
-      const outPort = connection.sourceHandle || 'output'
-      const inPort = connection.targetHandle || 'input'
+      const outPort = canonicalPort(connection.sourceHandle, 'output')
+      const inPort = canonicalPort(connection.targetHandle, 'input')
       const sourceType = sourceNode?.data.outputs?.find((p) => p.name === outPort)?.data_type
       if (sourceType) {
         try {
@@ -651,7 +654,7 @@ function BuilderInner() {
 
   return (
     <div className="flex h-full min-h-0">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-ink-200/70 bg-white/90 backdrop-blur">
+      <aside className="flex w-[17.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-white">
         <div className="sticky top-0 z-10 border-b border-ink-100 bg-white p-2">
           <input
             id="builder-catalog-search"
@@ -737,17 +740,27 @@ function BuilderInner() {
                       <button
                         key={n.node_type}
                         type="button"
-                        title={n.node_type}
+                        title={n.description || n.node_type}
                         onClick={() => addNode(n)}
-                        className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition hover:bg-ink-50"
+                        className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-ink-50"
                       >
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent-500/80" />
-                        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-900">
-                          {n.label || humanNodeLabel(n.node_type)}
+                        {(() => {
+                          const look = categoryLook(n.category)
+                          const Icon = look.Icon
+                          return (
+                            <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white ${look.bg}`}>
+                              <Icon className="h-3.5 w-3.5" />
+                            </span>
+                          )
+                        })()}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium text-ink-900">
+                            {n.label || humanNodeLabel(n.node_type)}
+                          </span>
                         </span>
                         {isIsolatedRuntime(n.runtime, n.node_type) && (
-                          <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-ink-500">
-                            Iso
+                          <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[9px] font-medium text-ink-500">
+                            iso
                           </span>
                         )}
                       </button>
@@ -846,6 +859,7 @@ function BuilderInner() {
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             defaultEdgeOptions={defaultEdgeOptions}
             connectionLineStyle={{ stroke: '#ff6d5a', strokeWidth: 2.75 }}
             connectionLineType={ConnectionLineType.Bezier}
@@ -853,6 +867,9 @@ function BuilderInner() {
             onEdgesChange={onEdgesChange}
             onConnect={(c) => void onConnect(c)}
             onNodeClick={(_, n) => setInspectorId(n.id)}
+            deleteKeyCode={['Backspace', 'Delete']}
+            edgesFocusable
+            elementsSelectable
             snapToGrid
             snapGrid={[20, 20]}
             panOnScroll

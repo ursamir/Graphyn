@@ -223,7 +223,7 @@ function fieldEditor(
   )
 }
 
-function categoryLook(cat?: string) {
+export function categoryLook(cat?: string) {
   const c = (cat || '').toLowerCase()
   if (c.includes('audio') || c.includes('input') || c.includes('speech')) {
     return { bg: 'bg-[#ff6d5a]', Icon: AudioLines }
@@ -268,17 +268,17 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
         status === 'error' && 'border-rose-500',
       )}
     >
-      {inputs.map((p, i) => (
-        <Handle
-          key={`in-${p.name}`}
-          id={p.name}
-          type="target"
-          position={Position.Left}
-          style={{ top: `${((i + 1) / (inputs.length + 1)) * 100}%` }}
-          className="graphyn-handle graphyn-handle-in"
-          title={`${p.name}${p.data_type ? ` (${p.data_type})` : ''}`}
-        />
-      ))}
+      {inputs.map((p, i) => {
+        const top = `${((i + 1) / (inputs.length + 1)) * 100}%`
+        const left = `${((i + 1) / (inputs.length + 1)) * 100}%`
+        const title = `${p.name}${p.data_type ? ` (${p.data_type})` : ''}`
+        return (
+          <span key={`in-${p.name}`}>
+            <Handle id={p.name} type="target" position={Position.Left} style={{ top }} className="graphyn-handle graphyn-handle-in" title={title} />
+            <Handle id={`${p.name}::top`} type="target" position={Position.Top} style={{ left }} className="graphyn-handle graphyn-handle-in" title={`${title} (top)`} />
+          </span>
+        )
+      })}
 
       <div className="flex items-center gap-2.5 px-2.5 py-2.5">
         <div className={clsx('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white shadow-sm', look.bg)}>
@@ -329,17 +329,17 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
         </div>
       </div>
 
-      {outputs.map((p, i) => (
-        <Handle
-          key={`out-${p.name}`}
-          id={p.name}
-          type="source"
-          position={Position.Right}
-          style={{ top: `${((i + 1) / (outputs.length + 1)) * 100}%` }}
-          className="graphyn-handle graphyn-handle-out"
-          title={`${p.name}${p.data_type ? ` (${p.data_type})` : ''}`}
-        />
-      ))}
+      {outputs.map((p, i) => {
+        const top = `${((i + 1) / (outputs.length + 1)) * 100}%`
+        const left = `${((i + 1) / (outputs.length + 1)) * 100}%`
+        const title = `${p.name}${p.data_type ? ` (${p.data_type})` : ''}`
+        return (
+          <span key={`out-${p.name}`}>
+            <Handle id={p.name} type="source" position={Position.Right} style={{ top }} className="graphyn-handle graphyn-handle-out" title={title} />
+            <Handle id={`${p.name}::bottom`} type="source" position={Position.Bottom} style={{ left }} className="graphyn-handle graphyn-handle-out" title={`${title} (bottom)`} />
+          </span>
+        )
+      })}
     </div>
   )
 }

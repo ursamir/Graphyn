@@ -329,7 +329,7 @@ export default function App() {
           {navOpen && (
             <aside
               className={clsx(
-                'z-30 flex w-56 shrink-0 flex-col border-r border-ink-200/70 bg-white/80 backdrop-blur-md',
+                'z-30 flex w-[13.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-[#f7f7f8]',
                 narrow && 'absolute inset-y-0 left-0 shadow-xl md:static md:shadow-none',
               )}
             >
@@ -348,14 +348,14 @@ export default function App() {
                             type="button"
                             onClick={() => go(id)}
                             className={clsx(
-                              'relative flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm transition',
+                              'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
                               active
-                                ? 'bg-accent-50 font-semibold text-accent-900 shadow-sm'
-                                : 'text-ink-600 hover:bg-ink-50 hover:text-ink-950',
+                                ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
+                                : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
                             )}
                             aria-current={active ? 'page' : undefined}
                           >
-                            <Icon className={clsx('h-3.5 w-3.5', active ? 'text-accent-700' : 'text-ink-400')} />
+                            <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
                             {label}
                           </button>
                         )
