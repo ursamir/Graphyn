@@ -263,7 +263,7 @@ export default function App() {
               <Boxes className="h-3.5 w-3.5" />
             </div>
             <div className="min-w-0 leading-tight">
-              <div className="font-display text-[17px] font-extrabold tracking-tight text-ink-950">Graphyn</div>
+              <div className="text-[15px] font-semibold text-ink-950">Graphyn</div>
               <div className="truncate text-[11px] text-ink-500">{VIEW_LABEL[view]}</div>
             </div>
           </div>
@@ -336,7 +336,7 @@ export default function App() {
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
                 {NAV_GROUPS.map((group) => (
                   <div key={group.title} className="mb-4">
-                    <div className="px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-400">
+                    <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
                       {group.title}
                     </div>
                     <div className="space-y-0.5">
@@ -395,7 +395,7 @@ export default function App() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-4 flex items-center justify-between">
-                <h2 id="settings-title" className="font-display text-lg font-bold">
+                <h2 id="settings-title" className="text-lg font-semibold">
                   Settings
                 </h2>
                 <button type="button" className="btn-secondary" onClick={() => setSettingsOpen(false)} aria-label="Close">

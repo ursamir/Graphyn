@@ -728,7 +728,7 @@ function BuilderInner() {
               ).map(([cat, items]) => (
                 <div key={cat}>
                   {categoryFilter === 'all' && (
-                    <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-400">
+                    <div className="px-2 pb-1 text-[11px] font-medium text-ink-400">
                       {cat}
                     </div>
                   )}
@@ -865,7 +865,7 @@ function BuilderInner() {
           {nodes.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
               <div className="pointer-events-auto max-w-sm rounded-3xl border border-ink-200/80 bg-white/90 px-8 py-7 text-center shadow-soft backdrop-blur">
-                <div className="font-display text-lg font-bold tracking-tight text-ink-950">Start a pipeline</div>
+                <div className="text-lg font-semibold text-ink-950">Start a pipeline</div>
                 <p className="mt-2 text-sm leading-relaxed text-ink-500">Pick a node from the left, or open a template and run it.</p>
                 <button
                   type="button"
@@ -891,7 +891,7 @@ function BuilderInner() {
                   <>
                     <div className="flex items-start justify-between gap-2 border-b border-ink-100 px-3 py-2">
                       <div className="min-w-0">
-                        <div className="truncate font-display text-sm font-bold text-ink-950">
+                        <div className="truncate text-sm font-semibold text-ink-950">
                           {node.data.label || node.data.nodeType}
                         </div>
                         <div className="truncate text-[11px] text-ink-400">{node.data.nodeType}</div>

@@ -357,7 +357,7 @@ export default function ProjectsView() {
           <>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-display text-lg font-bold">{selected}</h3>
+                <h3 className="text-lg font-semibold">{selected}</h3>
                 <div className="mt-2 flex flex-wrap gap-1">
                   {STATUSES.map((s) => (
                     <button key={s} type="button" className="btn-secondary" onClick={() => void setStatus(s)}>

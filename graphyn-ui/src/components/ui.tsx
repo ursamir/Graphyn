@@ -14,7 +14,7 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink-200 bg-white/60 px-6 py-16 text-center">
-      <div className="font-display text-lg font-bold text-ink-800">{title}</div>
+      <div className="text-lg font-semibold text-ink-800">{title}</div>
       {description && <p className="mt-2 max-w-md text-sm text-ink-500">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
@@ -154,7 +154,7 @@ export class ErrorBoundary extends React.Component<
     if (this.state.error) {
       return (
         <div className="m-6 rounded-2xl border border-rose-200 bg-rose-50 p-6">
-          <h2 className="font-display text-lg font-bold text-rose-900">Something went wrong</h2>
+          <h2 className="text-lg font-semibold text-rose-900">Something went wrong</h2>
           <p className="mt-2 text-sm text-rose-800">{this.state.error.message}</p>
           <button type="button" className="btn-secondary mt-4" onClick={() => this.setState({ error: null })}>
             Try again
@@ -179,7 +179,7 @@ export function PageHeader({
   return (
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h2 className="font-display text-xl font-bold tracking-tight text-ink-950">{title}</h2>
+        <h2 className="text-xl font-semibold text-ink-950">{title}</h2>
         {description && <p className="mt-0.5 max-w-2xl text-sm text-ink-500">{description}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

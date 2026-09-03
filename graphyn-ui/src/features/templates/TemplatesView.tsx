@@ -248,7 +248,7 @@ export default function TemplatesView() {
             <li key={name} className="flex flex-col rounded-2xl border border-ink-200/70 bg-white p-4 shadow-sm transition hover:shadow-soft">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="truncate font-display text-sm font-bold text-ink-950">
+                  <div className="truncate text-sm font-semibold text-ink-950">
                     {humanizeTemplateName(name)}
                   </div>
                   <div className="mt-0.5 text-[11px] text-ink-500">

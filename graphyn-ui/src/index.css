@@ -17,11 +17,11 @@ body,
 
 body {
   margin: 0;
-  font-family: Inter, 'IBM Plex Sans', system-ui, sans-serif;
+  font-family: Inter, system-ui, sans-serif;
   background: #eef2f6;
   color: #1a2129;
   -webkit-font-smoothing: antialiased;
-  letter-spacing: -0.011em;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
 * {
