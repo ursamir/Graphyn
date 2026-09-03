@@ -44,12 +44,56 @@ import GraphynNode, { ConfigFieldEditor, type GraphynNodeData } from './GraphynN
 
 const nodeTypes = { graphyn: GraphynNode }
 
-const EDGE_STYLE = { stroke: '#3a4b5b', strokeWidth: 2.4 }
-const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 18, height: 18, color: '#3a4b5b' }
+const EDGE_STYLE = { stroke: '#555555', strokeWidth: 2.75 }
+const EDGE_MARKER = { type: MarkerType.ArrowClosed, width: 14, height: 14, color: '#555555' }
 const defaultEdgeOptions = {
-  type: 'smoothstep' as const,
+  type: 'default' as const,
   style: EDGE_STYLE,
   markerEnd: EDGE_MARKER,
+}
+
+function layoutLeftToRight<T extends { id: string; position: { x: number; y: number } }>(
+  nodes: T[],
+  edges: Array<{ source: string; target: string }>,
+): T[] {
+  if (nodes.length === 0) return nodes
+  const xs = nodes.map((n) => n.position.x)
+  const ys = nodes.map((n) => n.position.y)
+  const wide = Math.max(...xs) - Math.min(...xs)
+  const tall = Math.max(...ys) - Math.min(...ys)
+  if (wide >= tall && wide > 80) return nodes
+  const ids = nodes.map((n) => n.id)
+  const outgoing = new Map(ids.map((id) => [id, [] as string[]]))
+  const incoming = new Map(ids.map((id) => [id, 0]))
+  for (const e of edges) {
+    outgoing.get(e.source)?.push(e.target)
+    incoming.set(e.target, (incoming.get(e.target) ?? 0) + 1)
+  }
+  const rank = new Map<string, number>()
+  const visit = (id: string, r: number) => {
+    if ((rank.get(id) ?? -1) >= r) return
+    rank.set(id, r)
+    for (const t of outgoing.get(id) ?? []) visit(t, r + 1)
+  }
+  for (const id of ids) {
+    if ((incoming.get(id) ?? 0) === 0) visit(id, 0)
+  }
+  for (const id of ids) if (!rank.has(id)) rank.set(id, 0)
+  const byRank = new Map<number, string[]>()
+  for (const id of ids) {
+    const r = rank.get(id) ?? 0
+    const arr = byRank.get(r) ?? []
+    arr.push(id)
+    byRank.set(r, arr)
+  }
+  const COL = 300
+  const ROW = 110
+  return nodes.map((n) => {
+    const r = rank.get(n.id) ?? 0
+    const col = byRank.get(r) ?? []
+    const i = col.indexOf(n.id)
+    return { ...n, position: { x: 48 + r * COL, y: 48 + i * ROW } }
+  })
 }
 
 function slugifyName(raw: string): string {
@@ -223,7 +267,10 @@ function BuilderInner() {
     const node: Node<GraphynNodeData> = attachHandlers({
       id,
       type: 'graphyn',
-      position: { x: 120 + Math.random() * 240, y: 80 + nodes.length * 28 },
+      position: {
+        x: nodes.reduce((m, n) => Math.max(m, n.position.x), -40) + 300,
+        y: nodes.find((n) => n.id === inspectorId)?.position.y ?? 80,
+      },
       data: {
         nodeType: entry.node_type,
         label: entry.label || humanNodeLabel(entry.node_type),
@@ -279,7 +326,7 @@ function BuilderInner() {
       targetHandle: e.dst_port,
       ...defaultEdgeOptions,
     }))
-    setNodes(nextNodes)
+    setNodes(layoutLeftToRight(nextNodes, nextEdges))
     setEdges(nextEdges)
     setRunHadErrors(false)
   }
@@ -800,11 +847,15 @@ function BuilderInner() {
             edges={edges}
             nodeTypes={nodeTypes}
             defaultEdgeOptions={defaultEdgeOptions}
-            connectionLineStyle={{ stroke: '#159288', strokeWidth: 2.4 }}
-            connectionLineType={ConnectionLineType.SmoothStep}
+            connectionLineStyle={{ stroke: '#ff6d5a', strokeWidth: 2.75 }}
+            connectionLineType={ConnectionLineType.Bezier}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={(c) => void onConnect(c)}
+            onNodeClick={(_, n) => setInspectorId(n.id)}
+            snapToGrid
+            snapGrid={[20, 20]}
+            panOnScroll
             fitView
           >
             <Background gap={22} size={1} color="#c5d0da" />

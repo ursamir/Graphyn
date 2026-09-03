@@ -1,8 +1,8 @@
 import { Handle, Position, type NodeProps } from 'reactflow'
 import clsx from 'clsx'
 import type { PortDef } from '../../types/graph'
-import { Pencil, ShieldCheck, X } from 'lucide-react'
-import { schemaFieldHint, schemaFieldLabel } from '../../lib/format'
+import { AudioLines, Box, Brain, GitBranch, Pencil, Sparkles, X } from 'lucide-react'
+import { schemaFieldHint } from '../../lib/format'
 
 export type GraphynNodeData = {
   nodeType: string
@@ -223,9 +223,26 @@ function fieldEditor(
   )
 }
 
-const STATUS_EDGE: Record<string, string> = {
+function categoryLook(cat?: string) {
+  const c = (cat || '').toLowerCase()
+  if (c.includes('audio') || c.includes('input') || c.includes('speech')) {
+    return { bg: 'bg-[#ff6d5a]', Icon: AudioLines }
+  }
+  if (c.includes('ml') || c.includes('model') || c.includes('train') || c.includes('plugin')) {
+    return { bg: 'bg-[#7c5cff]', Icon: Brain }
+  }
+  if (c.includes('logic') || c.includes('flow')) {
+    return { bg: 'bg-[#20b8a0]', Icon: GitBranch }
+  }
+  if (c.includes('augment') || c.includes('detect')) {
+    return { bg: 'bg-[#f5a524]', Icon: Sparkles }
+  }
+  return { bg: 'bg-[#2c3641]', Icon: Box }
+}
+
+const STATUS_DOT: Record<string, string> = {
   idle: 'bg-ink-300',
-  running: 'bg-accent-500',
+  running: 'bg-accent-500 animate-pulse',
   success: 'bg-emerald-500',
   error: 'bg-rose-500',
 }
@@ -233,20 +250,20 @@ const STATUS_EDGE: Record<string, string> = {
 export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeData>) {
   const props = data.schemaProps ?? {}
   const entries = Object.entries(props)
-  const shown = entries.slice(0, 3)
-  const hiddenCount = Math.max(0, entries.length - shown.length)
   const inputs = data.inputs?.length ? data.inputs : [{ name: 'input' }]
   const outputs = data.outputs?.length ? data.outputs : [{ name: 'output' }]
   const status = data.status ?? 'idle'
   const isolated = data.runtime === 'isolated' || data.nodeType.startsWith('Isolated_')
+  const look = categoryLook(data.category)
+  const Icon = look.Icon
 
   return (
     <div
       title={data.nodeType}
       className={clsx(
-        'graphyn-node min-w-[280px] max-w-[340px] overflow-visible rounded-[18px] border bg-white',
-        selected ? 'is-selected border-accent-500' : 'border-ink-200/90',
-        status === 'running' && 'border-accent-400',
+        'graphyn-node relative w-[240px] overflow-visible rounded-[10px] border bg-white',
+        selected ? 'is-selected border-ink-900' : 'border-ink-200',
+        status === 'running' && 'border-accent-500',
         status === 'success' && 'border-emerald-500',
         status === 'error' && 'border-rose-500',
       )}
@@ -256,104 +273,59 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
           key={`in-${p.name}`}
           id={p.name}
           type="target"
-          position={Position.Top}
-          style={{ left: `${((i + 1) / (inputs.length + 1)) * 100}%` }}
+          position={Position.Left}
+          style={{ top: `${((i + 1) / (inputs.length + 1)) * 100}%` }}
           className="graphyn-handle graphyn-handle-in"
           title={`${p.name}${p.data_type ? ` (${p.data_type})` : ''}`}
         />
       ))}
 
-      <div className="flex">
-        <div className={clsx('w-1 shrink-0 self-stretch', STATUS_EDGE[status] ?? STATUS_EDGE.idle)} />
+      <div className="flex items-center gap-2.5 px-2.5 py-2.5">
+        <div className={clsx('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white shadow-sm', look.bg)}>
+          <Icon className="h-5 w-5" />
+        </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2 border-b border-ink-100/80 px-3 py-2.5">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <div className="truncate font-display text-[13px] font-bold leading-tight text-ink-950">
-                  {data.label || data.nodeType}
-                </div>
-                {isolated && (
-                  <span className="shrink-0 rounded bg-ink-100 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-ink-600">
-                    Iso
-                  </span>
-                )}
-              </div>
-              {data.category && (
-                <div className="truncate text-[10px] text-ink-400">{data.category}</div>
-              )}
+          <div className="flex items-center gap-1.5">
+            <div className="truncate text-[13px] font-semibold leading-tight text-ink-950">
+              {data.label || data.nodeType}
             </div>
-            <div className="flex shrink-0 gap-0.5">
-              {data.onOpenInspector && entries.length > 0 && (
-                <button
-                  type="button"
-                  className="btn-icon"
-                  title="Edit fields"
-                  aria-label="Edit fields"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    data.onOpenInspector?.()
-                  }}
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
-              )}
-              {data.onValidateConfig && (
-                <button
-                  type="button"
-                  className="btn-icon"
-                  title="Validate config"
-                  aria-label="Validate config"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    data.onValidateConfig?.()
-                  }}
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                </button>
-              )}
-              {data.onDelete && (
-                <button
-                  type="button"
-                  className="btn-icon hover:bg-rose-50 hover:text-rose-600"
-                  title="Remove node"
-                  aria-label="Remove node"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    data.onDelete?.()
-                  }}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
+            <span className={clsx('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[status] ?? STATUS_DOT.idle)} />
           </div>
-
-          <div className="max-h-36 space-y-1.5 overflow-x-auto overflow-y-auto border-t border-ink-100/80 px-3 py-2">
-            {entries.length === 0 ? (
-              <div className="text-[11px] text-ink-400">No config</div>
-            ) : (
-              shown.map(([key, def]) => (
-                <label key={key} className="block text-[11px] text-ink-600" title={schemaFieldHint(def)}>
-                  <span className="font-medium">{schemaFieldLabel(key, def)}</span>
-                  {fieldEditor(key, def, data.config?.[key] ?? def.default, (v) =>
-                    data.onChangeConfig?.(key, v),
-                  )}
-                </label>
-              ))
-            )}
-            {hiddenCount > 0 && (
-              <button
-                type="button"
-                className="text-[11px] font-medium text-accent-700 hover:text-accent-900"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  data.onOpenInspector?.()
-                }}
-              >
-                +{hiddenCount} more
-              </button>
-            )}
+          <div className="mt-0.5 truncate text-[11px] text-ink-400">
+            {data.category || 'node'}
+            {isolated ? ' · isolated' : ''}
+            {entries.length ? ` · ${entries.length} fields` : ''}
           </div>
+        </div>
+        <div className="flex shrink-0 flex-col gap-0.5 opacity-70 hover:opacity-100">
+          {data.onOpenInspector && (
+            <button
+              type="button"
+              className="btn-icon h-6 w-6"
+              title="Configure"
+              aria-label="Configure"
+              onClick={(e) => {
+                e.stopPropagation()
+                data.onOpenInspector?.()
+              }}
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
+          {data.onDelete && (
+            <button
+              type="button"
+              className="btn-icon h-6 w-6 hover:bg-rose-50 hover:text-rose-600"
+              title="Remove"
+              aria-label="Remove"
+              onClick={(e) => {
+                e.stopPropagation()
+                data.onDelete?.()
+              }}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -362,8 +334,8 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
           key={`out-${p.name}`}
           id={p.name}
           type="source"
-          position={Position.Bottom}
-          style={{ left: `${((i + 1) / (outputs.length + 1)) * 100}%` }}
+          position={Position.Right}
+          style={{ top: `${((i + 1) / (outputs.length + 1)) * 100}%` }}
           className="graphyn-handle graphyn-handle-out"
           title={`${p.name}${p.data_type ? ` (${p.data_type})` : ''}`}
         />
