@@ -26,6 +26,7 @@ from app.core.nodes.retry import RetryPolicy
 # the dependency. The private _type_to_schema alias is kept in compat.py for
 # backward compatibility with any existing call sites.
 from app.core.nodes.compat import type_to_schema as _type_to_schema
+from app.core.nodes.metadata import stable_node_type
 
 log = logging.getLogger(__name__)
 
@@ -238,8 +239,7 @@ class Node(Generic[InputT, OutputT]):
         if self.observer is not None:
             try:
                 self.observer.on_node_start(
-                    node_type=getattr(self.metadata, "node_type", type(self).__name__)
-                    if hasattr(self, "metadata") else type(self).__name__,
+                    node_type=stable_node_type(self),
                     run_id=self._run_id,
                 )
             except Exception:
@@ -250,8 +250,7 @@ class Node(Generic[InputT, OutputT]):
         if self.observer is not None:
             try:
                 self.observer.on_node_end(
-                    node_type=getattr(self.metadata, "node_type", type(self).__name__)
-                    if hasattr(self, "metadata") else type(self).__name__,
+                    node_type=stable_node_type(self),
                     run_id=self._run_id,
                     duration_s=getattr(self, "_last_duration", 0.0),
                     input_counts=getattr(self, "_last_input_counts", {}),
@@ -265,8 +264,7 @@ class Node(Generic[InputT, OutputT]):
         if self.observer is not None:
             try:
                 self.observer.on_node_error(
-                    node_type=getattr(self.metadata, "node_type", type(self).__name__)
-                    if hasattr(self, "metadata") else type(self).__name__,
+                    node_type=stable_node_type(self),
                     run_id=self._run_id,
                     exc=exc,
                 )

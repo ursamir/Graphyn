@@ -37,6 +37,7 @@ from app.core.node_executor import NodeExecutor
 from app.core.checkpoint import _write_checkpoint, _load_checkpoint_outputs
 from app.core.utils import collect_stream as _collect_stream
 from app.core.registry_runtime import resolve_capability as _resolve_capability_impl
+from app.core.nodes.metadata import stable_node_type
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +105,9 @@ async def run_pipeline_ir_async(
         run = run_manager
 
     run.save_graph_ir(dump_ir(graph))
+    graph_name = str(getattr(getattr(graph, "metadata", None), "name", "") or "")
+    if graph_name:
+        run._write_meta_field("graph_name", graph_name)
     register_active_run(run)
 
     pipeline_cfg = _ir_to_pipeline_config(graph)
@@ -282,11 +286,11 @@ async def run_pipeline_ir_async(
           for idx, node_id in enumerate(graph_obj.execution_order):
             if node_id in completed_nodes:
                 node = graph_obj.get_node(node_id)
-                logger.node_skip(node_id, type(node).__name__, reason="resumed_from_checkpoint")
+                logger.node_skip(node_id, stable_node_type(node), reason="resumed_from_checkpoint")
                 continue
 
             if node_id not in active_nodes:
-                node_type = type(graph_obj.get_node(node_id)).__name__
+                node_type = stable_node_type(graph_obj.get_node(node_id))
                 logger.node_skip(node_id, node_type, reason="excluded_from_partial_execution")
                 passthrough: dict[str, Any] = {}
                 for src_id, src_port, dst_port in incoming[node_id]:
@@ -320,7 +324,7 @@ async def run_pipeline_ir_async(
 
             node = graph_obj.get_node(node_id)
             exec_ = executors[node_id]
-            node_type = type(node).__name__
+            node_type = stable_node_type(node)
 
             logger.node_start(node_type, idx, total_nodes=len(active_nodes))
             node_start_time = time.time()
@@ -543,7 +547,7 @@ async def run_pipeline_ir_async(
                             continue
                         exec_node = graph_obj.get_node(exec_node_id)
                         exec_obj = executors[exec_node_id]
-                        exec_node_type = type(exec_node).__name__
+                        exec_node_type = stable_node_type(exec_node)
                         exec_idx = exec_order.index(exec_node_id)
 
                         exec_inputs: dict[str, Any] = {}
@@ -635,6 +639,7 @@ async def run_pipeline_ir_async(
                 "duration_s": round(time.time() - start_time, 4),
                 "event_driven": True,
                 "trigger_count": trigger_count,
+                **({"graph_name": graph_name} if graph_name else {}),
             })
             last_id = graph_obj.execution_order[-1]
             return node_outputs.get(last_id, {})
@@ -655,6 +660,7 @@ async def run_pipeline_ir_async(
         "num_nodes": len(active_nodes),
         "node_stats": node_stats,
         "duration_s": round(total_duration, 4),
+        **({"graph_name": graph_name} if graph_name else {}),
         **(
             {"partial_execution": True, "included_nodes": sorted(active_nodes)}
             if is_partial and include_nodes is not None else {}

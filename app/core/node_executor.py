@@ -19,6 +19,7 @@ import time
 from typing import Any, AsyncGenerator
 
 from app.core.nodes.base import Node
+from app.core.nodes.metadata import stable_node_type
 from app.core.nodes.observers import NodeObserver
 from app.core.nodes.retry import RetryPolicy
 
@@ -127,7 +128,7 @@ class NodeExecutor:
         node = self._node
         policy: RetryPolicy | None = node.retry_policy
         max_attempts = policy.max_attempts if policy else 1
-        node_type = type(node).__name__
+        node_type = stable_node_type(node)
 
         last_exc: Exception | None = None
 
@@ -204,9 +205,8 @@ class NodeExecutor:
         raise last_exc
 
     def _node_type_name(self, node: Node) -> str | None:
-        return getattr(type(node), "node_type", None) or getattr(
-            getattr(node, "metadata", None), "node_type", None
-        )
+        name = stable_node_type(node)
+        return name or None
 
     def _isolated_spec(self):
         """Return IsolatedPluginSpec or None. Isolated types fail closed (H1)."""

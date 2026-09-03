@@ -90,7 +90,6 @@ class PipelineLogger:
         self.log("ERROR", msg)
 
     def pipeline_start(self, total_nodes: int, partial: bool = False, included_nodes: list[str] | None = None):
-        self.info(f"Pipeline starting — {total_nodes} node{'s' if total_nodes != 1 else ''}")
         event = {
             "type": "pipeline_start",
             "total_nodes": total_nodes,
@@ -100,10 +99,14 @@ class PipelineLogger:
             event["partial"] = True
         if included_nodes is not None:
             event["included_nodes"] = included_nodes
+        _log.info(
+            "Pipeline starting — %d node%s",
+            total_nodes,
+            "s" if total_nodes != 1 else "",
+        )
         self._emit_structured(event)
 
     def node_start(self, node_type, index, total_nodes=None):
-        self.info(f"[{index}] {node_type} — starting")
         event = {
             "type": "node_start",
             "node_type": node_type,
@@ -112,6 +115,7 @@ class PipelineLogger:
         }
         if total_nodes is not None:
             event["total_nodes"] = total_nodes
+        _log.info("[%s] %s — starting", index, node_type)
         self._emit_structured(event)
 
     def node_end(self, node_type, index, duration, output_count: int = 0):
@@ -123,7 +127,7 @@ class PipelineLogger:
                           scalar ports). Not a port count.
         """
         count_str = f" → {output_count} output items" if output_count else ""
-        self.info(f"[{index}] {node_type} — done in {duration:.3f}s{count_str}")
+        _log.info("[%s] %s — done in %.3fs%s", index, node_type, duration, count_str)
         # Use "duration_s" consistently across all events (B-10 fix)
         self._emit_structured({
             "type": "node_end",
@@ -135,7 +139,7 @@ class PipelineLogger:
         })
 
     def node_error(self, node_type, index, error):
-        self.error(f"[{index}] {node_type} — FAILED: {error}")
+        _log.error("[%s] %s — FAILED: %s", index, node_type, error)
         self._emit_structured({
             "type": "node_error",
             "node_type": node_type,

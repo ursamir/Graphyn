@@ -9,6 +9,7 @@ import {
 } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
+import { formatMergeToast } from '../../lib/format'
 
 interface OutputProject {
   project: string
@@ -227,7 +228,7 @@ export default function DataView() {
           target_version: mergeTargetVersion,
         }),
       })
-      pushToast(`Merge done: ${JSON.stringify(res)}`, 'success')
+      pushToast(formatMergeToast(res), 'success')
       await loadSources()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')

@@ -112,10 +112,22 @@ def test_events_forwarded_to_queue_when_provided():
     log = PipelineLogger(queue=q)
     log.pipeline_start(1)
     assert not q.empty()
-    # pipeline_start calls _emit (plain log) then _emit_structured (typed event)
-    # Drain the queue and look for the structured event
+    # Lifecycle events put only the structured event on the queue (server logs
+    # still get a plain-text _log.info line).
     events = []
     while not q.empty():
         events.append(q.get_nowait())
     typed = [e for e in events if isinstance(e, dict) and e.get("type") == "pipeline_start"]
     assert typed, f"No pipeline_start event found in queue. Got: {events}"
+    assert len(events) == 1
+
+
+def test_lifecycle_events_append_one_journal_entry(logger: PipelineLogger):
+    """pipeline_start / node_start / node_end / node_error do not duplicate info+JSON."""
+    logger.pipeline_start(1)
+    logger.node_start("edge_optimizer", 0, total_nodes=1)
+    logger.node_end("edge_optimizer", 0, 0.2, output_count=1)
+    logger.node_error("edge_optimizer", 0, RuntimeError("boom"))
+    assert len(logger.logs) == 4
+    types = [e.get("type") for e in logger.logs]
+    assert types == ["pipeline_start", "node_start", "node_end", "node_error"]

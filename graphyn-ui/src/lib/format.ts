@@ -162,3 +162,75 @@ export function prettyScalar(value: unknown): string {
   if (typeof value === 'string') return value || '—'
   return ''
 }
+
+export function formatLocaleDateTime(iso?: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  try {
+    return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+  } catch {
+    return iso
+  }
+}
+
+export function shortRunId(id: string): string {
+  if (!id) return '—'
+  if (id.length > 12) return id.slice(0, 8)
+  return id
+}
+
+export function skipConsecutiveByText<T>(items: T[], textOf: (item: T) => string): T[] {
+  const out: T[] = []
+  let last = ''
+  for (const item of items) {
+    const text = textOf(item)
+    if (text && text === last) continue
+    out.push(item)
+    last = text
+  }
+  return out
+}
+
+export function formatCleanupToast(res: unknown): string {
+  const o = res && typeof res === 'object' ? (res as Record<string, unknown>) : {}
+  const runs = Number(o.runs_deleted ?? 0) || 0
+  const cache = Number(o.cache_entries_deleted ?? o.cache_deleted ?? 0) || 0
+  const artifacts = Number(o.artifacts_deleted ?? 0) || 0
+  if (runs === 0 && cache === 0 && artifacts === 0) return 'Nothing to delete'
+  const parts: string[] = []
+  if (runs) parts.push(`${runs} ${runs === 1 ? 'run' : 'runs'}`)
+  if (cache) parts.push(`${cache} cache ${cache === 1 ? 'entry' : 'entries'}`)
+  if (artifacts) parts.push(`${artifacts} ${artifacts === 1 ? 'artifact' : 'artifacts'}`)
+  return parts.length ? `Deleted ${parts.join(', ')}` : 'Nothing to delete'
+}
+
+export function formatValidationErrors(errors: unknown): string {
+  if (errors == null) return 'Invalid config'
+  if (typeof errors === 'string') return errors
+  if (Array.isArray(errors)) {
+    const bits = errors
+      .map((e) => {
+        if (typeof e === 'string') return e
+        if (e && typeof e === 'object') {
+          const o = e as Record<string, unknown>
+          return String(o.msg ?? o.message ?? o.loc ?? '')
+        }
+        return ''
+      })
+      .filter(Boolean)
+    return bits.join('; ') || 'Invalid config'
+  }
+  if (typeof errors === 'object' && errors && 'message' in errors) {
+    return String((errors as { message?: unknown }).message)
+  }
+  return 'Invalid config'
+}
+
+export function formatMergeToast(res: unknown): string {
+  if (!res || typeof res !== 'object') return 'Merge complete'
+  const o = res as Record<string, unknown>
+  const n = o.merged ?? o.count ?? o.files ?? o.entries
+  if (typeof n === 'number' && n >= 0) return n === 0 ? 'Nothing to merge' : `Merged ${n} sources`
+  return 'Merge complete'
+}

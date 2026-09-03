@@ -24,6 +24,7 @@ from typing import Any
 
 # SA-O5 fix: import the shared stream collector instead of duplicating it here.
 from app.core.utils import collect_stream as _collect_stream_parallel
+from app.core.nodes.metadata import stable_node_type
 
 
 class ParallelExecutor:
@@ -194,7 +195,7 @@ class ParallelExecutor:
 
         node = graph_obj.get_node(node_id)
         exec_ = executors[node_id]
-        node_type = type(node).__name__
+        node_type = stable_node_type(node)
         # Use -1 sentinel for unknown nodes so they don't appear as "node 0" in logs
         idx = node_index_map.get(node_id, -1)
 

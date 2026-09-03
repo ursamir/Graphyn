@@ -449,7 +449,7 @@ class PluginLoader:
         validation does not ``extra_forbidden`` legitimate knobs.
         """
         from app.core.nodes.base import Node
-        from app.core.nodes.metadata import NodeMetadata
+        from app.core.nodes.metadata import NodeMetadata, human_node_label
 
         names = list(manifest.node_types or [])
         if not names:
@@ -506,7 +506,7 @@ class PluginLoader:
                         "_siso": False,
                         "metadata": NodeMetadata(
                             node_type=node_type,
-                            label=node_type.replace("_", " ").title(),
+                            label=human_node_label(node_type),
                             description=(
                                 f"Isolated plugin node from '{manifest.name}' "
                                 "(executed in a plugin venv worker)"

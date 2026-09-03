@@ -1,6 +1,7 @@
 import React from 'react'
 import { RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
+import { formatCleanupToast } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
 import {
   ConfirmButton,
@@ -66,12 +67,12 @@ export default function SystemView() {
     void refresh()
   }, [refresh])
 
-  const searchRegistry = async () => {
+  const searchRegistry = async (q = registryQ, status = registryStatus) => {
     try {
       const rows = await apiJson<Array<Record<string, unknown>>>('/system/projects-registry', {
         query: {
-          q: registryQ || undefined,
-          status: registryStatus || undefined,
+          q: q || undefined,
+          status: status || undefined,
         },
       })
       setRegistry(rows)
@@ -79,6 +80,12 @@ export default function SystemView() {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
   }
+
+  React.useEffect(() => {
+    void searchRegistry('', '')
+    // Load the full registry once on mount; later searches use the button.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
@@ -121,7 +128,12 @@ export default function SystemView() {
           className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
         />
         <div className="flex flex-wrap gap-4 text-sm">
-          {['pipeline_complete', 'pipeline_failed'].map((ev) => (
+          {(
+            [
+              ['pipeline_complete', 'Pipeline complete'],
+              ['pipeline_failed', 'Pipeline failed'],
+            ] as const
+          ).map(([ev, label]) => (
             <label key={ev} className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -132,7 +144,7 @@ export default function SystemView() {
                   )
                 }
               />
-              {ev}
+              {label}
             </label>
           ))}
         </div>
@@ -202,7 +214,7 @@ export default function SystemView() {
                 delete_artifacts: deleteArtifacts,
               }),
             })
-              .then((res) => pushToast(`Cleanup done: ${JSON.stringify(res)}`, 'success'))
+              .then((res) => pushToast(formatCleanupToast(res), 'success'))
               .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
           }}
         />
@@ -228,7 +240,7 @@ export default function SystemView() {
           </button>
         </div>
         {registry.length === 0 ? (
-          <EmptyState title="No registry results" description="Run a search against /system/projects-registry." />
+          <EmptyState title="No registry results" description="Search by name or status to list projects." />
         ) : (
           <div className="overflow-auto rounded-xl border border-ink-100">
             <table className="w-full text-left text-sm">

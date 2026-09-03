@@ -12,9 +12,41 @@ Reason To Change: New capability fields are added to the node contract, or
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
+
+
+def human_node_label(node_type: str) -> str:
+    """Catalog-style display name: ``edge_optimizer`` → ``Edge Optimizer``."""
+    raw = (node_type or "").strip()
+    if raw.startswith("Isolated_"):
+        raw = raw[len("Isolated_"):]
+    chunks: list[str] = []
+    for part in raw.replace("-", "_").split("_"):
+        if not part:
+            continue
+        spaced = re.sub(r"(?<=[a-z0-9])([A-Z])", r" \1", part)
+        chunks.extend(p for p in spaced.split() if p)
+    if not chunks:
+        return node_type
+    return " ".join(c[0].upper() + c[1:] for c in chunks)
+
+
+def stable_node_type(node: Any) -> str:
+    """Registry type for logs, status, and cache keys — never Isolated_ class names."""
+    declared = getattr(node, "node_type", None)
+    if declared:
+        return str(declared)
+    meta = getattr(node, "metadata", None)
+    from_meta = getattr(meta, "node_type", None)
+    if from_meta:
+        return str(from_meta)
+    name = type(node).__name__
+    if name.startswith("Isolated_"):
+        return name[len("Isolated_"):]
+    return name
 
 
 class NodeMetadata(BaseModel):

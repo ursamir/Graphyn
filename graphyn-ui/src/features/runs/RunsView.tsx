@@ -3,13 +3,28 @@ import { Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
-import { formatExecutionLine } from '../../lib/format'
+import {
+  formatExecutionLine,
+  formatLocaleDateTime,
+  humanNodeLabel,
+  shortRunId,
+  skipConsecutiveByText,
+} from '../../lib/format'
 
 interface RunSummary {
   run_id: string
   status?: string
   created_at?: string
+  graph_name?: string
   [key: string]: unknown
+}
+
+const PANEL_LABELS: Record<string, string> = {
+  logs: 'Logs',
+  debug: 'Debug',
+  checkpoints: 'Checkpoints',
+  artifacts: 'Artifacts',
+  provenance: 'Provenance',
 }
 
 export default function RunsView() {
@@ -124,6 +139,14 @@ export default function RunsView() {
       'unknown',
   )
   const logs = Array.isArray(detail?.logs) ? (detail!.logs as Array<Record<string, unknown>>) : []
+  const formattedLogs = skipConsecutiveByText(
+    logs.map((l, i) => {
+      const raw = typeof l.message === 'string' ? l.message : JSON.stringify(l)
+      const line = formatExecutionLine(raw)
+      return { i, l, line }
+    }),
+    (row) => row.line.text,
+  )
 
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
@@ -171,10 +194,13 @@ export default function RunsView() {
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="font-mono text-xs">{r.run_id}</div>
+                    <div className="font-mono text-xs" title={r.run_id}>{shortRunId(r.run_id)}</div>
                     <StatusBadge status={String(r.status ?? 'unknown')} />
                   </div>
-                  <div className="mt-0.5 text-[11px] text-ink-500">{r.created_at ?? '—'}</div>
+                  <div className="mt-0.5 text-[11px] text-ink-500">
+                    {r.graph_name ? <span className="mr-1 text-ink-700">{String(r.graph_name)} · </span> : null}
+                    {formatLocaleDateTime(r.created_at)}
+                  </div>
                 </button>
               </li>
             ))}
@@ -206,7 +232,7 @@ export default function RunsView() {
                 <span className="text-xs text-ink-500">{String(status.progress_pct)}%</span>
               )}
               {status?.current_node != null && (
-                <span className="font-mono text-xs text-ink-500">{String(status.current_node)}</span>
+                <span className="text-xs text-ink-500">{humanNodeLabel(String(status.current_node))}</span>
               )}
             </div>
             <div className="flex flex-wrap gap-2">
@@ -234,7 +260,7 @@ export default function RunsView() {
                   className={panel === p ? 'btn-primary' : 'btn-secondary'}
                   onClick={() => setPanel(p)}
                 >
-                  {p}
+                  {PANEL_LABELS[p]}
                 </button>
               ))}
             </div>
@@ -243,9 +269,7 @@ export default function RunsView() {
                 {logs.length === 0 ? (
                   <div className="text-ink-500">No logs.</div>
                 ) : (
-                  logs.map((l, i) => {
-                    const raw = typeof l.message === 'string' ? l.message : JSON.stringify(l)
-                    const line = formatExecutionLine(raw)
+                  formattedLogs.map(({ i, l, line }) => {
                     const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
                     return (
                       <div key={i} className={failed ? 'text-rose-300' : ''}>

@@ -26,7 +26,7 @@ import {
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState } from '../../components/ui'
-import { formatExecutionLine, humanNodeLabel } from '../../lib/format'
+import { formatExecutionLine, formatValidationErrors, humanNodeLabel, skipConsecutiveByText } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   catalogPorts,
@@ -117,7 +117,7 @@ function BuilderInner() {
                 },
               )
               if (res.valid) pushToast(`${node.data.nodeType} config valid`, 'success')
-              else pushToast(`Invalid config: ${JSON.stringify(res.errors)}`, 'error')
+              else pushToast(`Invalid config: ${formatValidationErrors(res.errors)}`, 'error')
             } catch (err) {
               pushToast(err instanceof Error ? err.message : String(err), 'error')
             }
@@ -672,7 +672,7 @@ function BuilderInner() {
             {logs.length === 0 ? (
               <div className="text-ink-500">No events yet.</div>
             ) : (
-              logs.map((l, i) => (
+              skipConsecutiveByText(logs, (l) => (showRawLogs ? l.raw || l.message : l.message)).map((l, i) => (
                 <div
                   key={`${l.ts}-${i}`}
                   className={

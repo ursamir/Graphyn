@@ -131,7 +131,7 @@ export function ToastHost({
           ) : (
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
           )}
-          <div className="flex-1 text-sm">{t.message}</div>
+          <div className="min-w-0 flex-1 break-words text-sm">{t.message}</div>
           <button type="button" className="text-ink-400 hover:text-ink-700" onClick={() => onDismiss(t.id)}>
             <X className="h-4 w-4" />
           </button>
