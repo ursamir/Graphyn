@@ -296,7 +296,7 @@ export default function ProjectsView() {
       <div className="overflow-y-auto border-r border-ink-200 p-4 space-y-3">
         <PageHeader
           title="Projects"
-          description="Dataset projects, versions, snapshots, and contracts."
+          description="A dataset project with named versions, plus spec, taxonomy, and contract used by pipelines."
           actions={
             <button type="button" className="btn-secondary" onClick={() => void load()} aria-label="Refresh">
               <RefreshCw className="h-3.5 w-3.5" />
@@ -352,7 +352,7 @@ export default function ProjectsView() {
 
       <div className="overflow-y-auto p-4 space-y-4">
         {!selected ? (
-          <EmptyState title="Select a project" description="Lifecycle, versions, snapshots, and contracts." />
+          <EmptyState title="Select a project" description="Open a dataset project to edit versions, spec, taxonomy, and contract." />
         ) : (
           <>
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -414,6 +414,7 @@ export default function ProjectsView() {
 
             {tab === 'spec' && (
               <section className="space-y-2">
+                <p className="text-sm text-ink-500">Markdown description of what this dataset is for. Saved as the project spec.</p>
                 <textarea
                   value={spec}
                   onChange={(e) => setSpec(e.target.value)}
@@ -428,6 +429,7 @@ export default function ProjectsView() {
 
             {tab === 'taxonomy' && (
               <section className="space-y-2">
+                <p className="text-sm text-ink-500">JSON list or map of labels/classes this dataset uses (the taxonomy).</p>
                 <textarea
                   value={taxonomy}
                   onChange={(e) => setTaxonomy(e.target.value)}
@@ -442,6 +444,7 @@ export default function ProjectsView() {
 
             {tab === 'contract' && (
               <section className="space-y-2">
+                <p className="text-sm text-ink-500">JSON schema/contract for records in this project (fields, types, required keys).</p>
                 <textarea
                   value={contract}
                   onChange={(e) => setContract(e.target.value)}

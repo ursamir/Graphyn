@@ -26,7 +26,7 @@ import {
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState } from '../../components/ui'
-import { formatExecutionLine, formatValidationErrors, humanNodeLabel, skipConsecutiveByText } from '../../lib/format'
+import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, skipConsecutiveByText } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   catalogPorts,
@@ -523,7 +523,14 @@ function BuilderInner() {
                       onClick={() => addNode(n)}
                       className="w-full rounded-lg border border-transparent px-2 py-1.5 text-left hover:border-ink-200 hover:bg-ink-50"
                     >
-                      <div className="text-sm font-medium text-ink-900">{n.label || humanNodeLabel(n.node_type)}</div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <div className="text-sm font-medium text-ink-900">{n.label || humanNodeLabel(n.node_type)}</div>
+                        {isIsolatedRuntime(n.runtime, n.node_type) && (
+                          <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
+                            Isolated
+                          </span>
+                        )}
+                      </div>
                       <div className="font-mono text-[10px] text-ink-400">{n.node_type}</div>
                     </button>
                   ))}

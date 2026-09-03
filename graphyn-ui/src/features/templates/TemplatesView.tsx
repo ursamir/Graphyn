@@ -1,9 +1,10 @@
 import React from 'react'
-import { RefreshCw, Trash2, Download } from 'lucide-react'
+import { RefreshCw, Download } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
+import { humanizeTemplateName } from '../../lib/format'
 
 function isExampleTemplate(name: string): boolean {
   return name.startsWith('ex-')
@@ -254,13 +255,14 @@ export default function TemplatesView() {
             >
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-medium">{name}</span>
+                  <span className="font-medium">{humanizeTemplateName(name)}</span>
                   {(isExampleTemplate(name) || starters.has(name)) && (
                     <span className="rounded bg-accent-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent-800">
                       example
                     </span>
                   )}
                 </div>
+                <div className="font-mono text-[10px] text-ink-400">{name}</div>
                 <div className="text-[11px] text-ink-500">
                   {(versionsMap[name] ?? []).length === 0
                     ? 'legacy flat file (unversioned)'
@@ -303,17 +305,17 @@ export default function TemplatesView() {
                       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
                   }}
                 />
-                <button
-                  type="button"
-                  className="btn-danger"
-                  onClick={() =>
+                <ConfirmButton
+                  label="Delete"
+                  confirmLabel="Confirm delete"
+                  danger
+                  onConfirm={() =>
                     void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
                       .then(load)
+                      .then(() => pushToast(`Deleted ${name}`, 'success'))
                       .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
                   }
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                />
               </div>
             </li>
           ))}

@@ -9,7 +9,7 @@ import {
 } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
-import { formatMergeToast } from '../../lib/format'
+import { formatExecutionLine, formatMergeToast } from '../../lib/format'
 
 interface OutputProject {
   project: string
@@ -40,7 +40,7 @@ export default function DataView() {
   const [ingestLog, setIngestLog] = React.useState<string[]>([])
 
   // merge
-  const [mergeSources, setMergeSources] = React.useState('project:v1')
+  const [mergeSources, setMergeSources] = React.useState('')
   const [mergeTargetProject, setMergeTargetProject] = React.useState('')
   const [mergeTargetVersion, setMergeTargetVersion] = React.useState('v1')
 
@@ -256,9 +256,16 @@ export default function DataView() {
       {error && <ErrorBanner message={error} onRetry={() => void loadSources()} />}
 
       <div className="flex flex-wrap gap-2">
-        {(['outputs', 'inputs', 'ingest', 'merge'] as const).map((m) => (
+        {(
+          [
+            ['outputs', 'Outputs'],
+            ['inputs', 'Inputs'],
+            ['ingest', 'Ingest'],
+            ['merge', 'Merge'],
+          ] as const
+        ).map(([m, label]) => (
           <button key={m} type="button" className={mode === m ? 'btn-primary' : 'btn-secondary'} onClick={() => setMode(m)}>
-            {m}
+            {label}
           </button>
         ))}
       </div>
@@ -279,13 +286,14 @@ export default function DataView() {
             <button type="button" className="btn-primary" onClick={() => void startHfIngest()}>Start HF ingest</button>
           </section>
           <pre className="max-h-48 overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
-            {ingestLog.join('\n') || 'No ingest events yet.'}
+            {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') || 'No ingest events yet.'}
           </pre>
         </div>
       ) : mode === 'merge' ? (
         <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-2">
           <h3 className="text-sm font-semibold">Merge datasets</h3>
-          <input value={mergeSources} onChange={(e) => setMergeSources(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="projectA:v1,projectB:v2" />
+          <p className="text-sm text-ink-500">Comma-separated project:version pairs combined into the target project version.</p>
+          <input value={mergeSources} onChange={(e) => setMergeSources(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="project:version, other:v2" />
           <input value={mergeTargetProject} onChange={(e) => setMergeTargetProject(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="target project" />
           <input value={mergeTargetVersion} onChange={(e) => setMergeTargetVersion(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="target version" />
           <button type="button" className="btn-primary" onClick={() => void doMerge()}>Merge</button>

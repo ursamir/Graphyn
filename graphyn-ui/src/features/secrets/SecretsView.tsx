@@ -1,14 +1,15 @@
 import React from 'react'
-import { KeyRound, RefreshCw } from 'lucide-react'
+import { Eye, EyeOff, KeyRound, RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
+import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
 
 export default function SecretsView() {
   const pushToast = useAppStore((s) => s.pushToast)
   const [names, setNames] = React.useState<string[]>([])
-  const [name, setName] = React.useState('OPENAI_API_KEY')
+  const [name, setName] = React.useState('')
   const [value, setValue] = React.useState('')
+  const [showValue, setShowValue] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
 
@@ -46,11 +47,21 @@ export default function SecretsView() {
     }
   }
 
+  const remove = async (secretName: string) => {
+    try {
+      await apiJson(`/secrets/${encodeURIComponent(secretName)}`, { method: 'DELETE' })
+      pushToast(`Deleted ${secretName}`, 'success')
+      await load()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
   return (
     <div className="h-full overflow-auto p-6">
       <PageHeader
         title="Secrets"
-        description="Named credentials stored on the server. Names only — values are never listed."
+        description="Graphs reference secrets by name (never paste keys into Graph IR)."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" />
@@ -72,14 +83,24 @@ export default function SecretsView() {
         </label>
         <label className="mt-3 block text-sm text-ink-600">
           Value
-          <input
-            type="password"
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 font-mono text-sm"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            autoComplete="off"
-            required
-          />
+          <div className="mt-1 flex gap-2">
+            <input
+              type={showValue ? 'text' : 'password'}
+              className="w-full rounded-lg border border-ink-200 px-3 py-2 font-mono text-sm"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              autoComplete="off"
+              required
+            />
+            <button
+              type="button"
+              className="btn-secondary shrink-0"
+              onClick={() => setShowValue((v) => !v)}
+              aria-label={showValue ? 'Hide value' : 'Show value'}
+            >
+              {showValue ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </button>
+          </div>
         </label>
         <button type="submit" className="btn-primary mt-4">
           <KeyRound className="h-3.5 w-3.5" />
@@ -96,8 +117,14 @@ export default function SecretsView() {
       ) : (
         <ul className="max-w-xl divide-y divide-ink-100 rounded-2xl border border-ink-200 bg-white">
           {names.map((n) => (
-            <li key={n} className="px-4 py-2 font-mono text-sm">
-              {n}
+            <li key={n} className="flex items-center justify-between gap-2 px-4 py-2">
+              <span className="font-mono text-sm">{n}</span>
+              <ConfirmButton
+                label="Delete"
+                confirmLabel="Confirm delete"
+                danger
+                onConfirm={() => void remove(n)}
+              />
             </li>
           ))}
         </ul>

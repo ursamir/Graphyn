@@ -234,3 +234,105 @@ export function formatMergeToast(res: unknown): string {
   if (typeof n === 'number' && n >= 0) return n === 0 ? 'Nothing to merge' : `Merged ${n} sources`
   return 'Merge complete'
 }
+
+const TEMPLATE_ACRONYMS = new Set(['e2e', 'asr', 'tts', 'stt', 'llm', 'api', 'hf', 'ml', 'nlp'])
+
+/** `ex-06-speech-commands-e2e` → “Speech commands (E2E)”. */
+export function humanizeTemplateName(id: string): string {
+  const raw = id.trim()
+  if (!raw) return id
+  const s = raw.replace(/^ex-\d+-/, '')
+  const parts = s.split(/[-_]+/).filter(Boolean)
+  if (parts.length === 0) return raw
+  const trailing: string[] = []
+  while (parts.length && TEMPLATE_ACRONYMS.has(parts[parts.length - 1].toLowerCase())) {
+    trailing.unshift(parts.pop()!.toUpperCase())
+  }
+  const words = parts.map((w, i) => {
+    const lower = w.toLowerCase()
+    if (TEMPLATE_ACRONYMS.has(lower)) return lower.toUpperCase()
+    if (i === 0) return lower.charAt(0).toUpperCase() + lower.slice(1)
+    return lower
+  })
+  let out = words.join(' ')
+  if (trailing.length) out = `${out}${out ? ' ' : ''}(${trailing.join(', ')})`
+  return out || raw
+}
+
+export function isIsolatedRuntime(runtime?: string | null, nodeType?: string | null): boolean {
+  const r = (runtime ?? '').toLowerCase()
+  if (r === 'isolated' || r.includes('isolated')) return true
+  return Boolean(nodeType && nodeType.startsWith('Isolated_'))
+}
+
+export function formatUptime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return ''
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.round((seconds % 3600) / 60)
+  return m ? `${h}h ${m}m` : `${h}h`
+}
+
+export function formatMetricsSummary(data: unknown): string | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+  const o = data as Record<string, unknown>
+  const req = o.requests_total ?? o.run_count ?? o.runs
+  const up = o.uptime_s ?? o.uptime
+  const parts: string[] = []
+  if (typeof req === 'number' && Number.isFinite(req)) {
+    parts.push(`${req} ${req === 1 ? 'request' : 'requests'}`)
+  }
+  if (typeof up === 'number' && Number.isFinite(up) && up > 0) {
+    const label = formatUptime(up)
+    if (label) parts.push(`uptime ${label}`)
+  }
+  if (typeof o.errors_5xx_total === 'number' && o.errors_5xx_total > 0) {
+    parts.push(`${o.errors_5xx_total} 5xx`)
+  }
+  return parts.length ? parts.join(' · ') : null
+}
+
+const HEALTH_FACT_KEYS = [
+  'status',
+  'timestamp',
+  'ready',
+  'ok',
+  'version',
+  'uptime_s',
+  'uptime',
+  'checks',
+]
+
+export function pickStatusFacts(data: unknown, max = 6): Array<{ key: string; value: unknown }> {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return []
+  const o = data as Record<string, unknown>
+  const out: Array<{ key: string; value: unknown }> = []
+  const seen = new Set<string>()
+  const push = (key: string, value: unknown) => {
+    if (seen.has(key) || value === undefined) return
+    seen.add(key)
+    out.push({ key, value })
+  }
+  for (const k of HEALTH_FACT_KEYS) {
+    if (!(k in o)) continue
+    const v = o[k]
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const [ck, cv] of Object.entries(v as Record<string, unknown>)) {
+        push(ck, cv)
+        if (out.length >= max) return out
+      }
+    } else {
+      push(k, v)
+    }
+    if (out.length >= max) return out
+  }
+  if (out.length === 0) {
+    for (const [k, v] of Object.entries(o)) {
+      if (v && typeof v === 'object') continue
+      push(k, v)
+      if (out.length >= max) break
+    }
+  }
+  return out.slice(0, max)
+}

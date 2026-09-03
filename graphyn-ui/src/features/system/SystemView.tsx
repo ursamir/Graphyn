@@ -1,13 +1,19 @@
 import React from 'react'
 import { RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
-import { formatCleanupToast } from '../../lib/format'
+import {
+  formatCleanupToast,
+  formatLocaleDateTime,
+  formatMetricsSummary,
+  pickStatusFacts,
+  prettyScalar,
+  startCase,
+} from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
 import {
   ConfirmButton,
-  EmptyState,
+  CollapsibleJson,
   ErrorBanner,
-  KeyValue,
   LoadingBlock,
   PageHeader,
   StatusBadge,
@@ -25,8 +31,30 @@ function badgeFromPayload(data: unknown, okKeys: string[]): string {
   return 'ok'
 }
 
+function Facts({ data }: { data: unknown }) {
+  const facts = pickStatusFacts(data, 6)
+  if (facts.length === 0) return <p className="text-sm text-ink-500">No status yet.</p>
+  return (
+    <dl className="space-y-1.5 text-sm">
+      {facts.map((f) => {
+        const value =
+          f.key === 'timestamp' && typeof f.value === 'string'
+            ? formatLocaleDateTime(f.value)
+            : prettyScalar(f.value) || String(f.value)
+        return (
+          <div key={f.key} className="flex justify-between gap-3">
+            <dt className="text-ink-500">{startCase(f.key)}</dt>
+            <dd className="font-medium text-ink-900">{value}</dd>
+          </div>
+        )
+      })}
+    </dl>
+  )
+}
+
 export default function SystemView() {
   const pushToast = useAppStore((s) => s.pushToast)
+  const setView = useAppStore((s) => s.setView)
   const [health, setHealth] = React.useState<unknown>(null)
   const [ready, setReady] = React.useState<unknown>(null)
   const [metrics, setMetrics] = React.useState<unknown>(null)
@@ -35,9 +63,6 @@ export default function SystemView() {
   const [cleanupDays, setCleanupDays] = React.useState(7)
   const [deleteCache, setDeleteCache] = React.useState(true)
   const [deleteArtifacts, setDeleteArtifacts] = React.useState(false)
-  const [registryQ, setRegistryQ] = React.useState('')
-  const [registryStatus, setRegistryStatus] = React.useState('')
-  const [registry, setRegistry] = React.useState<Array<Record<string, unknown>>>([])
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
 
@@ -67,31 +92,13 @@ export default function SystemView() {
     void refresh()
   }, [refresh])
 
-  const searchRegistry = async (q = registryQ, status = registryStatus) => {
-    try {
-      const rows = await apiJson<Array<Record<string, unknown>>>('/system/projects-registry', {
-        query: {
-          q: q || undefined,
-          status: status || undefined,
-        },
-      })
-      setRegistry(rows)
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
-  }
-
-  React.useEffect(() => {
-    void searchRegistry('', '')
-    // Load the full registry once on mount; later searches use the button.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const metricsLine = formatMetricsSummary(metrics)
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="System"
-        description="Health, webhooks, cleanup, and the projects registry."
+        description="Health, webhooks, and cleanup. Dataset projects live under Projects."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -101,23 +108,50 @@ export default function SystemView() {
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
       {loading && <LoadingBlock label="Loading system status…" />}
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2">
         {[
           ['Health', health, badgeFromPayload(health, ['ok'])],
           ['Readiness', ready, badgeFromPayload(ready, ['ready'])],
-          ['Metrics', metrics, 'live'],
         ].map(([title, data, badge]) => (
           <section key={String(title)} className="rounded-2xl border border-ink-200 bg-white p-4">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold">{title as string}</h3>
               <StatusBadge status={String(badge)} />
             </div>
-            <div className="max-h-48 overflow-auto">
-              <KeyValue data={data} />
+            <Facts data={data} />
+            <div className="mt-3">
+              <CollapsibleJson value={data} label="Raw JSON" />
             </div>
           </section>
         ))}
       </div>
+
+      {metricsLine ? (
+        <section className="rounded-2xl border border-ink-200 bg-white p-4">
+          <h3 className="mb-1 text-sm font-semibold">Metrics</h3>
+          <p className="text-sm text-ink-700">{metricsLine}</p>
+          <div className="mt-3">
+            <CollapsibleJson value={metrics} label="Raw JSON" />
+          </div>
+        </section>
+      ) : null}
+
+      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+        <h3 className="text-sm font-semibold">Projects</h3>
+        <p className="text-sm text-ink-500">
+          Dataset projects, versions, and contracts are managed on the Projects screen — not duplicated here.
+        </p>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => {
+            setView('projects')
+            window.history.replaceState(null, '', '#/projects')
+          }}
+        >
+          Open Projects
+        </button>
+      </section>
 
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
         <h3 className="text-sm font-semibold">Webhooks</h3>
@@ -218,51 +252,6 @@ export default function SystemView() {
               .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
           }}
         />
-      </section>
-
-      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
-        <h3 className="text-sm font-semibold">Projects registry</h3>
-        <div className="flex flex-wrap gap-2">
-          <input
-            value={registryQ}
-            onChange={(e) => setRegistryQ(e.target.value)}
-            placeholder="Search name…"
-            className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-          />
-          <input
-            value={registryStatus}
-            onChange={(e) => setRegistryStatus(e.target.value)}
-            placeholder="status filter"
-            className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-          />
-          <button type="button" className="btn-primary" onClick={() => void searchRegistry()}>
-            Search
-          </button>
-        </div>
-        {registry.length === 0 ? (
-          <EmptyState title="No registry results" description="Search by name or status to list projects." />
-        ) : (
-          <div className="overflow-auto rounded-xl border border-ink-100">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-ink-100 text-[11px] uppercase text-ink-500">
-                <tr>
-                  <th className="px-3 py-2">Name</th>
-                  <th className="px-3 py-2">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {registry.map((row) => (
-                  <tr key={String(row.name)} className="border-b border-ink-50">
-                    <td className="px-3 py-2 font-medium">{String(row.name ?? '')}</td>
-                    <td className="px-3 py-2">
-                      {row.status ? <StatusBadge status={String(row.status)} /> : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </section>
     </div>
   )
