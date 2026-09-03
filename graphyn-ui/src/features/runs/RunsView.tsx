@@ -268,7 +268,7 @@ export default function RunsView() {
 
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
-      <div className="overflow-y-auto border-r border-ink-200 p-4">
+      <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
           title="Runs"
           description="History, live status, and logs for pipeline executions."
@@ -299,7 +299,7 @@ export default function RunsView() {
             }
           />
         ) : (
-          <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white">
+          <ul className="space-y-1.5">
             {runs.map((r) => {
               const metric = formatRunMetric(r.metrics)
               return (
@@ -307,10 +307,10 @@ export default function RunsView() {
                 <button
                   type="button"
                   onClick={() => void open(r.run_id)}
-                  className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 px-3 py-2 text-left sm:grid-cols-[minmax(0,1.4fr)_auto_minmax(4rem,auto)_auto_auto] ${
+                  className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 rounded-xl border px-3 py-2.5 text-left shadow-sm transition sm:grid-cols-[minmax(0,1.4fr)_auto_minmax(4rem,auto)_auto_auto] ${
                     selected === r.run_id
-                      ? 'bg-accent-50'
-                      : 'hover:bg-ink-50'
+                      ? 'border-accent-200 bg-accent-50/80 shadow-soft'
+                      : 'border-ink-200/70 bg-white hover:border-ink-300 hover:bg-ink-50/80'
                   }`}
                 >
                   <div className="truncate text-sm font-medium text-ink-900">
@@ -353,7 +353,7 @@ export default function RunsView() {
         </div>
       </div>
 
-      <div className="overflow-y-auto p-4 space-y-3">
+      <div className="overflow-y-auto space-y-4 p-5">
         {!selected ? (
           <EmptyState title="Select a run" description="Inspect logs, checkpoints, artifacts, and control active runs." />
         ) : (
@@ -392,12 +392,12 @@ export default function RunsView() {
                 />
               )}
             </div>
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1">
               {(['logs', 'debug', 'checkpoints', 'artifacts', 'provenance'] as const).map((p) => (
                 <button
                   key={p}
                   type="button"
-                  className={panel === p ? 'btn-primary' : 'btn-secondary'}
+                  className={panel === p ? 'tab-pill tab-pill-on' : 'tab-pill'}
                   onClick={() => setPanel(p)}
                 >
                   {PANEL_LABELS[p]}
@@ -405,7 +405,7 @@ export default function RunsView() {
               ))}
             </div>
             {panel === 'logs' && (
-              <div className="max-h-[28rem] overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
+              <div className="max-h-[28rem] overflow-auto rounded-2xl bg-ink-950 p-4 font-mono text-[11px] leading-5 text-ink-100 shadow-soft">
                 {logs.length === 0 ? (
                   <div className="text-ink-500">No logs.</div>
                 ) : (

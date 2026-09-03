@@ -61,7 +61,8 @@ export function StatusBadge({
           ? 'bg-amber-100 text-amber-900'
           : 'bg-ink-100 text-ink-700'
   return (
-    <span className={clsx('inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide', tone)}>
+    <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide', tone)}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
       {status}
     </span>
   )
@@ -178,7 +179,7 @@ export function PageHeader({
   return (
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h2 className="font-display text-lg font-bold text-ink-950">{title}</h2>
+        <h2 className="font-display text-xl font-bold tracking-tight text-ink-950">{title}</h2>
         {description && <p className="mt-0.5 max-w-2xl text-sm text-ink-500">{description}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
@@ -209,7 +210,7 @@ function valueCell(value: unknown): React.ReactNode {
   const scalar = prettyScalar(value)
   if (scalar) return <span className="break-words">{scalar}</span>
   if (Array.isArray(value)) {
-    if (value.length === 0) return <span className="text-ink-400">Empty list</span>
+    if (value.length === 0) return <span className="text-ink-400">None</span>
     if (value.every((v) => v == null || typeof v !== 'object')) {
       return <span className="break-words">{value.map((v) => prettyScalar(v) || String(v)).join(', ')}</span>
     }

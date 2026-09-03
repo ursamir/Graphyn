@@ -588,7 +588,7 @@ function BuilderInner() {
           type="number"
           value={seed}
           onChange={(e) => setSeed(Number(e.target.value) || 0)}
-          className="w-16 rounded border border-ink-200 px-1 py-0.5 font-mono text-xs"
+          className="field-control mt-0 w-16 py-0.5 font-mono text-xs"
           title="Graph seed"
         />
       </label>
@@ -597,7 +597,7 @@ function BuilderInner() {
 
   return (
     <div className="flex h-full min-h-0">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-ink-200 bg-white">
+      <aside className="flex w-64 shrink-0 flex-col border-r border-ink-200/70 bg-white/90 backdrop-blur">
         <div className="sticky top-0 z-10 border-b border-ink-100 bg-white p-2">
           <input
             id="builder-catalog-search"
@@ -666,7 +666,7 @@ function BuilderInner() {
                   type="button"
                   title={n.node_type}
                   onClick={() => addNode(n)}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-ink-50"
+                  className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition hover:bg-ink-50"
                 >
                   <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-900">
                     {n.label || humanNodeLabel(n.node_type)}
@@ -684,7 +684,7 @@ function BuilderInner() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="relative z-30 flex flex-wrap items-center gap-1.5 border-b border-ink-200 bg-white px-2 py-1.5">
+        <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200/70 bg-white/90 px-3 py-2 backdrop-blur">
           {!isRunning ? (
             <button
               type="button"
@@ -850,7 +850,7 @@ function BuilderInner() {
           )}
         </div>
 
-        <div className="relative z-20 border-t border-ink-200 bg-ink-950 text-ink-100">
+        <div className="relative z-20 border-t border-ink-800 bg-[#12181f] text-ink-100">
           <div
             className="absolute inset-x-0 -top-1 z-30 h-2 cursor-row-resize"
             onPointerDown={onLogResize}

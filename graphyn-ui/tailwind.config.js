@@ -32,12 +32,15 @@ export default {
       },
       fontFamily: {
         display: ['Syne', 'system-ui', 'sans-serif'],
-        sans: ['"IBM Plex Sans"', 'system-ui', 'sans-serif'],
+        sans: ['Inter', '"IBM Plex Sans"', 'system-ui', 'sans-serif'],
         mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+      },
+      boxShadow: {
+        soft: '0 8px 24px rgba(26, 33, 41, 0.08), 0 1px 2px rgba(26, 33, 41, 0.04)',
       },
       backgroundImage: {
         mesh:
-          'radial-gradient(ellipse at 10% 0%, rgba(30,181,166,0.18), transparent 45%), radial-gradient(ellipse at 90% 10%, rgba(70,91,111,0.16), transparent 40%), linear-gradient(180deg, #f4f6f8 0%, #e8eef2 100%)',
+          'radial-gradient(ellipse at 10% 0%, rgba(30,181,166,0.14), transparent 45%), radial-gradient(ellipse at 90% 10%, rgba(70,91,111,0.12), transparent 40%), linear-gradient(180deg, #eef2f6 0%, #e4ebf1 100%)',
       },
     },
   },

@@ -203,7 +203,7 @@ export default function PluginsView() {
           value={source}
           onChange={(e) => setSource(e.target.value)}
           placeholder="path, package, https://…, git+…"
-          className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+          className="field-control mt-0 text-sm"
         />
         <button type="button" className="btn-primary" disabled={!source.trim()} onClick={() => void install()}>
           <Download className="h-3.5 w-3.5" /> Install
@@ -279,7 +279,7 @@ export default function PluginsView() {
               const runtime = p.runtime ?? p.dependency_summary?.runtime ?? p.manifest?.runtime ?? 'inprocess'
               const isolated = isIsolatedRuntime(runtime, p.name)
               return (
-                <li key={p.name} className="rounded-xl border border-ink-100 px-3 py-2">
+                <li key={p.name} className="rounded-2xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="font-medium">
@@ -305,12 +305,15 @@ export default function PluginsView() {
                           Install extras (TensorFlow, …)
                         </button>
                       )}
-                      <button type="button" className="btn-secondary" onClick={() => void setEnabled(p.name, true)}>
-                        Enable
-                      </button>
-                      <button type="button" className="btn-secondary" onClick={() => void setEnabled(p.name, false)}>
-                        Disable
-                      </button>
+                      {p.enabled === false ? (
+                        <button type="button" className="btn-secondary" onClick={() => void setEnabled(p.name, true)}>
+                          Enable
+                        </button>
+                      ) : (
+                        <button type="button" className="btn-quiet" onClick={() => void setEnabled(p.name, false)}>
+                          Disable
+                        </button>
+                      )}
                       <ConfirmButton
                         label="Uninstall"
                         confirmLabel="Confirm uninstall"

@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from 'reactflow'
 import clsx from 'clsx'
 import type { PortDef } from '../../types/graph'
+import { Pencil, ShieldCheck, X } from 'lucide-react'
 import { schemaFieldHint, schemaFieldLabel } from '../../lib/format'
 
 export type GraphynNodeData = {
@@ -110,7 +111,7 @@ function fieldEditor(
   if (Array.isArray(unwrapSchema(def).enum)) {
     return (
       <select
-        className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 text-[11px]"
+        className="field-control"
         value={String(value ?? '')}
         title={schemaFieldHint(def)}
         onChange={(e) => onChange(e.target.value)}
@@ -129,7 +130,7 @@ function fieldEditor(
   if (widget === 'textarea' || widget === 'json') {
     return (
       <textarea
-        className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-1 font-mono text-[10px] text-ink-800"
+        className="field-control font-mono text-[10px]"
         rows={3}
         defaultValue={formatValue(def, value)}
         title={schemaFieldHint(def)}
@@ -143,7 +144,7 @@ function fieldEditor(
     return (
       <input
         type="password"
-        className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
+        className="field-control font-mono"
         value={formatValue(def, value)}
         title={schemaFieldHint(def)}
         onChange={(e) => onChange(e.target.value)}
@@ -162,7 +163,7 @@ function fieldEditor(
   if (complex) {
     return (
       <textarea
-        className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-1 font-mono text-[10px] text-ink-800"
+        className="field-control font-mono text-[10px]"
         rows={3}
         defaultValue={formatValue(def, value)}
         onBlur={(e) => {
@@ -184,7 +185,7 @@ function fieldEditor(
       <input
         type="number"
         step={type === 'integer' ? 1 : 'any'}
-        className="mt-0.5 w-full overflow-x-auto rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
+        className="field-control overflow-x-auto font-mono"
         value={value == null || value === '' ? '' : Number(value)}
         title={formatValue(def, value)}
         onChange={(e) => {
@@ -201,7 +202,7 @@ function fieldEditor(
 
   return (
     <input
-      className="mt-0.5 w-full overflow-x-auto rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
+      className="field-control overflow-x-auto font-mono"
       value={formatValue(def, value)}
       title={formatValue(def, value)}
       onChange={(e) => {
@@ -237,8 +238,8 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
     <div
       title={data.nodeType}
       className={clsx(
-        'min-w-[300px] max-w-[380px] overflow-visible rounded-lg border bg-white shadow-sm',
-        selected ? 'border-accent-500 shadow-md ring-2 ring-accent-200' : 'border-ink-200',
+        'min-w-[300px] max-w-[380px] overflow-visible rounded-2xl border bg-white shadow-soft',
+        selected ? 'border-accent-500 shadow-soft ring-2 ring-accent-200' : 'border-ink-200/80',
         status === 'running' && 'border-accent-400',
         status === 'success' && 'border-emerald-500',
         status === 'error' && 'border-rose-500',
@@ -259,7 +260,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
       <div className="flex">
         <div className={clsx('w-1 shrink-0 self-stretch', STATUS_EDGE[status] ?? STATUS_EDGE.idle)} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2 px-2.5 py-1.5">
+          <div className="flex items-start justify-between gap-2 bg-gradient-to-r from-ink-50/80 to-white px-3 py-2">
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
                 <div className="truncate font-display text-[13px] font-bold leading-tight text-ink-950">
@@ -275,41 +276,47 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
                 <div className="truncate text-[10px] text-ink-400">{data.category}</div>
               )}
             </div>
-            <div className="flex shrink-0 gap-1">
+            <div className="flex shrink-0 gap-0.5">
               {data.onOpenInspector && entries.length > 0 && (
                 <button
                   type="button"
-                  className="text-[10px] text-accent-700 hover:underline"
+                  className="btn-icon"
+                  title="Edit fields"
+                  aria-label="Edit fields"
                   onClick={(e) => {
                     e.stopPropagation()
                     data.onOpenInspector?.()
                   }}
                 >
-                  edit
+                  <Pencil className="h-3.5 w-3.5" />
                 </button>
               )}
               {data.onValidateConfig && (
                 <button
                   type="button"
-                  className="text-[10px] text-accent-700 hover:underline"
+                  className="btn-icon"
+                  title="Validate config"
+                  aria-label="Validate config"
                   onClick={(e) => {
                     e.stopPropagation()
                     data.onValidateConfig?.()
                   }}
                 >
-                  check
+                  <ShieldCheck className="h-3.5 w-3.5" />
                 </button>
               )}
               {data.onDelete && (
                 <button
                   type="button"
-                  className="text-[10px] text-ink-400 hover:text-rose-600"
+                  className="btn-icon hover:bg-rose-50 hover:text-rose-600"
+                  title="Remove node"
+                  aria-label="Remove node"
                   onClick={(e) => {
                     e.stopPropagation()
                     data.onDelete?.()
                   }}
                 >
-                  remove
+                  <X className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
@@ -331,7 +338,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
             {hiddenCount > 0 && (
               <button
                 type="button"
-                className="text-[10px] text-accent-700 hover:underline"
+                className="text-[11px] font-medium text-accent-700 hover:text-accent-900"
                 onClick={(e) => {
                   e.stopPropagation()
                   data.onOpenInspector?.()

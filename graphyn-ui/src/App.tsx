@@ -241,7 +241,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div className="flex h-full flex-col bg-mesh">
-        <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-ink-200 bg-white/90 px-3 backdrop-blur">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-200/70 bg-white/80 px-4 backdrop-blur-md">
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -259,11 +259,11 @@ export default function App() {
             >
               <PanelLeftClose className={clsx('h-4 w-4', !navOpen && 'rotate-180')} />
             </button>
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-500 text-ink-950">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent-500 text-ink-950 shadow-sm">
               <Boxes className="h-3.5 w-3.5" />
             </div>
             <div className="min-w-0 leading-tight">
-              <div className="font-display text-base font-extrabold tracking-tight text-ink-950">Graphyn</div>
+              <div className="font-display text-[17px] font-extrabold tracking-tight text-ink-950">Graphyn</div>
               <div className="truncate text-[11px] text-ink-500">{VIEW_LABEL[view]}</div>
             </div>
           </div>
@@ -301,12 +301,11 @@ export default function App() {
             )}
             <button
               type="button"
-              className="btn-secondary"
+              className="btn-icon"
               onClick={openSettings}
               aria-label="Settings"
             >
-              <Settings className="h-3.5 w-3.5" />
-              Settings
+              <Settings className="h-4 w-4" />
             </button>
           </div>
         </header>
@@ -334,14 +333,14 @@ export default function App() {
           {navOpen && (
             <aside
               className={clsx(
-                'z-30 flex w-52 shrink-0 flex-col border-r border-ink-200 bg-white/95 backdrop-blur',
+                'z-30 flex w-56 shrink-0 flex-col border-r border-ink-200/70 bg-white/80 backdrop-blur-md',
                 narrow && 'absolute inset-y-0 left-0 shadow-xl md:static md:shadow-none',
               )}
             >
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
                 {NAV_GROUPS.map((group) => (
                   <div key={group.title} className="mb-4">
-                    <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+                    <div className="px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-400">
                       {group.title}
                     </div>
                     <div className="space-y-0.5">
@@ -353,9 +352,9 @@ export default function App() {
                             type="button"
                             onClick={() => go(id)}
                             className={clsx(
-                              'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors',
+                              'relative flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm transition',
                               active
-                                ? 'bg-accent-50 font-semibold text-accent-800'
+                                ? 'bg-accent-50 font-semibold text-accent-900 shadow-sm'
                                 : 'text-ink-600 hover:bg-ink-50 hover:text-ink-950',
                             )}
                             aria-current={active ? 'page' : undefined}

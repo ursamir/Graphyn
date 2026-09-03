@@ -4,6 +4,9 @@
 
 :root {
   color-scheme: light;
+  --shadow-sm: 0 1px 2px rgba(26, 33, 41, 0.05);
+  --shadow-md: 0 8px 24px rgba(26, 33, 41, 0.08), 0 1px 2px rgba(26, 33, 41, 0.04);
+  --shadow-lg: 0 18px 50px rgba(26, 33, 41, 0.14);
 }
 
 html,
@@ -14,10 +17,11 @@ body,
 
 body {
   margin: 0;
-  font-family: 'IBM Plex Sans', system-ui, sans-serif;
-  background: #f4f6f8;
+  font-family: Inter, 'IBM Plex Sans', system-ui, sans-serif;
+  background: #eef2f6;
   color: #1a2129;
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.011em;
 }
 
 * {
@@ -28,29 +32,60 @@ body {
   display: none;
 }
 
+.react-flow__controls {
+  box-shadow: var(--shadow-md) !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+  border: 1px solid #e4e9ee !important;
+}
+
+.react-flow__minimap {
+  border-radius: 12px !important;
+  overflow: hidden;
+  box-shadow: var(--shadow-md) !important;
+  border: 1px solid #e4e9ee !important;
+}
+
 .bg-canvas {
-  background-color: #f7f9fb;
-  background-image: radial-gradient(#d5dee6 0.7px, transparent 0.7px);
-  background-size: 18px 18px;
+  background-color: #f3f6f9;
+  background-image:
+    radial-gradient(ellipse at 0% 0%, rgba(30, 181, 166, 0.08), transparent 42%),
+    radial-gradient(#d7e0e8 0.8px, transparent 0.8px);
+  background-size: auto, 20px 20px;
 }
 
 @layer components {
   .btn-primary {
-    @apply inline-flex items-center gap-1.5 rounded-md bg-accent-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-accent-700 hover:shadow disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-secondary {
-    @apply inline-flex items-center gap-1.5 rounded-md border border-ink-200 bg-white px-2.5 py-1 text-xs font-semibold text-ink-700 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-ink-200/80 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 shadow-sm transition hover:border-ink-300 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-danger {
-    @apply inline-flex items-center gap-1.5 rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-800 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-quiet {
-    @apply inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-ink-500 hover:bg-ink-50 hover:text-ink-800 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-ink-500 transition hover:bg-ink-50 hover:text-ink-800 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-icon {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-lg text-ink-400 transition hover:bg-ink-100 hover:text-ink-800;
   }
   .catalog-pill {
-    @apply rounded-full border border-ink-200 bg-white px-2 py-0.5 text-[11px] font-medium text-ink-600 hover:border-ink-300 hover:bg-ink-50;
+    @apply rounded-full border border-ink-200/80 bg-white px-2.5 py-0.5 text-[11px] font-medium text-ink-600 shadow-sm transition hover:border-ink-300 hover:bg-ink-50;
   }
   .catalog-pill-on {
-    @apply border-ink-900 bg-ink-900 text-white hover:border-ink-900 hover:bg-ink-800;
+    @apply border-transparent bg-ink-950 text-white shadow-sm hover:border-transparent hover:bg-ink-800;
+  }
+  .field-control {
+    @apply mt-0.5 w-full rounded-lg border border-ink-200/90 bg-white px-2 py-1 text-[11px] text-ink-800 shadow-sm outline-none transition focus:border-accent-400 focus:ring-2 focus:ring-accent-200/70;
+  }
+  .tab-pill {
+    @apply rounded-lg px-2.5 py-1 text-xs font-medium text-ink-500 transition hover:bg-ink-50 hover:text-ink-800;
+  }
+  .tab-pill-on {
+    @apply bg-ink-950 text-white shadow-sm hover:bg-ink-800 hover:text-white;
+  }
+  .surface-card {
+    @apply rounded-2xl border border-ink-200/70 bg-white shadow-sm;
   }
 }
