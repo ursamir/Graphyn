@@ -107,3 +107,94 @@ class TestRunDebugReport:
         assert "status" in payload
         assert "artifact_count" in payload
         assert payload["error_count"] >= 1
+
+
+class TestPromoteRun:
+    def test_promote_points_latest(self, api_client, tmp_path, monkeypatch):
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+        runs_dir = tmp_path / "runs"
+        run_id = "prom1"
+        run_dir = runs_dir / run_id
+        run_dir.mkdir(parents=True)
+        art = tmp_path / "artifacts" / "speech-commands" / "runs" / run_id
+        art.mkdir(parents=True)
+        (art / "metrics.json").write_text('{"accuracy": 0.91}', encoding="utf-8")
+        (run_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "completed",
+                    "graph_name": "speech_commands_e2e_train_ml",
+                    "artifacts_dir": f"workspace/artifacts/speech-commands/runs/{run_id}",
+                }
+            )
+        )
+        (run_dir / "graph.json").write_text(
+            json.dumps({"metadata": {"name": "speech_commands_e2e_train_ml"}, "nodes": []})
+        )
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.post(f"/api/v1/runs/{run_id}/promote")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["run_id"] == run_id
+        assert body["slug"] == "speech-commands"
+        assert body["latest"] == "workspace/artifacts/speech-commands/latest"
+        latest = tmp_path / "artifacts" / "speech-commands" / "latest"
+        assert latest.is_symlink() or (latest / "latest.json").is_file() or (
+            tmp_path / "artifacts" / "speech-commands" / "latest.json"
+        ).is_file()
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            detail = api_client.get(f"/api/v1/runs/{run_id}")
+        assert detail.status_code == 200
+        assert detail.json()["is_latest"] is True
+        assert detail.json()["artifacts_dir"] == f"workspace/artifacts/speech-commands/runs/{run_id}"
+
+    def test_promote_missing_run_404(self, api_client, tmp_path):
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.post("/api/v1/runs/missing/promote")
+        assert resp.status_code == 404
+
+    def test_promote_no_artifacts_409(self, api_client, tmp_path, monkeypatch):
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+        runs_dir = tmp_path / "runs"
+        run_id = "empty1"
+        run_dir = runs_dir / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "meta.json").write_text(
+            json.dumps({"run_id": run_id, "status": "completed", "graph_name": "demo"})
+        )
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.post(f"/api/v1/runs/{run_id}/promote")
+        assert resp.status_code == 409
+
+    def test_list_includes_metrics(self, api_client, tmp_path, monkeypatch):
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+        runs_dir = tmp_path / "runs"
+        run_id = "met1"
+        run_dir = runs_dir / run_id
+        run_dir.mkdir(parents=True)
+        art = tmp_path / "artifacts" / "speech-commands" / "runs" / run_id
+        art.mkdir(parents=True)
+        (art / "metrics.json").write_text('{"accuracy": 0.91, "loss": 0.2}', encoding="utf-8")
+        (run_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "completed",
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                    "graph_name": "speech_commands_e2e_train_ml",
+                    "artifacts_dir": f"workspace/artifacts/speech-commands/runs/{run_id}",
+                }
+            )
+        )
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.get("/api/v1/runs")
+        assert resp.status_code == 200
+        row = resp.json()[0]
+        assert row["graph_name"] == "speech_commands_e2e_train_ml"
+        assert row["status"] == "completed"
+        assert row["created_at"]
+        assert row["artifacts_dir"].endswith(f"runs/{run_id}")
+        assert row["metrics"]["accuracy"] == 0.91

@@ -42,6 +42,64 @@ from app.core.nodes.metadata import stable_node_type
 log = logging.getLogger(__name__)
 
 
+def _graph_display_name(graph: Any) -> str:
+    return str(getattr(getattr(graph, "metadata", None), "name", "") or "")
+
+
+def _scope_graph_to_run(graph: Any, run: Any) -> Any:
+    """Rewire output paths into workspace/artifacts/<slug>/runs/<run_id>/."""
+    from app.core.workspace_paths import (
+        artifact_fs_path,
+        artifact_layout,
+        artifact_slug,
+        scope_outputs_to_run,
+    )
+
+    scoped = scope_outputs_to_run(graph, run.run_id)
+    name = _graph_display_name(scoped) or _graph_display_name(graph)
+    slug = artifact_slug(name or "pipeline")
+    layout = artifact_layout(slug, run.run_id)
+    try:
+        artifact_fs_path(layout["run_dir"]).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    run._write_meta_field("artifacts_dir", layout["run_dir"])
+    return scoped
+
+
+def _finalize_run_artifacts(run: Any, graph: Any) -> dict[str, Any]:
+    """Publish latest alias and collect artifacts_dir / metrics for meta.json."""
+    from app.core.workspace_paths import (
+        artifact_layout,
+        artifact_slug,
+        publish_latest,
+        read_run_metrics,
+    )
+
+    extras: dict[str, Any] = {}
+    name = _graph_display_name(graph)
+    slug = artifact_slug(name or "pipeline")
+    layout = artifact_layout(slug, run.run_id)
+    extras["artifacts_dir"] = layout["run_dir"]
+    metrics = read_run_metrics(slug, run.run_id)
+    if metrics:
+        extras["metrics"] = metrics
+        try:
+            run._write_meta_field("metrics", metrics)
+        except Exception:
+            pass
+    try:
+        publish_latest(slug, run.run_id)
+    except Exception:
+        log.warning("Failed to publish latest artifacts for run %s", run.run_id, exc_info=True)
+    try:
+        run._write_meta_field("artifacts_dir", layout["run_dir"])
+    except Exception:
+        pass
+    return extras
+
+
+
 # ── Capability resolution ──────────────────────────────────────────────────────
 # Canonical implementation lives in registry_runtime (BC3).
 # This alias is kept here for backward compatibility with any callers that
@@ -104,8 +162,9 @@ async def run_pipeline_ir_async(
     else:
         run = run_manager
 
+    graph = _scope_graph_to_run(graph, run)
     run.save_graph_ir(dump_ir(graph))
-    graph_name = str(getattr(getattr(graph, "metadata", None), "name", "") or "")
+    graph_name = _graph_display_name(graph)
     if graph_name:
         run._write_meta_field("graph_name", graph_name)
     register_active_run(run)
@@ -640,6 +699,7 @@ async def run_pipeline_ir_async(
                 "event_driven": True,
                 "trigger_count": trigger_count,
                 **({"graph_name": graph_name} if graph_name else {}),
+                **_finalize_run_artifacts(run, graph),
             })
             last_id = graph_obj.execution_order[-1]
             return node_outputs.get(last_id, {})
@@ -661,6 +721,7 @@ async def run_pipeline_ir_async(
         "node_stats": node_stats,
         "duration_s": round(total_duration, 4),
         **({"graph_name": graph_name} if graph_name else {}),
+        **_finalize_run_artifacts(run, graph),
         **(
             {"partial_execution": True, "included_nodes": sorted(active_nodes)}
             if is_partial and include_nodes is not None else {}

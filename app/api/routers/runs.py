@@ -9,6 +9,7 @@ Owns:             Route definitions for GET /runs, GET /runs/{run_id},
                   GET /runs/{run_id}/artifacts,
                   GET /runs/{run_id}/outputs,
                   GET /runs/{run_id}/outputs/zip,
+                  POST /runs/{run_id}/promote,
                   GET /runs/{run_id}/provenance.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
@@ -56,6 +57,71 @@ def _run_dir(run_id: str) -> Path:
     return path
 
 
+
+def _load_meta(run_path: Path) -> dict:
+    meta_file = run_path / "meta.json"
+    if not meta_file.exists():
+        return {}
+    try:
+        data = json.loads(meta_file.read_text())
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
+    from app.core.workspace_paths import (
+        artifact_fs_path,
+        artifact_layout,
+        artifact_slug,
+        read_metrics_json,
+        slug_from_artifacts_posix,
+    )
+
+    out = dict(meta)
+    run_id = str(out.get("run_id") or run_path.name)
+    slug = None
+    artifacts = out.get("artifacts_dir")
+    if isinstance(artifacts, str) and artifacts.strip():
+        slug = slug_from_artifacts_posix(artifacts)
+    if not slug:
+        name = out.get("graph_name")
+        if isinstance(name, str) and name.strip():
+            slug = artifact_slug(name)
+    if slug and not artifacts:
+        out["artifacts_dir"] = artifact_layout(slug, run_id)["run_dir"]
+    if not isinstance(out.get("metrics"), dict):
+        metrics = None
+        art = out.get("artifacts_dir")
+        if isinstance(art, str) and art.strip():
+            metrics = read_metrics_json(artifact_fs_path(art))
+        if metrics is None:
+            metrics = read_metrics_json(run_path)
+        if metrics:
+            out["metrics"] = metrics
+    return out
+
+
+def _run_slug_and_artifacts(run_id: str, run_path: Path, meta: dict) -> tuple[str | None, str | None]:
+    from app.core.workspace_paths import artifact_layout, artifact_slug, slug_from_artifacts_posix
+    from app.core.run_outputs import _load_run_graph
+
+    artifacts = meta.get("artifacts_dir") if isinstance(meta.get("artifacts_dir"), str) else None
+    slug = slug_from_artifacts_posix(artifacts) if artifacts else None
+    if not slug:
+        name = meta.get("graph_name")
+        if isinstance(name, str) and name.strip():
+            slug = artifact_slug(name)
+    if not slug:
+        graph = _load_run_graph(run_path)
+        gmeta = graph.get("metadata") if isinstance(graph, dict) else None
+        if isinstance(gmeta, dict) and gmeta.get("name"):
+            slug = artifact_slug(str(gmeta["name"]))
+    if slug and not artifacts:
+        artifacts = artifact_layout(slug, run_id)["run_dir"]
+    return slug, artifacts
+
+
 # ── List runs ─────────────────────────────────────────────────────────────────
 
 @router.get("", summary="List all pipeline runs")
@@ -90,9 +156,11 @@ def list_runs(
         if not meta_path.exists():
             continue
         try:
-            runs.append(json.loads(meta_path.read_text()))
+            meta = json.loads(meta_path.read_text())
         except Exception:
             continue
+        if isinstance(meta, dict):
+            runs.append(_enrich_run_summary(meta, entry))
     return runs
 
 
@@ -116,15 +184,24 @@ def get_run(run_id: str):
         except Exception:
             logs = []
 
-    meta: dict = {}
-    meta_file = run_path / "meta.json"
-    if meta_file.exists():
-        try:
-            meta = json.loads(meta_file.read_text())
-        except Exception:
-            pass
+    meta: dict = _load_meta(run_path)
+    meta = _enrich_run_summary(meta, run_path)
+    slug, artifacts_dir = _run_slug_and_artifacts(run_id, run_path, meta)
+    is_latest = False
+    if slug:
+        from app.core.workspace_paths import latest_run_id
+        is_latest = latest_run_id(slug) == run_id
+    if artifacts_dir:
+        meta.setdefault("artifacts_dir", artifacts_dir)
 
-    return {"run_id": run_id, "meta": meta, "config_yaml": config_yaml, "logs": logs}
+    return {
+        "run_id": run_id,
+        "meta": meta,
+        "config_yaml": config_yaml,
+        "logs": logs,
+        "is_latest": is_latest,
+        "artifacts_dir": artifacts_dir,
+    }
 
 
 # ── Run status ────────────────────────────────────────────────────────────────
@@ -256,6 +333,40 @@ def download_run_outputs_zip(run_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/{run_id}/promote", summary="Promote a run as the latest artifact alias")
+def promote_run(run_id: str):
+    """Point workspace/artifacts/<slug>/latest at this run's artifact folder."""
+    from app.core.workspace_paths import (
+        artifact_fs_path,
+        artifact_layout,
+        publish_latest,
+    )
+
+    run_path = _run_dir(run_id)
+    meta = _enrich_run_summary(_load_meta(run_path), run_path)
+    slug, artifacts_dir = _run_slug_and_artifacts(run_id, run_path, meta)
+    if not slug:
+        raise HTTPException(status_code=409, detail="Run has no artifact slug")
+    layout = artifact_layout(slug, run_id)
+    run_art = artifact_fs_path(layout["run_dir"])
+    has_files = False
+    if run_art.exists():
+        try:
+            has_files = any(run_art.rglob("*"))
+        except OSError:
+            has_files = False
+    if not has_files and artifacts_dir:
+        alt = artifact_fs_path(str(artifacts_dir))
+        try:
+            has_files = alt.exists() and any(p.is_file() for p in alt.rglob("*"))
+        except OSError:
+            has_files = False
+    if not has_files:
+        raise HTTPException(status_code=409, detail="Run has no artifacts to promote")
+    latest = publish_latest(slug, run_id)
+    return {"slug": slug, "run_id": run_id, "latest": latest}
 
 
 # ── Artifacts ─────────────────────────────────────────────────────────────────

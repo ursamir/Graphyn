@@ -18,7 +18,7 @@
       "id": "dataset_ingest_0",
       "node_type": "dataset_ingest",
       "config": {
-        "path": "workspace/artifacts/speech-commands/dataset/speech_commands/v1",
+        "path": "workspace/artifacts/speech-commands/latest/dataset/speech_commands/v1",
         "recursive": true,
         "source_type": "filesystem"
       },

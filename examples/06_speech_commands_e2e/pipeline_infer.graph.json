@@ -61,7 +61,7 @@
       "id": "realtime_inference_0",
       "node_type": "realtime_inference",
       "config": {
-        "model_path": "workspace/artifacts/speech-commands/tflite/model.tflite"
+        "model_path": "workspace/artifacts/speech-commands/latest/tflite/model.tflite"
       },
       "label": null,
       "capability_metadata": null,

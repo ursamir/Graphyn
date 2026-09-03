@@ -93,7 +93,7 @@ class RunManager:
             json.dump(data, f, indent=2)
         os.replace(tmp, path)  # atomic on POSIX
 
-    def _write_meta_field(self, key: str, value: str) -> None:
+    def _write_meta_field(self, key: str, value) -> None:
         """Update a single field in meta.json without overwriting others (thread-safe).
 
         SA-RJ2: the entire read-modify-write is performed under _meta_lock to
@@ -124,14 +124,26 @@ class RunManager:
 
     def save_metadata(self, metadata: dict) -> None:
         duration = time.time() - self._start_time
-        full = {
-            "run_id": self.run_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "duration_s": round(duration, 3),
-            "status": "completed",
-            **metadata,
-        }
-        self._write_meta(full)
+        meta_path = os.path.join(self.base_path, "meta.json")
+        tmp = meta_path + ".tmp"
+        with self._meta_lock:
+            existing = {}
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, encoding="utf-8") as f:
+                        existing = json.load(f)
+                except Exception:
+                    pass
+            created = existing.get("created_at") or datetime.now(timezone.utc).isoformat()
+            full = {
+                **existing,
+                "run_id": self.run_id,
+                "created_at": created,
+                "duration_s": round(duration, 3),
+                "status": "completed",
+                **metadata,
+            }
+            self._write_meta_unlocked(full, meta_path, tmp)
 
     def save_graph_ir(self, graph_data: dict) -> None:
         """Write graph.json and compute self._graph_hash."""

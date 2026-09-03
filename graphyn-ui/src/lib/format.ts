@@ -336,3 +336,20 @@ export function pickStatusFacts(data: unknown, max = 6): Array<{ key: string; va
   }
   return out.slice(0, max)
 }
+
+/** Pick one human metric from a run's metrics.json (accuracy preferred). */
+export function formatRunMetric(metrics: unknown): string | null {
+  if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) return null
+  const o = metrics as Record<string, unknown>
+  const acc = o.accuracy ?? o.acc
+  if (typeof acc === 'number' && Number.isFinite(acc)) {
+    const pct = acc <= 1 ? acc * 100 : acc
+    return `accuracy ${Math.round(pct)}%`
+  }
+  if (typeof acc === 'string' && acc.trim()) return `accuracy ${acc}`
+  const loss = o.loss
+  if (typeof loss === 'number' && Number.isFinite(loss)) {
+    return `loss ${loss.toFixed(3)}`
+  }
+  return null
+}

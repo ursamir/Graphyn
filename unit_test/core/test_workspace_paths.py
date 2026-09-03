@@ -134,3 +134,87 @@ class TestRewireGraphOutputs:
         )
         rewire_graph_outputs(graph, slug="wake-word")
         assert graph["nodes"][0]["config"]["output_dir"] == "examples/01_wake_word/output"
+
+
+class TestScopeOutputsToRun:
+    def test_inserts_runs_id_after_slug(self):
+        graph = _graph(
+            [
+                {
+                    "id": "trainer",
+                    "node_type": "trainer",
+                    "config": {"output_path": "workspace/artifacts/speech-commands"},
+                },
+                {
+                    "id": "edge",
+                    "node_type": "edge_optimizer",
+                    "config": {
+                        "output_path": "workspace/artifacts/speech-commands/tflite",
+                        "model_path": "workspace/artifacts/speech-commands/tflite/model.tflite",
+                    },
+                },
+            ]
+        )
+        from app.core.workspace_paths import scope_outputs_to_run
+
+        out = scope_outputs_to_run(graph, "abc123")
+        cfg0 = out["nodes"][0]["config"]
+        cfg1 = out["nodes"][1]["config"]
+        assert cfg0["output_path"] == "workspace/artifacts/speech-commands/runs/abc123"
+        assert cfg1["output_path"] == "workspace/artifacts/speech-commands/runs/abc123/tflite"
+        assert cfg1["model_path"] == (
+            "workspace/artifacts/speech-commands/runs/abc123/tflite/model.tflite"
+        )
+
+    def test_leaves_latest_and_examples_data_alone(self):
+        graph = _graph(
+            [
+                {
+                    "id": "ingest",
+                    "node_type": "dataset_ingest",
+                    "config": {"path": "examples/02_speech_commands/data/yes"},
+                },
+                {
+                    "id": "infer",
+                    "node_type": "realtime_inference",
+                    "config": {
+                        "model_path": "workspace/artifacts/speech-commands/latest/tflite/model.tflite"
+                    },
+                },
+                {
+                    "id": "train_data",
+                    "node_type": "dataset_ingest",
+                    "config": {
+                        "path": "workspace/artifacts/speech-commands/latest/dataset/speech_commands/v1"
+                    },
+                },
+            ]
+        )
+        from app.core.workspace_paths import scope_outputs_to_run
+
+        out = scope_outputs_to_run(graph, "abc123")
+        assert out["nodes"][0]["config"]["path"] == "examples/02_speech_commands/data/yes"
+        assert out["nodes"][1]["config"]["model_path"] == (
+            "workspace/artifacts/speech-commands/latest/tflite/model.tflite"
+        )
+        assert out["nodes"][2]["config"]["path"] == (
+            "workspace/artifacts/speech-commands/latest/dataset/speech_commands/v1"
+        )
+
+
+class TestPublishLatest:
+    def test_symlink_points_at_run_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+        from app.core.workspace_paths import artifact_fs_path, artifact_layout, latest_run_id, publish_latest
+
+        slug, run_id = "speech-commands", "runone"
+        layout = artifact_layout(slug, run_id)
+        run_dir = artifact_fs_path(layout["run_dir"])
+        run_dir.mkdir(parents=True)
+        (run_dir / "metrics.json").write_text('{"accuracy": 0.91}', encoding="utf-8")
+        latest = publish_latest(slug, run_id)
+        assert latest == layout["latest_dir"]
+        latest_path = artifact_fs_path(latest)
+        assert latest_path.is_symlink()
+        assert latest_run_id(slug) == run_id
+        assert (latest_path / "metrics.json").is_file()

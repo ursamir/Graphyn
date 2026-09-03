@@ -103,7 +103,7 @@ examples/05_speech_enhancement/data/
 
 ## Pipeline outputs
 
-Pipeline **outputs** belong in `workspace/artifacts/<name>/` (Compose bind-mounts `./workspace` as `GRAPHYN_PROJECT_DIR`). Do **not** write into the image's `examples/` tree — sample **inputs** stay under `examples/<n>_*/data/`. The console Downloads tab lists files from those artifact folders.
+Pipeline **outputs** belong in `workspace/artifacts/<name>/runs/<run_id>/` (Compose bind-mounts `./workspace` as `GRAPHYN_PROJECT_DIR`). A `latest/` alias is published after a successful run. Do **not** write into the image's `examples/` tree — sample **inputs** stay under `examples/<n>_*/data/`. The console Downloads tab lists files from that run folder.
 
 ## Pipeline Format
 

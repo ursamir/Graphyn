@@ -155,3 +155,49 @@ class TestOutputDirAndCsv:
             assert resp.json()["jail"] is True
         finally:
             target.unlink(missing_ok=True)
+
+
+class TestListRunOutputsScoped:
+    def test_excludes_sibling_run_files(self, api_client, tmp_path, monkeypatch):
+        ws, _home = _isolate_jail(tmp_path, monkeypatch)
+        run_id = "runmine"
+        other = "runother"
+        run_dir = ws / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "completed",
+                    "graph_name": "speech_commands_e2e_train_ml",
+                    "artifacts_dir": f"workspace/artifacts/speech-commands/runs/{run_id}",
+                }
+            )
+        )
+        mine = ws / "artifacts" / "speech-commands" / "runs" / run_id
+        sib = ws / "artifacts" / "speech-commands" / "runs" / other
+        mine.mkdir(parents=True)
+        sib.mkdir(parents=True)
+        (mine / "metrics.json").write_text('{"accuracy": 0.9}', encoding="utf-8")
+        (sib / "secret.json").write_text('{"nope": true}', encoding="utf-8")
+        (ws / "artifacts" / "speech-commands" / "root.json").write_text("{}", encoding="utf-8")
+        graph = {
+            "metadata": {"name": "speech_commands_e2e_train_ml"},
+            "nodes": [
+                {
+                    "id": "trainer_0",
+                    "node_type": "trainer",
+                    "config": {
+                        "output_path": f"workspace/artifacts/speech-commands/runs/{run_id}"
+                    },
+                }
+            ],
+        }
+        (run_dir / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
+        with patch("app.core.artifact_store.ArtifactStore") as store_cls:
+            store_cls.return_value.list.return_value = []
+            resp = api_client.get(f"/api/v1/runs/{run_id}/outputs")
+        assert resp.status_code == 200
+        names = {row["name"] for row in resp.json()}
+        assert "metrics.json" in names
+        assert "secret.json" not in names

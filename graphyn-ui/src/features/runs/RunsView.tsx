@@ -6,6 +6,8 @@ import { CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageH
 import {
   formatExecutionLine,
   formatLocaleDateTime,
+  formatRunMetric,
+  humanizeTemplateName,
   humanNodeLabel,
   shortRunId,
   skipConsecutiveByText,
@@ -16,6 +18,8 @@ interface RunSummary {
   status?: string
   created_at?: string
   graph_name?: string
+  artifacts_dir?: string
+  metrics?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -206,6 +210,18 @@ export default function RunsView() {
     }
   }
 
+  const promote = async () => {
+    if (!selected) return
+    try {
+      await apiJson(`/runs/${selected}/promote`, { method: 'POST' })
+      pushToast('This run is now latest', 'success')
+      await load()
+      await open(selected)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
   const loadCheckpointSamples = async (nodeId: string) => {
     if (!selected) return
     try {
@@ -282,12 +298,15 @@ export default function RunsView() {
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="font-mono text-xs" title={r.run_id}>{shortRunId(r.run_id)}</div>
+                    <div className="truncate text-sm font-medium text-ink-900">
+                      {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : 'Pipeline'}
+                    </div>
                     <StatusBadge status={String(r.status ?? 'unknown')} />
                   </div>
-                  <div className="mt-0.5 text-[11px] text-ink-500">
-                    {r.graph_name ? <span className="mr-1 text-ink-700">{String(r.graph_name)} · </span> : null}
-                    {formatLocaleDateTime(r.created_at)}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-ink-500">
+                    <span className="font-mono" title={r.run_id}>{shortRunId(r.run_id)}</span>
+                    <span>{formatLocaleDateTime(r.created_at)}</span>
+                    {formatRunMetric(r.metrics) ? <span>{formatRunMetric(r.metrics)}</span> : null}
                   </div>
                 </button>
               </li>
@@ -390,13 +409,45 @@ export default function RunsView() {
             )}
             {panel === 'artifacts' && (
               <div className="space-y-3">
-                {outputFiles.length > 0 && (
-                  <div className="flex justify-end">
-                    <button type="button" className="btn-secondary" onClick={() => void downloadZip()}>
-                      <Download className="h-3.5 w-3.5" /> Download all
-                    </button>
-                  </div>
-                )}
+                {(() => {
+                  const artifactsDir =
+                    (typeof detail?.artifacts_dir === 'string' && detail.artifacts_dir) ||
+                    ((detail?.meta as { artifacts_dir?: string } | undefined)?.artifacts_dir)
+                  const displayPath = typeof artifactsDir === 'string'
+                    ? artifactsDir.replace(/^workspace\//, '')
+                    : null
+                  const isLatest = detail?.is_latest === true
+                  return (
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        {displayPath ? (
+                          <div className="truncate font-mono text-[11px] text-ink-500">{displayPath}</div>
+                        ) : null}
+                        {isLatest ? (
+                          <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                            Latest
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {!isLatest && (
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => void promote()}
+                          >
+                            Use as latest
+                          </button>
+                        )}
+                        {outputFiles.length > 0 && (
+                          <button type="button" className="btn-secondary" onClick={() => void downloadZip()}>
+                            <Download className="h-3.5 w-3.5" /> Download all
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
                 {outputFiles.length === 0 ? (
                   <div className="text-sm text-ink-500">No downloadable files for this run.</div>
                 ) : (

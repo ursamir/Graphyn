@@ -206,7 +206,7 @@ def resolve_download_path(raw: str) -> Path:
     raise OutputPathError(403, "Path is outside allowed directories")
 
 
-def _walk_allowed_files(root: Path, *, limit: int) -> list[Path]:
+def _walk_allowed_files(root: Path, *, limit: int, this_run_id: str | None = None) -> list[Path]:
     found: list[Path] = []
     if not root.exists() or limit <= 0:
         return found
@@ -230,6 +230,10 @@ def _walk_allowed_files(root: Path, *, limit: int) -> list[Path]:
         dirnames[:] = sorted(
             d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")
         )
+        if this_run_id:
+            base = Path(dirpath)
+            if base.name == "runs":
+                dirnames[:] = [d for d in dirnames if d == this_run_id]
         for name in sorted(filenames):
             if name.startswith("."):
                 continue
@@ -364,18 +368,72 @@ def _dedupe_files(paths: Iterable[Path], *, limit: int = _MAX_LISTED_FILES) -> l
     return out
 
 
+def _run_slug(run_id: str, run_dir: Path, graph: dict[str, Any]) -> str | None:
+    from app.core.workspace_paths import artifact_slug, slug_from_artifacts_posix
+
+    meta_path = run_dir / "meta.json"
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+        if isinstance(meta, dict):
+            artifacts = meta.get("artifacts_dir")
+            if isinstance(artifacts, str) and artifacts.strip():
+                slug = slug_from_artifacts_posix(artifacts)
+                if slug:
+                    return slug
+            name = meta.get("graph_name")
+            if isinstance(name, str) and name.strip():
+                return artifact_slug(name)
+    meta = graph.get("metadata") if isinstance(graph, dict) else None
+    if isinstance(meta, dict) and meta.get("name"):
+        return artifact_slug(str(meta["name"]))
+    for raw in _output_paths_from_graph(graph):
+        slug = slug_from_artifacts_posix(str(raw))
+        if slug:
+            return slug
+    return None
+
+
 def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
     """Collect downloadable files for a run.
 
-    Sources:
-      (a) files under the run directory
-      (b) ArtifactRecord paths for the run
-      (c) node config output_dir / output_path / model_path / output-like path
-      (d) workspace/artifacts (graph slug folder, then the whole tree)
-      (e) legacy Example 6 output dir when those files exist
+    Sources (this run only):
+      (a) journal files under workspace/runs/<run_id>/
+      (b) workspace/artifacts/<slug>/runs/<run_id>/
+      (c) ArtifactRecord paths for this run_id
+      (d) latest/ only when the pointer/symlink targets this run_id
+    Does not walk sibling run folders or the whole artifacts tree.
     """
+    from app.core.workspace_paths import artifact_fs_path, artifact_layout, latest_run_id
+
     collected: list[Path] = []
-    collected.extend(_walk_allowed_files(run_dir, limit=_MAX_LISTED_FILES))
+    collected.extend(_walk_allowed_files(run_dir, limit=_MAX_LISTED_FILES, this_run_id=run_id))
+
+    graph = _load_run_graph(run_dir)
+    slug = _run_slug(run_id, run_dir, graph)
+    if slug:
+        layout = artifact_layout(slug, run_id)
+        remaining = _MAX_LISTED_FILES - len(collected)
+        if remaining > 0:
+            collected.extend(
+                _walk_allowed_files(
+                    artifact_fs_path(layout["run_dir"]),
+                    limit=remaining,
+                    this_run_id=run_id,
+                )
+            )
+        if latest_run_id(slug) == run_id:
+            remaining = _MAX_LISTED_FILES - len(collected)
+            if remaining > 0:
+                collected.extend(
+                    _walk_allowed_files(
+                        artifact_fs_path(layout["latest_dir"]),
+                        limit=remaining,
+                        this_run_id=run_id,
+                    )
+                )
 
     try:
         from app.core.artifact_store import ArtifactStore
@@ -385,11 +443,10 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
                 remaining = _MAX_LISTED_FILES - len(collected)
                 if remaining <= 0:
                     break
-                collected.extend(_walk_allowed_files(raw, limit=remaining))
+                collected.extend(_walk_allowed_files(raw, limit=remaining, this_run_id=run_id))
     except Exception:
         pass
 
-    graph = _load_run_graph(run_dir)
     for raw in _output_paths_from_graph(graph):
         bases: list[Path] = []
         if raw.is_absolute():
@@ -403,22 +460,7 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
             remaining = _MAX_LISTED_FILES - len(collected)
             if remaining <= 0:
                 break
-            collected.extend(_walk_allowed_files(candidate, limit=remaining))
-
-    for extra in _artifact_dirs_from_graph(graph):
-        remaining = _MAX_LISTED_FILES - len(collected)
-        if remaining <= 0:
-            break
-        collected.extend(_walk_allowed_files(extra, limit=remaining))
-
-    remaining = _MAX_LISTED_FILES - len(collected)
-    if remaining > 0:
-        collected.extend(_walk_allowed_files(artifacts_dir(), limit=remaining))
-
-    legacy = repo_root() / LEGACY_EXAMPLE_OUTPUT
-    remaining = _MAX_LISTED_FILES - len(collected)
-    if remaining > 0:
-        collected.extend(_walk_allowed_files(legacy, limit=remaining))
+            collected.extend(_walk_allowed_files(candidate, limit=remaining, this_run_id=run_id))
 
     files = _dedupe_files(collected)
     return [file_entry(p) for p in files]

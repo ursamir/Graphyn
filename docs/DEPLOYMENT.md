@@ -25,7 +25,7 @@ docker compose up --build
 - API: `http://localhost:8001/api/v1/`
 - Named volume `graphyn-home` persists `GRAPHYN_HOME` (plugins + `secrets/` files, mode 0600)
 - `./workspace` is the project dir (`GRAPHYN_PROJECT_DIR`)
-- Pipeline outputs belong in `workspace/artifacts/<name>/` on that bind-mount (not `examples/` inside the image)
+- Pipeline outputs belong in `workspace/artifacts/<name>/runs/<run_id>/` on that bind-mount (not `examples/` inside the image). Successful runs also publish `workspace/artifacts/<name>/latest/` (symlink, or a `latest.json` pointer if the host cannot symlink) so later graphs can consume the production alias.
 
 
 Stop:
