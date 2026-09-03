@@ -237,24 +237,50 @@ def _has_latest_segment(posix: str) -> bool:
     return "/latest/" in padded
 
 
+def _artifact_parts_after_slug(posix: str) -> tuple[str, list[str]] | None:
+    text = _normalize_artifacts(_posix(posix))
+    marker = ARTIFACTS_PREFIX + "/"
+    if not text.startswith(marker):
+        return None
+    rest = [p for p in text[len(marker):].split("/") if p]
+    if not rest:
+        return None
+    return rest[0], rest[1:]
+
+
+def _is_dataset_artifact_tail(posix: str) -> bool:
+    """True when the path under the slug is dataset/ (stable, latest, or runs/)."""
+    parsed = _artifact_parts_after_slug(posix)
+    if not parsed:
+        return False
+    _slug, tail = parsed
+    body = _strip_run_or_latest_prefix(tail)
+    return bool(body) and body[0] == "dataset"
+
+
+def _stable_dataset_artifact(posix: str) -> str | None:
+    """Map artifacts/<slug>/{runs|latest}/dataset/... → artifacts/<slug>/dataset/...."""
+    parsed = _artifact_parts_after_slug(posix)
+    if not parsed:
+        return None
+    slug, tail = parsed
+    body = _strip_run_or_latest_prefix(tail)
+    if not body or body[0] != "dataset":
+        return None
+    return f"{ARTIFACTS_PREFIX}/{slug}/{'/'.join(body)}"
+
+
 def _is_dataset_directory_ingest(key: str, posix: str, node_type: str | None) -> bool:
     """True for dataset_ingest dirs under examples/**/output or artifacts/*/dataset."""
     if Path(posix).suffix.lower() in _OUTPUT_FILE_SUFFIXES:
         return False
-    if key != "path" and node_type != "dataset_ingest":
-        return False
     if key != "path":
         return False
-    if _has_latest_segment(posix):
+    if node_type not in (None, "dataset_ingest"):
         return False
     if _EXAMPLES_OUTPUT_RE.search(posix):
         return True
-    text = _normalize_artifacts(_posix(posix))
-    if text.startswith(ARTIFACTS_PREFIX + "/"):
-        rest = [p for p in text[len(ARTIFACTS_PREFIX) + 1:].split("/") if p]
-        body = _strip_run_or_latest_prefix(rest[1:] if rest else [])
-        return bool(body) and body[0] == "dataset"
-    return False
+    return _is_dataset_artifact_tail(posix)
 
 
 def _join_latest(slug: str, tail: str) -> str:
@@ -288,7 +314,10 @@ def _rewrite_string(key: str, value: str, slug: str, node_type: str | None = Non
     posix = _posix(stripped)
     effective = _effective_path_slug(posix, slug)
     if _is_dataset_directory_ingest(key, posix, node_type):
-        return _join_latest(effective, _dataset_dir_tail(posix))
+        stable = _stable_dataset_artifact(posix)
+        if stable:
+            return stable
+        return _join_artifacts(effective, _dataset_dir_tail(posix))
     if _is_artifacts_path(posix):
         return _normalize_artifacts(posix)
     if _should_rewire_key(key, posix):
@@ -317,9 +346,9 @@ def rewire_graph_outputs(graph: dict[str, Any], *, slug: str) -> dict[str, Any]:
     Input dataset paths under examples/**/data are left in place (after
     stripping a legacy meritech absolute prefix). Dataset directories for
     ingest under examples/**/output or workspace/artifacts/*/dataset retarget
-    to <slug>/latest/<tail>. Generic names (pipeline, graph, untitled) never
-    relocate paths; the slug is taken from example folders or existing
-    artifact paths.
+    to the stable <slug>/dataset/<tail> (never latest/). Generic names
+    (pipeline, graph, untitled) never relocate paths; the slug is taken from
+    example folders or existing artifact paths.
     """
     if not isinstance(graph, dict):
         return graph
@@ -394,7 +423,12 @@ def _scope_artifact_string(posix: str, run_id: str) -> str:
     parts = [p for p in rest.split("/") if p]
     slug = parts[0]
     tail = parts[1:]
+    if tail and tail[0] == "dataset":
+        return text
     if tail and tail[0] in {"runs", "latest"}:
+        body = _strip_run_or_latest_prefix(tail)
+        if body and body[0] == "dataset":
+            return f"{ARTIFACTS_PREFIX}/{slug}/{'/'.join(body)}"
         return text
     if tail:
         return f"{ARTIFACTS_PREFIX}/{slug}/runs/{run_id}/{"/".join(tail)}"
@@ -403,6 +437,8 @@ def _scope_artifact_string(posix: str, run_id: str) -> str:
 
 def _should_scope_key(key: str, posix: str, node_type: str | None = None) -> bool:
     if node_type == "dataset_ingest":
+        return False
+    if _is_dataset_artifact_tail(posix):
         return False
     if _has_latest_segment(posix):
         return False
@@ -421,8 +457,12 @@ def _should_scope_key(key: str, posix: str, node_type: str | None = None) -> boo
 
 def _scope_value(key: str, value: Any, run_id: str, node_type: str | None = None) -> Any:
     if isinstance(value, str):
-        if key in _PATH_KEYS and _should_scope_key(key, value, node_type):
-            return _scope_artifact_string(value, run_id)
+        if key in _PATH_KEYS:
+            stable = _stable_dataset_artifact(value)
+            if stable:
+                return stable
+            if _should_scope_key(key, value, node_type):
+                return _scope_artifact_string(value, run_id)
         return value
     if isinstance(value, dict):
         nt = value.get("node_type") if isinstance(value.get("node_type"), str) else node_type
@@ -434,8 +474,10 @@ def _scope_value(key: str, value: Any, run_id: str, node_type: str | None = None
 def scope_outputs_to_run(graph: Any, run_id: str) -> Any:
     """Insert ``/runs/<run_id>/`` after the artifact slug on output paths.
 
-    Leaves ``latest/`` (inputs from a promoted run), ``dataset_ingest`` paths,
-    paths already under ``/runs/``, and ``examples/**/data`` ingest paths unchanged.
+    Leaves ``latest/`` model/infer inputs, ``dataset_ingest`` paths,
+    paths already under ``/runs/``, and ``examples/**/data`` ingest paths
+    unchanged. Dataset trees under artifacts stay at the stable
+    ``<slug>/dataset/`` location (never rewritten into ``runs/<id>/``).
     """
     rid = str(run_id).strip()
     if not rid:

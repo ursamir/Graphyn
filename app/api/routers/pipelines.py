@@ -368,8 +368,9 @@ def get_template(name: str, version: str | None = None):
         # Always migrate legacy node aliases so the console never paints
         # obsolete types like ``input`` / ``clean`` that are not registered.
         from app.core.ir.loader import dump_ir, load_ir
+        from app.core.workspace_paths import apply_output_rewire
 
-        graph = dump_ir(load_ir(graph))
+        graph = dump_ir(apply_output_rewire(load_ir(graph)))
         response = {"name": name, "graph": graph}
         if version:
             response["version"] = version

@@ -122,6 +122,56 @@ class TestRewireGraphOutputs:
         out = rewire_graph_outputs(graph, slug="builder")
         assert out["nodes"][0]["config"]["output_dir"] == "/mnt/models/custom"
 
+
+    def test_dataset_exporter_examples_output_rewires_stable_not_latest(self):
+        graph = _graph(
+            [
+                {
+                    "id": "exp",
+                    "node_type": "audio_exporter",
+                    "config": {
+                        "output_dir": "examples/06_speech_commands_e2e/output/dataset/speech_commands"
+                    },
+                }
+            ]
+        )
+        out = rewire_graph_outputs(graph, slug="speech_commands_e2e_preprocess")
+        assert out["nodes"][0]["config"]["output_dir"] == (
+            "workspace/artifacts/speech-commands/dataset/speech_commands"
+        )
+        assert "/latest/" not in out["nodes"][0]["config"]["output_dir"]
+
+    def test_dataset_ingest_of_built_dataset_rewires_stable_not_latest(self):
+        graph = _graph(
+            [
+                {
+                    "id": "ingest",
+                    "node_type": "dataset_ingest",
+                    "config": {
+                        "path": "examples/06_speech_commands_e2e/output/dataset/speech_commands/v1"
+                    },
+                }
+            ]
+        )
+        out = rewire_graph_outputs(graph, slug="speech_commands_e2e_train_ml")
+        assert out["nodes"][0]["config"]["path"] == (
+            "workspace/artifacts/speech-commands/dataset/speech_commands/v1"
+        )
+        assert "/latest/" not in out["nodes"][0]["config"]["path"]
+
+    def test_raw_wav_ingest_not_rewired(self):
+        graph = _graph(
+            [
+                {
+                    "id": "ingest",
+                    "node_type": "dataset_ingest",
+                    "config": {"path": "examples/02_speech_commands/data"},
+                }
+            ]
+        )
+        out = rewire_graph_outputs(graph, slug="speech_commands_e2e_train_ml")
+        assert out["nodes"][0]["config"]["path"] == "examples/02_speech_commands/data"
+
     def test_does_not_mutate_original(self):
         graph = _graph(
             [
@@ -198,7 +248,36 @@ class TestScopeOutputsToRun:
             "workspace/artifacts/speech-commands/latest/tflite/model.tflite"
         )
         assert out["nodes"][2]["config"]["path"] == (
-            "workspace/artifacts/speech-commands/latest/dataset/speech_commands/v1"
+            "workspace/artifacts/speech-commands/dataset/speech_commands/v1"
+        )
+
+
+
+    def test_dataset_exporter_not_scoped_into_runs(self):
+        graph = _graph(
+            [
+                {
+                    "id": "exp",
+                    "node_type": "audio_exporter",
+                    "config": {
+                        "output_dir": "workspace/artifacts/speech-commands/dataset/speech_commands"
+                    },
+                },
+                {
+                    "id": "trainer",
+                    "node_type": "trainer",
+                    "config": {"output_path": "workspace/artifacts/speech-commands"},
+                },
+            ]
+        )
+        from app.core.workspace_paths import scope_outputs_to_run
+
+        out = scope_outputs_to_run(graph, "abc123")
+        assert out["nodes"][0]["config"]["output_dir"] == (
+            "workspace/artifacts/speech-commands/dataset/speech_commands"
+        )
+        assert out["nodes"][1]["config"]["output_path"] == (
+            "workspace/artifacts/speech-commands/runs/abc123"
         )
 
 

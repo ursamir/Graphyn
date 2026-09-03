@@ -248,7 +248,7 @@ function BuilderInner() {
       return attachHandlers({
         id: n.id,
         type: 'graphyn',
-        position: positions[n.id] ?? { x: 180 + (i % 3) * 280, y: 60 + Math.floor(i / 3) * 160 },
+        position: positions[n.id] ?? { x: 60 + (i % 3) * 380, y: 40 + Math.floor(i / 3) * 300 },
         data: {
           nodeType: n.node_type,
           label: entry?.label || n.label || humanNodeLabel(n.node_type),

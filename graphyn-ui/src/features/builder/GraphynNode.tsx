@@ -129,6 +129,7 @@ function fieldEditor(
     <input
       className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
       value={formatValue(def, value)}
+      title={formatValue(def, value)}
       onChange={(e) => {
         try {
           onChange(parseValue(def, e.target.value))
@@ -160,7 +161,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
     <div
       title={data.nodeType}
       className={clsx(
-        'min-w-[196px] max-w-[248px] overflow-hidden rounded-lg border bg-white shadow-sm',
+        'min-w-[280px] max-w-[340px] overflow-visible rounded-lg border bg-white shadow-sm',
         selected ? 'border-accent-500 shadow-md ring-2 ring-accent-200' : 'border-ink-200',
         status === 'running' && 'border-accent-400',
         status === 'success' && 'border-emerald-500',

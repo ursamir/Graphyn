@@ -55,8 +55,18 @@ ALLOWED_SUFFIXES = frozenset(
 )
 
 _SKIP_DIR_NAMES = frozenset(
-    {".git", "__pycache__", "node_modules", "dataset", "data", ".venv"}
+    {".git", "__pycache__", "node_modules", "data", ".venv"}
 )
+# Generic os.walk skips this name so a 10k-wav tree cannot fill the 400-file cap.
+_SKIP_HEAVY_DIR_NAMES = frozenset({"dataset"})
+
+_DATASET_META_NAMES = frozenset(
+    {"labels.csv", "metadata.json", "dataset.json", "manifest.csv", "readme.md"}
+)
+_DATASET_AUDIO_SUFFIXES = frozenset({".wav", ".flac", ".mp3", ".ogg", ".webm"})
+_MAX_DATASET_DIRS = 12
+_MAX_DATASET_WAVS = 3
+_MAX_DATASET_DEPTH = 3  # dataset / <name> / v1 / train|val|test
 
 _MAX_LISTED_FILES = 400
 _MAX_ZIP_BYTES = 512 * 1024 * 1024
@@ -228,7 +238,11 @@ def _walk_allowed_files(root: Path, *, limit: int, this_run_id: str | None = Non
         return found
     for dirpath, dirnames, filenames in os.walk(resolved_root):
         dirnames[:] = sorted(
-            d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")
+            d
+            for d in dirnames
+            if d not in _SKIP_DIR_NAMES
+            and d not in _SKIP_HEAVY_DIR_NAMES
+            and not d.startswith(".")
         )
         if this_run_id:
             base = Path(dirpath)
@@ -249,6 +263,106 @@ def _walk_allowed_files(root: Path, *, limit: int, this_run_id: str | None = Non
                 if len(found) >= limit:
                     return found
     return found
+
+
+
+def _path_has_dataset_segment(path: Path) -> bool:
+    return any(part.lower() == "dataset" for part in path.parts)
+
+
+def _dataset_depth(path: Path) -> int | None:
+    parts = [part.lower() for part in path.parts]
+    if "dataset" not in parts:
+        return None
+    return len(parts) - parts.index("dataset") - 1
+
+
+def _summarize_dataset_tree(root: Path, *, limit: int) -> list[Path]:
+    """List a dataset tree without enumerating every wav.
+
+    Includes the dataset folders (up to split level), labels/metadata, and a
+    handful of sample audio files so the 400-entry cap still has room for plots.
+    """
+    found: list[Path] = []
+    if not root.exists() or limit <= 0:
+        return found
+    try:
+        resolved_root = root.resolve()
+    except OSError:
+        return found
+    if not is_under_jail(resolved_root):
+        return found
+
+    seen: set[str] = set()
+
+    def add(path: Path) -> bool:
+        if len(found) >= limit:
+            return False
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return True
+        if not is_under_jail(resolved):
+            return True
+        key = str(resolved)
+        if key in seen:
+            return True
+        seen.add(key)
+        found.append(resolved)
+        return len(found) < limit
+
+    if resolved_root.is_file():
+        add(resolved_root)
+        return found
+    if resolved_root.is_dir():
+        add(resolved_root)
+
+    dir_count = 1 if resolved_root.is_dir() else 0
+    wav_count = 0
+    for dirpath, dirnames, filenames in os.walk(resolved_root):
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")
+        )
+        base = Path(dirpath)
+        depth = _dataset_depth(base)
+        if depth is not None and depth >= _MAX_DATASET_DEPTH:
+            dirnames[:] = []
+        elif dir_count < _MAX_DATASET_DIRS:
+            for name in list(dirnames):
+                child = base / name
+                child_depth = _dataset_depth(child)
+                if child_depth is None or child_depth > _MAX_DATASET_DEPTH:
+                    continue
+                if dir_count >= _MAX_DATASET_DIRS:
+                    break
+                if add(child):
+                    dir_count += 1
+                else:
+                    return found
+        for name in sorted(filenames):
+            if name.startswith("."):
+                continue
+            child = base / name
+            lower = name.lower()
+            suffix = child.suffix.lower()
+            if lower in _DATASET_META_NAMES or suffix in {".csv", ".json", ".md"}:
+                if not add(child):
+                    return found
+            elif suffix in _DATASET_AUDIO_SUFFIXES and wav_count < _MAX_DATASET_WAVS:
+                if not add(child):
+                    return found
+                wav_count += 1
+    return found
+
+
+def _collect_listed_paths(
+    root: Path, *, limit: int, this_run_id: str | None = None
+) -> list[Path]:
+    if limit <= 0:
+        return []
+    if _path_has_dataset_segment(root):
+        return _summarize_dataset_tree(root, limit=limit)
+    return _walk_allowed_files(root, limit=limit, this_run_id=this_run_id)
 
 
 def _paths_from_artifact_record(record: Any) -> list[Path]:
@@ -399,17 +513,18 @@ def _run_slug(run_id: str, run_dir: Path, graph: dict[str, Any]) -> str | None:
 def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
     """Collect downloadable files for a run.
 
-    Sources (this run only):
+    Sources:
       (a) journal files under workspace/runs/<run_id>/
       (b) workspace/artifacts/<slug>/runs/<run_id>/
       (c) ArtifactRecord paths for this run_id
       (d) latest/ only when the pointer/symlink targets this run_id
+      (e) the stable workspace/artifacts/<slug>/dataset/ tree
     Does not walk sibling run folders or the whole artifacts tree.
     """
-    from app.core.workspace_paths import artifact_fs_path, artifact_layout, latest_run_id
+    from app.core.workspace_paths import ARTIFACTS_PREFIX, artifact_fs_path, artifact_layout, latest_run_id
 
     collected: list[Path] = []
-    collected.extend(_walk_allowed_files(run_dir, limit=_MAX_LISTED_FILES, this_run_id=run_id))
+    collected.extend(_collect_listed_paths(run_dir, limit=_MAX_LISTED_FILES, this_run_id=run_id))
 
     graph = _load_run_graph(run_dir)
     slug = _run_slug(run_id, run_dir, graph)
@@ -418,7 +533,7 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
         remaining = _MAX_LISTED_FILES - len(collected)
         if remaining > 0:
             collected.extend(
-                _walk_allowed_files(
+                _collect_listed_paths(
                     artifact_fs_path(layout["run_dir"]),
                     limit=remaining,
                     this_run_id=run_id,
@@ -428,12 +543,21 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
             remaining = _MAX_LISTED_FILES - len(collected)
             if remaining > 0:
                 collected.extend(
-                    _walk_allowed_files(
+                    _collect_listed_paths(
                         artifact_fs_path(layout["latest_dir"]),
                         limit=remaining,
                         this_run_id=run_id,
                     )
                 )
+        remaining = _MAX_LISTED_FILES - len(collected)
+        if remaining > 0:
+            collected.extend(
+                _collect_listed_paths(
+                    artifact_fs_path(f"{ARTIFACTS_PREFIX}/{slug}/dataset"),
+                    limit=remaining,
+                    this_run_id=run_id,
+                )
+            )
 
     try:
         from app.core.artifact_store import ArtifactStore
@@ -443,7 +567,7 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
                 remaining = _MAX_LISTED_FILES - len(collected)
                 if remaining <= 0:
                     break
-                collected.extend(_walk_allowed_files(raw, limit=remaining, this_run_id=run_id))
+                collected.extend(_collect_listed_paths(raw, limit=remaining, this_run_id=run_id))
     except Exception:
         pass
 
@@ -460,7 +584,7 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
             remaining = _MAX_LISTED_FILES - len(collected)
             if remaining <= 0:
                 break
-            collected.extend(_walk_allowed_files(candidate, limit=remaining, this_run_id=run_id))
+            collected.extend(_collect_listed_paths(candidate, limit=remaining, this_run_id=run_id))
 
     files = _dedupe_files(collected)
     return [file_entry(p) for p in files]
