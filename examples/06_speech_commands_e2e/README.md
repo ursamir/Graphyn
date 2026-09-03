@@ -137,21 +137,35 @@ realtime_inference
 
 ## Output Directory
 
+Console / Docker Compose training writes **models and plots** under the bind-mounted
+workspace (`./workspace:/app/workspace`), so they show up on the host and in the
+Runs → Artifacts download tab:
+
 ```
-output/
-├── dataset/speech_commands/v1/
-│   ├── train/{label}/*.wav
-│   ├── val/{label}/*.wav
-│   └── test/{label}/*.wav
-├── checkpoints/          Best checkpoint during training
-├── saved_model/          TF SavedModel (for TFLite conversion)
-├── tflite/
-│   ├── model.tflite      INT8 TFLite model
-│   └── labels.txt
-├── metrics.json          Test accuracy + per-class metrics
+workspace/artifacts/speech-commands/
+├── model.keras
+├── saved_model/
+├── checkpoints/
+├── metrics.json
 ├── confusion_matrix.png
+├── roc_curves.png
 ├── training_curves.png
-└── feature_config.json   Feature extractor config (read by run_infer.py)
+└── tflite/
+    ├── model.tflite
+    └── labels.txt
+```
+
+**Dataset ingest is unchanged.** Phase 2 still reads preprocessed WAVs from
+`examples/06_speech_commands_e2e/output/dataset/speech_commands/v1/` (written by
+Phase 1). CLI `run_train.py` also still writes under `examples/06_speech_commands_e2e/output/`
+when run on the host; that legacy tree is listed by the download API when files exist.
+
+```
+examples/06_speech_commands_e2e/output/   # Phase 1 dataset + legacy CLI artifacts
+└── dataset/speech_commands/v1/
+    ├── train/{label}/*.wav
+    ├── val/{label}/*.wav
+    └── test/{label}/*.wav
 ```
 
 ---

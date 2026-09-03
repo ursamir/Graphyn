@@ -39,6 +39,7 @@ from app.api.routers.projects import router as projects_router
 from app.api.routers.ingest import router as ingest_router
 from app.api.routers.run_control import router as run_control_router
 from app.api.routers.artifacts import router as artifacts_router
+from app.api.routers.outputs import router as outputs_router
 from app.api.routers.plugins import router as plugins_router
 from app.api.routers.secrets import router as secrets_router
 from app.api.observability import record_request
@@ -166,6 +167,7 @@ app.include_router(projects_router,    prefix="/api/v1", dependencies=_deps)
 app.include_router(ingest_router,      prefix="/api/v1", dependencies=_deps)
 app.include_router(run_control_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(artifacts_router,   prefix="/api/v1", dependencies=_deps)
+app.include_router(outputs_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(plugins_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(secrets_router,     prefix="/api/v1", dependencies=_deps)
 

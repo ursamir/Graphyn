@@ -7,6 +7,8 @@ Owns:             Route definitions for GET /runs, GET /runs/{run_id},
                   GET /runs/{run_id}/status,
                   GET /runs/{run_id}/checkpoints/**,
                   GET /runs/{run_id}/artifacts,
+                  GET /runs/{run_id}/outputs,
+                  GET /runs/{run_id}/outputs/zip,
                   GET /runs/{run_id}/provenance.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
@@ -22,6 +24,7 @@ import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from app.core.config import runs_dir as _runs_dir
 
 # ASCII-only run_id: must start with alphanumeric, hyphens allowed in body.
@@ -226,6 +229,33 @@ def get_checkpoint_samples(
     if not isinstance(samples, list):
         samples = []
     return samples[:n]
+
+
+# ── Downloadable outputs ──────────────────────────────────────────────────────
+
+@router.get("/{run_id}/outputs", summary="List downloadable output files for a run")
+def list_run_outputs(run_id: str):
+    """Return files from the run dir, artifact records, graph output_path, and legacy Example 6."""
+    run_path = _run_dir(run_id)
+    from app.core.run_outputs import list_run_output_files
+
+    return list_run_output_files(run_id, run_path)
+
+
+@router.get("/{run_id}/outputs/zip", summary="Download run outputs as a zip")
+def download_run_outputs_zip(run_id: str):
+    """Zip listed output files for one-click download."""
+    run_path = _run_dir(run_id)
+    from app.core.run_outputs import list_run_output_files, pack_outputs_zip
+
+    entries = list_run_output_files(run_id, run_path)
+    payload = pack_outputs_zip(entries)
+    filename = f"{run_id}-outputs.zip"
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ── Artifacts ─────────────────────────────────────────────────────────────────

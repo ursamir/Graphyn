@@ -170,3 +170,25 @@ export async function fetchAuthenticatedBlobUrl(staticPath: string): Promise<str
   const blob = await res.blob()
   return URL.createObjectURL(blob)
 }
+
+/** Authenticated blob URL for a jailed output file (caller must revoke). */
+export async function fetchOutputBlobUrl(filePath: string): Promise<string> {
+  const res = await apiFetch('/outputs/file', { query: { path: filePath }, timeoutMs: 120000 })
+  if (!res.ok) throw await parseError(res, '/outputs/file')
+  const blob = await res.blob()
+  return URL.createObjectURL(blob)
+}
+
+export async function downloadOutputFile(filePath: string, filename?: string): Promise<void> {
+  const url = await fetchOutputBlobUrl(filePath)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename || filePath.split(/[\\/]/).pop() || 'download'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}

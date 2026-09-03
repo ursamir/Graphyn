@@ -1,6 +1,6 @@
 import React from 'react'
-import { Copy, Play, RefreshCw } from 'lucide-react'
-import { apiJson } from '../../api/client'
+import { Copy, Download, Play, RefreshCw } from 'lucide-react'
+import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
 import { humanNodeLabel, shortRunId } from '../../lib/format'
@@ -40,6 +40,7 @@ export default function ArtifactsView() {
   const [nodeTypeFilter, setNodeTypeFilter] = React.useState('')
   const [artifactTypeFilter, setArtifactTypeFilter] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
 
   const idOf = (a: Artifact) => String(a.artifact_id ?? a.id ?? '')
 
@@ -99,6 +100,37 @@ export default function ArtifactsView() {
   }
 
   const path = findCopyablePath(detail)
+
+  React.useEffect(() => {
+    if (!path || !/\.(png|jpe?g|gif|webp)$/i.test(path)) {
+      setPreviewUrl(null)
+      return
+    }
+    let cancelled = false
+    let created: string | null = null
+    void fetchOutputBlobUrl(path)
+      .then((url) => {
+        created = url
+        if (!cancelled) setPreviewUrl(url)
+        else URL.revokeObjectURL(url)
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewUrl(null)
+      })
+    return () => {
+      cancelled = true
+      if (created) URL.revokeObjectURL(created)
+    }
+  }, [path])
+
+  const download = async (filePath: string) => {
+    try {
+      await downloadOutputFile(filePath)
+      pushToast('Download started', 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
 
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
@@ -195,11 +227,23 @@ export default function ArtifactsView() {
               <Play className="h-3.5 w-3.5" /> Replay
             </button>
             {path && (
-              <div className="flex items-start gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2">
-                <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-ink-800">{path}</code>
-                <button type="button" className="btn-secondary shrink-0" onClick={() => void copyPath(path)}>
-                  <Copy className="h-3.5 w-3.5" /> Copy path
-                </button>
+              <div className="space-y-2">
+                <div className="flex items-start gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2">
+                  <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-ink-800">{path}</code>
+                  <button type="button" className="btn-secondary shrink-0" onClick={() => void copyPath(path)}>
+                    <Copy className="h-3.5 w-3.5" /> Copy path
+                  </button>
+                  <button type="button" className="btn-primary shrink-0" onClick={() => void download(path)}>
+                    <Download className="h-3.5 w-3.5" /> Download
+                  </button>
+                </div>
+                {previewUrl && (
+                  <img
+                    src={previewUrl}
+                    alt={path.split(/[\\/]/).pop() || 'preview'}
+                    className="max-h-80 w-full rounded-xl border border-ink-200 object-contain bg-white"
+                  />
+                )}
               </div>
             )}
             <h3 className="text-sm font-semibold">Detail</h3>

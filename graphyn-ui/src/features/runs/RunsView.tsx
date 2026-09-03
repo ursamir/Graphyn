@@ -1,6 +1,6 @@
 import React from 'react'
-import { Pause, Play, Square, RefreshCw } from 'lucide-react'
-import { apiJson } from '../../api/client'
+import { Download, Pause, Play, Square, RefreshCw } from 'lucide-react'
+import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
 import {
@@ -17,6 +17,29 @@ interface RunSummary {
   created_at?: string
   graph_name?: string
   [key: string]: unknown
+}
+
+interface OutputFile {
+  name: string
+  path: string
+  size: number
+  kind: string
+}
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "—"
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function isPreviewPlot(file: OutputFile): boolean {
+  if (file.kind === "dir") return false
+  const n = file.name.toLowerCase()
+  return (
+    n.endsWith(".png") &&
+    (n.includes("confusion_matrix") || n.includes("roc") || n.includes("training_curves"))
+  )
 }
 
 const PANEL_LABELS: Record<string, string> = {
@@ -41,6 +64,8 @@ export default function RunsView() {
   const [checkpoints, setCheckpoints] = React.useState<string[]>([])
   const [samples, setSamples] = React.useState<unknown>(null)
   const [artifacts, setArtifacts] = React.useState<unknown>(null)
+  const [outputFiles, setOutputFiles] = React.useState<OutputFile[]>([])
+  const [previewUrls, setPreviewUrls] = React.useState<Record<string, string>>({})
   const [provenance, setProvenance] = React.useState<unknown>(null)
   const [panel, setPanel] = React.useState<'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'provenance'>('logs')
   const [error, setError] = React.useState<string | null>(null)
@@ -72,15 +97,17 @@ export default function RunsView() {
     setDebug(null)
     setSamples(null)
     setArtifacts(null)
+    setOutputFiles([])
     setProvenance(null)
     setError(null)
     try {
-      const [d, st, dbg, cps, arts, prov] = await Promise.all([
+      const [d, st, dbg, cps, arts, outs, prov] = await Promise.all([
         apiJson<Record<string, unknown>>(`/runs/${id}`),
         apiJson<Record<string, unknown>>(`/runs/${id}/status`).catch(() => null),
         apiJson<Record<string, unknown>>(`/runs/${id}/debug-report`).catch(() => null),
         apiJson<string[]>(`/runs/${id}/checkpoints`).catch(() => []),
         apiJson(`/runs/${id}/artifacts`).catch(() => []),
+        apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
         apiJson(`/runs/${id}/provenance`).catch(() => null),
       ])
       setDetail(d)
@@ -88,6 +115,7 @@ export default function RunsView() {
       setDebug(dbg)
       setCheckpoints(Array.isArray(cps) ? cps : [])
       setArtifacts(arts)
+      setOutputFiles(Array.isArray(outs) ? outs : [])
       setProvenance(prov)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -106,6 +134,66 @@ export default function RunsView() {
     }, 2000)
     return () => clearInterval(t)
   }, [selected, status?.status, detail])
+
+  React.useEffect(() => {
+    const plots = outputFiles.filter(isPreviewPlot)
+    let cancelled = false
+    const created: string[] = []
+    void (async () => {
+      const next: Record<string, string> = {}
+      for (const file of plots) {
+        try {
+          const url = await fetchOutputBlobUrl(file.path)
+          created.push(url)
+          if (cancelled) {
+            URL.revokeObjectURL(url)
+            continue
+          }
+          next[file.path] = url
+        } catch {
+          /* preview is optional */
+        }
+      }
+      if (!cancelled) setPreviewUrls(next)
+    })()
+    return () => {
+      cancelled = true
+      created.forEach((u) => URL.revokeObjectURL(u))
+    }
+  }, [outputFiles])
+
+  const downloadFile = async (file: OutputFile) => {
+    try {
+      await downloadOutputFile(file.path, file.name)
+      pushToast(`Downloading ${file.name}`, 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const downloadZip = async () => {
+    if (!selected) return
+    try {
+      const url = apiUrl(`/runs/${selected}/outputs/zip`)
+      const token = getApiToken()
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) throw new Error(`Download failed (${res.status})`)
+      const blob = await res.blob()
+      const obj = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = obj
+      a.download = `${selected}-outputs.zip`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(obj)
+      pushToast('Zip download started', 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
 
   const control = async (id: string, action: 'pause' | 'resume' | 'cancel') => {
     try {
@@ -300,7 +388,49 @@ export default function RunsView() {
                 {samples != null && <CollapsibleJson value={samples} label="Samples" />}
               </div>
             )}
-            {panel === 'artifacts' && <KeyValue data={artifacts} empty="No artifacts for this run." />}
+            {panel === 'artifacts' && (
+              <div className="space-y-3">
+                {outputFiles.length > 0 && (
+                  <div className="flex justify-end">
+                    <button type="button" className="btn-secondary" onClick={() => void downloadZip()}>
+                      <Download className="h-3.5 w-3.5" /> Download all
+                    </button>
+                  </div>
+                )}
+                {outputFiles.length === 0 ? (
+                  <div className="text-sm text-ink-500">No downloadable files for this run.</div>
+                ) : (
+                  <ul className="space-y-2">
+                    {outputFiles.map((f) => (
+                      <li key={`${f.path}-${f.name}`} className="rounded-xl border border-ink-200 bg-white px-3 py-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-ink-900">{f.name}</div>
+                            <div className="truncate font-mono text-[10px] text-ink-400">{f.path}</div>
+                            <div className="text-[11px] text-ink-500">
+                              {f.kind} · {formatBytes(f.size)}
+                            </div>
+                          </div>
+                          {f.kind !== 'dir' && (
+                            <button type="button" className="btn-primary shrink-0" onClick={() => void downloadFile(f)}>
+                              <Download className="h-3.5 w-3.5" /> Download
+                            </button>
+                          )}
+                        </div>
+                        {previewUrls[f.path] && (
+                          <img
+                            src={previewUrls[f.path]}
+                            alt={f.name}
+                            className="mt-2 max-h-64 w-full rounded-lg border border-ink-100 object-contain bg-ink-50"
+                          />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <KeyValue data={artifacts} empty="No artifact records for this run." />
+              </div>
+            )}
             {panel === 'provenance' && <KeyValue data={provenance} empty="No provenance." />}
           </>
         )}
