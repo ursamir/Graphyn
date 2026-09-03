@@ -70,7 +70,7 @@ def test_known_enum_keys_have_enum_lists(toml_path: Path) -> None:
 
 
 def test_nodes_py_literal_for_known_enum_keys() -> None:
-    """Canvas widgets come from Pydantic Literal/enum on Config, not toml."""
+    """Pydantic Literal keeps runtime validation aligned with plugin.toml enums."""
     missing: list[str] = []
     for path in sorted(PLUGIN_ROOT.rglob("nodes.py")):
         tree = ast.parse(path.read_text())
@@ -112,3 +112,21 @@ def test_trainer_model_json_schema_exposes_enums() -> None:
     assert builder["backend"]["enum"] == ["keras", "auto"]
     assert trainer["epochs"]["type"] == "integer"
     assert trainer["mixed_precision"]["type"] == "boolean"
+
+
+def test_nodes_py_field_is_imported() -> None:
+    """c466516 used Field() in Config; the name must be imported (not only inside string templates)."""
+    missing: list[str] = []
+    for path in sorted(PLUGIN_ROOT.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        uses = False
+        imported = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("pydantic"):
+                if any(a.name in {"Field", "*"} for a in node.names):
+                    imported = True
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Field":
+                uses = True
+        if uses and not imported:
+            missing.append(str(path.relative_to(ROOT)))
+    assert not missing, f"Field() used without pydantic import: {missing}"

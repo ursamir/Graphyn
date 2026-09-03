@@ -91,8 +91,10 @@ class PluginManifest(BaseModel):
         registration without importing plugin code. Default ``[]`` (AST
         fallback from entry points for isolated plugins).
     config_schema
-        Optional per-node-type JSON Schema (or flat {field: {type, default}}
-        tables) used by isolated stubs when AST Config extraction is empty.
+        Plugin-author UI contract: per-node-type field tables
+        ``{field: {type, title, description, enum, default, widget}}``.
+        Builder renders this (overlaid on Pydantic Config). Isolated stubs
+        also use it when AST Config extraction is empty.
         Keys are node_type strings. Default ``{}``.
     """
 

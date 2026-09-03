@@ -44,6 +44,8 @@ class NodeRegistry:
     def __init__(self) -> None:
         self._classes: dict[str, type] = {}           # node_type → Node subclass
         self._metadata: dict[str, NodeMetadata] = {}  # node_type → NodeMetadata
+        # plugin.toml [config_schema.<node_type>] — plugin-author UI contract
+        self._plugin_ui_fields: dict[str, dict[str, Any]] = {}
         self.type_catalogue = TypeCatalogue()
         self._lock = threading.RLock()  # N-08 fix: guards _classes and _metadata
 
@@ -91,6 +93,7 @@ class NodeRegistry:
         with self._lock:
             self._classes.pop(node_type, None)
             self._metadata.pop(node_type, None)
+            self._plugin_ui_fields.pop(node_type, None)
 
     # ── lookup ────────────────────────────────────────────────────────────────
 
@@ -216,20 +219,40 @@ class NodeRegistry:
 
     # ── schema export ─────────────────────────────────────────────────────────
 
+    def set_plugin_ui_schema(self, node_type: str, fields: dict[str, Any] | None) -> None:
+        """Record plugin.toml config_schema for *node_type* (plugin-author UI)."""
+        with self._lock:
+            self._plugin_ui_fields[str(node_type)] = dict(fields or {})
+
     def get_config_schema(self, node_type: str) -> dict[str, Any]:
-        """Return the JSON Schema for the node's Config Pydantic model.
+        """Return JSON Schema for Builder: plugin.toml overlay on Pydantic Config.
+
+        Installed plugins own titles, descriptions, enums, and widget hints via
+        ``[config_schema.<node_type>]``. The host only renders that contract.
+        Pydantic Config remains the fallback when the plugin omits a field.
 
         Raises:
-            NodeNotFoundError: if node_type is not registered or has no
-                Pydantic Config class.
+            NodeNotFoundError: if node_type is not registered and has neither
+                a Pydantic Config class nor a plugin UI table.
         """
+        from app.core.nodes.plugin_ui import overlay_plugin_ui
+
         node_class = self.get_class(node_type)
         cfg = getattr(node_class, "Config", None)
-        if cfg is None or not hasattr(cfg, "model_json_schema"):
+        base: dict[str, Any] = {}
+        if cfg is not None and hasattr(cfg, "model_json_schema"):
+            dumped = cfg.model_json_schema()
+            if isinstance(dumped, dict):
+                base = dumped
+        with self._lock:
+            fields = self._plugin_ui_fields.get(node_type)
+        if fields:
+            return overlay_plugin_ui(base, fields)
+        if not base:
             raise NodeNotFoundError(
                 f"Node '{node_type}' has no Pydantic Config class."
             )
-        return cfg.model_json_schema()
+        return base
 
     def get_port_schema(self, node_type: str) -> dict[str, Any]:
         """Return the port schema dict (inputs + outputs) for the node.

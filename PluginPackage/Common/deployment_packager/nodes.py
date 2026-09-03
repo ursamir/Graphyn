@@ -18,6 +18,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 from typing import ClassVar, Literal
+from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig

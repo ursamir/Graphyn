@@ -180,6 +180,7 @@ class PluginLoader:
                 "PluginLoader: plugin '%s' already loaded — skipping",
                 manifest.name,
             )
+            self._attach_plugin_ui_schema(manifest)
             declared = list(manifest.node_types or [])
             return [n for n in declared if n in self._registry._classes]
 
@@ -235,6 +236,8 @@ class PluginLoader:
             len(new_node_types),
             new_node_types,
         )
+
+        self._attach_plugin_ui_schema(manifest)
 
         # Step 7 — return newly registered node_types
         self._loaded_plugins.add(manifest.name)
@@ -525,6 +528,15 @@ class PluginLoader:
             new_types = sorted(after - before)
 
         return sorted(set(names) | set(new_types))
+
+    def _attach_plugin_ui_schema(self, manifest: PluginManifest) -> None:
+        """Publish plugin.toml [config_schema] as the Builder UI contract."""
+        schemas = getattr(manifest, "config_schema", None) or {}
+        if not isinstance(schemas, dict):
+            return
+        for node_type, fields in schemas.items():
+            if isinstance(fields, dict):
+                self._registry.set_plugin_ui_schema(str(node_type), fields)
 
     @staticmethod
     def _ast_node_types(plugin_dir: Path, manifest: PluginManifest) -> list[str]:

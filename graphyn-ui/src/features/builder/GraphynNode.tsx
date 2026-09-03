@@ -125,6 +125,33 @@ function fieldEditor(
     )
   }
 
+  const widget = String(unwrapSchema(def).widget ?? '')
+  if (widget === 'textarea' || widget === 'json') {
+    return (
+      <textarea
+        className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-1 font-mono text-[10px] text-ink-800"
+        rows={3}
+        defaultValue={formatValue(def, value)}
+        title={schemaFieldHint(def)}
+        onBlur={(e) => onChange(parseValue(def, e.target.value))}
+        onMouseDown={(e) => e.stopPropagation()}
+        spellCheck={false}
+      />
+    )
+  }
+  if (widget === 'password' || widget === 'secret') {
+    return (
+      <input
+        type="password"
+        className="mt-0.5 w-full rounded border border-ink-200 bg-ink-50 px-1.5 py-0.5 font-mono text-[11px] text-ink-800"
+        value={formatValue(def, value)}
+        title={schemaFieldHint(def)}
+        onChange={(e) => onChange(e.target.value)}
+        onMouseDown={(e) => e.stopPropagation()}
+      />
+    )
+  }
+
   const complex =
     type === 'object' ||
     isObjectSchema(def) ||
