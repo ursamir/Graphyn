@@ -198,3 +198,62 @@ class TestPromoteRun:
         assert row["created_at"]
         assert row["artifacts_dir"].endswith(f"runs/{run_id}")
         assert row["metrics"]["accuracy"] == 0.91
+
+
+class TestDeleteRun:
+    def test_delete_removes_journal_and_artifact_trees(self, api_client, tmp_workspace):
+        run_id = "del-me"
+        run_dir = tmp_workspace / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "completed",
+                    "graph_name": "demo",
+                    "artifacts_dir": f"workspace/artifacts/demo/runs/{run_id}",
+                }
+            )
+        )
+        art = tmp_workspace / "artifacts" / "demo" / "runs" / run_id
+        art.mkdir(parents=True)
+        (art / "out.txt").write_text("x")
+        resp = api_client.delete(f"/api/v1/runs/{run_id}")
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == run_id
+        assert not run_dir.exists()
+        assert not art.exists()
+
+    def test_delete_running_returns_409(self, api_client, tmp_workspace):
+        run_id = "still-going"
+        run_dir = tmp_workspace / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "meta.json").write_text(json.dumps({"run_id": run_id, "status": "running"}))
+        resp = api_client.delete(f"/api/v1/runs/{run_id}")
+        assert resp.status_code == 409
+
+    def test_delete_retargets_latest(self, api_client, tmp_workspace):
+        from app.core.workspace_paths import latest_run_id, publish_latest
+
+        for rid in ("older", "newer"):
+            d = tmp_workspace / "runs" / rid
+            d.mkdir(parents=True)
+            (d / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": rid,
+                        "status": "completed",
+                        "graph_name": "demo",
+                        "artifacts_dir": f"workspace/artifacts/demo/runs/{rid}",
+                    }
+                )
+            )
+            art = tmp_workspace / "artifacts" / "demo" / "runs" / rid
+            art.mkdir(parents=True)
+            (art / "out.txt").write_text(rid)
+        publish_latest("demo", "newer")
+        resp = api_client.delete("/api/v1/runs/newer")
+        assert resp.status_code == 200
+        assert latest_run_id("demo") == "older"
+        assert (tmp_workspace / "runs" / "older").exists()
+        assert not (tmp_workspace / "runs" / "newer").exists()

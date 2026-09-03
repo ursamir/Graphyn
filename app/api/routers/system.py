@@ -9,20 +9,19 @@ Owns:             Route definitions for GET /system/health,
                   POST /system/webhooks/test,
                   GET /system/projects-registry.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
-Must NOT:         Contain cleanup or webhook logic — delegate to ArtifactStore,
+Must NOT:         Contain cleanup or webhook logic — delegate to run_cleanup,
                   WebhookService, and ProjectManager.
-Dependencies:     fastapi, app.core.{artifact_store, webhook, config},
-                  app.domain.project_manager, stdlib (shutil, datetime).
+Dependencies:     fastapi, app.core.{run_cleanup, webhook, config},
+                  app.domain.project_manager, stdlib (datetime).
 Reason To Change: New system endpoint added, or cleanup policy changes.
 """
 from __future__ import annotations
 
-import shutil
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.config import runs_dir as _runs_dir, cache_dir as _cache_dir
 from app.domain.project_manager import ProjectManager
@@ -65,63 +64,35 @@ def metrics_snapshot():
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 
 class CleanupRequest(BaseModel):
-    older_than_days: int = 7
+    older_than_days: int = Field(7, ge=0)
     delete_cache: bool = True
     delete_artifacts: bool = False
+    keep_latest: bool = True
 
 
 @router.post("/cleanup", summary="Clean up old runs and cache")
 def cleanup(body: CleanupRequest = CleanupRequest()):
-    """Delete run directories older than older_than_days, optionally cache and artifact entries."""
-    from datetime import timedelta
+    """Delete finished run journals older than older_than_days.
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=body.older_than_days)
-    runs_deleted = 0
-    cache_deleted = 0
-    artifacts_deleted = 0
-    bytes_freed = 0
+    ``older_than_days=0`` deletes all finished runs (completed/failed/cancelled).
+    Currently running/paused runs are never deleted. When ``keep_latest`` is
+    true (default), the run that ``latest/`` still points at is kept, including
+    its ``workspace/artifacts/<slug>/runs/<id>`` folder.
 
-    runs_root = _runs_dir()
-    cache_root = _cache_dir()
+    Optional cache cleanup applies the same age cutoff under ``cache/``.
+    When ``delete_artifacts`` is true, matching
+    ``{project_dir}/artifacts/<slug>/runs/<run_id>/`` folders are removed too.
+    ``examples/`` and ``datasets/input`` are never touched. Deletion is jailed
+    to ``runs/``, ``cache/``, and ``artifacts/`` under the project dir.
+    """
+    from app.core.run_cleanup import cleanup_workspace
 
-    if runs_root.exists():
-        for entry in runs_root.iterdir():
-            if not entry.is_dir():
-                continue
-            mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
-            if mtime < cutoff:
-                for f in entry.rglob("*"):
-                    if f.is_file():
-                        bytes_freed += f.stat().st_size
-                shutil.rmtree(entry)
-                runs_deleted += 1
-
-    if body.delete_cache and cache_root.exists():
-        for entry in cache_root.iterdir():
-            if not entry.is_dir():
-                continue
-            mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=timezone.utc)
-            if mtime < cutoff:
-                for f in entry.rglob("*"):
-                    if f.is_file():
-                        bytes_freed += f.stat().st_size
-                shutil.rmtree(entry)
-                cache_deleted += 1
-
-    if body.delete_artifacts:
-        from app.core.artifact_store import ArtifactStore
-        result = ArtifactStore().cleanup(older_than_days=body.older_than_days)
-        artifacts_deleted = result["entries_deleted"]
-        bytes_freed += result["bytes_freed"]
-
-    return {
-        "deleted": runs_deleted + cache_deleted + artifacts_deleted,
-        "runs_deleted": runs_deleted,
-        "cache_entries_deleted": cache_deleted,
-        "artifacts_deleted": artifacts_deleted,
-        "bytes_freed": bytes_freed,
-        "older_than_days": body.older_than_days,
-    }
+    return cleanup_workspace(
+        older_than_days=body.older_than_days,
+        delete_cache=body.delete_cache,
+        delete_artifacts=body.delete_artifacts,
+        keep_latest=body.keep_latest,
+    )
 
 
 # ── Projects registry ─────────────────────────────────────────────────────────

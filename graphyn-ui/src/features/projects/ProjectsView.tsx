@@ -296,7 +296,7 @@ export default function ProjectsView() {
       <div className="overflow-y-auto border-r border-ink-200 p-4 space-y-3">
         <PageHeader
           title="Projects"
-          description="A dataset project with named versions, plus spec, taxonomy, and contract used by pipelines."
+          description="Dataset projects live under workspace/datasets/output. Create, open, rename, clone, or delete a project here."
           actions={
             <button type="button" className="btn-secondary" onClick={() => void load()} aria-label="Refresh">
               <RefreshCw className="h-3.5 w-3.5" />
@@ -320,8 +320,8 @@ export default function ProjectsView() {
           <LoadingBlock />
         ) : projects.length === 0 ? (
           <EmptyState
-            title="No projects"
-            description="Create a project to manage dataset versions."
+            title="No dataset projects"
+            description="Nothing under workspace/datasets/output yet. Create a project to manage dataset versions."
             action={
               <button type="button" className="btn-primary" onClick={() => void create()}>
                 Create project
@@ -352,7 +352,7 @@ export default function ProjectsView() {
 
       <div className="overflow-y-auto p-4 space-y-4">
         {!selected ? (
-          <EmptyState title="Select a project" description="Open a dataset project to edit versions, spec, taxonomy, and contract." />
+          <EmptyState title="Select a project" description="Open a dataset project to rename, clone, delete, or inspect versions." />
         ) : (
           <>
             <div className="flex flex-wrap items-start justify-between gap-3">

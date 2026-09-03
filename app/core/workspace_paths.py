@@ -39,8 +39,10 @@ _MERITECH_PREFIXES = (
 _OUTPUT_KEYS = frozenset({"output_dir", "output_path", "model_path", "root"})
 _PATH_KEYS = frozenset({"output_dir", "output_path", "model_path", "path", "file_path", "root"})
 _GENERIC_TAILS = frozenset({"output", "outputs", "out"})
+_GENERIC_SLUGS = frozenset({"pipeline", "graph", "untitled"})
 _SAFE_SLUG_RE = re.compile(r"[^a-z0-9-]+")
 _EXAMPLES_OUTPUT_RE = re.compile(r"(?:^|/)examples/[^/]+/output(?:/(.*))?$", re.I)
+_EXAMPLES_FOLDER_RE = re.compile(r"(?:^|/)examples/([^/]+)/output(?:/|$)", re.I)
 _EXAMPLES_DATA_RE = re.compile(r"(?:^|/)examples/[^/]+/data(?:/|$)", re.I)
 _DATASETS_OUTPUT_RE = re.compile(r"(?:^|/)workspace/datasets/output(?:/(.*))?$", re.I)
 _OUTPUT_FILE_SUFFIXES = frozenset(
@@ -138,6 +140,130 @@ def _join_artifacts(slug: str, tail: str) -> str:
     return f"{ARTIFACTS_PREFIX}/{slug}/{'/'.join(parts)}"
 
 
+
+def _is_generic_slug(raw: str) -> bool:
+    return artifact_slug(raw) in _GENERIC_SLUGS
+
+
+def _examples_output_folder(posix: str) -> str | None:
+    match = _EXAMPLES_FOLDER_RE.search(_posix(posix))
+    return match.group(1) if match else None
+
+
+def _slug_from_examples_folder(posix: str) -> str | None:
+    folder = _examples_output_folder(posix)
+    if not folder:
+        return None
+    derived = artifact_slug(folder)
+    return None if _is_generic_slug(derived) else derived
+
+
+def _first_non_generic_artifact_slug(posix: str) -> str | None:
+    text = _normalize_artifacts(_posix(posix))
+    marker = ARTIFACTS_PREFIX + "/"
+    if not text.startswith(marker):
+        idx = text.find(marker)
+        if idx < 0:
+            return None
+        text = text[idx:]
+    rest = text[len(marker):]
+    slug = rest.split("/", 1)[0] if rest else ""
+    if not slug or slug in {"runs", "latest"} or _is_generic_slug(slug):
+        return None
+    return slug
+
+
+def _walk_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _walk_strings(v)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_strings(item)
+
+
+def _resolve_graph_slug(graph: dict[str, Any], raw_name: str) -> str:
+    """Pick an artifact slug; never relocate using a generic metadata.name."""
+    if not _is_generic_slug(raw_name):
+        return artifact_slug(raw_name)
+    for s in _walk_strings(graph):
+        posix = _posix(strip_legacy_absolute_prefix(s))
+        found = _first_non_generic_artifact_slug(posix)
+        if found:
+            return found
+    for s in _walk_strings(graph):
+        posix = _posix(strip_legacy_absolute_prefix(s))
+        found = _slug_from_examples_folder(posix)
+        if found:
+            return found
+    return artifact_slug(raw_name)
+
+
+def _effective_path_slug(posix: str, fallback: str) -> str:
+    if _is_generic_slug(fallback):
+        derived = _slug_from_examples_folder(posix)
+        if derived:
+            return derived
+        found = _first_non_generic_artifact_slug(posix)
+        if found:
+            return found
+    return artifact_slug(fallback)
+
+
+def _strip_run_or_latest_prefix(parts: list[str]) -> list[str]:
+    if parts and parts[0] == "latest":
+        return parts[1:]
+    if parts and parts[0] == "runs":
+        return parts[2:] if len(parts) > 1 else []
+    return parts
+
+
+def _dataset_dir_tail(posix: str) -> str:
+    posix = _normalize_artifacts(_posix(posix))
+    tail = _relocatable_tail(posix)
+    if tail is not None:
+        return tail
+    if posix.startswith(ARTIFACTS_PREFIX + "/"):
+        rest = [p for p in posix[len(ARTIFACTS_PREFIX) + 1:].split("/") if p]
+        if rest:
+            return "/".join(_strip_run_or_latest_prefix(rest[1:]))
+    return ""
+
+
+def _has_latest_segment(posix: str) -> bool:
+    padded = f"/{_posix(posix)}/"
+    return "/latest/" in padded
+
+
+def _is_dataset_directory_ingest(key: str, posix: str, node_type: str | None) -> bool:
+    """True for dataset_ingest dirs under examples/**/output or artifacts/*/dataset."""
+    if Path(posix).suffix.lower() in _OUTPUT_FILE_SUFFIXES:
+        return False
+    if key != "path" and node_type != "dataset_ingest":
+        return False
+    if key != "path":
+        return False
+    if _has_latest_segment(posix):
+        return False
+    if _EXAMPLES_OUTPUT_RE.search(posix):
+        return True
+    text = _normalize_artifacts(_posix(posix))
+    if text.startswith(ARTIFACTS_PREFIX + "/"):
+        rest = [p for p in text[len(ARTIFACTS_PREFIX) + 1:].split("/") if p]
+        body = _strip_run_or_latest_prefix(rest[1:] if rest else [])
+        return bool(body) and body[0] == "dataset"
+    return False
+
+
+def _join_latest(slug: str, tail: str) -> str:
+    parts = [p for p in tail.split("/") if p]
+    parts = _strip_run_or_latest_prefix(parts)
+    if not parts:
+        return f"{ARTIFACTS_PREFIX}/{slug}/latest"
+    return f"{ARTIFACTS_PREFIX}/{slug}/latest/{'/'.join(parts)}"
+
 def _should_rewire_key(key: str, posix: str) -> bool:
     if _is_artifacts_path(posix):
         return False
@@ -157,47 +283,52 @@ def _should_rewire_key(key: str, posix: str) -> bool:
     return False
 
 
-def _rewrite_string(key: str, value: str, slug: str) -> str:
+def _rewrite_string(key: str, value: str, slug: str, node_type: str | None = None) -> str:
     stripped = strip_legacy_absolute_prefix(value)
     posix = _posix(stripped)
+    effective = _effective_path_slug(posix, slug)
+    if _is_dataset_directory_ingest(key, posix, node_type):
+        return _join_latest(effective, _dataset_dir_tail(posix))
     if _is_artifacts_path(posix):
         return _normalize_artifacts(posix)
     if _should_rewire_key(key, posix):
         tail = _relocatable_tail(posix) or ""
-        return _join_artifacts(slug, tail)
+        return _join_artifacts(effective, tail)
     return posix if posix != _posix(value) else value
 
 
-def _rewrite_value(key: str, value: Any, slug: str) -> Any:
+def _rewrite_value(key: str, value: Any, slug: str, node_type: str | None = None) -> Any:
     if isinstance(value, str):
         if key in _PATH_KEYS or value.startswith("/home/meritech/"):
             use_key = key if key in _PATH_KEYS else "path"
-            return _rewrite_string(use_key, value, slug)
+            return _rewrite_string(use_key, value, slug, node_type)
         return value
     if isinstance(value, dict):
-        return {k: _rewrite_value(k, v, slug) for k, v in value.items()}
+        nt = value.get("node_type") if isinstance(value.get("node_type"), str) else node_type
+        return {k: _rewrite_value(k, v, slug, nt) for k, v in value.items()}
     if isinstance(value, list):
-        return [_rewrite_value(key, item, slug) for item in value]
+        return [_rewrite_value(key, item, slug, node_type) for item in value]
     return value
 
 
 def rewire_graph_outputs(graph: dict[str, Any], *, slug: str) -> dict[str, Any]:
-    """Return a copy of ``graph`` with output paths under workspace/artifacts/<slug>.
+    """Return a copy of graph with output paths under workspace/artifacts/<slug>.
 
-    Input dataset paths under ``examples/**/data`` are left in place (after
-    stripping a legacy meritech absolute prefix). Paths already under
-    ``workspace/artifacts/`` are normalized, not moved. Custom output locations
-    outside ``examples/**/output`` (and the legacy ``output/`` /
-    ``workspace/datasets/output`` roots) are not rewritten.
+    Input dataset paths under examples/**/data are left in place (after
+    stripping a legacy meritech absolute prefix). Dataset directories for
+    ingest under examples/**/output or workspace/artifacts/*/dataset retarget
+    to <slug>/latest/<tail>. Generic names (pipeline, graph, untitled) never
+    relocate paths; the slug is taken from example folders or existing
+    artifact paths.
     """
     if not isinstance(graph, dict):
         return graph
-    slug = artifact_slug(slug)
-    return _rewrite_value("", copy.deepcopy(graph), slug)
+    resolved = _resolve_graph_slug(graph, slug)
+    return _rewrite_value("", copy.deepcopy(graph), resolved)
 
 
 def apply_output_rewire(graph: Any) -> Any:
-    """Rewire a loaded GraphIR using ``metadata.name`` as the slug."""
+    """Rewire a loaded GraphIR, inferring slug when metadata.name is generic."""
     from app.core.ir.loader import dump_ir, load_ir
 
     data = dump_ir(graph)
@@ -270,7 +401,11 @@ def _scope_artifact_string(posix: str, run_id: str) -> str:
     return f"{ARTIFACTS_PREFIX}/{slug}/runs/{run_id}"
 
 
-def _should_scope_key(key: str, posix: str) -> bool:
+def _should_scope_key(key: str, posix: str, node_type: str | None = None) -> bool:
+    if node_type == "dataset_ingest":
+        return False
+    if _has_latest_segment(posix):
+        return False
     if not _is_artifacts_path(_posix(posix)):
         return False
     if key in _OUTPUT_KEYS:
@@ -284,23 +419,23 @@ def _should_scope_key(key: str, posix: str) -> bool:
     return False
 
 
-def _scope_value(key: str, value: Any, run_id: str) -> Any:
+def _scope_value(key: str, value: Any, run_id: str, node_type: str | None = None) -> Any:
     if isinstance(value, str):
-        if key in _PATH_KEYS and _should_scope_key(key, value):
+        if key in _PATH_KEYS and _should_scope_key(key, value, node_type):
             return _scope_artifact_string(value, run_id)
         return value
     if isinstance(value, dict):
-        return {k: _scope_value(k, v, run_id) for k, v in value.items()}
+        nt = value.get("node_type") if isinstance(value.get("node_type"), str) else node_type
+        return {k: _scope_value(k, v, run_id, nt) for k, v in value.items()}
     if isinstance(value, list):
-        return [_scope_value(key, item, run_id) for item in value]
+        return [_scope_value(key, item, run_id, node_type) for item in value]
     return value
-
 
 def scope_outputs_to_run(graph: Any, run_id: str) -> Any:
     """Insert ``/runs/<run_id>/`` after the artifact slug on output paths.
 
-    Leaves ``latest/`` (inputs from a promoted run), paths already under
-    ``/runs/``, and ``examples/**/data`` ingest paths unchanged.
+    Leaves ``latest/`` (inputs from a promoted run), ``dataset_ingest`` paths,
+    paths already under ``/runs/``, and ``examples/**/data`` ingest paths unchanged.
     """
     rid = str(run_id).strip()
     if not rid:

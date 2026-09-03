@@ -4,7 +4,9 @@ Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for input/output dataset management and
                   audio file uploads.
 Owns:             Route definitions for GET/POST /data/inputs,
-                  GET /data/outputs, POST /data/merge.
+                  DELETE /data/inputs/{label},
+                  GET /data/outputs, DELETE /data/outputs/{project}/{version},
+                  POST /data/merge.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain dataset storage logic — delegate to filesystem
                   helpers and config path functions.
@@ -41,6 +43,9 @@ def _output_root() -> Path:
 
 
 def _safe_child(root: Path, *parts: str) -> Path:
+    for part in parts:
+        if part in {"", ".", ".."} or "/" in part or "\\" in part:
+            raise HTTPException(status_code=400, detail="Path is outside workspace")
     resolved_root = root.resolve()
     path = resolved_root.joinpath(*parts).resolve()
     if not path.is_relative_to(resolved_root):
@@ -85,6 +90,19 @@ def get_input_dataset(label: str):
                 rel_path = os.path.relpath(abs_path, input_root).replace("\\", "/")
                 files.append({"path": rel_path, "label": label})
     return files
+
+
+@router.delete("/inputs/{label}", summary="Delete an input dataset label")
+def delete_input_dataset(label: str):
+    """Delete the input label directory, jailed under datasets/input."""
+    import shutil
+
+    input_root = _input_root()
+    label_path = _safe_child(input_root, label)
+    if not label_path.is_dir():
+        raise HTTPException(status_code=404, detail=f"Label '{label}' not found")
+    shutil.rmtree(label_path)
+    return {"deleted": label}
 
 
 @router.post("/inputs/upload", summary="Upload an audio file")
@@ -170,6 +188,26 @@ def get_output_dataset(project: str, version: str):
                         "label": label,
                     })
     return data
+
+
+@router.delete("/outputs/{project}/{version}", summary="Delete an output dataset version")
+def delete_output_dataset(project: str, version: str):
+    """Delete a version dir under datasets/output; remove the project if empty."""
+    import shutil
+
+    output_root = _output_root()
+    dataset_path = _safe_child(output_root, project, version)
+    if not dataset_path.exists():
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    shutil.rmtree(dataset_path)
+    project_path = _safe_child(output_root, project)
+    try:
+        leftover = list(project_path.iterdir()) if project_path.is_dir() else []
+        if project_path.is_dir() and not leftover:
+            project_path.rmdir()
+    except OSError:
+        pass
+    return {"deleted": f"{project}/{version}"}
 
 
 @router.get("/outputs/{project}/{version}/stats", summary="Get dataset statistics")

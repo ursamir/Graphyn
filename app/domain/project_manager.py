@@ -120,6 +120,25 @@ class ProjectManager:
         self._write_json(proj_file, meta)
         return meta
 
+    def _prune_empty_leftovers(self) -> None:
+        """Remove empty leftover directories under BASE (no project.json)."""
+        if not self.BASE.exists():
+            return
+        for d in list(self.BASE.iterdir()):
+            if not d.is_dir():
+                continue
+            if (d / "project.json").exists():
+                continue
+            try:
+                next(d.iterdir())
+            except StopIteration:
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass
+            except OSError:
+                pass
+
     def delete(self, name: str, confirm: str) -> None:
         """Remove project directory; confirm must equal name."""
         self._validate_name(name)
@@ -129,6 +148,7 @@ class ProjectManager:
             )
         d = self._require_project(name)
         shutil.rmtree(str(d))
+        self._prune_empty_leftovers()
 
     def set_status(self, name: str, status: str) -> dict:
         """Update project status field."""

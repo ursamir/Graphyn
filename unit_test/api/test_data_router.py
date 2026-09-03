@@ -182,3 +182,40 @@ class TestUploadFile:
         body = resp.json()
         assert "file_path" in body
         assert "filename" in body
+
+
+class TestDeleteInputDataset:
+    def test_deletes_label_dir(self, api_client, tmp_path):
+        patcher, input_root = _patch_input(tmp_path)
+        label_dir = input_root / "speech"
+        label_dir.mkdir()
+        (label_dir / "a.wav").write_bytes(b"RIFF")
+        with patcher:
+            resp = api_client.delete("/api/v1/data/inputs/speech")
+        assert resp.status_code == 200
+        assert not label_dir.exists()
+
+    def test_rejects_path_escape(self, api_client, tmp_path):
+        patcher, _ = _patch_input(tmp_path)
+        with patcher:
+            resp = api_client.delete("/api/v1/data/inputs/%2e%2e")
+        assert resp.status_code == 400
+
+
+class TestDeleteOutputDataset:
+    def test_deletes_version_and_empty_project(self, api_client, tmp_path):
+        patcher, output_root = _patch_output(tmp_path)
+        version_dir = output_root / "proj" / "v1"
+        version_dir.mkdir(parents=True)
+        (version_dir / "a.wav").write_bytes(b"RIFF")
+        with patcher:
+            resp = api_client.delete("/api/v1/data/outputs/proj/v1")
+        assert resp.status_code == 200
+        assert not version_dir.exists()
+        assert not (output_root / "proj").exists()
+
+    def test_rejects_path_escape(self, api_client, tmp_path):
+        patcher, _ = _patch_output(tmp_path)
+        with patcher:
+            resp = api_client.delete("/api/v1/data/outputs/%2e%2e/v1")
+        assert resp.status_code == 400

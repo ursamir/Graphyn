@@ -8,7 +8,7 @@ import {
   getApiToken,
 } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
+import { ConfirmButton, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
 import { formatExecutionLine, formatMergeToast } from '../../lib/format'
 
 interface OutputProject {
@@ -210,6 +210,36 @@ export default function DataView() {
     }
   }
 
+  const deleteInput = async () => {
+    if (!label) return
+    try {
+      await apiJson(`/data/inputs/${encodeURIComponent(label)}`, { method: 'DELETE' })
+      pushToast(`Deleted input ${label}`, 'success')
+      setLabel('')
+      setRows([])
+      await loadSources()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const deleteOutput = async () => {
+    if (!project || !version) return
+    try {
+      await apiJson(
+        `/data/outputs/${encodeURIComponent(project)}/${encodeURIComponent(version)}`,
+        { method: 'DELETE' },
+      )
+      pushToast(`Deleted ${project}/${version}`, 'success')
+      setVersion('')
+      setRows([])
+      setStats(null)
+      await loadSources()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
   const doMerge = async () => {
     try {
       const sources = mergeSources
@@ -301,21 +331,58 @@ export default function DataView() {
       ) : (
         <>
           {mode === 'outputs' ? (
-            <div className="flex flex-wrap gap-2">
+            outputs.length === 0 ? (
+              <EmptyState
+                title="No output datasets"
+                description="Pipeline dataset versions live under workspace/datasets/output. Run a pipeline or merge datasets to create one."
+              />
+            ) : (
+            <div className="flex flex-wrap items-center gap-2">
               <select value={project} onChange={(e) => { setProject(e.target.value); setVersion(outputs.find((o) => o.project === e.target.value)?.versions[0] ?? '') }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
                 {outputs.map((o) => <option key={o.project} value={o.project}>{o.project}</option>)}
               </select>
               <select value={version} onChange={(e) => setVersion(e.target.value)} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
                 {versions.map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
+              {project && version ? (
+                <ConfirmButton
+                  label="Delete"
+                  confirmLabel={`Delete ${project}/${version}?`}
+                  danger
+                  onConfirm={() => void deleteOutput()}
+                />
+              ) : null}
             </div>
+            )
           ) : (
+            inputs.length === 0 ? (
+              <EmptyState
+                title="No input labels"
+                description="Upload audio or ingest URLs to create a label folder under workspace/datasets/input."
+                action={
+                  <button type="button" className="btn-primary" onClick={upload}>
+                    Upload a file
+                  </button>
+                }
+              />
+            ) : (
+            <div className="flex flex-wrap items-center gap-2">
             <select value={label} onChange={(e) => setLabel(e.target.value)} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
               {inputs.map((i) => <option key={i.label} value={i.label}>{i.label} ({i.file_count})</option>)}
             </select>
+              {label ? (
+                <ConfirmButton
+                  label="Delete"
+                  confirmLabel={`Delete input ${label}?`}
+                  danger
+                  onConfirm={() => void deleteInput()}
+                />
+              ) : null}
+            </div>
+            )
           )}
-          {stats != null && <KeyValue data={stats} />}
-          {rows.length === 0 ? (
+          {mode === 'outputs' && outputs.length === 0 ? null : mode === 'inputs' && inputs.length === 0 ? null : stats != null && <KeyValue data={stats} />}
+          {mode === 'outputs' && outputs.length === 0 ? null : mode === 'inputs' && inputs.length === 0 ? null : rows.length === 0 ? (
             <EmptyState
               title="No rows"
               description="Upload audio or ingest a dataset to see files here."

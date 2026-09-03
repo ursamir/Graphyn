@@ -10,6 +10,7 @@ Owns:             Route definitions for GET /runs, GET /runs/{run_id},
                   GET /runs/{run_id}/outputs,
                   GET /runs/{run_id}/outputs/zip,
                   POST /runs/{run_id}/promote,
+                  DELETE /runs/{run_id},
                   GET /runs/{run_id}/provenance.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
@@ -202,6 +203,26 @@ def get_run(run_id: str):
         "is_latest": is_latest,
         "artifacts_dir": artifacts_dir,
     }
+
+
+@router.delete("/{run_id}", summary="Delete a run and its workspace artifacts")
+def delete_run_endpoint(run_id: str):
+    """Delete the journal dir and ``artifacts/<slug>/runs/<run_id>``.
+
+    If this run is latest, retarget ``latest/`` to the next newest remaining
+    run of that slug, or remove the alias if none remain. Returns 409 when
+    the run is currently running or paused.
+    """
+    from app.core.run_cleanup import RunInProgressError, delete_run
+
+    _run_dir(run_id)  # 400/404 + jail
+    try:
+        result = delete_run(run_id, require_finished=True)
+    except RunInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return result
 
 
 # ── Run status ────────────────────────────────────────────────────────────────

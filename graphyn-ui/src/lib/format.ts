@@ -197,7 +197,22 @@ export function formatCleanupToast(res: unknown): string {
   const runs = Number(o.runs_deleted ?? 0) || 0
   const cache = Number(o.cache_entries_deleted ?? o.cache_deleted ?? 0) || 0
   const artifacts = Number(o.artifacts_deleted ?? 0) || 0
-  if (runs === 0 && cache === 0 && artifacts === 0) return 'Nothing to delete'
+  const tooNew = Number(o.runs_skipped_too_new ?? 0) || 0
+  const latest = Number(o.runs_skipped_latest ?? 0) || 0
+  const running = Number(o.runs_skipped_running ?? 0) || 0
+  const skipped = tooNew + latest + running
+  const days = Number(o.older_than_days ?? 7)
+  const daysLabel = Number.isFinite(days) ? String(days) : '7'
+  if (runs === 0 && cache === 0 && artifacts === 0) {
+    if (skipped > 0) {
+      const kept = `${skipped} ${skipped === 1 ? 'run' : 'runs'} kept`
+      if (tooNew > 0) {
+        return `Nothing older than ${daysLabel} days (${kept}). Set days to 0 to clear finished runs.`
+      }
+      return `Nothing to delete (${kept}).`
+    }
+    return 'Nothing to delete'
+  }
   const parts: string[] = []
   if (runs) parts.push(`${runs} ${runs === 1 ? 'run' : 'runs'}`)
   if (cache) parts.push(`${cache} cache ${cache === 1 ? 'entry' : 'entries'}`)

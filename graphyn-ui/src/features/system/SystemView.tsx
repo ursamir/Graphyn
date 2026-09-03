@@ -213,13 +213,23 @@ export default function SystemView() {
 
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
         <h3 className="text-sm font-semibold">Cleanup</h3>
+        <p className="text-sm text-ink-500">
+          Deletes finished run journals under workspace/runs (completed, failed, or cancelled — never a
+          currently running run). Optionally also deletes pipeline cache under workspace/cache and
+          workspace/artifacts/&lt;slug&gt;/runs/&lt;run_id&gt; folders for those runs. Set days to 0 to
+          clear all finished runs. The run that latest/ still points at is kept by default.
+          examples/ and datasets/input are never deleted.
+        </p>
         <label className="block text-sm text-ink-600">
           Older than days
           <input
             type="number"
-            min={1}
+            min={0}
             value={cleanupDays}
-            onChange={(e) => setCleanupDays(Number(e.target.value) || 7)}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10)
+              setCleanupDays(Number.isFinite(n) && n >= 0 ? n : 0)
+            }}
             className="ml-2 w-20 rounded border border-ink-200 px-2 py-1"
           />
         </label>
@@ -233,7 +243,7 @@ export default function SystemView() {
             checked={deleteArtifacts}
             onChange={(e) => setDeleteArtifacts(e.target.checked)}
           />
-          Delete artifacts
+          Delete workspace artifacts
         </label>
         <ConfirmButton
           label="Run cleanup"
@@ -246,6 +256,7 @@ export default function SystemView() {
                 older_than_days: cleanupDays,
                 delete_cache: deleteCache,
                 delete_artifacts: deleteArtifacts,
+                keep_latest: true,
               }),
             })
               .then((res) => pushToast(formatCleanupToast(res), 'success'))

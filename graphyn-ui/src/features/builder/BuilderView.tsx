@@ -77,6 +77,7 @@ function BuilderInner() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [filter, setFilter] = React.useState('')
   const [templateName, setTemplateName] = React.useState('')
+  const [graphName, setGraphName] = React.useState('pipeline')
   const [moreOpen, setMoreOpen] = React.useState(false)
   const [showRawLogs, setShowRawLogs] = React.useState(false)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
@@ -143,8 +144,9 @@ function BuilderInner() {
         nodesRef.current.map((n) => ({ id: n.id, position: n.position, data: n.data })),
         edgesRef.current,
         seed,
+        graphName,
       ),
-    [seed],
+    [seed, graphName],
   )
 
   React.useEffect(() => {
@@ -207,6 +209,8 @@ function BuilderInner() {
   const pendingGraph = useAppStore((s) => s.pendingGraph)
 
   const loadGraph = (graph: GraphIR) => {
+    const loadedName = (graph.metadata?.name || '').trim()
+    setGraphName(loadedName || 'pipeline')
     if (typeof graph.metadata?.seed === 'number') setSeed(graph.metadata.seed)
     const byType = new Map(catalog.map((c) => [c.node_type, c]))
     const ui = graph.ui?.positions
@@ -551,7 +555,7 @@ function BuilderInner() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-center gap-2 border-b border-ink-200 bg-white/70 px-3 py-2 backdrop-blur">
+        <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200 bg-white/70 px-3 py-2 backdrop-blur">
           {!isRunning ? (
             <button
               type="button"
@@ -579,7 +583,11 @@ function BuilderInner() {
               <MoreHorizontal className="h-3.5 w-3.5" /> More
             </button>
             {moreOpen && (
-              <div className="absolute right-0 z-20 mt-1 w-64 rounded-xl border border-ink-200 bg-white p-2 shadow-lg">
+              <div
+                className="absolute right-0 z-50 mt-1 w-64 rounded-xl border border-ink-200 bg-white p-2 shadow-lg"
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
                 <button type="button" className="btn-quiet w-full justify-start" onClick={() => { importIr(); setMoreOpen(false) }}>
                   <Upload className="h-3.5 w-3.5" /> Import
                 </button>
@@ -604,6 +612,7 @@ function BuilderInner() {
                     if (!window.confirm('Clear the canvas?')) return
                     setNodes([])
                     setEdges([])
+                    setGraphName('pipeline')
                     clearLogs()
                     setMoreOpen(false)
                   }}

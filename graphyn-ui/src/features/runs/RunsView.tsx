@@ -2,7 +2,7 @@ import React from 'react'
 import { Download, Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
+import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
 import {
   formatExecutionLine,
   formatLocaleDateTime,
@@ -222,6 +222,19 @@ export default function RunsView() {
     }
   }
 
+  const deleteRun = async () => {
+    if (!selected) return
+    try {
+      await apiJson(`/runs/${selected}`, { method: 'DELETE' })
+      pushToast(`Deleted run ${selected}`, 'success')
+      setSelected(null)
+      setDetail(null)
+      await load()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
   const loadCheckpointSamples = async (nodeId: string) => {
     if (!selected) return
     try {
@@ -357,6 +370,14 @@ export default function RunsView() {
                 <button type="button" className="btn-danger" onClick={() => void control(selected, 'cancel')}>
                   <Square className="h-3.5 w-3.5" /> Cancel
                 </button>
+              )}
+              {!['running', 'paused'].includes(runStatus.toLowerCase()) && (
+                <ConfirmButton
+                  label="Delete run"
+                  confirmLabel={`Delete ${selected}?`}
+                  danger
+                  onConfirm={() => void deleteRun()}
+                />
               )}
             </div>
             <div className="flex flex-wrap gap-1">

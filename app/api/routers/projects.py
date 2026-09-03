@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -137,7 +137,7 @@ def rename_project(name: str, body: RenameProjectBody):
 
 
 @router.delete("/{name}")
-def delete_project(name: str, body: DeleteProjectBody):
+def delete_project(name: str, body: DeleteProjectBody = Body(...)):
     """DELETE /projects/{name} — delete a project (requires confirm == name)."""
     _handle(_pm.delete, name, body.confirm)
     return {"deleted": name}

@@ -204,3 +204,19 @@ def test_diff_versions_returns_added_removed_changed(pm: ProjectManager):
     assert result["added"] == 1
     assert result["removed"] == 1
     assert result["changed"] == 1
+
+
+def test_list_all_creates_missing_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    ws = tmp_path / "fresh-ws"
+    monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(ws))
+    pm = ProjectManager()
+    assert pm.list_all() == []
+    assert pm.BASE.exists()
+
+
+def test_delete_prunes_empty_leftover_dirs(pm: ProjectManager):
+    pm.create("keep-me")
+    leftover = pm.BASE / "empty-orphan"
+    leftover.mkdir()
+    pm.delete("keep-me", confirm="keep-me")
+    assert not leftover.exists()
