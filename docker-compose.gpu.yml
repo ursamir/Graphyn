@@ -1,0 +1,30 @@
+# Optional GPU overlay for graphyn-api ONLY.
+#
+# Default docker-compose.yml does not pass NVIDIA devices. Isolated TF workers
+# then burn CPU while other apps (e.g. FaceRecognition on RTX 3070 Ti) keep
+# the GPU. Opt in without killing or resetting those processes:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d graphyn-api
+#
+# This requests gpus: all / NVIDIA_VISIBLE_DEVICES=all on graphyn-api. Graphyn
+# still uses TF memory growth and GRAPHYN_TF_GPU_MIN_FREE_MIB (default 4096)
+# so it will stay on CPU when spare VRAM is low — it must not grab 100% of
+# the card or OOM FaceRecognition.
+#
+# Requires NVIDIA Container Toolkit on the host. Does not bake TF/CUDA into
+# the API image.
+
+version: "3.9"
+
+services:
+  graphyn-api:
+    gpus: all
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Override the CPU-safe empty CUDA_VISIBLE_DEVICES from the image / base compose.
+      # Never set to -1 here (that is GRAPHYN_TF_DEVICE=cpu only).
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-all}
+      GRAPHYN_TF_DEVICE: ${GRAPHYN_TF_DEVICE:-auto}
+      GRAPHYN_TF_GPU_MIN_FREE_MIB: ${GRAPHYN_TF_GPU_MIN_FREE_MIB:-4096}
+

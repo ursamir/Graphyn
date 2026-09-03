@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import pickle
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -146,6 +147,74 @@ def recast_plugin_types(obj: Any) -> Any:
     return obj
 
 
+
+def terminate_process_group(pid: int) -> None:
+    """Best-effort SIGTERM+SIGKILL of a session/process group (Unix)."""
+    if pid <= 0:
+        return
+    if os.name == "nt":
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+        if sig == signal.SIGTERM:
+            try:
+                os.waitpid(-pid, os.WNOHANG)
+            except Exception:
+                pass
+
+
+def _run_isolated_subprocess(
+    cmd: list[str],
+    *,
+    env: dict[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess:
+    """Run the worker in a new session; terminate the group on timeout/failure.
+
+    Isolated trainer workers can spawn extra Python processes. Killing only
+    the leader left leaked ``python -m app.core.plugins.worker`` rows in htop.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    pgid = proc.pid
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        terminate_process_group(pgid)
+        try:
+            stdout, stderr = proc.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            stdout = stderr = ""
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        raise RuntimeError(
+            f"Isolated plugin worker timed out after {timeout}s "
+            "(process group terminated)"
+        ) from None
+    except BaseException:
+        terminate_process_group(pgid)
+        raise
+    result = subprocess.CompletedProcess(cmd, proc.returncode or 0, stdout, stderr)
+    if result.returncode != 0:
+        terminate_process_group(pgid)
+    return result
+
+
 def load_isolated_outputs(path: Path) -> dict[str, Any]:
     """Load worker outputs with RestrictedUnpickler; must be a dict."""
     with path.open("rb") as fh:
@@ -203,6 +272,9 @@ def run_isolated_node(
             project_root if not prev else f"{project_root}{os.pathsep}{prev}"
         )
         env["PYTHONNOUSERSITE"] = "1"
+        # Inherit host/container NVIDIA libs (LD_LIBRARY_PATH, NVIDIA_*).
+        # Do not hide GPUs here; GRAPHYN_TF_DEVICE=cpu is the only path that
+        # sets CUDA_VISIBLE_DEVICES=-1 (in configure_tf_stable_defaults).
 
         cmd = [
             spec.venv_python,
@@ -217,13 +289,7 @@ def run_isolated_node(
             spec.venv_python,
             timeout,
         )
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
+        result = _run_isolated_subprocess(cmd, env=env, timeout=timeout)
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(

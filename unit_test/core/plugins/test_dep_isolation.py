@@ -533,7 +533,7 @@ def test_isolated_model_builder_input_pickle_does_not_explode(tmp_path: Path) ->
         m.stdout = ""
         return m
 
-    with patch("app.core.plugins.isolated_executor.subprocess.run", side_effect=fake_run):
+    with patch("app.core.plugins.isolated_executor._run_isolated_subprocess", side_effect=fake_run):
         result = iso.run_isolated_node(
             spec,
             node_type="model_builder",
@@ -688,7 +688,7 @@ def test_isolated_worker_timeout_is_finite(monkeypatch, tmp_path: Path) -> None:
         m.stdout = ""
         return m
 
-    with patch("app.core.plugins.isolated_executor.subprocess.run", side_effect=fake_run):
+    with patch("app.core.plugins.isolated_executor._run_isolated_subprocess", side_effect=fake_run):
         result = iso.run_isolated_node(
             spec, node_type="t", config={}, seed=1, inputs={}, timeout=None
         )

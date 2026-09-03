@@ -1,6 +1,11 @@
 version: "3.9"
 
 # Production-ish local deploy: API + UI. Auth is fail-closed.
+# GPU (optional, does not evict other apps):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d graphyn-api
+# Default compose is CPU-safe: no NVIDIA device requests, so FaceRecognition
+# (or any other host GPU process) keeps the card unless you opt in.
+#
 # You MUST set GRAPHYN_API_TOKEN (API/MCP reject empty tokens when AUTH_REQUIRED=1).
 #
 #   export GRAPHYN_API_TOKEN=change-me

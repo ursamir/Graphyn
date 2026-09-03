@@ -490,7 +490,7 @@ get_backend().execute(graph, ...)
 | API auth | Optional Bearer token via `GRAPHYN_API_TOKEN` |
 | MCP auth | Token at `arguments._meta.auth_token` |
 | Plugin sources | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated URL prefix allowlist; empty = allow all |
-| Keras TF device | `GRAPHYN_TF_DEVICE` / `select_keras_device()`; CC ≥12 GPUs default to CPU (`GRAPHYN_TF_FORCE_GPU=1` to override) |
+| Keras TF device | `GRAPHYN_TF_DEVICE=auto\|cpu\|gpu` / `select_keras_device()`; CC ≥12 default CPU (`GRAPHYN_TF_FORCE_GPU=1`); GPU also requires free VRAM ≥ `GRAPHYN_TF_GPU_MIN_FREE_MIB` (default 4096) |
 | Plugin isolation | `runtime` in `plugin.toml` (`inprocess`\|`isolated`); isolated venvs under `GRAPHYN_PLUGIN_VENVS_DIR`; deps API under `/api/v1/plugins/{name}/dependencies` |
 | Checkpoint node IDs | Null byte rejection + path traversal guard via `os.path.abspath` prefix check |
 | Webhook DNS | Resolves once, connects to IP directly with `Host` header (DNS rebinding fix) |

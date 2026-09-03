@@ -50,7 +50,7 @@ Fixed in code:
 
 **Files:** `app/core/tf_runtime.py` (`select_keras_device`), `PluginPackage/Common/trainer/nodes.py`  
 **Detail:** RTX 50-series (e.g. RTX 5070 Ti, CC 12.0) is visible to TensorFlow but Keras `fit` fails (PTX/libdevice/XLA JIT). Soft-placement CPU fallback without pinning also fails (CPU weights + GPU train step).  
-**Workaround:** Platform defaults Keras to CPU on CC ≥12. Force GPU only with `GRAPHYN_TF_FORCE_GPU=1` (expected to fail until TF/CUDA support catches up). FaceRecognition and other GPU apps are left alone (memory growth only).
+**Workaround:** Platform defaults Keras to CPU on CC ≥12. Force that class of GPU only with `GRAPHYN_TF_FORCE_GPU=1` (expected to fail until TF/CUDA support catches up). FaceRecognition and other GPU apps are left alone: memory growth + `GRAPHYN_TF_GPU_MIN_FREE_MIB` (default 4096). Opt-in compose overlay `docker-compose.gpu.yml` is required before Graphyn can see the NVIDIA device at all.
 
 ---
 

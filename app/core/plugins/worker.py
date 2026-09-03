@@ -25,6 +25,11 @@ def _load_job(path: Path) -> dict[str, Any]:
 
 
 def _run(job: dict[str, Any]) -> None:
+    # Before pickle.load / plugin imports that pull in TensorFlow.
+    from app.core.tf_runtime import configure_tf_stable_defaults
+
+    configure_tf_stable_defaults()
+
     from app.core.nodes.discovery import AutoDiscovery
     from app.core.nodes.registry import NodeRegistry
     from app.core.plugins.manifest import load_manifest

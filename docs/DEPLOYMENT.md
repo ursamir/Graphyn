@@ -47,8 +47,25 @@ REST: `GET/POST /api/v1/secrets` (Bearer required in this compose profile). List
 
 ## GPU Safety Notes
 
-- Compose leaves `CUDA_VISIBLE_DEVICES` empty by default.
-- If GPU is shared, set a specific device: `CUDA_VISIBLE_DEVICES=1 docker compose up --build`
+Default `docker-compose.yml` is **CPU-safe**: it does not request NVIDIA devices, so Graphyn cannot steal VRAM from other host apps (e.g. FaceRecognition on an RTX 3070 Ti). Isolated trainer workers will use CPU in that setup.
+
+To let `graphyn-api` *see* the GPU **without** killing or resetting other CUDA processes:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d graphyn-api
+```
+
+That overlay sets `gpus: all` and `NVIDIA_VISIBLE_DEVICES=all` on **graphyn-api only**. It does not bake TensorFlow/CUDA into the API image (TF stays in isolated plugin venvs).
+
+Sharing policy (so Graphyn does not grab 100% of the card):
+
+- `GRAPHYN_TF_DEVICE=auto|cpu|gpu` (default `auto`)
+- `GRAPHYN_TF_GPU_MIN_FREE_MIB=4096` — if `nvidia-smi` reports less free VRAM than this, Keras stays on `/CPU:0`
+- TF memory growth is on (`TF_FORCE_GPU_ALLOW_GROWTH`); Graphyn must not full-preallocate VRAM
+- `GRAPHYN_TF_FORCE_GPU=1` only overrides the compute-capability ≥12 CPU fallback; it does **not** bypass the free-VRAM gate
+- `CUDA_VISIBLE_DEVICES=-1` is set only when `GRAPHYN_TF_DEVICE=cpu`
+
+Trainer/evaluator still retry on GPU OOM by rebuilding on CPU. Do not run `nvidia-smi -r` or kill FaceRecognition.
 
 ## Runtime extras (speech_enhancer)
 

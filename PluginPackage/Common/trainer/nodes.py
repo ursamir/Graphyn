@@ -298,6 +298,7 @@ class TrainerNode(Node):
             )
         except Exception as exc:
             msg = str(exc)
+            low = msg.lower()
             is_gpu_fail = device.startswith("/GPU") and (
                 "Autotuner could not compile" in msg
                 or "triton_gemm" in msg
@@ -308,6 +309,10 @@ class TrainerNode(Node):
                 or "enable_soft_placement" in msg
                 or "JIT compilation failed" in msg
                 or "libdevice" in msg
+                or "resourceexhausted" in low
+                or "out of memory" in low
+                or "oom" in low
+                or "cuda_error_out_of_memory" in low
             )
             if is_gpu_fail:
                 log.warning(
