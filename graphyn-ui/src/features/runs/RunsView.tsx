@@ -2,7 +2,8 @@ import React from 'react'
 import { Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock, StatusBadge } from '../../components/ui'
+import { CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
+import { formatExecutionLine } from '../../lib/format'
 
 interface RunSummary {
   run_id: string
@@ -127,17 +128,35 @@ export default function RunsView() {
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-200 p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold">Runs</h2>
-          <button type="button" onClick={() => void load()} className="btn-secondary">
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
-        </div>
+        <PageHeader
+          title="Runs"
+          description="History, live status, and logs for pipeline executions."
+          actions={
+            <button type="button" onClick={() => void load()} className="btn-secondary">
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
+          }
+        />
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         {runs === null ? (
           <LoadingBlock />
         ) : runs.length === 0 ? (
-          <EmptyState title="No runs yet" description="Execute a graph from Builder to see history here." />
+          <EmptyState
+            title="No runs yet"
+            description="Execute a graph from Builder to see history here."
+            action={
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  useAppStore.getState().setView('builder')
+                  window.history.replaceState(null, '', '#/builder')
+                }}
+              >
+                Open Builder
+              </button>
+            }
+          />
         ) : (
           <ul className="space-y-2">
             {runs.map((r) => (
@@ -224,19 +243,20 @@ export default function RunsView() {
                 {logs.length === 0 ? (
                   <div className="text-ink-500">No logs.</div>
                 ) : (
-                  logs.map((l, i) => (
-                    <div key={i} className={String(l.level).toUpperCase() === 'ERROR' ? 'text-rose-300' : ''}>
-                      [{String(l.time ?? l.timestamp ?? '')}] {String(l.message ?? JSON.stringify(l))}
-                    </div>
-                  ))
+                  logs.map((l, i) => {
+                    const raw = typeof l.message === 'string' ? l.message : JSON.stringify(l)
+                    const line = formatExecutionLine(raw)
+                    const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
+                    return (
+                      <div key={i} className={failed ? 'text-rose-300' : ''}>
+                        {line.text}
+                      </div>
+                    )
+                  })
                 )}
               </div>
             )}
-            {panel === 'debug' && (
-              <pre className="max-h-[28rem] overflow-auto rounded-xl bg-ink-100 p-3 font-mono text-[11px]">
-                {JSON.stringify(debug, null, 2)}
-              </pre>
-            )}
+            {panel === 'debug' && <KeyValue data={debug} empty="No debug report." />}
             {panel === 'checkpoints' && (
               <div className="space-y-2">
                 {checkpoints.length === 0 ? (
@@ -253,23 +273,11 @@ export default function RunsView() {
                     </button>
                   ))
                 )}
-                {samples != null && (
-                  <pre className="max-h-64 overflow-auto rounded-xl bg-ink-100 p-3 font-mono text-[11px]">
-                    {JSON.stringify(samples, null, 2)}
-                  </pre>
-                )}
+                {samples != null && <CollapsibleJson value={samples} label="Samples" />}
               </div>
             )}
-            {panel === 'artifacts' && (
-              <pre className="max-h-[28rem] overflow-auto rounded-xl bg-ink-100 p-3 font-mono text-[11px]">
-                {JSON.stringify(artifacts, null, 2)}
-              </pre>
-            )}
-            {panel === 'provenance' && (
-              <pre className="max-h-[28rem] overflow-auto rounded-xl bg-ink-100 p-3 font-mono text-[11px]">
-                {JSON.stringify(provenance, null, 2)}
-              </pre>
-            )}
+            {panel === 'artifacts' && <KeyValue data={artifacts} empty="No artifacts for this run." />}
+            {panel === 'provenance' && <KeyValue data={provenance} empty="No provenance." />}
           </>
         )}
       </div>

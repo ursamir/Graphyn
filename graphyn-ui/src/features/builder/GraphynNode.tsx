@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from 'reactflow'
 import clsx from 'clsx'
 import type { PortDef } from '../../types/graph'
+import { schemaFieldHint, schemaFieldLabel } from '../../lib/format'
 
 export type GraphynNodeData = {
   nodeType: string
@@ -11,6 +12,7 @@ export type GraphynNodeData = {
   inputs: PortDef[]
   outputs: PortDef[]
   status?: 'idle' | 'running' | 'success' | 'error'
+  runtime?: string
   onChangeConfig?: (key: string, value: unknown) => void
   onDelete?: () => void
   onValidateConfig?: () => void
@@ -171,8 +173,15 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
       <div className="border-b border-ink-100 px-3 py-2">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <div className="font-display text-sm font-bold text-ink-950">{data.label || data.nodeType}</div>
-            <div className="font-mono text-[10px] text-ink-400">{data.nodeType}</div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className="font-display text-sm font-bold text-ink-950">{data.label || data.nodeType}</div>
+              {(data.runtime === 'isolated' || data.nodeType.startsWith('Isolated_')) && (
+                <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
+                  Isolated
+                </span>
+              )}
+            </div>
+            <div className="font-mono text-[10px] text-ink-400">{data.nodeType.replace(/^Isolated_/, '')}</div>
           </div>
           <div className="flex gap-1">
             {data.onValidateConfig && (
@@ -213,8 +222,8 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
           <div className="text-[11px] text-ink-400">No config fields</div>
         ) : (
           entries.map(([key, def]) => (
-            <label key={key} className="block text-[11px] text-ink-600">
-              <span className="font-medium">{key}</span>
+            <label key={key} className="block text-[11px] text-ink-600" title={schemaFieldHint(def)}>
+              <span className="font-medium">{schemaFieldLabel(key, def)}</span>
               {fieldEditor(key, def, data.config?.[key] ?? def.default, (v) =>
                 data.onChangeConfig?.(key, v),
               )}

@@ -2,7 +2,7 @@ import React from 'react'
 import { KeyRound, RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
+import { EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
 
 export default function SecretsView() {
   const pushToast = useAppStore((s) => s.pushToast)
@@ -48,18 +48,16 @@ export default function SecretsView() {
 
   return (
     <div className="h-full overflow-auto p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h1 className="font-display text-xl font-bold">Secrets</h1>
-          <p className="text-sm text-ink-500">
-            Named credentials in GRAPHYN_HOME/secrets (mode 0600). List returns names only — never values.
-          </p>
-        </div>
-        <button type="button" className="btn-secondary" onClick={() => void load()}>
-          <RefreshCw className="h-3.5 w-3.5" />
-          Refresh
-        </button>
-      </div>
+      <PageHeader
+        title="Secrets"
+        description="Named credentials stored on the server. Names only — values are never listed."
+        actions={
+          <button type="button" className="btn-secondary" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </button>
+        }
+      />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
       <form onSubmit={onSubmit} className="mb-6 max-w-xl rounded-2xl border border-ink-200 bg-white p-4">
         <label className="block text-sm text-ink-600">
@@ -91,7 +89,10 @@ export default function SecretsView() {
       {loading ? (
         <LoadingBlock label="Loading secret names…" />
       ) : names.length === 0 ? (
-        <EmptyState title="No secrets stored" description="Set OPENAI_API_KEY, DEEPGRAM_API_KEY, or ASSEMBLYAI_API_KEY to run live providers." />
+        <EmptyState
+          title="No secrets stored"
+          description="Add a named credential above (for example OPENAI_API_KEY) to use live providers."
+        />
       ) : (
         <ul className="max-w-xl divide-y divide-ink-100 rounded-2xl border border-ink-200 bg-white">
           {names.map((n) => (

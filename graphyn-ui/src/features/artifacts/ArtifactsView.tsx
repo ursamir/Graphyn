@@ -2,7 +2,7 @@ import React from 'react'
 import { Play, RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock, StatusBadge } from '../../components/ui'
+import { EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
 
 interface Artifact {
   artifact_id?: string
@@ -76,8 +76,11 @@ export default function ArtifactsView() {
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-200 p-4">
+        <PageHeader
+          title="Artifacts"
+          description="Outputs from completed nodes — inspect lineage and replay a producing run."
+        />
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-lg font-bold">Artifacts</h2>
           <input value={runFilter} onChange={(e) => setRunFilter(e.target.value)} placeholder="run_id" className="rounded-lg border border-ink-200 px-2 py-1 text-sm" />
           <input value={nodeTypeFilter} onChange={(e) => setNodeTypeFilter(e.target.value)} placeholder="node_type" className="rounded-lg border border-ink-200 px-2 py-1 text-sm" />
           <input value={artifactTypeFilter} onChange={(e) => setArtifactTypeFilter(e.target.value)} placeholder="artifact_type" className="rounded-lg border border-ink-200 px-2 py-1 text-sm" />
@@ -89,7 +92,22 @@ export default function ArtifactsView() {
         {items === null ? (
           <LoadingBlock />
         ) : items.length === 0 ? (
-          <EmptyState title="No artifacts" description="Run a pipeline that produces artifacts, then refresh." />
+          <EmptyState
+            title="No artifacts"
+            description="Run a pipeline that produces artifacts, then refresh."
+            action={
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  useAppStore.getState().setView('builder')
+                  window.history.replaceState(null, '', '#/builder')
+                }}
+              >
+                Open Builder
+              </button>
+            }
+          />
         ) : (
           <ul className="space-y-2">
             {items.map((a) => {
@@ -123,14 +141,9 @@ export default function ArtifactsView() {
               <Play className="h-3.5 w-3.5" /> Replay
             </button>
             <h3 className="text-sm font-semibold">Detail</h3>
-            <pre className="max-h-56 overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
-              {JSON.stringify(detail, null, 2)}
-            </pre>
+            <KeyValue data={detail} />
             <h3 className="text-sm font-semibold">Lineage</h3>
-            <pre className="max-h-80 overflow-auto rounded-xl bg-ink-100 p-3 font-mono text-[11px]">
-              {JSON.stringify(lineage, null, 2)}
-            </pre>
-            <StatusBadge status="lineage" />
+            <KeyValue data={lineage} />
           </>
         )}
       </div>

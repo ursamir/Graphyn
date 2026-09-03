@@ -1,6 +1,7 @@
 import React from 'react'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronRight, Info, X } from 'lucide-react'
+import { prettyScalar, startCase } from '../lib/format'
 
 export function EmptyState({
   title,
@@ -162,4 +163,80 @@ export class ErrorBoundary extends React.Component<
     }
     return this.props.children
   }
+}
+
+
+export function PageHeader({
+  title,
+  description,
+  actions,
+}: {
+  title: string
+  description?: string
+  actions?: React.ReactNode
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h2 className="font-display text-lg font-bold text-ink-950">{title}</h2>
+        {description && <p className="mt-0.5 max-w-2xl text-sm text-ink-500">{description}</p>}
+      </div>
+      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+    </div>
+  )
+}
+
+export function CollapsibleJson({
+  value,
+  label = 'JSON',
+}: {
+  value: unknown
+  label?: string
+}) {
+  return (
+    <details className="rounded-lg border border-ink-100 bg-ink-50">
+      <summary className="cursor-pointer select-none px-2.5 py-1.5 text-xs font-medium text-ink-500">
+        {label}
+      </summary>
+      <pre className="max-h-64 overflow-auto border-t border-ink-100 p-2.5 font-mono text-[11px] text-ink-800">
+        {value == null ? 'null' : JSON.stringify(value, null, 2)}
+      </pre>
+    </details>
+  )
+}
+
+function valueCell(value: unknown): React.ReactNode {
+  const scalar = prettyScalar(value)
+  if (scalar) return <span className="break-words">{scalar}</span>
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="text-ink-400">Empty list</span>
+    if (value.every((v) => v == null || typeof v !== 'object')) {
+      return <span className="break-words">{value.map((v) => prettyScalar(v) || String(v)).join(', ')}</span>
+    }
+    return <CollapsibleJson value={value} label={`${value.length} items`} />
+  }
+  if (value && typeof value === 'object') return <CollapsibleJson value={value} label="Details" />
+  return <span className="text-ink-400">—</span>
+}
+
+export function KeyValue({ data, empty = 'No data' }: { data: unknown; empty?: string }) {
+  if (data == null) return <p className="text-sm text-ink-500">{empty}</p>
+  if (typeof data !== 'object' || Array.isArray(data)) {
+    return <CollapsibleJson value={data} />
+  }
+  const entries = Object.entries(data as Record<string, unknown>)
+  if (entries.length === 0) return <p className="text-sm text-ink-500">{empty}</p>
+  return (
+    <dl className="divide-y divide-ink-100 overflow-hidden rounded-xl border border-ink-200 bg-white">
+      {entries.map(([k, v]) => (
+        <div key={k} className="grid grid-cols-1 gap-1 px-3 py-2 sm:grid-cols-[11rem_1fr] sm:gap-3">
+          <dt className="flex items-start gap-1 text-xs font-medium text-ink-500">
+            <ChevronRight className="mt-0.5 hidden h-3 w-3 shrink-0 text-ink-300 sm:block" />
+            {startCase(k)}
+          </dt>
+          <dd className="min-w-0 text-sm text-ink-900">{valueCell(v)}</dd>
+        </div>
+      ))}
+    </dl>
+  )
 }

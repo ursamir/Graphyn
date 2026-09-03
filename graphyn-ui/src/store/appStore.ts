@@ -31,8 +31,8 @@ interface AppState {
   setRefreshCatalog: (fn: () => Promise<void>) => void
   seed: number
   setSeed: (seed: number) => void
-  logs: Array<{ message: string; level: string; ts: string }>
-  addLog: (message: string, level?: string) => void
+  logs: Array<{ message: string; level: string; ts: string; raw?: string }>
+  addLog: (message: string, level?: string, raw?: string) => void
   clearLogs: () => void
   isRunning: boolean
   setIsRunning: (v: boolean) => void
@@ -71,9 +71,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   seed: 42,
   setSeed: (seed) => set({ seed }),
   logs: [],
-  addLog: (message, level = 'info') =>
+  addLog: (message, level = 'info', raw) =>
     set((s) => ({
-      logs: [...s.logs, { message, level, ts: new Date().toISOString() }].slice(-500),
+      logs: [...s.logs, { message, level, ts: new Date().toISOString(), raw }].slice(-500),
     })),
   clearLogs: () => set({ logs: [] }),
   isRunning: false,

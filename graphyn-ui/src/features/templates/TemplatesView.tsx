@@ -1,9 +1,9 @@
 import React from 'react'
-import { BookOpen, RefreshCw, Trash2, Download } from 'lucide-react'
+import { RefreshCw, Trash2, Download } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
-import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
+import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
 
 function isExampleTemplate(name: string): boolean {
   return name.startsWith('ex-')
@@ -164,33 +164,28 @@ export default function TemplatesView() {
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-display text-lg font-bold flex items-center gap-2">
-          <BookOpen className="h-5 w-5 text-accent-600" /> Templates
-        </h2>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={syncing}
-            onClick={() => void importExamples()}
-            title="Copy all examples/**/*.graph.json into templates"
-          >
-            <Download className="h-3.5 w-3.5" />
-            {syncing ? 'Importing…' : 'Import all examples'}
-          </button>
-          <button type="button" className="btn-secondary" onClick={() => void load()}>
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Templates"
+        description="Starter graphs and saved pipelines. Import examples, then open one in Builder."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={syncing}
+              onClick={() => void importExamples()}
+              title="Copy example graphs into templates"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {syncing ? 'Importing…' : 'Import examples'}
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => void load()}>
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
+          </div>
+        }
+      />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
-
-      <p className="text-sm text-ink-600">
-        Open any example into Builder — **one numbered example → one template**
-        (label/phase shards stay in ``examples/`` for CLI scripts only). Example
-        graphs keep repo-relative data paths (run the API from the project root).
-      </p>
 
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
         <h3 className="text-sm font-semibold">Create / version template</h3>
@@ -241,15 +236,13 @@ export default function TemplatesView() {
           title={filter === 'examples' ? 'No example templates' : 'No templates'}
           description={
             filter === 'examples'
-              ? 'Click “Import all examples” to load every examples/**/*.graph.json into Templates.'
-              : 'Save a Graph IR template from Builder or upload a file.'
+              ? 'Import example graphs from the repo, then open one in builder.'
+              : 'Import examples, save from Builder, or upload a graph file.'
           }
           action={
-            filter === 'examples' ? (
-              <button type="button" className="btn-primary" onClick={() => void importExamples()}>
-                Import all examples
-              </button>
-            ) : undefined
+            <button type="button" className="btn-primary" onClick={() => void importExamples()}>
+              Import examples
+            </button>
           }
         />
       ) : (
@@ -291,7 +284,7 @@ export default function TemplatesView() {
                   </select>
                 ) : null}
                 <button type="button" className="btn-primary" onClick={() => void loadIntoBuilder(name)}>
-                  Open in Builder
+                  Open in builder
                 </button>
                 <ConfirmButton
                   label="Delete version"

@@ -6,7 +6,9 @@ import {
   ConfirmButton,
   EmptyState,
   ErrorBanner,
+  KeyValue,
   LoadingBlock,
+  PageHeader,
   StatusBadge,
 } from '../../components/ui'
 
@@ -80,12 +82,15 @@ export default function SystemView() {
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="font-display text-lg font-bold">System</h2>
-        <button type="button" className="btn-secondary" onClick={() => void refresh()}>
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </button>
-      </div>
+      <PageHeader
+        title="System"
+        description="Health, webhooks, cleanup, and the projects registry."
+        actions={
+          <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        }
+      />
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
       {loading && <LoadingBlock label="Loading system status…" />}
 
@@ -100,9 +105,9 @@ export default function SystemView() {
               <h3 className="text-sm font-semibold">{title as string}</h3>
               <StatusBadge status={String(badge)} />
             </div>
-            <pre className="max-h-48 overflow-auto font-mono text-[11px] text-ink-700">
-              {JSON.stringify(data, null, 2)}
-            </pre>
+            <div className="max-h-48 overflow-auto">
+              <KeyValue data={data} />
+            </div>
           </section>
         ))}
       </div>

@@ -2,7 +2,7 @@ import React from 'react'
 import { Download, Power, PowerOff, RefreshCw, PackagePlus } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, StatusBadge } from '../../components/ui'
+import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
 
 interface DepSummary {
   missing_required?: string[]
@@ -157,12 +157,15 @@ export default function PluginsView() {
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="font-display text-lg font-bold">Plugins</h2>
-        <button type="button" className="btn-secondary" onClick={() => void load()}>
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </button>
-      </div>
+      <PageHeader
+        title="Plugins"
+        description="Install node packs, manage dependencies, and enable isolated runtimes."
+        actions={
+          <button type="button" className="btn-secondary" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        }
+      />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
@@ -219,7 +222,19 @@ export default function PluginsView() {
         {plugins === null ? (
           <LoadingBlock />
         ) : plugins.length === 0 ? (
-          <EmptyState title="No plugins installed" />
+          <EmptyState
+            title="No plugins installed"
+            description="Install a package, path, or git URL above to add nodes to the Builder catalog."
+            action={
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => document.querySelector<HTMLInputElement>('input[placeholder="path, package, https://…, git+…"]')?.focus()}
+              >
+                Install a plugin
+              </button>
+            }
+          />
         ) : (
           <ul className="space-y-2">
             {plugins.map((p) => {

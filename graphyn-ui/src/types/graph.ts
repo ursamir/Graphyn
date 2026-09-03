@@ -53,6 +53,7 @@ export interface NodeCatalogEntry {
     inputs?: PortDef[]
     outputs?: PortDef[]
   }
+  runtime?: string
 }
 
 export function emptyGraph(name = 'pipeline', seed = 42): GraphIR {

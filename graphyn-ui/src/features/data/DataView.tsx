@@ -8,7 +8,7 @@ import {
   getApiToken,
 } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
+import { EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
 
 interface OutputProject {
   project: string
@@ -238,17 +238,20 @@ export default function DataView() {
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-display text-lg font-bold">Data</h2>
-        <div className="flex gap-2">
-          <button type="button" className="btn-secondary" onClick={upload}>
-            <Upload className="h-3.5 w-3.5" /> Upload
-          </button>
-          <button type="button" className="btn-secondary" onClick={() => void loadSources()}>
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        title="Data"
+        description="Browse pipeline outputs, upload inputs, ingest URLs, and merge dataset versions."
+        actions={
+          <div className="flex gap-2">
+            <button type="button" className="btn-secondary" onClick={upload}>
+              <Upload className="h-3.5 w-3.5" /> Upload
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => void loadSources()}>
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
+          </div>
+        }
+      />
       {error && <ErrorBanner message={error} onRetry={() => void loadSources()} />}
 
       <div className="flex flex-wrap gap-2">
@@ -302,9 +305,17 @@ export default function DataView() {
               {inputs.map((i) => <option key={i.label} value={i.label}>{i.label} ({i.file_count})</option>)}
             </select>
           )}
-          {stats != null && <pre className="rounded-xl bg-ink-100 p-3 font-mono text-[11px]">{JSON.stringify(stats, null, 2)}</pre>}
+          {stats != null && <KeyValue data={stats} />}
           {rows.length === 0 ? (
-            <EmptyState title="No rows" />
+            <EmptyState
+              title="No rows"
+              description="Upload audio or ingest a dataset to see files here."
+              action={
+                <button type="button" className="btn-primary" onClick={upload}>
+                  Upload a file
+                </button>
+              }
+            />
           ) : (
             <div className="rounded-2xl border border-ink-200 bg-white">
               <table className="w-full text-left text-sm">

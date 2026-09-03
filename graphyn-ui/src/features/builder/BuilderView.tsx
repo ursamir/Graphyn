@@ -21,10 +21,12 @@ import {
   Hash,
   Square,
   BookmarkPlus,
-  Zap,
+  MoreHorizontal,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
+import { EmptyState } from '../../components/ui'
+import { formatExecutionLine, humanNodeLabel } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   catalogPorts,
@@ -46,7 +48,7 @@ function defaultsFromSchema(entry?: NodeCatalogEntry): Record<string, unknown> {
 
 function BuilderInner() {
   const catalog = useAppStore((s) => s.catalog)
-  const bootError = useAppStore((s) => s.bootError)
+  const setView = useAppStore((s) => s.setView)
   const bootStatus = useAppStore((s) => s.bootStatus)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const seed = useAppStore((s) => s.seed)
@@ -66,11 +68,24 @@ function BuilderInner() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [filter, setFilter] = React.useState('')
   const [templateName, setTemplateName] = React.useState('')
+  const [moreOpen, setMoreOpen] = React.useState(false)
+  const [showRawLogs, setShowRawLogs] = React.useState(false)
+  const moreRef = React.useRef<HTMLDivElement | null>(null)
   const abortRef = React.useRef<AbortController | null>(null)
   const nodesRef = React.useRef(nodes)
   const edgesRef = React.useRef(edges)
   nodesRef.current = nodes
   edgesRef.current = edges
+
+  React.useEffect(() => {
+    if (!moreOpen) return
+    const onDoc = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as HTMLElement)) setMoreOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [moreOpen])
+
 
   const attachHandlers = React.useCallback(
     (node: Node<GraphynNodeData>): Node<GraphynNodeData> => ({
@@ -167,8 +182,9 @@ function BuilderInner() {
       position: { x: 120 + Math.random() * 240, y: 80 + nodes.length * 28 },
       data: {
         nodeType: entry.node_type,
-        label: entry.label || entry.node_type,
+        label: entry.label || humanNodeLabel(entry.node_type),
         category: entry.category,
+        runtime: entry.runtime,
         config: defaultsFromSchema(entry),
         schemaProps: entry.config_schema?.properties ?? {},
         inputs: ports.inputs,
@@ -197,8 +213,9 @@ function BuilderInner() {
         position: positions[n.id] ?? { x: 180 + (i % 3) * 280, y: 60 + Math.floor(i / 3) * 160 },
         data: {
           nodeType: n.node_type,
-          label: entry?.label || n.label || n.node_type,
+          label: entry?.label || n.label || humanNodeLabel(n.node_type),
           category: entry?.category,
+          runtime: entry?.runtime,
           config: { ...defaultsFromSchema(entry), ...(n.config ?? {}) },
           schemaProps: entry?.config_schema?.properties ?? {},
           inputs: ports.inputs.length ? ports.inputs : [{ name: 'input' }],
@@ -336,11 +353,15 @@ function BuilderInner() {
                 )
               }
             }
-            const msg = String(ev.message ?? ev.type ?? trimmed)
-            const level = String(ev.level ?? ev.type ?? 'info').toLowerCase()
-            addLog(msg, level.includes('error') ? 'error' : level)
+            const formatted = formatExecutionLine(trimmed)
+            addLog(
+              formatted.text,
+              formatted.level.includes('error') ? 'error' : formatted.level,
+              formatted.raw,
+            )
           } catch {
-            addLog(trimmed, 'info')
+            const formatted = formatExecutionLine(trimmed)
+            addLog(formatted.text, formatted.level, formatted.raw)
           }
         }
       }
@@ -458,26 +479,33 @@ function BuilderInner() {
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {catalog.length === 0 ? (
-            <div className="space-y-2 px-2 py-4">
-              {bootError && (
-                <div className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-sm text-rose-800">
-                  {bootError}
-                </div>
-              )}
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-sm text-amber-900">
-                {bootStatus === 401 || !getApiToken()
-                  ? 'Set API token in Settings'
-                  : 'No plugins installed'}
-              </div>
-              {(bootStatus === 401 || !getApiToken()) && (
-                <button
-                  type="button"
-                  className="btn-primary w-full text-sm"
-                  onClick={() => setSettingsOpen(true)}
-                >
-                  Open Settings
-                </button>
-              )}
+            <div className="px-1 py-2">
+              <EmptyState
+                title={bootStatus === 401 || !getApiToken() ? 'Sign in to load nodes' : 'No plugins installed'}
+                description={
+                  bootStatus === 401 || !getApiToken()
+                    ? 'Paste your API token in Settings to load the node catalog.'
+                    : 'Install a plugin to populate the catalog, then add nodes here.'
+                }
+                action={
+                  bootStatus === 401 || !getApiToken() ? (
+                    <button type="button" className="btn-primary" onClick={() => setSettingsOpen(true)}>
+                      Open Settings
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        setView('plugins')
+                        window.history.replaceState(null, '', '#/plugins')
+                      }}
+                    >
+                      Open Plugins
+                    </button>
+                  )
+                }
+              />
             </div>
           ) : byCategory.length === 0 ? (
             <div className="px-2 py-6 text-sm text-ink-500">No nodes match the search.</div>
@@ -495,7 +523,7 @@ function BuilderInner() {
                       onClick={() => addNode(n)}
                       className="w-full rounded-lg border border-transparent px-2 py-1.5 text-left hover:border-ink-200 hover:bg-ink-50"
                     >
-                      <div className="text-sm font-medium text-ink-900">{n.label || n.node_type}</div>
+                      <div className="text-sm font-medium text-ink-900">{n.label || humanNodeLabel(n.node_type)}</div>
                       <div className="font-mono text-[10px] text-ink-400">{n.node_type}</div>
                     </button>
                   ))}
@@ -508,19 +536,6 @@ function BuilderInner() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-200 bg-white/70 px-3 py-2 backdrop-blur">
-          <div className="flex items-center gap-1.5 rounded-lg border border-ink-200 px-2 py-1">
-            <Hash className="h-3.5 w-3.5 text-ink-400" />
-            <input
-              type="number"
-              value={seed}
-              onChange={(e) => setSeed(Number(e.target.value) || 0)}
-              className="w-16 bg-transparent text-sm font-mono outline-none"
-              title="Graph seed"
-            />
-          </div>
-          <button type="button" onClick={() => void handleValidate()} className="btn-secondary">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Validate
-          </button>
           {!isRunning ? (
             <button
               type="button"
@@ -535,44 +550,78 @@ function BuilderInner() {
               <Square className="h-3.5 w-3.5" /> Cancel
             </button>
           )}
-          <button
-            type="button"
-            disabled={nodes.length === 0 || isRunning}
-            onClick={() => void handleRunAsync()}
-            className="btn-secondary"
-          >
-            <Zap className="h-3.5 w-3.5" /> Run async
+          <button type="button" onClick={() => void handleValidate()} className="btn-secondary">
+            <CheckCircle2 className="h-3.5 w-3.5" /> Validate
           </button>
-          <button type="button" onClick={exportIr} className="btn-secondary">
-            <Download className="h-3.5 w-3.5" /> Export IR
-          </button>
-          <button type="button" onClick={importIr} className="btn-secondary">
-            <Upload className="h-3.5 w-3.5" /> Import IR
-          </button>
-          <input
-            value={templateName}
-            onChange={(e) => setTemplateName(e.target.value)}
-            placeholder="template-name"
-            className="w-36 rounded-lg border border-ink-200 px-2 py-1 text-xs"
-          />
-          <button type="button" onClick={() => void saveTemplate()} className="btn-secondary">
-            <BookmarkPlus className="h-3.5 w-3.5" /> Save template
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!window.confirm('Clear the canvas?')) return
-              setNodes([])
-              setEdges([])
-              clearLogs()
-            }}
-            className="btn-secondary"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Clear
-          </button>
+          <div className="relative ml-auto" ref={moreRef}>
+            <button
+              type="button"
+              className="btn-quiet"
+              onClick={() => setMoreOpen((o) => !o)}
+              aria-expanded={moreOpen}
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" /> More
+            </button>
+            {moreOpen && (
+              <div className="absolute right-0 z-20 mt-1 w-64 rounded-xl border border-ink-200 bg-white p-2 shadow-lg">
+                <button type="button" className="btn-quiet w-full justify-start" onClick={() => { importIr(); setMoreOpen(false) }}>
+                  <Upload className="h-3.5 w-3.5" /> Import
+                </button>
+                <button type="button" className="btn-quiet w-full justify-start" onClick={() => { exportIr(); setMoreOpen(false) }}>
+                  <Download className="h-3.5 w-3.5" /> Export
+                </button>
+                <div className="mt-1 flex items-center gap-1 px-1">
+                  <input
+                    value={templateName}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                    placeholder="template-name"
+                    className="min-w-0 flex-1 rounded-lg border border-ink-200 px-2 py-1 text-xs"
+                  />
+                  <button type="button" className="btn-quiet shrink-0" onClick={() => void saveTemplate()}>
+                    <BookmarkPlus className="h-3.5 w-3.5" /> Save
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="btn-quiet w-full justify-start"
+                  onClick={() => {
+                    if (!window.confirm('Clear the canvas?')) return
+                    setNodes([])
+                    setEdges([])
+                    clearLogs()
+                    setMoreOpen(false)
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Clear
+                </button>
+                <button
+                  type="button"
+                  disabled={nodes.length === 0 || isRunning}
+                  className="btn-quiet w-full justify-start"
+                  onClick={() => {
+                    void handleRunAsync()
+                    setMoreOpen(false)
+                  }}
+                >
+                  Run in background
+                </button>
+                <label className="mt-1 flex items-center gap-2 px-2 py-1 text-xs text-ink-500">
+                  <Hash className="h-3.5 w-3.5" />
+                  Seed
+                  <input
+                    type="number"
+                    value={seed}
+                    onChange={(e) => setSeed(Number(e.target.value) || 0)}
+                    className="w-16 rounded border border-ink-200 px-1 py-0.5 font-mono text-xs"
+                    title="Graph seed"
+                  />
+                </label>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="min-h-0 flex-1">
+        <div className="relative min-h-0 flex-1">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -586,11 +635,38 @@ function BuilderInner() {
             <Controls />
             <MiniMap pannable zoomable />
           </ReactFlow>
+          {nodes.length === 0 && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+              <div className="pointer-events-auto max-w-sm rounded-2xl border border-ink-200 bg-white/95 px-6 py-5 text-center shadow-sm">
+                <div className="font-display text-base font-bold text-ink-900">Empty canvas</div>
+                <p className="mt-1 text-sm text-ink-500">Add a node from the catalog, or open Templates.</p>
+                <button
+                  type="button"
+                  className="btn-primary mt-3"
+                  onClick={() => {
+                    setView('templates')
+                    window.history.replaceState(null, '', '#/templates')
+                  }}
+                >
+                  Open Templates
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="h-40 border-t border-ink-200 bg-ink-950 px-3 py-2 text-ink-100">
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-            Execution log
+          <div className="mb-1 flex items-center justify-between">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+              Execution log
+            </div>
+            <button
+              type="button"
+              className="text-[11px] font-medium text-ink-400 hover:text-ink-100"
+              onClick={() => setShowRawLogs((v) => !v)}
+            >
+              {showRawLogs ? 'Pretty' : 'Raw'}
+            </button>
           </div>
           <div className="h-[7.5rem] overflow-y-auto font-mono text-[11px]">
             {logs.length === 0 ? (
@@ -607,7 +683,7 @@ function BuilderInner() {
                         : 'text-ink-200'
                   }
                 >
-                  {l.message}
+                  {showRawLogs ? l.raw || l.message : l.message}
                 </div>
               ))
             )}

@@ -4,9 +4,12 @@ import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import {
   ConfirmButton,
+  CollapsibleJson,
   EmptyState,
   ErrorBanner,
+  KeyValue,
   LoadingBlock,
+  PageHeader,
   StatusBadge,
 } from '../../components/ui'
 
@@ -291,12 +294,15 @@ export default function ProjectsView() {
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-[320px_1fr]">
       <div className="overflow-y-auto border-r border-ink-200 p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold">Projects</h2>
-          <button type="button" className="btn-secondary" onClick={() => void load()} aria-label="Refresh">
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        <PageHeader
+          title="Projects"
+          description="Dataset projects, versions, snapshots, and contracts."
+          actions={
+            <button type="button" className="btn-secondary" onClick={() => void load()} aria-label="Refresh">
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          }
+        />
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         <div className="flex gap-2">
           <input
@@ -313,7 +319,15 @@ export default function ProjectsView() {
         {loading || projects == null ? (
           <LoadingBlock />
         ) : projects.length === 0 ? (
-          <EmptyState title="No projects" description="Create a project to manage dataset versions." />
+          <EmptyState
+            title="No projects"
+            description="Create a project to manage dataset versions."
+            action={
+              <button type="button" className="btn-primary" onClick={() => void create()}>
+                Create project
+              </button>
+            }
+          />
         ) : (
           <ul className="space-y-2">
             {projects.map((p) => (
@@ -463,19 +477,9 @@ export default function ProjectsView() {
                     onConfirm={() => void restoreVersion()}
                   />
                 </div>
-                <pre className="rounded-xl bg-ink-100 p-3 font-mono text-[11px]">
-                  {JSON.stringify(versions, null, 2)}
-                </pre>
-                {versionStats != null && (
-                  <pre className="rounded-xl bg-white border border-ink-200 p-3 font-mono text-[11px]">
-                    {JSON.stringify(versionStats, null, 2)}
-                  </pre>
-                )}
-                {versionSamples != null && (
-                  <pre className="max-h-64 overflow-auto rounded-xl bg-white border border-ink-200 p-3 font-mono text-[11px]">
-                    {JSON.stringify(versionSamples, null, 2)}
-                  </pre>
-                )}
+                <KeyValue data={versions} empty="No versions." />
+                {versionStats != null && <KeyValue data={versionStats} />}
+                {versionSamples != null && <CollapsibleJson value={versionSamples} label="Samples" />}
               </section>
             )}
 
@@ -550,15 +554,9 @@ export default function ProjectsView() {
                     Diff
                   </button>
                 </div>
-                {diffResult != null && (
-                  <pre className="max-h-64 overflow-auto rounded-xl bg-ink-100 p-3 font-mono text-[11px]">
-                    {JSON.stringify(diffResult, null, 2)}
-                  </pre>
-                )}
+                {diffResult != null && <KeyValue data={diffResult} />}
                 <h4 className="text-sm font-semibold">Lineage</h4>
-                <pre className="max-h-64 overflow-auto rounded-xl bg-white border border-ink-200 p-3 font-mono text-[11px]">
-                  {JSON.stringify(lineage, null, 2)}
-                </pre>
+                <KeyValue data={lineage} empty="No lineage." />
               </section>
             )}
           </>
