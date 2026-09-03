@@ -585,3 +585,74 @@ def publish_latest(slug: str, run_id: str) -> str:
     _copy_key_files(run_path, latest)
     _atomic_write_json(latest / "latest.json", pointer)
     return latest_rel
+
+
+def ingest_dir_candidates(raw: str) -> list[Path]:
+    """Filesystem locations to try for a dataset_ingest path."""
+    from app.core.config import project_dir
+    from app.core.example_templates import examples_dir, repo_root
+
+    text = _posix(strip_legacy_absolute_prefix(raw or ""))
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        try:
+            key = str(path)
+        except OSError:
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(path)
+
+    add(Path(text))
+    if text and not Path(text).is_absolute():
+        add(Path.cwd() / text)
+        add(project_dir() / text)
+        add(repo_root() / text)
+        parts = Path(text).parts
+        if parts and parts[0] == "workspace":
+            add(project_dir() / Path(*parts[1:]))
+        if parts and parts[0] == "examples":
+            add(examples_dir() / Path(*parts[1:]))
+    if "latest" in Path(text).parts:
+        parts = [p for p in Path(text).parts if p != "latest"]
+        stripped = Path(*parts) if parts else Path(".")
+        add(stripped)
+        if not stripped.is_absolute():
+            add(Path.cwd() / stripped)
+            add(project_dir() / stripped)
+            add(repo_root() / stripped)
+            sp = stripped.parts
+            if sp and sp[0] == "workspace":
+                add(project_dir() / Path(*sp[1:]))
+    needle = text.replace("_", "-")
+    if "speech-command" in needle:
+        add(examples_dir() / "02_speech_commands" / "data")
+        add(repo_root() / "examples" / "02_speech_commands" / "data")
+    return out
+
+
+def resolve_ingest_dir(raw: str) -> Path:
+    """Return an existing directory for ingest, or raise FileNotFoundError.
+
+    Does **not** create empty folders — ingest reads audio. Missing ``latest/``
+    falls back to the same path without ``latest``, then bundled
+    ``examples/02_speech_commands/data`` for speech-commands graphs.
+    """
+    tried: list[str] = []
+    for candidate in ingest_dir_candidates(raw):
+        tried.append(str(candidate))
+        try:
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
+    hint = (
+        "Ingest reads audio; empty folders are not created. "
+        "Run the Speech Commands preprocess template first, or set path to "
+        "examples/02_speech_commands/data (the wavs on the host). "
+        f"Tried: {tried[:8]}"
+    )
+    raise FileNotFoundError(hint)

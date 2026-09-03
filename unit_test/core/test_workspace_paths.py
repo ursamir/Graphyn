@@ -218,3 +218,22 @@ class TestPublishLatest:
         assert latest_path.is_symlink()
         assert latest_run_id(slug) == run_id
         assert (latest_path / "metrics.json").is_file()
+
+
+class TestResolveIngestDir:
+    def test_missing_latest_falls_back_to_bundled_speech_commands(self, tmp_path, monkeypatch):
+        data = tmp_path / "examples" / "02_speech_commands" / "data"
+        data.mkdir(parents=True)
+        (data / "yes").mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path / "workspace"))
+        (tmp_path / "workspace").mkdir()
+        from app.core.workspace_paths import resolve_ingest_dir
+        # monkeypatch examples_dir
+        import app.core.example_templates as et
+        monkeypatch.setattr(et, "repo_root", lambda: tmp_path)
+        monkeypatch.setattr(et, "examples_dir", lambda: tmp_path / "examples")
+        found = resolve_ingest_dir(
+            "workspace/artifacts/speech-commands/latest/dataset/speech_commands/v1"
+        )
+        assert found == data

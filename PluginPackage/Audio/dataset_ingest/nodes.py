@@ -145,9 +145,12 @@ class DatasetIngestNode(Node):
           recursive=False — ``limit`` is applied to the **total** number of files
                             loaded from the flat directory.
         """
-        root_path = Path(path)
-        if not root_path.exists():
-            raise ValueError(f"DatasetIngestNode: path does not exist: {root_path}")
+        try:
+            from app.core.workspace_paths import resolve_ingest_dir
+
+            root_path = resolve_ingest_dir(path)
+        except FileNotFoundError as exc:
+            raise ValueError(f"DatasetIngestNode: {exc}") from exc
         if not root_path.is_dir():
             raise ValueError(f"DatasetIngestNode: path must be a directory: {root_path}")
 
