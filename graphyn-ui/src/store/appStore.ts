@@ -13,6 +13,7 @@ export type AppView =
   | 'secrets'
   | 'workers'
   | 'trace'
+  | 'edge'
   | 'experiments'
 
 export type ToastTone = 'info' | 'success' | 'error'

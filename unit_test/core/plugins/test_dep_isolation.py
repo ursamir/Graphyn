@@ -825,3 +825,31 @@ def test_coerce_node_inputs_dict_to_model_and_dataset_artifact() -> None:
     # Already-typed objects stay objects.
     again = coerce_node_inputs({"model_artifact": out["model_artifact"], "dataset": out["dataset"]}, _Ports)
     assert again["model_artifact"] is out["model_artifact"]
+
+
+def test_coerce_unwraps_code_result_wrapper_to_model_artifact() -> None:
+    """python_code emits CodeResult(data={model_path, labels}); coerce to ModelArtifact."""
+    from app.core.nodes.ports import InputPort, PortDataType
+    from app.core.plugins.hydrate import coerce_node_inputs, hydrate_platform_models
+    from app.models.model_artifact import ModelArtifact
+    from pydantic import Field
+
+    class CodeResult(PortDataType):
+        data: object = None
+        metadata: dict = Field(default_factory=dict)
+
+    class _Ports:
+        input_ports = {
+            "input": InputPort(name="input", data_type=ModelArtifact, required=True),
+        }
+
+    payload = {"model_path": "workspace/artifacts/models/saved_model", "labels": ["a", "b"]}
+    live = CodeResult(data=payload, metadata={})
+    out = coerce_node_inputs({"input": live}, _Ports)
+    assert isinstance(out["input"], ModelArtifact)
+    assert out["input"].model_path == payload["model_path"]
+
+    dumped = {"data": payload, "metadata": {}}
+    hydrated = hydrate_platform_models(dumped, ModelArtifact)
+    assert isinstance(hydrated, ModelArtifact)
+    assert hydrated.labels == ["a", "b"]

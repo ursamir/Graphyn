@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "edge-deploy",
+    "seed": 42,
+    "description": "Edge deploy path: model path → edge_optimizer → deployment_packager. Point model_ref at a Keras SavedModel/.keras from trainer (workspace/artifacts/...). Outputs under workspace/artifacts/edge-deploy/.",
+    "created_at": null,
+    "tags": [
+      "example",
+      "starter",
+      "edge",
+      "deploy",
+      "ml"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "model_ref",
+      "node_type": "python_code",
+      "config": {
+        "source": "output = {\n  \"model_path\": \"workspace/artifacts/models/saved_model\",\n  \"labels\": [\"yes\", \"no\", \"up\", \"down\", \"go\", \"stop\"],\n  \"history\": {},\n  \"metrics\": {}\n}\n",
+        "allowed_paths": [],
+        "allow_network": false
+      },
+      "label": "Model path",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "edge_optimizer_0",
+      "node_type": "edge_optimizer",
+      "config": {
+        "backend": "tflite",
+        "quantization": "float32",
+        "output_path": "workspace/artifacts/edge-deploy/optimized",
+        "representative_samples": 100,
+        "prune": false,
+        "operator_fusion": true
+      },
+      "label": "Edge Optimizer",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "deployment_packager_0",
+      "node_type": "deployment_packager",
+      "config": {
+        "target": "edge",
+        "output_path": "workspace/artifacts/edge-deploy/packages",
+        "include_inference_script": true,
+        "include_metadata": true,
+        "package_name": "edge_model"
+      },
+      "label": "Deployment Packager",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "model_ref",
+      "src_port": "output",
+      "dst_id": "edge_optimizer_0",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "edge_optimizer_0",
+      "src_port": "output",
+      "dst_id": "deployment_packager_0",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {},
+  "ui": {
+    "positions": {
+      "model_ref": { "x": 80, "y": 160 },
+      "edge_optimizer_0": { "x": 360, "y": 160 },
+      "deployment_packager_0": { "x": 640, "y": 160 }
+    }
+  }
+}

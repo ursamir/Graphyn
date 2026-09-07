@@ -99,7 +99,31 @@ def hydrate_platform_models(obj: Any, expected_type: Any = None) -> Any:
         if isinstance(obj, expected_type):
             return obj
         if isinstance(obj, dict):
+            # Wrapper PortDataTypes (CodeResult / MappedPayload / JsonDocument)
+            # dump as {"data": ..., "metadata": ...}. Unwrap when *data* looks
+            # like the expected platform artifact so python_code → ML nodes work.
+            inner = obj.get("data")
+            if (
+                isinstance(inner, dict)
+                and "metadata" in obj
+                and set(obj.keys()) <= {"data", "metadata"}
+                and (
+                    _distinctive_match(inner, expected_type)
+                    or any(k in inner for k in ("model_path", "artifact_path", "tflite_path"))
+                )
+            ):
+                return _validate(expected_type, inner)
             return _validate(expected_type, obj)
+        # Live PortDataType wrapper instance (in-process DAG edges).
+        inner = getattr(obj, "data", None)
+        if isinstance(inner, dict) and type(obj).__name__ in {
+            "CodeResult",
+            "MappedPayload",
+            "JsonDocument",
+        }:
+            return hydrate_platform_models(inner, expected_type)
+        if isinstance(inner, expected_type):
+            return inner
         return obj
 
     # Untyped restore (cache JSON): infer then recurse into nested dict/list.

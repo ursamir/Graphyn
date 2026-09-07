@@ -51,6 +51,7 @@ Use this table to find the example that demonstrates a specific feature:
 | Nightly compliance (schedule + IF + HTTP mock/CSV) | 26 |
 | GitHub triage via http_request + IF | 27 |
 | ASR + python_code fan-out → merge → CSV | 28 |
+| Edge optimize → package (deploy wizard) | 30 |
 
 ---
 

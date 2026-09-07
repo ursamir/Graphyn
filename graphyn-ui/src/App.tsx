@@ -14,6 +14,7 @@ import {
   KeyRound,
   Server,
   GitBranch,
+  Cpu,
   FlaskConical,
   X,
   Menu,
@@ -36,6 +37,7 @@ import SystemView from './features/system/SystemView'
 import SecretsView from './features/secrets/SecretsView'
 import WorkersView from './features/workers/WorkersView'
 import TraceView from './features/trace/TraceView'
+import EdgeWizardView from './features/edge/EdgeWizardView'
 import ExperimentsView from './features/experiments/ExperimentsView'
 
 const NAV_GROUPS: Array<{
@@ -57,6 +59,7 @@ const NAV_GROUPS: Array<{
       { id: 'data', label: 'Data', icon: Database },
       { id: 'artifacts', label: 'Artifacts', icon: Archive },
       { id: 'trace', label: 'Trace', icon: GitBranch },
+      { id: 'edge', label: 'Edge', icon: Cpu },
       { id: 'experiments', label: 'Experiments', icon: FlaskConical },
     ],
   },
@@ -81,6 +84,7 @@ const VIEW_LABEL: Record<AppView, string> = {
   data: 'Data',
   artifacts: 'Artifacts',
   trace: 'Trace',
+  edge: 'Edge',
   experiments: 'Experiments',
   projects: 'Projects',
   secrets: 'Secrets',
@@ -405,6 +409,7 @@ export default function App() {
             {view === 'system' && <SystemView />}
             {view === 'workers' && <WorkersView />}
             {view === 'trace' && <TraceView />}
+            {view === 'edge' && <EdgeWizardView />}
             {view === 'experiments' && <ExperimentsView />}
             {view === 'secrets' && <SecretsView />}
           </main>
