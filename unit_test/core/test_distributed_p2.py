@@ -18,6 +18,32 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _expire_job_lease(q: JobQueue, job_id: str) -> None:
+    """Force an expired lease into the durable store (and refresh local cache).
+
+    Tests must not only poke ``q._jobs`` when a store is configured — durable
+    reclaim reads the store snapshot inside ``mutate_queue``.
+    """
+    store = q._store
+    assert store is not None
+
+    def mut(snap):
+        jobs = dict(snap.get("jobs") or {})
+        payload = jobs.get(job_id)
+        assert payload is not None, f"missing job {job_id}"
+        job = NodeJob.model_validate(payload)
+        expired = job.model_copy(
+            update={"lease_expires_at": _utcnow() - timedelta(seconds=5)}
+        )
+        jobs[job_id] = expired.model_dump(mode="json")
+        return {**snap, "jobs": jobs}, None
+
+    store.mutate_queue(mut)
+    with q._lock:
+        q._apply_queue_snapshot_unlocked(store.load_queue())
+
+
+
 def test_disk_store_persists_workers_and_jobs(tmp_path: Path):
     store = DiskStateStore(root=tmp_path)
     reg = WorkerRegistry(store=store, load_persisted=False)
@@ -60,12 +86,8 @@ def test_lease_reclaim_returns_job_to_pending():
     assert claimed.status == "claimed"
     assert claimed.lease_expires_at is not None
 
-    # Force lease expiry.
-    expired = claimed.model_copy(
-        update={"lease_expires_at": _utcnow() - timedelta(seconds=5)}
-    )
-    with q._lock:
-        q._jobs[claimed.job_id] = expired
+    # Force lease expiry in durable store (not only local cache).
+    _expire_job_lease(q, claimed.job_id)
 
     reclaimed = q.reclaim_expired_leases()
     assert claimed.job_id in reclaimed
@@ -294,11 +316,8 @@ def test_lease_reclaim_increments_generation_and_fences_old_complete():
     claimed = q.claim(w1)
     old_gen = int(claimed.lease_generation or 0)
 
-    # Expire + reclaim
-    with q._lock:
-        q._jobs[claimed.job_id] = claimed.model_copy(
-            update={"lease_expires_at": _utcnow() - timedelta(seconds=5)}
-        )
+    # Expire + reclaim (via durable store)
+    _expire_job_lease(q, claimed.job_id)
     reclaimed = q.reclaim_expired_leases()
     assert "fence1" in reclaimed
     job = q.get("fence1")
@@ -382,10 +401,7 @@ def test_reclaim_clears_preferred_worker_pin():
     assert claimed.placement.worker == "gpu-dead"
     old_gen = int(claimed.lease_generation or 0)
 
-    with q._lock:
-        q._jobs[claimed.job_id] = claimed.model_copy(
-            update={"lease_expires_at": _utcnow() - timedelta(seconds=5)}
-        )
+    _expire_job_lease(q, claimed.job_id)
     reclaimed = q.reclaim_expired_leases()
     assert "pin1" in reclaimed
 
@@ -700,3 +716,298 @@ def test_concurrent_append_and_renew_no_lost_update(tmp_path: Path):
     assert job is not None and job.status == "claimed"
     assert job.claimed_by == "w1"
     assert job.lease_expires_at is not None
+
+
+# ---------------------------------------------------------------------------
+# DIST-002 — remaining mutators: cancel / reclaim / renew_leases_for_worker / clear
+# ---------------------------------------------------------------------------
+
+
+def _dist002_cancel_worker(root: str, job_id: str, out_path: str) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=60.0)
+    try:
+        job = q.cancel(job_id)
+        P(out_path).write_text(f"ok:{job.status}", encoding="utf-8")
+    except KeyError:
+        P(out_path).write_text("missing", encoding="utf-8")
+
+
+def _dist002_claim_worker_simple(root: str, wid: str, out_path: str) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.models import WorkerInfo, WorkerResources
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=60.0)
+    worker = WorkerInfo(
+        worker_id=wid,
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    claimed = q.claim(worker)
+    if claimed is None:
+        P(out_path).write_text("none", encoding="utf-8")
+    else:
+        P(out_path).write_text(f"claimed:{claimed.job_id}:{claimed.status}", encoding="utf-8")
+
+
+def test_concurrent_cancel_vs_claim(tmp_path: Path):
+    """DIST-002: cancel and claim racing on shared DiskStateStore stay consistent."""
+    import multiprocessing as mp
+
+    store = DiskStateStore(root=tmp_path)
+    q = JobQueue(store=store, load_persisted=False, lease_ttl_s=60.0)
+    q.enqueue(NodeJob(job_id="cx1", run_id="r", node_id="n", node_type="x"))
+
+    out_c = tmp_path / "cancel.txt"
+    out_k = tmp_path / "claim.txt"
+    pc = mp.Process(target=_dist002_cancel_worker, args=(str(tmp_path), "cx1", str(out_c)))
+    pk = mp.Process(
+        target=_dist002_claim_worker_simple, args=(str(tmp_path), "w-claim", str(out_k))
+    )
+    pc.start()
+    pk.start()
+    pc.join(timeout=15)
+    pk.join(timeout=15)
+    assert pc.exitcode == 0 and pk.exitcode == 0
+
+    cancel_line = out_c.read_text(encoding="utf-8").strip()
+    claim_line = out_k.read_text(encoding="utf-8").strip()
+    assert cancel_line.startswith("ok:"), cancel_line
+
+    final = JobQueue(store=DiskStateStore(root=tmp_path), load_persisted=True)
+    job = final.get("cx1")
+    assert job is not None
+    # Either cancel won first (pending→cancelled, claim gets none) or claim won
+    # first (claimed then cancelled). Terminal must be cancelled; never pending.
+    assert job.status == "cancelled", (job.status, cancel_line, claim_line)
+    assert final.get_result("cx1") is not None
+    assert final.get_result("cx1").status == "cancelled"
+    if claim_line.startswith("claimed:"):
+        # Claim observed the job before cancel finished; durable cancel still wins.
+        assert "cx1" in claim_line
+    else:
+        assert claim_line == "none"
+
+
+def _dist002_reclaim_worker(root: str, out_path: str) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=1.0)
+    ids = q.reclaim_expired_leases()
+    P(out_path).write_text(",".join(ids), encoding="utf-8")
+
+
+def test_concurrent_reclaim_vs_claim(tmp_path: Path):
+    """DIST-002: reclaim_expired_leases vs claim against shared disk (no torn state)."""
+    import multiprocessing as mp
+
+    store = DiskStateStore(root=tmp_path)
+    q = JobQueue(store=store, load_persisted=False, lease_ttl_s=1.0)
+    q.enqueue(NodeJob(job_id="rx1", run_id="r", node_id="n", node_type="x"))
+    w = WorkerInfo(
+        worker_id="dead",
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    claimed = q.claim(w)
+    assert claimed is not None
+    _expire_job_lease(q, "rx1")
+
+    out_r = tmp_path / "reclaim.txt"
+    out_k = tmp_path / "claim2.txt"
+    pr = mp.Process(target=_dist002_reclaim_worker, args=(str(tmp_path), str(out_r)))
+    pk = mp.Process(
+        target=_dist002_claim_worker_simple, args=(str(tmp_path), "alive", str(out_k))
+    )
+    pr.start()
+    pk.start()
+    pr.join(timeout=15)
+    pk.join(timeout=15)
+    assert pr.exitcode == 0 and pk.exitcode == 0
+
+    final = JobQueue(store=DiskStateStore(root=tmp_path), load_persisted=True)
+    job = final.get("rx1")
+    assert job is not None
+    # Claim embeds reclaim_in_snapshot, so either process can surface pending→claimed.
+    # Durable truth: not still held by the dead worker with an expired lease.
+    assert job.claimed_by != "dead" or job.status == "pending"
+    if job.status == "claimed":
+        assert job.claimed_by == "alive"
+        assert int(job.lease_generation or 0) >= 1
+    else:
+        assert job.status == "pending"
+        assert job.claimed_by is None
+        # Explicit reclaim may have won without a subsequent claim.
+        reclaim_line = out_r.read_text(encoding="utf-8").strip()
+        claim_line = out_k.read_text(encoding="utf-8").strip()
+        assert "rx1" in reclaim_line or claim_line == "none"
+
+
+def _dist002_renew_worker_bulk(root: str, worker_id: str, out_path: str) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=60.0)
+    n = q.renew_leases_for_worker(worker_id)
+    P(out_path).write_text(str(n), encoding="utf-8")
+
+
+def _dist002_complete_worker(
+    root: str, job_id: str, worker_id: str, gen: int, out_path: str
+) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.models import JobResult
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=60.0)
+    try:
+        q.complete(
+            JobResult(
+                job_id=job_id,
+                status="succeeded",
+                worker_id=worker_id,
+                lease_generation=gen,
+            )
+        )
+        P(out_path).write_text("ok", encoding="utf-8")
+    except Exception as exc:
+        P(out_path).write_text(f"err:{type(exc).__name__}:{exc}", encoding="utf-8")
+
+
+def test_concurrent_renew_leases_for_worker_vs_complete(tmp_path: Path):
+    """DIST-002: renew_leases_for_worker and complete must not lose the complete."""
+    import multiprocessing as mp
+
+    store = DiskStateStore(root=tmp_path)
+    q = JobQueue(store=store, load_persisted=False, lease_ttl_s=60.0)
+    q.enqueue(NodeJob(job_id="rw1", run_id="r", node_id="n", node_type="x"))
+    worker = WorkerInfo(
+        worker_id="w1",
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    claimed = q.claim(worker)
+    assert claimed is not None
+    gen = int(claimed.lease_generation or 0)
+
+    out_r = tmp_path / "renew_bulk.txt"
+    out_c = tmp_path / "complete.txt"
+    pr = mp.Process(
+        target=_dist002_renew_worker_bulk, args=(str(tmp_path), "w1", str(out_r))
+    )
+    pc = mp.Process(
+        target=_dist002_complete_worker,
+        args=(str(tmp_path), "rw1", "w1", gen, str(out_c)),
+    )
+    pr.start()
+    pc.start()
+    pr.join(timeout=15)
+    pc.join(timeout=15)
+    assert pr.exitcode == 0 and pc.exitcode == 0
+    assert out_c.read_text(encoding="utf-8").strip() == "ok"
+
+    final = JobQueue(store=DiskStateStore(root=tmp_path), load_persisted=True)
+    job = final.get("rw1")
+    assert job is not None and job.status == "succeeded"
+    assert final.get_result("rw1") is not None
+    assert final.get_result("rw1").status == "succeeded"
+
+
+def _dist002_clear_worker(root: str, out_path: str) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=60.0)
+    q.clear()
+    P(out_path).write_text("cleared", encoding="utf-8")
+
+
+def _dist002_enqueue_worker(root: str, job_id: str, out_path: str) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.models import NodeJob
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=60.0)
+    job = q.enqueue(
+        NodeJob(job_id=job_id, run_id="r", node_id="n", node_type="x")
+    )
+    P(out_path).write_text(f"enqueued:{job.job_id}", encoding="utf-8")
+
+
+def test_concurrent_clear_vs_enqueue(tmp_path: Path):
+    """DIST-002: clear vs enqueue on shared disk — final snapshot is coherent."""
+    import multiprocessing as mp
+
+    store = DiskStateStore(root=tmp_path)
+    q = JobQueue(store=store, load_persisted=False, lease_ttl_s=60.0)
+    q.enqueue(NodeJob(job_id="old1", run_id="r", node_id="n", node_type="x"))
+
+    out_clear = tmp_path / "clear.txt"
+    out_enq = tmp_path / "enq.txt"
+    p_clear = mp.Process(target=_dist002_clear_worker, args=(str(tmp_path), str(out_clear)))
+    p_enq = mp.Process(
+        target=_dist002_enqueue_worker, args=(str(tmp_path), "new1", str(out_enq))
+    )
+    p_clear.start()
+    p_enq.start()
+    p_clear.join(timeout=15)
+    p_enq.join(timeout=15)
+    assert p_clear.exitcode == 0 and p_enq.exitcode == 0
+    assert out_clear.read_text(encoding="utf-8").strip() == "cleared"
+    assert out_enq.read_text(encoding="utf-8").strip() == "enqueued:new1"
+
+    snap = DiskStateStore(root=tmp_path).load_queue()
+    jobs = snap.get("jobs") or {}
+    order = snap.get("order") or []
+    # Coherent outcomes: empty (clear last) or only new1 (enqueue after clear)
+    # or both old1+new1 if enqueue raced before clear saw old1 — but clear must
+    # wipe whatever it observed. Never a torn order referencing missing jobs.
+    for jid in order:
+        assert jid in jobs
+    for jid, payload in jobs.items():
+        assert isinstance(payload, dict)
+        if payload.get("status") == "pending":
+            assert jid in order or jid in jobs
+    # new1 may or may not survive depending on race order; if present it is pending.
+    if "new1" in jobs:
+        assert jobs["new1"]["status"] == "pending"
+    # If clear won last, store is empty.
+    if not jobs:
+        assert order == []
+
+
+def test_mark_running_durable_two_queues(tmp_path: Path):
+    """DIST-002: mark_running via mutate_queue is visible to a second JobQueue."""
+    store = DiskStateStore(root=tmp_path)
+    q_a = JobQueue(store=store, load_persisted=False, lease_ttl_s=60.0)
+    q_a.enqueue(NodeJob(job_id="mr1", run_id="r", node_id="n", node_type="x"))
+    worker = WorkerInfo(
+        worker_id="w",
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    claimed = q_a.claim(worker)
+    assert claimed is not None and claimed.status == "claimed"
+
+    q_b = JobQueue(store=DiskStateStore(root=tmp_path), load_persisted=True, lease_ttl_s=60.0)
+    running = q_b.mark_running("mr1")
+    assert running is not None and running.status == "running"
+
+    q_c = JobQueue(store=DiskStateStore(root=tmp_path), load_persisted=True, lease_ttl_s=60.0)
+    job = q_c.get("mr1")
+    assert job is not None and job.status == "running"

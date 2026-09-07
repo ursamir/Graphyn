@@ -544,6 +544,30 @@ class JobQueue:
     def renew_leases_for_worker(self, worker_id: str) -> int:
         """Renew leases for all non-terminal jobs claimed by ``worker_id``."""
         with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    jobs = dict(snap.get("jobs") or {})
+                    count = 0
+                    expiry = _utcnow() + timedelta(seconds=self._lease_ttl_s)
+                    for jid, payload in list(jobs.items()):
+                        try:
+                            job = NodeJob.model_validate(payload)
+                        except Exception:
+                            continue
+                        if job.claimed_by != worker_id:
+                            continue
+                        if job.status not in ("claimed", "running"):
+                            continue
+                        jobs[jid] = job.model_copy(
+                            update={"lease_expires_at": expiry}
+                        ).model_dump(mode="json")
+                        count += 1
+                    if not count:
+                        return snap, 0
+                    return {**snap, "jobs": jobs}, count
+
+                return self._durable_mutate(mut)
+
             count = 0
             now = _utcnow()
             expiry = now + timedelta(seconds=self._lease_ttl_s)
@@ -561,9 +585,36 @@ class JobQueue:
     def reclaim_expired_leases(self, *, now: datetime | None = None) -> list[str]:
         """Requeue claimed/running jobs whose lease has expired. Returns job ids.
 
+        When a durable store is configured, reclaim runs inside ``mutate_queue``
+        via ``_reclaim_in_snapshot`` (same CAS path as claim/enqueue). The
+        in-memory unlocked helper remains for store-less callers.
+
         Safe to call with or without the queue lock held (RLock).
         """
         with self._lock:
+            if self._store is not None:
+                now_fixed = _as_aware(now) or _utcnow()
+
+                def mut(snap: dict[str, Any]):
+                    before = dict(snap.get("jobs") or {})
+                    new_snap = self._reclaim_in_snapshot(
+                        snap, lease_ttl_s=self._lease_ttl_s, now=now_fixed
+                    )
+                    reclaimed: list[str] = []
+                    for jid, new_payload in (new_snap.get("jobs") or {}).items():
+                        old_payload = before.get(jid)
+                        if not isinstance(old_payload, dict) or not isinstance(
+                            new_payload, dict
+                        ):
+                            continue
+                        if old_payload.get("status") in ("claimed", "running") and (
+                            new_payload.get("status") == "pending"
+                        ):
+                            reclaimed.append(jid)
+                    return new_snap, reclaimed
+
+                return self._durable_mutate(mut)
+
             return self._reclaim_expired_leases_unlocked(now=now)
 
     def _reclaim_expired_leases_unlocked(
@@ -622,6 +673,30 @@ class JobQueue:
     def mark_running(self, job_id: str) -> NodeJob | None:
         """Transition claimed → running (optional worker signal)."""
         with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    jobs = dict(snap.get("jobs") or {})
+                    payload = jobs.get(job_id)
+                    if payload is None:
+                        return snap, None
+                    try:
+                        job = NodeJob.model_validate(payload)
+                    except Exception:
+                        return snap, None
+                    if job.status not in ("claimed", "running"):
+                        return snap, job
+                    updated = job.model_copy(
+                        update={
+                            "status": "running",
+                            "lease_expires_at": _utcnow()
+                            + timedelta(seconds=self._lease_ttl_s),
+                        }
+                    )
+                    jobs[job_id] = updated.model_dump(mode="json")
+                    return {**snap, "jobs": jobs}, updated
+
+                return self._durable_mutate(mut)
+
             job = self._jobs.get(job_id)
             if job is None or job.status not in ("claimed", "running"):
                 return job
@@ -755,6 +830,39 @@ class JobQueue:
         Claiming workers should poll ``get`` / ``is_cancelled`` and stop.
         """
         with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    jobs = dict(snap.get("jobs") or {})
+                    payload = jobs.get(job_id)
+                    if payload is None:
+                        raise KeyError(job_id)
+                    job = NodeJob.model_validate(payload)
+                    if job.status in ("succeeded", "failed", "cancelled"):
+                        return snap, job
+                    updated = job.model_copy(
+                        update={"status": "cancelled", "lease_expires_at": None}
+                    )
+                    jobs[job_id] = updated.model_dump(mode="json")
+                    order = [j for j in (snap.get("order") or []) if j != job_id]
+                    results = dict(snap.get("results") or {})
+                    results[job_id] = JobResult(
+                        job_id=job_id,
+                        status="cancelled",
+                        error="cancelled by control plane",
+                        worker_id=job.claimed_by,
+                    ).model_dump(mode="json")
+                    new_snap = {
+                        "jobs": jobs,
+                        "order": order,
+                        "results": results,
+                        "events": dict(snap.get("events") or {}),
+                    }
+                    return new_snap, updated
+
+                updated = self._durable_mutate(mut)
+                self._waiters.setdefault(job_id, threading.Event()).set()
+                return updated
+
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(job_id)
@@ -877,6 +985,21 @@ class JobQueue:
 
     def clear(self) -> None:
         with self._lock:
+            if self._store is not None:
+                def mut(_snap: dict[str, Any]):
+                    return {
+                        "jobs": {},
+                        "order": [],
+                        "results": {},
+                        "events": {},
+                    }, None
+
+                self._durable_mutate(mut)
+                for evt in list(self._waiters.values()):
+                    evt.set()
+                self._waiters.clear()
+                return
+
             for evt in self._waiters.values():
                 evt.set()
             self._jobs.clear()
