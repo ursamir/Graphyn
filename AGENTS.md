@@ -85,7 +85,7 @@ docs/             Public docs (GETTING_STARTED, PRODUCT_VISION, architecture, re
 - **Clean install:** `venv/bin/pip install -e ".[dev]"` then import `app` / `pytest`.
 - **Extras:** `mcp`, `redis`, `events` (watchfiles), `vad` (webrtcvad), `hf`, `tf`, `dev`, `all`.
 - **Do not** add a runtime import under `app/` without declaring it in `setup.py`.
-- **CI:** `.github/workflows/ci.yml` → `scripts/ci_smoke.sh` + UI build.
+- **CI smoke:** `scripts/ci_smoke.sh` (+ `scripts/ui_build.sh` for the console). A GitHub Actions workflow can wrap these when the push credential has `workflow` scope.
 
 ## Quick Commands
 
