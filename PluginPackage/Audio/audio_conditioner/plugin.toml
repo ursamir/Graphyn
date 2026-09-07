@@ -30,14 +30,14 @@ optional_dependencies = [
 [config_schema.audio_conditioner]
 target_sample_rate = { type = "integer", title = "Target Sample Rate", default = 16000, description = "Resample audio to this rate (Hz)." }
 mono = { type = "boolean", title = "Mono", default = true, description = "Downmix to a single channel." }
-trim_silence = { type = "boolean", title = "Trim Silence", default = true, description = "Enable trim silence." }
-trim_threshold_db = { type = "number", title = "Trim Threshold DB", default = 40.0, description = "Trim Threshold DB." }
-normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize feature or audio amplitude." }
+trim_silence = { type = "boolean", title = "Trim Silence", default = true, description = "Trim leading/trailing silence using trim_threshold_db." }
+trim_threshold_db = { type = "number", title = "Trim Threshold DB", default = 40.0, description = "Silence threshold in dB for trim_silence." }
+normalize = { type = "boolean", title = "Normalize", default = true, description = "Apply amplitude/loudness normalization." }
 normalize_method = { type = "string", title = "Normalize Method", default = "peak", description = "Loudness normalization method. One of: peak, rms, lufs.", enum = ["peak", "rms", "lufs"] }
-target_level_db = { type = "number", title = "Target Level DB", default = -1.0, description = "Target Level DB." }
-target_lufs = { type = "number", title = "Target LUFS", default = -23.0, description = "Target LUFS." }
-remove_dc_offset = { type = "boolean", title = "Remove Dc Offset", default = true, description = "Enable remove dc offset." }
-preemphasis = { type = "boolean", title = "Preemphasis", default = false, description = "Enable preemphasis." }
+target_level_db = { type = "number", title = "Target Level DB", default = -1.0, description = "Peak/RMS target level in dB (when not using LUFS)." }
+target_lufs = { type = "number", title = "Target LUFS", default = -23.0, description = "EBU R128 integrated loudness target when normalize_method is lufs." }
+remove_dc_offset = { type = "boolean", title = "Remove Dc Offset", default = true, description = "Subtract DC bias before further processing." }
+preemphasis = { type = "boolean", title = "Preemphasis", default = false, description = "Apply a high-frequency pre-emphasis filter." }
 preemphasis_coeff = { type = "number", title = "Preemphasis Coeff", default = 0.97, description = "Preemphasis Coeff." }
 compress = { type = "boolean", title = "Compress", default = false, description = "Enable compress." }
 compress_threshold_db = { type = "number", title = "Compress Threshold DB", default = -20.0, description = "Compress Threshold DB." }

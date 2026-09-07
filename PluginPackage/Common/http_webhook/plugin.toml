@@ -19,10 +19,10 @@ runtime = "inprocess"
 node_types = ["http_webhook"]
 
 [config_schema.http_webhook]
-url = { type = "string", title = "URL", default = "", description = "HTTP URL." }
-timeout_s = { type = "number", title = "Timeout S", default = 10.0, description = "Timeout in seconds." }
-hmac_secret = { type = "string", title = "HMAC Secret", default = "", description = "HMAC Secret." }
-hmac_env = { type = "string", title = "HMAC Env", default = "", description = "HMAC Env." }
-hmac_header = { type = "string", title = "HMAC Header", default = "X-Graphyn-Signature", description = "HMAC Header." }
+url = { type = "string", title = "Callback URL", default = "", description = "HTTPS URL to POST completion JSON." }
+timeout_s = { type = "number", title = "Timeout (s)", default = 10.0, description = "HTTP timeout in seconds." }
+hmac_secret = { type = "string", title = "HMAC secret", default = "", description = "Prefer a Secrets store name via hmac_env when possible.", widget = "secret" }
+hmac_env = { type = "string", title = "HMAC env / secret name", default = "", description = "Env var or Graphyn secret name holding the HMAC key." }
+hmac_header = { type = "string", title = "HMAC header", default = "X-Graphyn-Signature", description = "Header that carries the signature." }
 provider = { type = "string", title = "Provider", default = "http", description = "Remote or local service provider. One of: http, mock.", enum = ["http", "mock"] }
-mock_response = { type = "object", title = "Mock Response", default = {  }, description = "Mock Response." }
+mock_response = { type = "object", title = "Mock response", default = {}, description = "Synthetic response when provider is mock.", widget = "json" }

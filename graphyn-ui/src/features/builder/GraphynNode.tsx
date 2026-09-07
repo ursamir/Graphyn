@@ -91,7 +91,7 @@ export function ConfigFieldEditor(
 }
 
 function fieldEditor(
-  _key: string,
+  key: string,
   def: Record<string, unknown>,
   value: unknown,
   onChange: (v: unknown) => void,
@@ -99,13 +99,17 @@ function fieldEditor(
   const type = schemaType(def)
   if (type === 'boolean') {
     return (
-      <input
-        type="checkbox"
-        checked={Boolean(value)}
-        title={schemaFieldHint(def)}
-        onChange={(e) => onChange(e.target.checked)}
-        onMouseDown={(e) => e.stopPropagation()}
-      />
+      <label className="mt-1 inline-flex items-center gap-2 text-[12px] text-ink-700">
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5 rounded border-ink-300"
+          checked={Boolean(value)}
+          title={schemaFieldHint(def)}
+          onChange={(e) => onChange(e.target.checked)}
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+        <span className="text-ink-500">{value ? 'On' : 'Off'}</span>
+      </label>
     )
   }
   if (Array.isArray(unwrapSchema(def).enum)) {
@@ -206,11 +210,36 @@ function fieldEditor(
     )
   }
 
+  const k = key.toLowerCase()
+  const longText =
+    k.includes('code') ||
+    k.includes('expression') ||
+    k.includes('prompt') ||
+    k.includes('body') ||
+    k.includes('template') ||
+    k.includes('script') ||
+    k.includes('jsonpath')
+  if (longText || widget === 'code') {
+    return (
+      <textarea
+        className="field-control mt-1 font-mono text-[11px] leading-4"
+        rows={4}
+        value={formatValue(def, value)}
+        title={schemaFieldHint(def)}
+        onChange={(e) => onChange(e.target.value)}
+        onMouseDown={(e) => e.stopPropagation()}
+        spellCheck={false}
+      />
+    )
+  }
+  const pathish =
+    k.includes('path') || k.includes('dir') || k.includes('file') || k.endsWith('_url') || k === 'url'
   return (
     <input
-      className="field-control overflow-x-auto font-mono"
+      className={pathish ? 'field-control' : 'field-control overflow-x-auto font-mono'}
       value={formatValue(def, value)}
-      title={formatValue(def, value)}
+      title={schemaFieldHint(def) || formatValue(def, value)}
+      placeholder={pathish ? 'workspace/ relative path' : undefined}
       onChange={(e) => {
         try {
           onChange(parseValue(def, e.target.value))

@@ -15,5 +15,5 @@ runtime = "inprocess"
 node_types = ["merge"]
 
 [config_schema.merge]
-mode = { type = "string", title = "Mode", default = "append", description = "Operating mode. One of: append, combine_by_key.", enum = ["append", "combine_by_key"] }
-key = { type = "string", title = "Key", default = "id", description = "Key." }
+mode = { type = "string", title = "Mode", default = "append", description = "append concatenates lists; combine_by_key merges objects/lists on a shared key.", enum = ["append", "combine_by_key"] }
+key = { type = "string", title = "Key", default = "id", description = "Field name used when mode is combine_by_key." }

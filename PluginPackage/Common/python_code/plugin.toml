@@ -15,6 +15,6 @@ runtime = "inprocess"
 node_types = ["python_code"]
 
 [config_schema.python_code]
-source = { type = "string", title = "Source", default = "", description = "Source." }
-allowed_paths = { type = "array", title = "Allowed Paths", default = [], description = "Allowed Paths." }
-allow_network = { type = "boolean", title = "Allow Network", default = false, description = "Enable allow network." }
+source = { type = "string", title = "Source code", default = "", description = "Python defining process(inputs, config) or assigning result.", widget = "code" }
+allowed_paths = { type = "array", title = "Allowed paths", default = [], description = "Workspace-relative paths the snippet may read/write." }
+allow_network = { type = "boolean", title = "Allow network", default = false, description = "Permit outbound network calls from the snippet (off by default)." }
