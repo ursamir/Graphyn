@@ -34,6 +34,12 @@ Individual entry-point failures → WARNING + skip; remaining entry points still
 
 ## Key Invariants
 
+### Concurrency (PLUGIN-001 / PLUGIN-002)
+
+- `PluginManager` holds a **process-wide** RLock (keyed by registry parent) plus exclusive flock on `{plugins_home}/install.lock` for install/uninstall/enable/disable. Instance-local `threading.Lock` is not enough — the API constructs a new manager per request.
+- `PluginStore` RMW (`save` / `delete` / `update_enabled` / `mutate`) holds a process-wide RLock plus exclusive flock on `{plugins_home}/registry.lock` for the full read-modify-write, then atomic `os.replace`. Separate store instances and processes cannot lost-update `registry.json`.
+
+
 - `AutoDiscovery` is not bypassed — `PluginLoader` uses it internally to register node types
 - `unregister()` is called on disable/uninstall — removes every contributed `node_type` from registry
 - Startup loading failures are WARNING, not fatal

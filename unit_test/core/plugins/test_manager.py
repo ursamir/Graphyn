@@ -10,7 +10,6 @@ import pytest
 
 from app.core.nodes.registry import NodeRegistry
 from app.core.plugins.errors import (
-    PluginAlreadyInstalledError,
     PluginNotFoundError,
 )
 from app.core.plugins.manager import PluginManager
@@ -107,8 +106,8 @@ def test_install_registers_node_type(tmp_path: Path, fresh_registry: NodeRegistr
     assert record.name == "test-plugin"
 
 
-def test_double_install_raises(tmp_path: Path, fresh_registry: NodeRegistry) -> None:
-    """Req 6.6 — double install without upgrade=True raises PluginAlreadyInstalledError.
+def test_double_install_reuses_existing(tmp_path: Path, fresh_registry: NodeRegistry) -> None:
+    """Req 6.6 — double install without upgrade=True reuses the existing record.
 
     The first install uses the plain plugin name so _parse_name_version extracts
     the correct name and the store lookup works on the second call.
@@ -118,11 +117,14 @@ def test_double_install_raises(tmp_path: Path, fresh_registry: NodeRegistry) -> 
 
     # Use plain name so _parse_name_version returns ("test-plugin", None)
     with _patch_resolve(src), _patch_loader_load():
-        manager.install("test-plugin")
+        first = manager.install("test-plugin")
 
     with _patch_resolve(src), _patch_loader_load():
-        with pytest.raises(PluginAlreadyInstalledError):
-            manager.install("test-plugin")
+        second = manager.install("test-plugin")
+
+    assert second.name == first.name
+    assert second.version == first.version
+    assert len(manager.list_installed()) == 1
 
 
 def test_uninstall_removes_record(tmp_path: Path, fresh_registry: NodeRegistry) -> None:
@@ -245,3 +247,150 @@ def test_load_enabled_plugins_fault_isolation(
     assert "good-plugin" in loaded_names
     # A warning was logged for bad-plugin
     assert any("bad-plugin" in record.message for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# PLUGIN-001 — process-wide + flock install serialization
+# ---------------------------------------------------------------------------
+
+
+def test_separate_managers_share_process_lock(
+    tmp_path: Path, fresh_registry: NodeRegistry
+) -> None:
+    """Separate PluginManager instances for the same home share one RLock."""
+    m1 = _make_manager(tmp_path, registry=fresh_registry)
+    m2 = _make_manager(tmp_path, registry=NodeRegistry())
+    assert m1._thread_lock is m2._thread_lock
+    assert m1._lock_key == m2._lock_key
+
+
+def _plugin001_install_worker(
+    base_dir: str,
+    plugins_dir: str,
+    src: str,
+    name: str,
+    out_path: str,
+) -> None:
+    """Multiprocessing target: install one plugin via a fresh PluginManager."""
+    import os
+    from unittest.mock import patch
+
+    os.environ["GRAPHYN_SKIP_PLUGIN_LOAD"] = "1"
+    from app.core.nodes.registry import NodeRegistry
+    from app.core.plugins.manager import PluginManager
+
+    mgr = PluginManager(registry=NodeRegistry(), base_dir=base_dir)
+    mgr._plugins_dir = plugins_dir
+    with patch(
+        "app.core.plugins.manager.PluginInstaller.resolve",
+        return_value=Path(src),
+    ), patch(
+        "app.core.plugins.manager.PluginLoader.load",
+        return_value=[],
+    ):
+        record = mgr.install(str(src))
+    Path(out_path).write_text(record.name, encoding="utf-8")
+
+
+def test_concurrent_install_distinct_plugins(
+    tmp_path: Path, fresh_registry: NodeRegistry
+) -> None:
+    """PLUGIN-001: concurrent managers install distinct plugins without loss."""
+    import multiprocessing as mp
+
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    n = 8
+    srcs = [_make_plugin_src(tmp_path, name=f"conc-{i}", version="1.0.0") for i in range(n)]
+    outs = [tmp_path / f"inst{i}.txt" for i in range(n)]
+    procs = [
+        mp.Process(
+            target=_plugin001_install_worker,
+            args=(
+                str(tmp_path),
+                str(plugins_dir),
+                str(srcs[i]),
+                f"conc-{i}",
+                str(outs[i]),
+            ),
+        )
+        for i in range(n)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=60)
+        assert p.exitcode == 0, f"worker exited {p.exitcode}"
+
+    names = {o.read_text(encoding="utf-8").strip() for o in outs}
+    assert names == {f"conc-{i}" for i in range(n)}
+
+    manager = _make_manager(tmp_path, registry=fresh_registry)
+    installed = {r.name for r in manager.list_installed()}
+    assert installed == {f"conc-{i}" for i in range(n)}
+    for i in range(n):
+        assert (plugins_dir / f"conc-{i}").is_dir()
+
+
+def _plugin001_same_plugin_worker(
+    base_dir: str,
+    plugins_dir: str,
+    src: str,
+    out_path: str,
+) -> None:
+    """Install the same named plugin; either success or reuse is fine."""
+    import os
+    from unittest.mock import patch
+
+    os.environ["GRAPHYN_SKIP_PLUGIN_LOAD"] = "1"
+    from app.core.nodes.registry import NodeRegistry
+    from app.core.plugins.manager import PluginManager
+
+    mgr = PluginManager(registry=NodeRegistry(), base_dir=base_dir)
+    mgr._plugins_dir = plugins_dir
+    try:
+        with patch(
+            "app.core.plugins.manager.PluginInstaller.resolve",
+            return_value=Path(src),
+        ), patch(
+            "app.core.plugins.manager.PluginLoader.load",
+            return_value=[],
+        ):
+            record = mgr.install(str(src))
+        Path(out_path).write_text(f"ok:{record.name}", encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 — surface to parent via file
+        Path(out_path).write_text(f"err:{type(exc).__name__}:{exc}", encoding="utf-8")
+
+
+def test_concurrent_install_same_plugin_consistent(
+    tmp_path: Path, fresh_registry: NodeRegistry
+) -> None:
+    """PLUGIN-001: racing installs of the same plugin leave one consistent record."""
+    import multiprocessing as mp
+
+    plugins_dir = tmp_path / "plugins"
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    src = _make_plugin_src(tmp_path, name="race-plugin", version="1.0.0")
+    n = 6
+    outs = [tmp_path / f"race{i}.txt" for i in range(n)]
+    procs = [
+        mp.Process(
+            target=_plugin001_same_plugin_worker,
+            args=(str(tmp_path), str(plugins_dir), str(src), str(outs[i])),
+        )
+        for i in range(n)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=60)
+        assert p.exitcode == 0, f"worker exited {p.exitcode}"
+
+    results = [o.read_text(encoding="utf-8").strip() for o in outs]
+    assert all(r.startswith("ok:") for r in results), results
+
+    manager = _make_manager(tmp_path, registry=fresh_registry)
+    records = [r for r in manager.list_installed() if r.name == "race-plugin"]
+    assert len(records) == 1
+    assert records[0].version == "1.0.0"
+    assert (plugins_dir / "race-plugin").is_dir()

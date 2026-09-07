@@ -78,6 +78,14 @@
 
 ## Resolved (kept for history)
 
+### (resolved 2026-09-07) PLUGIN-001 plugin installation lock is instance-local
+
+`PluginManager` lifecycle ops (install/uninstall/enable/disable) use a process-wide RLock keyed by plugins home plus an exclusive flock on `install.lock`, so separate API-created managers and multi-process writers cannot race on the same install directory. Regression: multiprocess install stress in `unit_test/core/plugins/test_manager.py`.
+
+### (resolved 2026-09-07) PLUGIN-002 plugin registry cross-process lost-update
+
+`PluginStore` RMW uses a process-wide RLock (shared across instances) plus exclusive flock on `registry.lock` for the full load→mutate→atomic replace (same spirit as `DiskStateStore.mutate_queue`). Regression: multiprocess save/update stress in `unit_test/core/plugins/test_store.py`.
+
 ### (resolved 2026-09-07) SEC-001 plugin source allowlist prefix matching
 
 `plugin_source_is_allowed` now parses URLs structurally and requires host + path-segment boundaries (exact repo or subpath under `/owner/repo/`). Similarly prefixed repos (`repo` vs `repo-evil`/`repo2`), malicious hosts, and `..` / encoded traversal are rejected. Redirect hops continue to be re-checked fail-closed in installer/index download paths.

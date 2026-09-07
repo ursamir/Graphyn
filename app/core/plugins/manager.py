@@ -14,10 +14,12 @@ Must NOT:         Import from app.domain or app.api.
                   directly from outside this package.
 Dependencies:     app.core.plugins.{installer, loader, store, index, manifest,
                   errors}, app.core.config (plugins_home — lazy import),
-                  stdlib (logging, os, shutil, datetime).
+                  stdlib (logging, os, shutil, datetime, threading, fcntl,
+                  contextlib).
 Security:         install() forwards expected_sha256 to PluginInstaller.resolve()
                   for HTTP archive checksum verification (SEC-6 fix).
                   Source allowlist enforced inside PluginInstaller.
+                  Lifecycle ops use process-wide + flock install lock (PLUGIN-001).
 Reason To Change: Plugin lifecycle steps change, or new install source types
                   are added.
 """
@@ -28,9 +30,10 @@ import logging
 import os
 import shutil
 import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator
 
 from app.core.plugins.errors import (
     PluginNotFoundError,
@@ -45,6 +48,21 @@ if TYPE_CHECKING:
     from app.core.nodes.registry import NodeRegistry
 
 log = logging.getLogger(__name__)
+
+# Process-wide lifecycle locks keyed by plugins-home directory so separate
+# PluginManager instances (e.g. one per API request) serialize install/remove
+# (PLUGIN-001). Cross-process races use an exclusive flock on install.lock.
+_INSTALL_LOCKS: dict[str, threading.RLock] = {}
+_INSTALL_LOCKS_GUARD = threading.Lock()
+
+
+def _install_process_lock(lock_key: str) -> threading.RLock:
+    with _INSTALL_LOCKS_GUARD:
+        lock = _INSTALL_LOCKS.get(lock_key)
+        if lock is None:
+            lock = threading.RLock()
+            _INSTALL_LOCKS[lock_key] = lock
+        return lock
 
 
 class PluginManager:
@@ -79,9 +97,39 @@ class PluginManager:
         self._installer = PluginInstaller(index_client=PluginIndexClient())
         from app.core.config import plugins_home as _plugins_home
         self._plugins_dir: str = str(_plugins_home())
-        # G4-LOCK: serialise all install/uninstall/enable/disable operations so
-        # concurrent API requests cannot corrupt the install directory or registry.
-        self._install_lock = threading.Lock()
+        # PLUGIN-001: process-wide + flock lifecycle lock (not instance-local).
+        # Keyed by registry parent so store + install dir share one scope in tests
+        # (base_dir) and production (GRAPHYN_HOME/plugins).
+        self._lock_key = str(self._store._registry_path.parent.resolve())
+        self._thread_lock = _install_process_lock(self._lock_key)
+        self._install_lock_path = Path(self._lock_key) / "install.lock"
+
+    # ------------------------------------------------------------------
+    # concurrency
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def _lifecycle_lock(self) -> Iterator[None]:
+        """Serialize install/uninstall/enable/disable across instances + processes.
+
+        Holds a process-wide RLock and an exclusive flock on ``install.lock``
+        (same spirit as ``DiskStateStore.mutate_queue`` / jobs.lock).
+        """
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover — non-POSIX
+            fcntl = None  # type: ignore[assignment]
+
+        self._install_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._thread_lock:
+            with open(self._install_lock_path, "a+", encoding="utf-8") as lf:
+                if fcntl is not None:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
     # ------------------------------------------------------------------
     # install
@@ -142,9 +190,9 @@ class PluginManager:
         # Step 1 — parse name from source (best-effort; authoritative name comes from manifest)
         _pre_name, _ver = self._installer._parse_name_version(source)
 
-        # G4-LOCK: hold the install lock for the entire operation so concurrent
-        # calls cannot race on the same install_path or registry state.
-        with self._install_lock:
+        # PLUGIN-001: hold process-wide + flock lifecycle lock for the entire
+        # operation so concurrent managers/processes cannot race on install_path.
+        with self._lifecycle_lock():
             # Step 2 — pre-flight duplicate check using best-effort name (URL sources skip this;
             # the authoritative check happens after the manifest is parsed — G4-01 fix)
             existing: PluginRecord | None = None
@@ -302,11 +350,11 @@ class PluginManager:
         PluginNotFoundError
             If no plugin with *name* is installed.
         """
-        with self._install_lock:
+        with self._lifecycle_lock():
             self._do_uninstall(name)
 
     def _do_uninstall(self, name: str) -> None:
-        """Internal uninstall steps — caller must hold ``self._install_lock``."""
+        """Internal uninstall steps — caller must hold ``_lifecycle_lock``."""
         # Step 1 — get record (raises PluginNotFoundError if not found)
         record = self._store.get(name)
 
@@ -339,7 +387,7 @@ class PluginManager:
         record = self._store.get(name)
         if not record.enabled:
             install_path = Path(record.install_path)
-            with self._install_lock:
+            with self._lifecycle_lock():
                 try:
                     # Check whether the plugin's node types are already in the registry
                     # by comparing the registry snapshot before and after load().
@@ -380,7 +428,7 @@ class PluginManager:
         """
         record = self._store.get(name)
         if record.enabled:
-            with self._install_lock:
+            with self._lifecycle_lock():
                 self._unload_node_types(record)
                 try:
                     from app.core.plugins.runtime_registry import get_runtime_registry

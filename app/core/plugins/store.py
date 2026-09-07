@@ -4,20 +4,23 @@ Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
 Responsibility:   Persist and retrieve PluginRecord objects from disk.
                   Single source of truth for installed plugin state.
 Owns:             PluginRecord model, PluginStore class, registry.json I/O,
-                  threading lock, atomic write via os.replace().
+                  process-wide + cross-process locking, atomic write via
+                  os.replace().
 Public Surface:   PluginRecord, PluginStore.get(), .list(), .save(),
-                  .delete(), .update_enabled()
+                  .delete(), .update_enabled(), .mutate()
 Must NOT:         Import from app.domain, app.api, or app.models.
                   Must not load or execute plugin code.
 Dependencies:     pydantic, stdlib (json, logging, os, tempfile, threading,
-                  pathlib), app.core.plugins.errors, app.core.config.
+                  pathlib, fcntl), app.core.plugins.errors, app.core.config.
 Reason To Change: PluginRecord schema changes, or storage backend changes
                   (e.g. SQLite migration).
 
 Stores plugin state in ``{GRAPHYN_HOME}/plugins/registry.json`` as a JSON
 object mapping plugin name → PluginRecord dict. All read-modify-write
-operations acquire a threading lock and writes are atomic (write-to-temp
-+ os.replace).
+operations acquire a process-wide lock (shared across PluginStore instances)
+and an exclusive flock on ``registry.lock`` for the full RMW, then write
+atomically (write-to-temp + os.replace). This closes lost-update races
+across API-created store instances and multi-process writers (PLUGIN-002).
 """
 
 from __future__ import annotations
@@ -27,13 +30,32 @@ import logging
 import os
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from pydantic import BaseModel
 
 from app.core.plugins.errors import PluginManifestError, PluginNotFoundError
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+# Process-wide locks keyed by resolved registry path so separate PluginStore
+# instances in the same process serialize on the same file (PLUGIN-002).
+_PROCESS_LOCKS: dict[str, threading.RLock] = {}
+_PROCESS_LOCKS_GUARD = threading.Lock()
+
+
+def _process_lock_for(registry_path: Path) -> threading.RLock:
+    key = str(registry_path.resolve())
+    with _PROCESS_LOCKS_GUARD:
+        lock = _PROCESS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _PROCESS_LOCKS[key] = lock
+        return lock
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +108,11 @@ class PluginStore:
     The registry file lives at ``{GRAPHYN_HOME}/plugins/registry.json``.
     ``base_dir`` defaults to ``GRAPHYN_HOME`` (falling back to ``~/.graphyn``
     if unset). Pass ``base_dir`` explicitly in tests to use a temp directory.
+
+    Concurrency (PLUGIN-002): a process-wide ``threading.RLock`` (keyed by
+    registry path) plus an exclusive ``fcntl.flock`` on ``registry.lock``
+    wrap every read-modify-write so separate instances and processes cannot
+    lose updates.
     """
 
     def __init__(self, base_dir: str | None = None) -> None:
@@ -95,7 +122,8 @@ class PluginStore:
             self._registry_path = Path(base_dir) / "plugins" / "registry.json"
         else:
             self._registry_path = _plugin_registry_path()
-        self._lock = threading.Lock()
+        self._lock = _process_lock_for(self._registry_path)
+        self._lock_path = self._registry_path.parent / "registry.lock"
         # Ensure the directory exists so _save() never has to create it.
         self._registry_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -103,14 +131,29 @@ class PluginStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _load(self) -> dict[str, dict]:
-        """Read registry.json and return its contents as a plain dict.
+    def _with_registry_lock(self, exclusive: bool, fn: Callable[[], T]) -> T:
+        """Run *fn* under process-wide + advisory file lock (cross-process)."""
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover — non-POSIX
+            fcntl = None  # type: ignore[assignment]
 
-        Returns an empty dict when the file does not exist yet.
-        When the file contains invalid JSON (e.g. truncated write), backs it
-        up to ``registry.json.corrupt`` before returning an empty dict so the
-        data is not silently lost (PL-13 fix).
-        """
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            with open(self._lock_path, "a+", encoding="utf-8") as lf:
+                if fcntl is not None:
+                    fcntl.flock(
+                        lf.fileno(),
+                        fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
+                    )
+                try:
+                    return fn()
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+    def _load_unlocked(self) -> dict[str, dict]:
+        """Read registry.json; caller must hold the registry lock."""
         if not self._registry_path.exists():
             return {}
         try:
@@ -137,15 +180,8 @@ class PluginStore:
                 )
             return {}
 
-    def _save(self, data: dict[str, dict]) -> None:
-        """Atomically write *data* to registry.json.
-
-        Writes to a temporary file in the same directory, then calls
-        ``os.replace()`` so the update is atomic on POSIX systems.
-
-        The caller is responsible for holding ``self._lock`` before
-        invoking this method.
-        """
+    def _save_unlocked(self, data: dict[str, dict]) -> None:
+        """Atomically write *data* to registry.json. Caller holds registry lock."""
         directory = self._registry_path.parent
         # Write to a temp file in the same directory so os.replace() is
         # guaranteed to be on the same filesystem (required for atomicity).
@@ -155,6 +191,8 @@ class PluginStore:
         try:
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp_path, self._registry_path)
         except Exception:
             # Clean up the temp file if anything goes wrong.
@@ -168,14 +206,34 @@ class PluginStore:
     # Public API
     # ------------------------------------------------------------------
 
+    def mutate(
+        self, mutator: Callable[[dict[str, dict]], tuple[dict[str, dict], T]]
+    ) -> T:
+        """Atomically load → mutate → save the registry (exclusive flock).
+
+        ``mutator(data)`` returns ``(new_data, result)``. Same spirit as
+        ``DiskStateStore.mutate_queue``.
+        """
+
+        def _mutate() -> T:
+            data = self._load_unlocked()
+            new_data, result = mutator(data)
+            self._save_unlocked(new_data)
+            return result
+
+        return self._with_registry_lock(True, _mutate)
+
     def get(self, name: str) -> PluginRecord:
         """Return the :class:`PluginRecord` for *name*.
 
         Raises :class:`~app.core.plugins.errors.PluginNotFoundError` when
         no plugin with that name is installed.
         """
-        with self._lock:
-            data = self._load()
+
+        def _get() -> dict[str, dict]:
+            return self._load_unlocked()
+
+        data = self._with_registry_lock(False, _get)
         if name not in data:
             raise PluginNotFoundError(name)
         try:
@@ -187,8 +245,11 @@ class PluginStore:
 
     def list(self) -> list[PluginRecord]:
         """Return all installed plugins as a list of :class:`PluginRecord`."""
-        with self._lock:
-            data = self._load()
+
+        def _list() -> dict[str, dict]:
+            return self._load_unlocked()
+
+        data = self._with_registry_lock(False, _list)
         records = []
         for name, v in data.items():
             try:
@@ -201,10 +262,12 @@ class PluginStore:
 
     def save(self, record: PluginRecord) -> None:
         """Persist *record*, overwriting any existing entry with the same name."""
-        with self._lock:
-            data = self._load()
+
+        def _save(data: dict[str, dict]) -> tuple[dict[str, dict], None]:
             data[record.name] = record.model_dump()
-            self._save(data)
+            return data, None
+
+        self.mutate(_save)
 
     def delete(self, name: str) -> None:
         """Remove the record for *name*.
@@ -212,12 +275,14 @@ class PluginStore:
         Raises :class:`~app.core.plugins.errors.PluginNotFoundError` when
         no plugin with that name is installed.
         """
-        with self._lock:
-            data = self._load()
+
+        def _delete(data: dict[str, dict]) -> tuple[dict[str, dict], None]:
             if name not in data:
                 raise PluginNotFoundError(name)
             del data[name]
-            self._save(data)
+            return data, None
+
+        self.mutate(_delete)
 
     def update_enabled(self, name: str, enabled: bool) -> PluginRecord:
         """Toggle the ``enabled`` flag for *name* and return the updated record.
@@ -225,15 +290,19 @@ class PluginStore:
         Raises :class:`~app.core.plugins.errors.PluginNotFoundError` when
         no plugin with that name is installed.
         """
-        with self._lock:
-            data = self._load()
+
+        def _update(
+            data: dict[str, dict],
+        ) -> tuple[dict[str, dict], PluginRecord]:
             if name not in data:
                 raise PluginNotFoundError(name)
             data[name] = {**data[name], "enabled": enabled}
-            self._save(data)
             try:
-                return PluginRecord(**data[name])
+                updated = PluginRecord(**data[name])
             except Exception as exc:
                 raise PluginManifestError(
                     f"Corrupt record for plugin '{name}' in registry: {exc}"
                 ) from exc
+            return data, updated
+
+        return self.mutate(_update)
