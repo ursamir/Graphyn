@@ -27,6 +27,7 @@ import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
 import { useAppStore, type AppView } from './store/appStore'
 import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
+import { shortRunId } from './lib/format'
 import { KeyboardHelp } from './components/KeyboardHelp'
 import BuilderView from './features/builder/BuilderView'
 import RunsView from './features/runs/RunsView'
@@ -156,6 +157,9 @@ export default function App() {
   const setCatalog = useAppStore((s) => s.setCatalog)
   const setRefreshCatalog = useAppStore((s) => s.setRefreshCatalog)
   const openRun = useAppStore((s) => s.openRun)
+  const openTrace = useAppStore((s) => s.openTrace)
+  const openArtifacts = useAppStore((s) => s.openArtifacts)
+  const openExperiments = useAppStore((s) => s.openExperiments)
   const statusMessage = useAppStore((s) => s.statusMessage)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const isRunning = useAppStore((s) => s.isRunning)
@@ -247,7 +251,7 @@ export default function App() {
 
   React.useEffect(() => {
     // Preserve query strings for deep links (#/trace?run_id=, #/edge?…, etc.)
-    const PRESERVE_QUERY = new Set<AppView>(['trace', 'edge', 'experiments', 'proposals'])
+    const PRESERVE_QUERY = new Set<AppView>(['trace', 'edge', 'experiments', 'proposals', 'artifacts'])
     const focus = useAppStore.getState().focusRunId
     const raw = window.location.hash.replace(/^#\/?/, '')
     const pathOnly = raw.split('?')[0] || ''
@@ -417,14 +421,37 @@ export default function App() {
               </span>
             )}
             {lastRunId && (
-              <button
-                type="button"
-                className="rounded-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"
-                onClick={() => openRun(lastRunId)}
-                title={lastRunId}
-              >
-                Last run {lastRunId.slice(0, 8)}
-              </button>
+              <div className="hidden items-center gap-1 sm:flex" title={`Observe loop for ${lastRunId}`}>
+                <button
+                  type="button"
+                  className="rounded-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"
+                  onClick={() => openRun(lastRunId)}
+                  title={lastRunId}
+                >
+                  Run {shortRunId(lastRunId)}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+                  onClick={() => openTrace({ runId: lastRunId })}
+                >
+                  Lineage
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+                  onClick={() => openArtifacts({ runId: lastRunId })}
+                >
+                  Artifacts
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+                  onClick={() => openExperiments({ runIds: [lastRunId] })}
+                >
+                  Compare
+                </button>
+              </div>
             )}
             <button
               type="button"

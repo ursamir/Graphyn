@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
+import { fetchRunGraph } from '../../lib/runGraph'
 import {
   CopyableMono,
   EmptyState,
@@ -90,7 +91,9 @@ const STEP_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 
 export default function TraceView() {
   const openRun = useAppStore((s) => s.openRun)
+  const openArtifacts = useAppStore((s) => s.openArtifacts)
   const setView = useAppStore((s) => s.setView)
+  const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
 
   const initial = parseTraceHash()
@@ -145,11 +148,31 @@ export default function TraceView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const openArtifact = (id: string) => {
-    setView('artifacts')
-    window.history.replaceState(null, '', '#/artifacts')
-    // Artifacts view does not deep-link yet — toast the id for copy.
-    pushToast(`Open Artifacts and select ${id}`, 'info')
+  const browseArtifacts = (opts?: { artifactId?: string; runId?: string }) => {
+    const linkedRun = (opts?.runId || trace?.run?.run_id || '').toString().trim() || runId.trim()
+    openArtifacts({ runId: linkedRun || undefined })
+    if (opts?.artifactId) {
+      pushToast(`Browse artifacts — select ${opts.artifactId}`, 'info')
+    }
+  }
+
+  const openGraphHop = async (name?: string | null) => {
+    const graphName = (name || trace?.graph?.name || trace?.run?.graph_name || '').trim()
+    const rid = (trace?.run?.run_id || runId || '').trim()
+    try {
+      const graph = await fetchRunGraph(rid, graphName || null)
+      if (graph) {
+        loadGraphIntoBuilder(graph)
+        pushToast(graphName ? `Opened ${graphName} in Builder` : 'Opened graph in Builder', 'success')
+        return
+      }
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      return
+    }
+    setView('builder')
+    window.history.replaceState(null, '', '#/builder')
+    pushToast(graphName ? `Builder opened — graph ${graphName} not found on disk` : 'Opened Builder', 'info')
   }
 
   const chain = trace?.chain ?? []
@@ -240,10 +263,7 @@ export default function TraceView() {
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => {
-                  setView('artifacts')
-                  window.history.replaceState(null, '', '#/artifacts')
-                }}
+                onClick={() => openArtifacts()}
               >
                 Open Artifacts
               </button>
@@ -298,21 +318,68 @@ export default function TraceView() {
                         )}
                         <div className="mt-2 flex flex-wrap gap-1">
                           {step.step === 'run' && step.id && (
-                            <button
-                              type="button"
-                              className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                              onClick={() => openRun(String(step.id))}
-                            >
-                              Open Run
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                className="btn-secondary !px-2 !py-0.5 text-[11px]"
+                                onClick={() => openRun(String(step.id))}
+                              >
+                                Open run
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-secondary !px-2 !py-0.5 text-[11px]"
+                                onClick={() => browseArtifacts({ runId: String(step.id) })}
+                              >
+                                Artifacts
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-secondary !px-2 !py-0.5 text-[11px]"
+                                onClick={() => {
+                                  setArtifactId('')
+                                  setRunId(String(step.id))
+                                  void load('', String(step.id))
+                                }}
+                              >
+                                Trace
+                              </button>
+                            </>
                           )}
                           {step.step === 'artifact' && step.id && (
+                            <>
+                              <button
+                                type="button"
+                                className="btn-secondary !px-2 !py-0.5 text-[11px]"
+                                onClick={() =>
+                                  browseArtifacts({
+                                    artifactId: String(step.id),
+                                    runId: trace?.run?.run_id,
+                                  })
+                                }
+                              >
+                                Artifacts
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-secondary !px-2 !py-0.5 text-[11px]"
+                                onClick={() => {
+                                  setArtifactId(String(step.id))
+                                  setRunId('')
+                                  void load(String(step.id), '')
+                                }}
+                              >
+                                Trace
+                              </button>
+                            </>
+                          )}
+                          {step.step === 'graph' && (
                             <button
                               type="button"
                               className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                              onClick={() => openArtifact(String(step.id))}
+                              onClick={() => void openGraphHop(step.label || trace?.graph?.name)}
                             >
-                              Artifacts
+                              Builder
                             </button>
                           )}
                           {step.step === 'worker' && (
@@ -325,6 +392,19 @@ export default function TraceView() {
                               }}
                             >
                               Workers
+                            </button>
+                          )}
+                          {step.step === 'node' && step.id && (
+                            <button
+                              type="button"
+                              className="btn-secondary !px-2 !py-0.5 text-[11px]"
+                              onClick={() => {
+                                const rid = (trace?.run?.run_id || runId || '').trim()
+                                if (rid) openRun(rid)
+                                else setView('builder')
+                              }}
+                            >
+                              {trace?.run?.run_id || runId ? 'Open run' : 'Builder'}
                             </button>
                           )}
                         </div>

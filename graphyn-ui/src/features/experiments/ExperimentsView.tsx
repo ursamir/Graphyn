@@ -63,6 +63,24 @@ function valuesDiffer(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) !== JSON.stringify(b)
 }
 
+
+function parseExperimentsHash(): string[] {
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const qIdx = raw.indexOf('?')
+  if (qIdx < 0) return []
+  const params = new URLSearchParams(raw.slice(qIdx + 1))
+  const collected: string[] = []
+  for (const key of ['run_id', 'run_ids']) {
+    for (const val of params.getAll(key)) {
+      for (const part of val.split(',')) {
+        const id = part.trim()
+        if (id && !collected.includes(id)) collected.push(id)
+      }
+    }
+  }
+  return collected
+}
+
 export default function ExperimentsView() {
   const openRun = useAppStore((s) => s.openRun)
   const openTrace = useAppStore((s) => s.openTrace)
@@ -73,7 +91,7 @@ export default function ExperimentsView() {
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [selectedExp, setSelectedExp] = React.useState<string | null>(null)
-  const [selectedIds, setSelectedIds] = React.useState<string[]>([])
+  const [selectedIds, setSelectedIds] = React.useState<string[]>(() => parseExperimentsHash().slice(0, 5))
   const [compare, setCompare] = React.useState<ComparePayload | null>(null)
   const [compareLoading, setCompareLoading] = React.useState(false)
 
@@ -100,6 +118,16 @@ export default function ExperimentsView() {
   React.useEffect(() => {
     void refresh()
   }, [refresh])
+
+  React.useEffect(() => {
+    const apply = () => {
+      const ids = parseExperimentsHash().slice(0, 5)
+      if (ids.length) setSelectedIds(ids)
+    }
+    apply()
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+  }, [])
 
   const active =
     blocks?.find((b) => b.experiment_name === selectedExp) ??
@@ -180,38 +208,28 @@ export default function ExperimentsView() {
       ) : !blocks || blocks.length === 0 || tableRuns.length === 0 ? (
         <EmptyState
           title="No experiments yet"
-          description="Run a pipeline from Builder with experiment_tracker (or metrics.json under a run) to populate this board."
+          description="Compare starts from Runs — execute a pipeline, then return here to pick runs and diff params/metrics."
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <button
                 type="button"
                 className="btn-primary"
                 onClick={() => {
-                  setView('builder')
-                  window.history.replaceState(null, '', '#/builder')
-                }}
-              >
-                Open Builder
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setView('templates')
-                  window.history.replaceState(null, '', '#/templates')
-                }}
-              >
-                Browse Templates
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
                   setView('runs')
                   window.history.replaceState(null, '', '#/runs')
                 }}
               >
                 Open Runs
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setView('builder')
+                  window.history.replaceState(null, '', '#/builder')
+                }}
+              >
+                Open Builder
               </button>
             </div>
           }
@@ -317,15 +335,16 @@ export default function ExperimentsView() {
                                 className="btn-secondary !px-2 !py-1 text-xs"
                                 onClick={() => openRun(r.run_id)}
                               >
-                                Runs
+                                Open run
                               </button>
                               <button
                                 type="button"
                                 className="btn-secondary !px-2 !py-1 text-xs"
                                 onClick={() => openTrace({ runId: r.run_id })}
-                                title="Open Trace"
+                                title="View lineage"
                               >
                                 <GitBranch className="h-3 w-3" />
+                                <span className="ml-1 hidden lg:inline">Lineage</span>
                               </button>
                             </div>
                           </td>
@@ -336,7 +355,7 @@ export default function ExperimentsView() {
                 </table>
               </div>
               <div className="px-3 py-2 text-[11px] text-ink-400 border-t border-ink-50">
-                Select 2–5 runs, then Compare. Click a run id to open Runs; Trace opens the accountability chain.
+                Select 2–5 runs, then Compare. Open run returns to ops; Lineage opens the accountability chain.
               </div>
             </div>
 
@@ -361,6 +380,7 @@ export default function ExperimentsView() {
                     keys={compare.param_keys}
                     runs={compare.runs}
                     getter={(r, k) => r.parameters?.[k]}
+                    onOpenRun={openRun}
                   />
                   <CompareTable
                     title="Metrics"
@@ -368,6 +388,7 @@ export default function ExperimentsView() {
                     runs={compare.runs}
                     getter={(r, k) => r.metrics?.[k]}
                     format={fmtMetric}
+                    onOpenRun={openRun}
                   />
                 </div>
               </div>
@@ -385,12 +406,14 @@ function CompareTable({
   runs,
   getter,
   format,
+  onOpenRun,
 }: {
   title: string
   keys: string[]
   runs: Array<ExperimentRun & { experiment_name?: string }>
   getter: (r: ExperimentRun, key: string) => unknown
   format?: (v: unknown) => string
+  onOpenRun?: (runId: string) => void
 }) {
   const fmt = format ?? ((v: unknown) => (v == null ? '—' : prettyScalar(v)))
   if (!keys.length) {
@@ -411,7 +434,17 @@ function CompareTable({
             <th className="px-4 py-2 font-medium w-40">Key</th>
             {runs.map((r) => (
               <th key={r.run_id} className="px-3 py-2 font-mono font-normal text-xs" title={r.run_id}>
-                {shortRunId(r.run_id)}
+                {onOpenRun ? (
+                  <button
+                    type="button"
+                    className="hover:underline hover:text-accent-800"
+                    onClick={() => onOpenRun(r.run_id)}
+                  >
+                    {shortRunId(r.run_id)}
+                  </button>
+                ) : (
+                  shortRunId(r.run_id)
+                )}
               </th>
             ))}
           </tr>

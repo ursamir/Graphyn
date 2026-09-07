@@ -1,6 +1,8 @@
 import React from 'react'
-import { GitBranch, Download, Pause, Play, RefreshCw } from 'lucide-react'
+import { Archive, FlaskConical, GitBranch, Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
+import type { GraphIR } from '../../types/graph'
+import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
 import {
@@ -73,6 +75,9 @@ export default function RunsView() {
   const lastRunId = useAppStore((s) => s.lastRunId)
   const pushToast = useAppStore((s) => s.pushToast)
   const openTrace = useAppStore((s) => s.openTrace)
+  const openArtifacts = useAppStore((s) => s.openArtifacts)
+  const openExperiments = useAppStore((s) => s.openExperiments)
+  const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
 
   const [runs, setRuns] = React.useState<RunSummary[] | null>(null)
   const [offset, setOffset] = React.useState(0)
@@ -280,6 +285,45 @@ export default function RunsView() {
     (row) => row.line.text,
   )
 
+  const selectedSummary = runs?.find((r) => r.run_id === selected)
+  const graphName = String(
+    selectedSummary?.graph_name ??
+      (detail?.meta as { graph_name?: string } | undefined)?.graph_name ??
+      detail?.graph_name ??
+      '',
+  ).trim()
+  const embeddedGraph = (detail?.graph ?? (detail?.meta as { graph?: unknown } | undefined)?.graph) as
+    | GraphIR
+    | undefined
+  const canOpenGraph = Boolean(
+    selected &&
+      (graphName ||
+        (embeddedGraph && Array.isArray(embeddedGraph.nodes) && Array.isArray(embeddedGraph.edges))),
+  )
+
+  const openGraphInBuilder = async () => {
+    if (!selected) return
+    try {
+      if (embeddedGraph && Array.isArray(embeddedGraph.nodes) && Array.isArray(embeddedGraph.edges)) {
+        loadGraphIntoBuilder(embeddedGraph)
+        pushToast('Opened graph in Builder', 'success')
+        return
+      }
+      const graph = await fetchRunGraph(selected, graphName || null)
+      if (!graph) {
+        pushToast(graphName ? `Graph not found for ${graphName}` : 'Graph not available for this run', 'info')
+        return
+      }
+      loadGraphIntoBuilder(graph)
+      pushToast(
+        graphName ? `Opened ${humanizeTemplateName(graphName)} in Builder` : 'Opened graph in Builder',
+        'success',
+      )
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
@@ -449,6 +493,29 @@ export default function RunsView() {
               >
                 <GitBranch className="h-3.5 w-3.5" /> View lineage
               </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openArtifacts({ runId: selected })}
+              >
+                <Archive className="h-3.5 w-3.5" /> Browse artifacts
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openExperiments({ runIds: [selected] })}
+              >
+                <FlaskConical className="h-3.5 w-3.5" /> Compare
+              </button>
+              {canOpenGraph && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => void openGraphInBuilder()}
+                >
+                  <Workflow className="h-3.5 w-3.5" /> Open in Builder
+                </button>
+              )}
               {['running'].includes(runStatus.toLowerCase()) && (
                 <button type="button" className="btn-secondary" onClick={() => void control(selected, 'pause')}>
                   <Pause className="h-3.5 w-3.5" /> Pause

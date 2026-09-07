@@ -1,9 +1,10 @@
 import React from 'react'
-import { Copy, Download, GitBranch, Play, RefreshCw } from 'lucide-react'
+import { Copy, Download, GitBranch, History, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
+import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
-import { humanNodeLabel, shortRunId } from '../../lib/format'
+import { formatLocaleDateTime, humanNodeLabel, humanizeTemplateName, shortRunId } from '../../lib/format'
 
 interface Artifact {
   artifact_id?: string
@@ -95,15 +96,35 @@ function LineageList({
   )
 }
 
+
+function parseArtifactsHash(): { runId: string } {
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const qIdx = raw.indexOf('?')
+  if (qIdx < 0) return { runId: '' }
+  const params = new URLSearchParams(raw.slice(qIdx + 1))
+  return { runId: (params.get('run_id') || '').trim() }
+}
+
+function writeArtifactsHash(runId: string) {
+  const params = new URLSearchParams()
+  if (runId.trim()) params.set('run_id', runId.trim())
+  const qs = params.toString()
+  const next = qs ? `#/artifacts?${qs}` : '#/artifacts'
+  if (window.location.hash !== next) {
+    window.history.replaceState(null, '', next)
+  }
+}
+
 export default function ArtifactsView() {
   const openRun = useAppStore((s) => s.openRun)
   const openTrace = useAppStore((s) => s.openTrace)
+  const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
   const [items, setItems] = React.useState<Artifact[] | null>(null)
   const [selected, setSelected] = React.useState<string | null>(null)
   const [detail, setDetail] = React.useState<unknown>(null)
   const [lineage, setLineage] = React.useState<unknown>(null)
-  const [runFilter, setRunFilter] = React.useState('')
+  const [runFilter, setRunFilter] = React.useState(() => parseArtifactsHash().runId)
   const [nodeTypeFilter, setNodeTypeFilter] = React.useState('')
   const [artifactTypeFilter, setArtifactTypeFilter] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
@@ -132,6 +153,20 @@ export default function ArtifactsView() {
   React.useEffect(() => {
     void load()
   }, [load])
+
+  React.useEffect(() => {
+    const apply = () => {
+      const { runId } = parseArtifactsHash()
+      setRunFilter((prev) => (prev === runId ? prev : runId))
+    }
+    apply()
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+  }, [])
+
+  React.useEffect(() => {
+    writeArtifactsHash(runFilter)
+  }, [runFilter])
 
   const open = async (id: string) => {
     setSelected(id)
@@ -204,7 +239,7 @@ export default function ArtifactsView() {
       <div className="overflow-y-auto border-r border-ink-300 bg-white p-4">
         <PageHeader
           title="Artifacts"
-          description="Outputs from completed nodes. Inspect lineage here; use Observe → Trace for the full chain (artifact → run → graph → worker)."
+          description="Outputs from completed runs. Filter by run, then Trace lineage or open the run — Builder closes the Observe→Deploy loop."
         />
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <label className="text-[11px] font-medium text-ink-500">
@@ -323,16 +358,97 @@ export default function ArtifactsView() {
           />
         ) : (
           <>
+            {(() => {
+              const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
+              const nodeType = String(rec.node_type ?? '').trim()
+              const artifactType = String(rec.artifact_type ?? '').trim()
+              const runId = String(rec.run_id ?? '').trim()
+              const created = String(rec.created_at ?? rec.ts ?? '').trim()
+              const graphName = String(rec.graph_name ?? '').trim()
+              return (
+                <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm space-y-1">
+                  <div className="text-base font-semibold text-ink-900">
+                    {nodeType ? humanNodeLabel(nodeType) : 'Artifact'}
+                    {artifactType ? (
+                      <span className="ml-2 text-sm font-normal text-ink-500">{artifactType}</span>
+                    ) : null}
+                  </div>
+                  <div className="text-sm text-ink-600">
+                    {runId ? (
+                      <>
+                        From run{' '}
+                        <button
+                          type="button"
+                          className="font-mono text-accent-800 hover:underline"
+                          onClick={() => openRun(runId)}
+                          title={runId}
+                        >
+                          {shortRunId(runId)}
+                        </button>
+                      </>
+                    ) : (
+                      'No linked run'
+                    )}
+                    {graphName ? ` · ${humanizeTemplateName(graphName)}` : ''}
+                    {created ? ` · ${formatLocaleDateTime(created)}` : ''}
+                  </div>
+                  <div className="font-mono text-[11px] text-ink-400">{selected}</div>
+                </div>
+              )
+            })()}
             <div className="flex flex-wrap gap-2">
-              <button type="button" className="btn-primary" onClick={() => void replay(selected)}>
-                <Play className="h-3.5 w-3.5" /> Replay
-              </button>
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => openTrace({ artifactId: selected })}
+                onClick={() => {
+                  const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
+                  const runId = String(rec.run_id ?? '').trim()
+                  openTrace({ artifactId: selected, runId: runId || undefined })
+                }}
               >
-                <GitBranch className="h-3.5 w-3.5" /> Open in Trace
+                <GitBranch className="h-3.5 w-3.5" /> Trace lineage
+              </button>
+              {(() => {
+                const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
+                const runId = String(rec.run_id ?? '').trim()
+                if (!runId) return null
+                return (
+                  <button type="button" className="btn-secondary" onClick={() => openRun(runId)}>
+                    <History className="h-3.5 w-3.5" /> Open run
+                  </button>
+                )
+              })()}
+              {(() => {
+                const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
+                const runId = String(rec.run_id ?? '').trim()
+                const graphName = String(rec.graph_name ?? '').trim()
+                if (!runId && !graphName) return null
+                return (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          const graph = await fetchRunGraph(runId, graphName || null)
+                          if (!graph) {
+                            pushToast('Graph not available for this artifact', 'info')
+                            return
+                          }
+                          loadGraphIntoBuilder(graph)
+                          pushToast('Opened graph in Builder', 'success')
+                        } catch (err) {
+                          pushToast(err instanceof Error ? err.message : String(err), 'error')
+                        }
+                      })()
+                    }}
+                  >
+                    <Workflow className="h-3.5 w-3.5" /> Open in Builder
+                  </button>
+                )
+              })()}
+              <button type="button" className="btn-primary" onClick={() => void replay(selected)}>
+                <Play className="h-3.5 w-3.5" /> Replay
               </button>
             </div>
             {path && (

@@ -49,6 +49,7 @@ export default function EdgeWizardView() {
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const openRun = useAppStore((s) => s.openRun)
   const openTrace = useAppStore((s) => s.openTrace)
+  const openArtifacts = useAppStore((s) => s.openArtifacts)
   const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
   const setLastRunId = useAppStore((s) => s.setLastRunId)
@@ -179,7 +180,7 @@ export default function EdgeWizardView() {
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => { setView('artifacts'); window.history.replaceState(null, '', '#/artifacts') }}
+              onClick={() => openArtifacts(runId ? { runId } : undefined)}
             >
               <Archive className="h-3.5 w-3.5" /> Artifacts
             </button>
@@ -260,7 +261,7 @@ export default function EdgeWizardView() {
           {!ready && (
             <EmptyState
               title="No graph selected"
-              description="Start with the edge template to continue packaging, or open Templates for other starters."
+              description="Observe→Deploy: pick the edge template, configure, run, then download — or open Templates / Builder and come back with a packaged model."
               action={
                 <div className="flex flex-wrap justify-center gap-2">
                   <button type="button" className="btn-primary" onClick={useEdgeTemplate}>
@@ -275,6 +276,16 @@ export default function EdgeWizardView() {
                     }}
                   >
                     Browse Templates
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setView('runs')
+                      window.history.replaceState(null, '', '#/runs')
+                    }}
+                  >
+                    Open Runs
                   </button>
                 </div>
               }
@@ -440,7 +451,14 @@ export default function EdgeWizardView() {
                   className="btn-secondary"
                   onClick={() => openTrace({ runId })}
                 >
-                  <GitBranch className="h-3.5 w-3.5" /> Trace
+                  <GitBranch className="h-3.5 w-3.5" /> View lineage
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => openArtifacts({ runId })}
+                >
+                  <Archive className="h-3.5 w-3.5" /> View artifacts
                 </button>
               </>
             )}
@@ -487,17 +505,26 @@ export default function EdgeWizardView() {
             >
               <Download className="h-3.5 w-3.5" /> {downloading ? 'Downloading…' : 'Download'}
             </button>
-            <button type="button" className="btn-secondary" onClick={() => { setView('artifacts'); window.history.replaceState(null, '', '#/artifacts') }}>
-              <Archive className="h-3.5 w-3.5" /> Open Artifacts
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => openArtifacts(runId ? { runId } : undefined)}
+            >
+              <Archive className="h-3.5 w-3.5" /> View artifacts
             </button>
             {runId && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openTrace({ runId })}
-              >
-                <GitBranch className="h-3.5 w-3.5" /> Trace run
-              </button>
+              <>
+                <button type="button" className="btn-secondary" onClick={() => openRun(runId)}>
+                  <RefreshCw className="h-3.5 w-3.5" /> Open run
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => openTrace({ runId })}
+                >
+                  <GitBranch className="h-3.5 w-3.5" /> View lineage
+                </button>
+              </>
             )}
             <button type="button" className="btn-secondary" onClick={openInBuilder}>
               <Workflow className="h-3.5 w-3.5" /> Open in Builder

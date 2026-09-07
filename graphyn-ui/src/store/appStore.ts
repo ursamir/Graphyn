@@ -31,7 +31,8 @@ interface AppState {
   focusRunId: string | null
   openRun: (id: string) => void
   openTrace: (opts: { artifactId?: string; runId?: string }) => void
-  openExperiments: () => void
+  openArtifacts: (opts?: { runId?: string }) => void
+  openExperiments: (opts?: { runIds?: string[] }) => void
   openProposals: () => void
   pendingProposalCount: number
   setPendingProposalCount: (n: number) => void
@@ -82,8 +83,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     window.history.replaceState(null, '', qs ? `#/trace?${qs}` : '#/trace')
     set({ view: 'trace' })
   },
-  openExperiments: () => {
-    window.history.replaceState(null, '', '#/experiments')
+  openArtifacts: ({ runId } = {}) => {
+    const params = new URLSearchParams()
+    if (runId?.trim()) params.set('run_id', runId.trim())
+    const qs = params.toString()
+    window.history.replaceState(null, '', qs ? `#/artifacts?${qs}` : '#/artifacts')
+    set({ view: 'artifacts' })
+  },
+  openExperiments: ({ runIds } = {}) => {
+    const params = new URLSearchParams()
+    const ids = (runIds ?? []).map((id) => id.trim()).filter(Boolean)
+    if (ids.length === 1) params.set('run_id', ids[0])
+    else if (ids.length > 1) params.set('run_id', ids.join(','))
+    const qs = params.toString()
+    window.history.replaceState(null, '', qs ? `#/experiments?${qs}` : '#/experiments')
     set({ view: 'experiments' })
   },
   openProposals: () => {
