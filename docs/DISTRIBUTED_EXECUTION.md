@@ -171,11 +171,12 @@ Heartbeats every ~15s; stale after ~45s → scheduler skips worker.
 | `distributed` | `GRAPHYN_BACKEND=distributed` or explicit `register_backend` |
 
 `DistributedBackend.execute()`:
-1. Build waves (reuse `PipelineGraph`)
-2. For each node in wave: resolve placement → if local worker slot, run `NodeExecutor`; else enqueue job and wait
-3. Materialize inputs: serialize upstream outputs → store → `input_refs`
-4. On completion: hydrate `output_refs` → in-memory port values for downstream **on the control plane** (or pass refs through if downstream is also remote — P1 may hydrate always for simplicity)
-5. Mirror events into `PipelineLogger` / run journal
+1. Build waves from GraphIR edges (`compute_ir_waves` — same level algorithm as `PipelineGraph`, no node instantiation required for remote types)
+2. For each node in wave order: resolve placement → if local, run `NodeExecutor`; else enqueue job and wait
+3. Materialize inputs: pickle+recast → `put_blob` → `input_refs` (see `app/core/distributed/transfer.py`)
+4. On completion: hydrate `output_refs` → in-memory port values for downstream **on the control plane** (always hydrate in P1)
+5. All-local graphs short-circuit to `LocalPythonBackend` unchanged
+6. P1 supports **unconditional** edges only; conditional edges are skipped with a warning
 
 ---
 
@@ -263,10 +264,11 @@ P1 two-box path on Server-99: NFS **or** MinIO; default implementation starts wi
 
 ### P1 — Two-box MVP
 - [x] HTTP artifact put/get through control API
-- [x] Real claim/complete loop; remote `NodeExecutor` on worker (local-ref / in-process path; full artifact hydrate still P1+)
+- [x] Real claim/complete loop; remote `NodeExecutor` on worker with artifact URI hydrate/upload
 - [x] Scheduler uses tags + `requires_gpu`
-- [ ] Example: pin `trainer`/`evaluator` to GPU worker; rest local
-- [ ] Document Server-99 + second host runbook
+- [x] Wave scheduler: local via `NodeExecutor`, remote via job queue + `input_refs`/`output_refs` (no full-graph local rematerialize)
+- [x] Example: pin `trainer`/`evaluator` to GPU worker; rest local (`examples/29_distributed_placement/`)
+- [x] Document Server-99 + second host runbook (below)
 
 ### P2 — Operable
 - [ ] Persistent registry (Redis or disk) for multi-API-worker control
@@ -310,3 +312,74 @@ P1 two-box path on Server-99: NFS **or** MinIO; default implementation starts wi
 - **Plugin drift** between hosts — advertise plugin set; fail job if missing
 - **Large dataset copy** — prefer shared store / NFS for training data paths; pass path refs when both sides mount the same volume
 - **Blackwell / FaceRecognition VRAM** — worker reports free VRAM; honor `min_vram_mib` and existing TF CPU fallbacks
+
+---
+
+## 14. Server-99 two-box runbook (P1)
+
+Goal: control plane on machine A (laptop / API host); GPU worker on Server-99.
+
+### Prerequisites
+- Same Graphyn version / plugin set on both hosts (worker advertises `plugins`; missing `node_type` → claim skips / job fails).
+- Network: worker can reach control `http://<A>:8001/api/v1` (Bearer `GRAPHYN_API_TOKEN` if set).
+- No shared filesystem required — blobs cross the network via `POST/GET /api/v1/artifacts/blob`.
+
+### Machine A — control plane
+
+```bash
+export GRAPHYN_BACKEND=distributed
+export GRAPHYN_API_TOKEN=secret   # optional but recommended
+export GRAPHYN_DISTRIBUTED_JOB_TIMEOUT=3600
+
+# API (workers + blob store)
+venv/bin/uvicorn app.api.main:app --host 0.0.0.0 --port 8001
+
+# In another shell — run the example graph
+GRAPHYN_BACKEND=distributed \
+  venv/bin/python -m app.cli.main run \
+  --graph examples/29_distributed_placement/pipeline.graph.json
+```
+
+Local / CPU nodes (`placement.mode=local` or unconstrained) execute on A via `NodeExecutor`.
+Nodes with `tags:["gpu"]` / `require_gpu:true` enqueue jobs and wait for Server-99.
+
+### Server-99 — GPU worker
+
+```bash
+export GRAPHYN_CONTROL_URL=http://<A-IP>:8001/api/v1
+export GRAPHYN_API_TOKEN=secret
+export GRAPHYN_WORKER_ID=server99-gpu
+
+venv/bin/python -m app.cli.main worker start \
+  --control-url "$GRAPHYN_CONTROL_URL" \
+  --worker-id "$GRAPHYN_WORKER_ID" \
+  --labels gpu,lab \
+  --pool gpu-lab
+```
+
+The worker heartbeats (~15s), claims eligible jobs, downloads `input_refs`, runs `NodeExecutor`, uploads output blobs, and completes with `output_refs`.
+
+### Same-host smoke (no second box)
+
+```bash
+# Terminal 1 — API
+GRAPHYN_BACKEND=distributed venv/bin/uvicorn app.api.main:app --port 8001
+
+# Terminal 2 — in-process worker against the same registry is for unit tests;
+# for HTTP loopback on one box:
+GRAPHYN_CONTROL_URL=http://127.0.0.1:8001/api/v1 \
+  venv/bin/python -m app.cli.main worker start \
+  --control-url http://127.0.0.1:8001/api/v1 \
+  --worker-id local-gpu --labels gpu --once
+```
+
+### Env reference (P1)
+
+| Variable | Role |
+|---|---|
+| `GRAPHYN_BACKEND=distributed` | Select wave scheduler backend |
+| `GRAPHYN_CONTROL_URL` | Worker → control base (`…/api/v1`) |
+| `GRAPHYN_WORKER_ID` | Stable worker identity |
+| `GRAPHYN_API_TOKEN` | Shared Bearer token |
+| `GRAPHYN_DISTRIBUTED_JOB_TIMEOUT` | Control wait per remote job (default 120s) |
+

@@ -73,3 +73,33 @@ def test_distributed_backend_no_workers_equals_local(monkeypatch):
     result = backend.execute(graph)
     assert called.get("yes") is True
     assert result == {"output": "local-ok"}
+
+
+def test_distributed_all_local_still_short_circuits(monkeypatch):
+    """Regression: unconstrained graph still hits LocalPythonBackend once."""
+    from app.core.distributed.backend import DistributedBackend
+    from app.core.distributed.queue import _reset_job_queue
+    from app.core.distributed.registry import _reset_worker_registry
+    from app.core.ir.models import IRCapabilityMetadata
+
+    _reset_worker_registry()
+    _reset_job_queue()
+    graph = GraphIR(
+        schema_version="1.2",
+        metadata=IRMetadata(name="local-only", seed=0),
+        nodes=[IRNode(id="e1", node_type="anything", config={})],
+        edges=[],
+    )
+    called = {"n": 0}
+
+    def _fake(self, graph, **kwargs):
+        called["n"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr(LocalPythonBackend, "execute", _fake)
+    monkeypatch.setattr(
+        "app.core.registry_runtime.resolve_capability",
+        lambda ir_node, registry: IRCapabilityMetadata(requires_gpu=False),
+    )
+    assert DistributedBackend().execute(graph) == {"ok": True}
+    assert called["n"] == 1

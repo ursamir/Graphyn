@@ -1,0 +1,125 @@
+{
+  "schema_version": "1.2",
+  "metadata": {
+    "name": "distributed_placement_demo",
+    "seed": 42,
+    "description": "Two-box demo: light CPU nodes local, GPU trainer pinned to a gpu-labelled worker (Server-99). Use with GRAPHYN_BACKEND=distributed and graphyn worker start --labels gpu.",
+    "created_at": null,
+    "tags": ["example", "distributed", "placement", "gpu"]
+  },
+  "nodes": [
+    {
+      "id": "ingest",
+      "node_type": "dataset_ingest",
+      "config": {
+        "path": "workspace/datasets/input/wake-word/wake_word",
+        "source_type": "filesystem",
+        "recursive": false,
+        "limit": 4
+      },
+      "label": "Local ingest",
+      "capability_metadata": null,
+      "event_trigger": null,
+      "placement": {
+        "mode": "local"
+      }
+    },
+    {
+      "id": "conditioner",
+      "node_type": "audio_conditioner",
+      "config": {
+        "target_sample_rate": 16000
+      },
+      "label": "Local conditioner",
+      "capability_metadata": null,
+      "event_trigger": null,
+      "placement": {
+        "mode": "local"
+      }
+    },
+    {
+      "id": "features",
+      "node_type": "feature_frontend",
+      "config": {
+        "feature_type": "mfcc",
+        "n_mfcc": 40
+      },
+      "label": "Local features",
+      "capability_metadata": null,
+      "event_trigger": null,
+      "placement": {
+        "mode": "auto"
+      }
+    },
+    {
+      "id": "trainer_gpu",
+      "node_type": "trainer",
+      "config": {
+        "epochs": 1,
+        "batch_size": 8
+      },
+      "label": "GPU trainer (remote)",
+      "capability_metadata": {
+        "requires_gpu": true,
+        "supports_cpu": false,
+        "supports_edge": false,
+        "deterministic": false,
+        "cacheable": false,
+        "streaming_support": false,
+        "realtime_support": false
+      },
+      "event_trigger": null,
+      "placement": {
+        "mode": "auto",
+        "tags": ["gpu"],
+        "require_gpu": true,
+        "min_vram_mib": 4096
+      }
+    },
+    {
+      "id": "evaluator",
+      "node_type": "evaluator",
+      "config": {},
+      "label": "GPU evaluator (remote)",
+      "capability_metadata": {
+        "requires_gpu": true
+      },
+      "event_trigger": null,
+      "placement": {
+        "mode": "auto",
+        "tags": ["gpu"],
+        "require_gpu": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "ingest",
+      "src_port": "output",
+      "dst_id": "conditioner",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "conditioner",
+      "src_port": "output",
+      "dst_id": "features",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "features",
+      "src_port": "output",
+      "dst_id": "trainer_gpu",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "trainer_gpu",
+      "src_port": "output",
+      "dst_id": "evaluator",
+      "dst_port": "input",
+      "condition": null
+    }
+  ]
+}

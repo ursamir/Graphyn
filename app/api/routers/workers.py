@@ -168,25 +168,6 @@ def get_job(job_id: str):
 # ── Artifact blobs (P1 HTTP transfer) ─────────────────────────────────────────
 
 
-def _blob_root() -> Path:
-    from app.core.config import artifacts_dir
-
-    root = Path(artifacts_dir()) / "distributed_blobs"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _safe_blob_path(key: str) -> Path:
-    key = (key or "").lstrip("/")
-    if not key or not _BLOB_KEY_RE.match(key) or ".." in key.split("/"):
-        raise HTTPException(status_code=400, detail="Invalid blob key")
-    path = (_blob_root() / key).resolve()
-    root = _blob_root().resolve()
-    if not str(path).startswith(str(root)):
-        raise HTTPException(status_code=400, detail="Invalid blob key")
-    return path
-
-
 @router.post("/artifacts/blob", summary="Upload an artifact blob")
 async def put_artifact_blob(
     request: Request,
@@ -195,27 +176,40 @@ async def put_artifact_blob(
     """Store raw bytes; returns ``artifact://local/{key}``.
 
     If ``key`` is omitted, a sha256 content-addressed key is used.
+    Delegates to :mod:`app.core.distributed.transfer` so control and
+    in-process workers share one store layout.
     """
+    from app.core.artifact_uri import parse_artifact_uri
+    from app.core.distributed.transfer import put_blob
+
     body = await request.body()
     if not body:
         raise HTTPException(status_code=400, detail="Empty body")
+    try:
+        uri = put_blob(body, key=key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    parsed = parse_artifact_uri(uri)
     digest = hashlib.sha256(body).hexdigest()
-    if not key:
-        from app.core.artifact_uri import local_content_key
-
-        key = local_content_key(digest)
-    path = _safe_blob_path(key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(body)
-    from app.core.artifact_uri import build_artifact_uri, LOCAL_STORE_ID
-
-    uri = build_artifact_uri(LOCAL_STORE_ID, key)
-    return {"uri": uri, "key": key, "sha256": digest, "bytes": len(body)}
+    return {"uri": uri, "key": parsed.key, "sha256": digest, "bytes": len(body)}
 
 
 @router.get("/artifacts/blob/{key:path}", summary="Download an artifact blob")
 def get_artifact_blob(key: str):
-    path = _safe_blob_path(key)
-    if not path.is_file():
+    from app.core.artifact_uri import build_artifact_uri, LOCAL_STORE_ID
+    from app.core.distributed.transfer import blob_root, get_blob
+
+    key = (key or "").lstrip("/")
+    if not key or not _BLOB_KEY_RE.match(key) or ".." in key.split("/"):
+        raise HTTPException(status_code=400, detail="Invalid blob key")
+    uri = build_artifact_uri(LOCAL_STORE_ID, key)
+    try:
+        data = get_blob(uri)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Blob not found")
-    return FileResponse(path, filename=path.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    path = blob_root() / key
+    if path.is_file():
+        return FileResponse(path, filename=path.name)
+    return Response(content=data, media_type="application/octet-stream")

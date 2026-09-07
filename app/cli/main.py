@@ -1197,9 +1197,8 @@ def cmd_mcp(args):
 def cmd_worker_start(args):
     """Register with the control plane and run heartbeat + claim loop.
 
-    P0/P1: when a job is claimed, attempt local NodeExecutor execution if
-    input refs are already local paths / resolvable; otherwise complete with
-    a structured error for unimplemented remote hydrate.
+    P1: hydrate input_refs from local blob store or control HTTP API,
+    run NodeExecutor, upload output blobs, complete with output_refs.
     """
     import json
     import time
@@ -1289,36 +1288,74 @@ def cmd_worker_start(args):
     except Exception:
         pass
 
-    def _execute_job(job: dict) -> dict:
-        """Best-effort local execute for jobs with hydrated/local input refs."""
+    def _hydrate_inputs(input_refs: dict) -> dict:
+        """Resolve input_refs to in-memory port values (local store or HTTP)."""
         from pathlib import Path as _Path
-        from app.core.distributed.models import NodeJob as _NodeJob
+        from app.core.distributed.transfer import (
+            get_blob,
+            http_get_blob,
+            load_port_value,
+        )
 
-        node_job = _NodeJob.model_validate(job)
-        # Resolve input_refs that are plain filesystem paths or file:// URIs.
         inputs = {}
-        for port, ref in (node_job.input_refs or {}).items():
-            if isinstance(ref, str) and (ref.startswith("/") or ref.startswith("file://")):
-                path = ref[7:] if ref.startswith("file://") else ref
-                inputs[port] = path
-            elif isinstance(ref, str) and ref.startswith("artifact://"):
-                # P1: download via control API — for P0 accept local distributed_blobs
-                from app.core.artifact_uri import parse_artifact_uri
-                from app.core.config import artifacts_dir
-                uri = parse_artifact_uri(ref)
-                candidate = _Path(artifacts_dir()) / "distributed_blobs" / uri.key
-                if candidate.is_file():
-                    inputs[port] = str(candidate)
-                else:
-                    raise RuntimeError(
-                        f"Cannot hydrate input ref {ref!r} locally yet "
-                        "(HTTP artifact fetch is P1; place blob under distributed_blobs)"
-                    )
-            else:
+        for port, ref in (input_refs or {}).items():
+            if not isinstance(ref, str):
                 inputs[port] = ref
+                continue
+            if ref.startswith("/") or ref.startswith("file://"):
+                path = ref[7:] if ref.startswith("file://") else ref
+                data = _Path(path).read_bytes()
+                try:
+                    inputs[port] = load_port_value(data)
+                except Exception:
+                    inputs[port] = path
+                continue
+            if ref.startswith("artifact://"):
+                data = None
+                try:
+                    data = get_blob(ref)
+                except FileNotFoundError:
+                    data = None
+                except Exception:
+                    data = None
+                if data is None:
+                    if not control_url or in_process:
+                        raise RuntimeError(
+                            f"Cannot hydrate input ref {ref!r}: blob missing locally "
+                            "and no control URL for HTTP fetch"
+                        )
+                    data = http_get_blob(control_url, ref, token=token or None)
+                inputs[port] = load_port_value(data)
+                continue
+            inputs[port] = ref
+        return inputs
 
+    def _upload_outputs(outputs: dict) -> dict:
+        """Serialize outputs to blobs; return output_refs map."""
+        from app.core.distributed.transfer import (
+            dump_port_value,
+            http_put_blob,
+            put_blob,
+        )
+
+        refs = {}
+        for port, value in (outputs or {}).items():
+            raw = dump_port_value(value)
+            if in_process or not control_url:
+                refs[port] = put_blob(raw)
+            else:
+                refs[port] = http_put_blob(control_url, raw, token=token or None)
+        return refs
+
+    def _execute_job(job: dict) -> tuple:
+        """Hydrate inputs, run NodeExecutor, return (outputs, output_refs)."""
+        from app.core.distributed.models import NodeJob as _NodeJob
         from app.core.node_executor import NodeExecutor
         from app.core.registry_runtime import get_registry
+        from app.core.write_paths import ensure_node_write_dirs
+
+        node_job = _NodeJob.model_validate(job)
+        inputs = _hydrate_inputs(node_job.input_refs or {})
 
         registry = get_registry()
         try:
@@ -1327,17 +1364,24 @@ def cmd_worker_start(args):
             raise RuntimeError(
                 f"Node type {node_job.node_type!r} is not registered on this worker: {exc}"
             ) from exc
+        if node_class is None:
+            raise RuntimeError(
+                f"Node type {node_job.node_type!r} is not registered on this worker"
+            )
         seed = node_job.seed if node_job.seed is not None else 0
         node = node_class(config=dict(node_job.config or {}), seed=seed)
+        ensure_node_write_dirs(node)
         executor = NodeExecutor(node, run_id=node_job.run_id)
         executor.setup()
         try:
-            return executor.execute(inputs)
+            outputs = executor.execute(inputs)
         finally:
             try:
                 executor.teardown()
             except Exception:
                 pass
+        refs = _upload_outputs(outputs or {})
+        return outputs or {}, refs
 
     def _claim_and_run_in_process():
         from app.core.distributed.models import JobResult, WorkerInfo
@@ -1362,16 +1406,21 @@ def cmd_worker_start(args):
             print(f"[worker] claimed job {job.job_id} node={job.node_id} type={job.node_type}")
             started = time.time()
             try:
-                outputs = _execute_job(job.model_dump(mode="json"))
+                outputs, output_refs = _execute_job(job.model_dump(mode="json"))
+                # Embed outputs only when tiny (debug); control hydrates via refs.
+                events = []
+                try:
+                    import sys as _sys
+                    if sum(len(repr(v)) for v in (outputs or {}).values()) < 2048:
+                        events = [{"type": "outputs", "data": outputs}]
+                except Exception:
+                    events = []
                 get_job_queue().complete(
                     JobResult(
                         job_id=job.job_id,
                         status="succeeded",
-                        output_refs={
-                            k: f"artifact://local/worker/{job.job_id}/{k}"
-                            for k in (outputs or {})
-                        },
-                        events=[{"type": "outputs", "data": outputs}],
+                        output_refs=output_refs,
+                        events=events,
                         worker_id=worker_id,
                         duration_s=time.time() - started,
                     )
@@ -1422,15 +1471,18 @@ def cmd_worker_start(args):
                 )
                 started = time.time()
                 try:
-                    outputs = _execute_job(job)
+                    outputs, output_refs = _execute_job(job)
+                    events = []
+                    try:
+                        if sum(len(repr(v)) for v in (outputs or {}).values()) < 2048:
+                            events = [{"type": "outputs", "data": outputs}]
+                    except Exception:
+                        events = []
                     result = {
                         "job_id": job["job_id"],
                         "status": "succeeded",
-                        "output_refs": {
-                            k: f"artifact://local/worker/{job['job_id']}/{k}"
-                            for k in (outputs or {})
-                        },
-                        "events": [{"type": "outputs", "data": outputs}],
+                        "output_refs": output_refs,
+                        "events": events,
                         "error": None,
                         "worker_id": worker_id,
                         "duration_s": time.time() - started,

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from app.core.distributed.backend import (
     DistributedBackend,
+    compute_ir_waves,
     run_loopback_worker_once,
     start_loopback_worker_thread,
 )
@@ -31,6 +32,7 @@ from app.core.distributed.registry import (
 
 __all__ = [
     "DistributedBackend",
+    "compute_ir_waves",
     "JobQueue",
     "JobResult",
     "NodeJob",
