@@ -161,7 +161,7 @@ _BACKEND_REGISTRY: dict[str, type[RuntimeBackend]] = {
 # Stateless backends (like LocalPythonBackend) are safe to share across calls.
 # Future connection-holding backends (Docker, K8s) benefit from reuse.
 _BACKEND_INSTANCES: dict[str, RuntimeBackend] = {}
-_BACKEND_INSTANCES_LOCK = __import__("threading").Lock()
+_BACKEND_INSTANCES_LOCK = __import__("threading").RLock()
 
 
 def register_backend(backend_id: str, backend_class: type[RuntimeBackend]) -> None:
@@ -188,22 +188,38 @@ def register_backend(backend_id: str, backend_class: type[RuntimeBackend]) -> No
         _BACKEND_INSTANCES.pop(backend_id, None)
 
 
-def get_backend(backend_id: str = "local_python") -> RuntimeBackend:
+def get_backend(backend_id: str | None = None) -> RuntimeBackend:
     """Return a cached backend instance by ID.
 
     Instances are created once and reused across calls. This avoids the
     overhead of re-instantiating connection-holding backends (e.g. Docker,
     Kubernetes) on every pipeline execution.
 
+    When ``backend_id`` is omitted, reads ``GRAPHYN_BACKEND`` (default
+    ``local_python``). Setting ``GRAPHYN_BACKEND=distributed`` selects the
+    distributed control-plane backend without code changes.
+
     Args:
-        backend_id: The registered backend identifier (default: ``"local_python"``).
+        backend_id: The registered backend identifier, or ``None`` to use
+            ``GRAPHYN_BACKEND`` / ``local_python``.
 
     Returns:
         A ``RuntimeBackend`` instance (shared singleton per backend_id).
 
     Raises:
-        KeyError: If ``backend_id`` is not registered.
+        ValueError: If ``backend_id`` is not registered.
     """
+    import os
+
+    if backend_id is None:
+        backend_id = (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python"
+
+    # Lazy-register distributed so env selection works without an explicit import.
+    if backend_id == "distributed" and "distributed" not in _BACKEND_REGISTRY:
+        from app.core.distributed.backend import DistributedBackend
+
+        register_backend("distributed", DistributedBackend)
+
     if backend_id not in _BACKEND_REGISTRY:
         available = sorted(_BACKEND_REGISTRY)
         raise ValueError(
@@ -224,11 +240,20 @@ def list_backends() -> list[str]:
 def _reset_backend_registry() -> None:
     """Reset the backend registry and instance cache to their initial state.
 
-    Intended for test teardown only — restores ``_BACKEND_REGISTRY`` to the
-    default ``{"local_python": LocalPythonBackend}`` and clears all cached
-    instances.  Do not call in production code.
+    Intended for test teardown only — restores ``local_python`` (and
+    ``distributed`` when importable) and clears all cached instances.
+    Do not call in production code.
     """
+    # Import *outside* the lock — distributed package registration may call
+    # register_backend(), which acquires the same lock.
+    distributed_cls = None
+    try:
+        from app.core.distributed.backend import DistributedBackend as distributed_cls  # noqa: N813
+    except Exception:
+        distributed_cls = None
     with _BACKEND_INSTANCES_LOCK:
         _BACKEND_REGISTRY.clear()
         _BACKEND_REGISTRY["local_python"] = LocalPythonBackend
+        if distributed_cls is not None:
+            _BACKEND_REGISTRY["distributed"] = distributed_cls
         _BACKEND_INSTANCES.clear()

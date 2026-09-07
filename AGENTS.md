@@ -12,6 +12,11 @@ General-purpose AI/workflow execution platform (**graphyn-sdk**). Four interface
 
 Canonical docs: `docs/README.md`. Architecture: `docs/ARCHITECTURE.md`. Kiro steering (detailed): `.kiro/steering/`.
 
+**Distributed execution:** multi-machine placement, worker registry/job queue, and
+`GRAPHYN_BACKEND=distributed` are specified in `docs/DISTRIBUTED_EXECUTION.md`
+(IR `placement`, `artifact://` URIs, `graphyn worker start`). Default remains
+`LocalPythonBackend` when `GRAPHYN_BACKEND` is unset.
+
 ## Vision
 
 Build, run, and manage typed DAG pipelines — domain-agnostic via plugins (audio ML is a first-party pack, not the product identity). Graph IR (`.graph.json`) is the single pipeline language. Interfaces execute via `get_backend().execute(graph)`.

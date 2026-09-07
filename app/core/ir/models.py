@@ -3,7 +3,7 @@ Bounded Context:  BC1 — Graph Language
 Responsibility:   Define the canonical, versioned, immutable data model for
                   pipeline graphs. The single source of truth for graph structure.
 Owns:             GraphIR, IRNode, IREdge, IRMetadata, IRParameter,
-                  IRCapabilityMetadata — all frozen Pydantic models.
+                  IRCapabilityMetadata, IRPlacement — all frozen Pydantic models.
 Public Surface:   All model classes above.
 Must NOT:         Import from app.core.nodes, app.core.orchestrator,
                   app.core.sdk, app.domain, or app.api.
@@ -17,7 +17,7 @@ from __future__ import annotations
 import copy
 import re
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -114,6 +114,44 @@ class IRMetadata(BaseModel):
         return v.strip()  # P-24 fix: strip and store the normalised value
 
 
+
+class IRPlacement(BaseModel):
+    """Optional placement hint for where a node should execute (IR 1.2+).
+
+    Omitted / ``None`` on ``IRNode`` means auto-placement from capability
+    metadata. See ``docs/DISTRIBUTED_EXECUTION.md`` §3.1.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    mode: Literal["auto", "local", "worker", "pool"] = "auto"
+    """Placement strategy: auto | local | worker | pool."""
+
+    worker: str | None = None
+    """Exact worker id when ``mode=worker``."""
+
+    pool: str | None = None
+    """Logical pool name when ``mode=pool`` (e.g. ``gpu-lab``)."""
+
+    tags: tuple[str, ...] = ()
+    """Soft/hard label match hints (``gpu``, ``edge``, ``cpu``)."""
+
+    require_gpu: bool = False
+    """Hard GPU constraint."""
+
+    min_vram_mib: int | None = None
+    """Hard VRAM floor in MiB when set."""
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _coerce_tags(cls, v: Any) -> Any:
+        if v is None:
+            return ()
+        if isinstance(v, list):
+            return tuple(v)
+        return v
+
+
 class IRNode(BaseModel):
     """Specification for a single node in the graph.
 
@@ -140,6 +178,9 @@ class IRNode(BaseModel):
     compatibility — all existing IRNode instances without this field behave
     identically to the Phase 1/2 implementation.
     """
+
+    placement: IRPlacement | None = None
+    """Optional distributed placement hint (IR 1.2+). ``None`` → auto/local."""
 
     @field_validator("config", mode="before")
     @classmethod

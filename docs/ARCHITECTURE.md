@@ -39,6 +39,8 @@
 │  app/core/runtime_backend.py                                        │
 │  ├── RuntimeBackend (ABC)     canonical execution entry point       │
 │  ├── LocalPythonBackend       default — delegates to orchestrator   │
+│  ├── DistributedBackend       GRAPHYN_BACKEND=distributed (see      │
+│  │                             docs/DISTRIBUTED_EXECUTION.md)       │
 │  ├── get_backend()            returns cached backend singleton      │
 │  └── register_backend()       register custom backends              │
 └──────────────────────────────┬──────────────────────────────────────┘
@@ -468,6 +470,7 @@ get_backend().execute(graph, ...)
 |---|---|---|
 | `1.0` | Initial IR format | Accepted; missing fields default to `None` |
 | `1.1` | Added `IREdge.condition`, `IRNode.event_trigger` | Accepted; `1.0` docs treated as `1.1` |
+| `1.2` | Added `IRNode.placement` (`IRPlacement`) for distributed execution | Accepted; `1.0`/`1.1` load with `placement=None` |
 
 **Rules:**
 - Major version mismatch → `IRVersionError` (hard fail)

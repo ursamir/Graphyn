@@ -14,6 +14,7 @@ This index is the entry point for all documentation. Start here, then follow the
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System layers, component dependency graph, data flows, phase history |
 | [NODE_SYSTEM.md](./NODE_SYSTEM.md) | Node base class, ports, config, metadata, capability fields, registry, AutoDiscovery |
 | [PIPELINE_EXECUTION.md](./PIPELINE_EXECUTION.md) | Graph IR, DAG executor, caching, checkpoints, all execution modes |
+| [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md) | Multi-machine workers, placement IR, job queue, artifact URIs |
 | [BACKEND_CORE.md](./BACKEND_CORE.md) | RunJournal, RunControl, PipelineLogger, ArtifactSerializerRegistry, ArtifactStore, ProvenanceStore |
 | [DOMAIN_SERVICES.md](./DOMAIN_SERVICES.md) | IngestionService, ProjectManager, QualityChecker, AudioSampleHandler |
 | [API_REFERENCE.md](./API_REFERENCE.md) | All `/api/v1/` REST endpoints, request/response shapes, streaming protocol |

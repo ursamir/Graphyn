@@ -23,6 +23,7 @@ Subcommands:
   nodes    [--category CAT]           List registered node types
   runs     list                       List recent pipeline runs
   runs     logs <run_id>              Print log entries for a run
+  worker   start                      Register as a distributed worker
 """
 
 import argparse
@@ -1193,6 +1194,277 @@ def cmd_mcp(args):
 
 # ─── Argument parser ──────────────────────────────────────────────────────────
 
+def cmd_worker_start(args):
+    """Register with the control plane and run heartbeat + claim loop.
+
+    P0/P1: when a job is claimed, attempt local NodeExecutor execution if
+    input refs are already local paths / resolvable; otherwise complete with
+    a structured error for unimplemented remote hydrate.
+    """
+    import json
+    import time
+    import urllib.error
+    import urllib.request
+
+    control_url = (args.control_url or os.environ.get("GRAPHYN_CONTROL_URL") or "").rstrip("/")
+    worker_id = args.worker_id or os.environ.get("GRAPHYN_WORKER_ID") or "worker-local"
+    labels = [x.strip() for x in (args.labels or "").split(",") if x.strip()]
+    pools = []
+    if args.pool:
+        pools = [args.pool]
+    token = os.environ.get("GRAPHYN_API_TOKEN", "")
+    heartbeat_s = float(getattr(args, "heartbeat", 15) or 15)
+    once = bool(getattr(args, "once", False))
+    in_process = bool(getattr(args, "in_process", False))
+
+    def _headers():
+        h = {"Content-Type": "application/json", "Accept": "application/json"}
+        if token:
+            h["Authorization"] = f"Bearer {token}"
+        return h
+
+    def _http_json(method: str, path: str, payload=None):
+        url = f"{control_url}{path}"
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=_headers(), method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {exc.code} {path}: {detail}") from exc
+
+    def _detect_resources():
+        resources = {"gpu": False, "cpus": os.cpu_count() or 1}
+        try:
+            import shutil
+            import subprocess
+            if shutil.which("nvidia-smi"):
+                out = subprocess.check_output(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=name,memory.total,memory.free",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    text=True,
+                    timeout=5,
+                ).strip()
+                if out:
+                    line = out.splitlines()[0]
+                    parts = [p.strip() for p in line.split(",")]
+                    resources["gpu"] = True
+                    resources["gpu_name"] = parts[0] if parts else None
+                    if len(parts) > 1:
+                        resources["vram_mib_total"] = int(float(parts[1]))
+                    if len(parts) > 2:
+                        resources["vram_mib_free"] = int(float(parts[2]))
+        except Exception:
+            pass
+        return resources
+
+    resources = _detect_resources()
+    if "gpu" in {l.lower() for l in labels}:
+        resources["gpu"] = True
+
+    info = {
+        "worker_id": worker_id,
+        "labels": labels,
+        "pools": pools,
+        "resources": resources,
+        "plugins": [],
+        "graphyn_version": None,
+        "status": "idle",
+    }
+
+    # Prefer advertising known registry node types when available.
+    try:
+        from app.core.registry_runtime import get_registry
+        reg = get_registry()
+        info["plugins"] = [
+            getattr(m, "node_type", None) or getattr(m, "name", "")
+            for m in reg.list_nodes()
+        ]
+        info["plugins"] = [p for p in info["plugins"] if p]
+    except Exception:
+        pass
+
+    def _execute_job(job: dict) -> dict:
+        """Best-effort local execute for jobs with hydrated/local input refs."""
+        from pathlib import Path as _Path
+        from app.core.distributed.models import NodeJob as _NodeJob
+
+        node_job = _NodeJob.model_validate(job)
+        # Resolve input_refs that are plain filesystem paths or file:// URIs.
+        inputs = {}
+        for port, ref in (node_job.input_refs or {}).items():
+            if isinstance(ref, str) and (ref.startswith("/") or ref.startswith("file://")):
+                path = ref[7:] if ref.startswith("file://") else ref
+                inputs[port] = path
+            elif isinstance(ref, str) and ref.startswith("artifact://"):
+                # P1: download via control API — for P0 accept local distributed_blobs
+                from app.core.artifact_uri import parse_artifact_uri
+                from app.core.config import artifacts_dir
+                uri = parse_artifact_uri(ref)
+                candidate = _Path(artifacts_dir()) / "distributed_blobs" / uri.key
+                if candidate.is_file():
+                    inputs[port] = str(candidate)
+                else:
+                    raise RuntimeError(
+                        f"Cannot hydrate input ref {ref!r} locally yet "
+                        "(HTTP artifact fetch is P1; place blob under distributed_blobs)"
+                    )
+            else:
+                inputs[port] = ref
+
+        from app.core.node_executor import NodeExecutor
+        from app.core.registry_runtime import get_registry
+
+        registry = get_registry()
+        try:
+            node_class = registry.get_class(node_job.node_type)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Node type {node_job.node_type!r} is not registered on this worker: {exc}"
+            ) from exc
+        seed = node_job.seed if node_job.seed is not None else 0
+        node = node_class(config=dict(node_job.config or {}), seed=seed)
+        executor = NodeExecutor(node, run_id=node_job.run_id)
+        executor.setup()
+        try:
+            return executor.execute(inputs)
+        finally:
+            try:
+                executor.teardown()
+            except Exception:
+                pass
+
+    def _claim_and_run_in_process():
+        from app.core.distributed.models import JobResult, WorkerInfo
+        from app.core.distributed.queue import get_job_queue
+        from app.core.distributed.registry import get_worker_registry
+
+        reg = get_worker_registry()
+        w = WorkerInfo.model_validate(info)
+        reg.register(w)
+        print(f"[worker] in-process registered {worker_id} labels={labels} pools={pools}")
+        iterations = 0
+        while True:
+            iterations += 1
+            reg.heartbeat(worker_id, resources=w.resources, status="idle")
+            job = get_job_queue().claim(reg.get(worker_id))
+            if job is None:
+                if once:
+                    print("[worker] no job; exiting (--once)")
+                    return
+                time.sleep(heartbeat_s)
+                continue
+            print(f"[worker] claimed job {job.job_id} node={job.node_id} type={job.node_type}")
+            started = time.time()
+            try:
+                outputs = _execute_job(job.model_dump(mode="json"))
+                get_job_queue().complete(
+                    JobResult(
+                        job_id=job.job_id,
+                        status="succeeded",
+                        output_refs={
+                            k: f"artifact://local/worker/{job.job_id}/{k}"
+                            for k in (outputs or {})
+                        },
+                        events=[{"type": "outputs", "data": outputs}],
+                        worker_id=worker_id,
+                        duration_s=time.time() - started,
+                    )
+                )
+                print(f"[worker] completed job {job.job_id}")
+            except Exception as exc:
+                get_job_queue().complete(
+                    JobResult(
+                        job_id=job.job_id,
+                        status="failed",
+                        error=str(exc),
+                        worker_id=worker_id,
+                        duration_s=time.time() - started,
+                    )
+                )
+                print(f"[worker] job {job.job_id} failed: {exc}", file=sys.stderr)
+            if once:
+                return
+
+    def _claim_and_run_http():
+        if not control_url:
+            print(
+                "error: --control-url or GRAPHYN_CONTROL_URL is required "
+                "(or pass --in-process for local registry loop)",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print(f"[worker] registering with {control_url} as {worker_id}")
+        _http_json("POST", "/workers/register", info)
+        while True:
+            try:
+                _http_json(
+                    "POST",
+                    f"/workers/{worker_id}/heartbeat",
+                    {"resources": resources, "status": "idle"},
+                )
+                claimed = _http_json("POST", "/jobs/claim", {"worker_id": worker_id})
+                job = (claimed or {}).get("job")
+                if not job:
+                    if once:
+                        print("[worker] no job; exiting (--once)")
+                        return
+                    time.sleep(heartbeat_s)
+                    continue
+                print(
+                    f"[worker] claimed job {job.get('job_id')} "
+                    f"node={job.get('node_id')} type={job.get('node_type')}"
+                )
+                started = time.time()
+                try:
+                    outputs = _execute_job(job)
+                    result = {
+                        "job_id": job["job_id"],
+                        "status": "succeeded",
+                        "output_refs": {
+                            k: f"artifact://local/worker/{job['job_id']}/{k}"
+                            for k in (outputs or {})
+                        },
+                        "events": [{"type": "outputs", "data": outputs}],
+                        "error": None,
+                        "worker_id": worker_id,
+                        "duration_s": time.time() - started,
+                    }
+                except Exception as exc:
+                    result = {
+                        "job_id": job["job_id"],
+                        "status": "failed",
+                        "output_refs": {},
+                        "events": [],
+                        "error": str(exc),
+                        "worker_id": worker_id,
+                        "duration_s": time.time() - started,
+                    }
+                    print(f"[worker] job failed: {exc}", file=sys.stderr)
+                _http_json("POST", f"/jobs/{job['job_id']}/complete", result)
+                print(f"[worker] reported completion for {job['job_id']}")
+                if once:
+                    return
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                print(f"[worker] loop error: {exc}", file=sys.stderr)
+                if once:
+                    sys.exit(1)
+                time.sleep(heartbeat_s)
+
+    if in_process:
+        _claim_and_run_in_process()
+    else:
+        _claim_and_run_http()
+
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="graphyn",
@@ -1576,6 +1848,61 @@ def build_parser():
         ),
     )
     mcp_parser.set_defaults(func=cmd_mcp)
+
+
+    # ── worker ── (distributed execution)
+    worker_parser = subparsers.add_parser(
+        "worker",
+        help="Run as a distributed execution worker",
+        description="Register with a Graphyn control plane and claim node jobs.",
+    )
+    worker_sub = worker_parser.add_subparsers(dest="worker_command", metavar="ACTION")
+    worker_sub.required = True
+    worker_start = worker_sub.add_parser(
+        "start",
+        help="Register, heartbeat, claim and execute jobs",
+    )
+    worker_start.add_argument(
+        "--control-url",
+        default=os.environ.get("GRAPHYN_CONTROL_URL"),
+        metavar="URL",
+        help="Control plane API base, e.g. http://host:8001/api/v1",
+    )
+    worker_start.add_argument(
+        "--worker-id",
+        default=os.environ.get("GRAPHYN_WORKER_ID"),
+        metavar="ID",
+        help="Unique worker id (default: GRAPHYN_WORKER_ID or worker-local)",
+    )
+    worker_start.add_argument(
+        "--labels",
+        default="",
+        metavar="LIST",
+        help="Comma-separated labels, e.g. gpu,lab",
+    )
+    worker_start.add_argument(
+        "--pool",
+        default=None,
+        metavar="NAME",
+        help="Optional pool name, e.g. gpu-lab",
+    )
+    worker_start.add_argument(
+        "--heartbeat",
+        type=float,
+        default=15.0,
+        help="Heartbeat / poll interval seconds (default 15)",
+    )
+    worker_start.add_argument(
+        "--once",
+        action="store_true",
+        help="Process at most one claim attempt then exit (useful for tests)",
+    )
+    worker_start.add_argument(
+        "--in-process",
+        action="store_true",
+        help="Use in-memory registry/queue instead of HTTP (dev/tests)",
+    )
+    worker_start.set_defaults(func=cmd_worker_start)
 
     return parser
 

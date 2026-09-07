@@ -29,20 +29,20 @@ from app.core.ir.models import GraphIR
 
 # ── Version constant ──────────────────────────────────────────────────────────
 
-CURRENT_IR_VERSION: str = "1.1"
+CURRENT_IR_VERSION: str = "1.2"
 """The IR schema version implemented in this phase.
 
 Format: "<major>.<minor>". The loader rejects documents whose major version
 differs from this constant's major component.
 
-Phase 3 bumped the minor version from 0 to 1 to reflect the addition of
-``IREdge.condition`` and ``IRNode.event_trigger`` fields. Both ``"1.0"`` and
-``"1.1"`` documents are accepted; ``"1.0"`` documents are treated as ``"1.1"``
-with all new fields set to their defaults (``None``).
+Phase 3 bumped the minor to 1 (``IREdge.condition``, ``IRNode.event_trigger``).
+Distributed execution bumps the minor to 2 (``IRNode.placement`` / ``IRPlacement``).
+Documents with versions ``"1.0"``, ``"1.1"``, and ``"1.2"`` are accepted; older
+minors get new fields as their Pydantic defaults (``None`` / empty).
 """
 
 SUPPORTED_MAJOR: int = 1
-SUPPORTED_MINOR_MAX: int = 1  # accepts 1.0 and 1.1
+SUPPORTED_MINOR_MAX: int = 2  # accepts 1.0, 1.1, and 1.2
 
 # ── Error types ───────────────────────────────────────────────────────────────
 
@@ -74,8 +74,8 @@ def _check_version(schema_version: str) -> None:
 
     Accepts any document whose major version matches ``SUPPORTED_MAJOR`` and
     whose minor version is between 0 and ``SUPPORTED_MINOR_MAX`` (inclusive).
-    ``"1.0"`` documents are treated as ``"1.1"`` — missing ``condition`` and
-    ``event_trigger`` fields default to ``None`` via Pydantic field defaults.
+    Older minors (``"1.0"``, ``"1.1"``) load with missing ``condition``,
+    ``event_trigger``, and ``placement`` fields defaulted via Pydantic.
 
     Raises:
         IRVersionError: if the major version component differs.

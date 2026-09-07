@@ -16,7 +16,9 @@ from app.core.ir.models import GraphIR, IREdge, IRMetadata, IRNode
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _minimal_graph(schema_version: str = "1.1") -> GraphIR:
+def _minimal_graph(schema_version: str | None = None) -> GraphIR:
+    if schema_version is None:
+        schema_version = CURRENT_IR_VERSION
     return GraphIR(
         schema_version=schema_version,
         metadata=IRMetadata(name="test", seed=0),
