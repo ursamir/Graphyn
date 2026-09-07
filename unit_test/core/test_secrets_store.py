@@ -60,3 +60,16 @@ def test_delete(secret_home):
     assert delete_secret("ASSEMBLYAI_API_KEY") is True
     assert list_secret_names() == []
     assert delete_secret("ASSEMBLYAI_API_KEY") is False
+
+
+def test_secret_error_messages_omit_values(secret_home):
+    """SecretError / empty-value failures must not embed the attempted value."""
+    secret_value = "super-secret-payload-xyz"
+    with pytest.raises(SecretError) as ei:
+        set_secret("OPENAI_API_KEY", "")
+    assert secret_value not in str(ei.value)
+    with pytest.raises(SecretError) as ei2:
+        set_secret("bad name!", secret_value)
+    assert secret_value not in str(ei2.value)
+    assert resolve_secret("MISSING_KEY_NEVER_SET") == ""
+

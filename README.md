@@ -56,4 +56,4 @@ Follow **[Getting Started](docs/GETTING_STARTED.md)** — install once, then Mod
 
 ## Development
 
-Contributor / agent guide: [AGENTS.md](AGENTS.md). Limitations: [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
+Contributor / agent guide: [AGENTS.md](AGENTS.md). Limitations: [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md). Trust / auth boundaries: [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md).

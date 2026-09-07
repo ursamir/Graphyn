@@ -20,13 +20,17 @@ are not met with a bare 404.
 """
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
@@ -103,7 +107,7 @@ def _auth_dep(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
             detail="Missing Bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if credentials.credentials != token:
+    if not hmac.compare_digest(str(credentials.credentials), token):
         raise HTTPException(
             status_code=401,
             detail="Invalid Bearer token",
@@ -131,7 +135,7 @@ def _auth_dep_request(request: Request) -> None:
             detail="Missing Bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if value != token:
+    if not hmac.compare_digest(str(value), token):
         raise HTTPException(
             status_code=401,
             detail="Invalid Bearer token",
@@ -142,6 +146,26 @@ def _auth_dep_request(request: Request) -> None:
 # ── App factory ───────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Graphyn API", version="2.0.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    """Redact secret *values* from 422 bodies on /api/v1/secrets.
+
+    Pydantic/FastAPI includes ``input`` in validation errors by default; that
+    would echo the submitted secret. Other routes keep the stock detail shape.
+    """
+    errors = jsonable_encoder(exc.errors())
+    if request.url.path.startswith("/api/v1/secrets"):
+        cleaned = []
+        for err in errors:
+            item = dict(err)
+            loc = item.get("loc") or []
+            if any(part == "value" for part in loc):
+                item["input"] = "[redacted]"
+            cleaned.append(item)
+        errors = cleaned
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 app.add_middleware(
     CORSMiddleware,

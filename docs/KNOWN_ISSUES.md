@@ -63,7 +63,8 @@
 
 ### RBAC-1 — Role-based access control not shipped
 
-**Detail:** Auth is shared Bearer / optional local unlock. No per-user roles, tenants, or OIDC.  
+**Detail:** Auth is shared Bearer / optional local unlock (unauthenticated-dev when `GRAPHYN_API_TOKEN` unset). No per-user roles, tenants, or OIDC. Resource capabilities for the current model are documented in `docs/TRUST_MODEL.md` §2 — that matrix is **not** RBAC.  
+**Future:** when multi-user is supported, cross-project access must be prevented by default.  
 **Do not claim done** in market/vision docs until implemented.
 
 ### OTEL-1 — OpenTelemetry traces not shipped

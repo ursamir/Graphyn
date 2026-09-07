@@ -504,8 +504,8 @@ get_backend().execute(graph, ...)
 | Upload filenames | Replaced with timestamped names |
 | Artifact IDs | `^[A-Za-z0-9_-]+$` |
 | Condition expressions | AST whitelist: comparisons, boolean ops, `len()`, `output["key"]` only |
-| API auth | Optional Bearer token via `GRAPHYN_API_TOKEN` |
-| MCP auth | Token at `arguments._meta.auth_token` |
+| API auth | Optional Bearer via `GRAPHYN_API_TOKEN` (shared single-tenant; see `docs/TRUST_MODEL.md`) |
+| MCP auth | Token at `arguments._meta.auth_token` (same shared token policy) |
 | Plugin sources | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated base-URL allowlist (structural host/path match, not string prefix); empty = allow all |
 | Keras TF device | `GRAPHYN_TF_DEVICE=auto\|cpu\|gpu` / `select_keras_device()`; CC ≥12 default CPU (`GRAPHYN_TF_FORCE_GPU=1`); GPU also requires free VRAM ≥ `GRAPHYN_TF_GPU_MIN_FREE_MIB` (default 4096) |
 | Plugin isolation | `runtime` in `plugin.toml` (`inprocess`\|`isolated`); isolated venvs under `GRAPHYN_PLUGIN_VENVS_DIR`; deps API under `/api/v1/plugins/{name}/dependencies` |

@@ -2,7 +2,9 @@
 """REST endpoints for the local named secret store.
 
 GET lists names only. PUT/POST set a value. DELETE removes. Values are never
-returned in list/get responses.
+returned in list/get responses. Invalid bodies on this router have ``value``
+inputs redacted in 422 responses (see ``app.api.main`` validation handler).
+Writes require the same shared Bearer gate as other ``/api/v1`` admin routes.
 """
 from __future__ import annotations
 
