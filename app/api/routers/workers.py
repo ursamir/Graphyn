@@ -71,6 +71,21 @@ def register_worker(info: WorkerInfo):
     """Register / refresh a worker in the durable registry (disk/Redis)."""
     _validate_worker_id(info.worker_id)
     stored = get_worker_registry().register(info)
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor="worker",
+            action="worker.register",
+            resource_type="worker",
+            resource_id=info.worker_id,
+            meta={
+                "labels": list(getattr(info, "labels", None) or []),
+                "pools": list(getattr(info, "pools", None) or []),
+            },
+        )
+    except Exception:
+        pass
     return stored.model_dump(mode="json")
 
 

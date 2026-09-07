@@ -12,6 +12,7 @@ export type AppView =
   | 'system'
   | 'secrets'
   | 'workers'
+  | 'trace'
 
 export type ToastTone = 'info' | 'success' | 'error'
 
@@ -26,6 +27,7 @@ interface AppState {
   setView: (view: AppView) => void
   focusRunId: string | null
   openRun: (id: string) => void
+  openTrace: (opts: { artifactId?: string; runId?: string }) => void
   catalog: NodeCatalogEntry[]
   setCatalog: (catalog: NodeCatalogEntry[]) => void
   refreshCatalog: (() => Promise<void>) | null
@@ -64,6 +66,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   openRun: (id) => {
     window.history.replaceState(null, '', `#/runs/${id}`)
     set({ view: 'runs', focusRunId: id, lastRunId: id })
+  },
+  openTrace: ({ artifactId, runId }) => {
+    const params = new URLSearchParams()
+    if (artifactId?.trim()) params.set('artifact_id', artifactId.trim())
+    if (runId?.trim()) params.set('run_id', runId.trim())
+    const qs = params.toString()
+    window.history.replaceState(null, '', qs ? `#/trace?${qs}` : '#/trace')
+    set({ view: 'trace' })
   },
   catalog: [],
   setCatalog: (catalog) => set({ catalog }),

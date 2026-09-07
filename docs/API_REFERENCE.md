@@ -887,6 +887,36 @@ Plugin lifecycle management. All operations delegate to `PluginManager`. Error r
 
 ---
 
+
+## Trace & Audit — `/api/v1/trace`, `/api/v1/audit`
+
+Accountability / backtrack surface (Pillar A).
+
+### `GET /api/v1/trace`
+
+Unified Trace payload for an artifact and/or run.
+
+**Query:**
+- `artifact_id` (optional)
+- `run_id` (optional)
+- `node_id` (optional focus)
+
+At least one of `artifact_id` / `run_id` is required.
+
+**Also:** `GET /api/v1/trace/artifact/{id}` and `GET /api/v1/trace/run/{id}`.
+
+**Response (partial OK):** `subject`, `run`, `graph`, `node`, `artifact`, `lineage` (`inputs`, `downstream_hint`), `chain` (ordered steps), `warnings`.
+
+Reuses ProvenanceStore lineage, ArtifactStore, and run `meta.json` (including `distributed_node_workers`).
+
+### `GET /api/v1/audit`
+
+Newest-first append-only audit events from `{project}/audit/events.jsonl`.
+
+**Query:** `limit` (default 100, max 1000).
+
+Seed hooks: template save, async run start, worker register.
+
 ## Static File Serving
 
 | Mount | Filesystem | Example URL |

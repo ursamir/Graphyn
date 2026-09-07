@@ -1,5 +1,5 @@
 import React from 'react'
-import { Download, Pause, Play, Square, RefreshCw } from 'lucide-react'
+import { GitBranch, Download, Pause, Play, Square, RefreshCw } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
@@ -72,6 +72,7 @@ export default function RunsView() {
   const focusRunId = useAppStore((s) => s.focusRunId)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const pushToast = useAppStore((s) => s.pushToast)
+  const openTrace = useAppStore((s) => s.openTrace)
 
   const [runs, setRuns] = React.useState<RunSummary[] | null>(null)
   const [offset, setOffset] = React.useState(0)
@@ -408,6 +409,13 @@ export default function RunsView() {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openTrace({ runId: selected })}
+              >
+                <GitBranch className="h-3.5 w-3.5" /> Open in Trace
+              </button>
               {['running'].includes(runStatus.toLowerCase()) && (
                 <button type="button" className="btn-secondary" onClick={() => void control(selected, 'pause')}>
                   <Pause className="h-3.5 w-3.5" /> Pause

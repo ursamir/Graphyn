@@ -1,5 +1,5 @@
 import React from 'react'
-import { Copy, Download, Play, RefreshCw } from 'lucide-react'
+import { Copy, Download, GitBranch, Play, RefreshCw } from 'lucide-react'
 import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
@@ -97,6 +97,7 @@ function LineageList({
 
 export default function ArtifactsView() {
   const openRun = useAppStore((s) => s.openRun)
+  const openTrace = useAppStore((s) => s.openTrace)
   const pushToast = useAppStore((s) => s.pushToast)
   const [items, setItems] = React.useState<Artifact[] | null>(null)
   const [selected, setSelected] = React.useState<string | null>(null)
@@ -289,9 +290,18 @@ export default function ArtifactsView() {
           <EmptyState title="Select an artifact" description="Inspect lineage and replay producing runs." />
         ) : (
           <>
-            <button type="button" className="btn-primary" onClick={() => void replay(selected)}>
-              <Play className="h-3.5 w-3.5" /> Replay
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-primary" onClick={() => void replay(selected)}>
+                <Play className="h-3.5 w-3.5" /> Replay
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openTrace({ artifactId: selected })}
+              >
+                <GitBranch className="h-3.5 w-3.5" /> Open in Trace
+              </button>
+            </div>
             {path && (
               <div className="space-y-2">
                 <div className="flex items-start gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2">

@@ -13,6 +13,7 @@ import {
   Settings,
   KeyRound,
   Server,
+  GitBranch,
   X,
   Menu,
   PanelLeftClose,
@@ -33,6 +34,7 @@ import ProjectsView from './features/projects/ProjectsView'
 import SystemView from './features/system/SystemView'
 import SecretsView from './features/secrets/SecretsView'
 import WorkersView from './features/workers/WorkersView'
+import TraceView from './features/trace/TraceView'
 
 const NAV_GROUPS: Array<{
   title: string
@@ -52,6 +54,7 @@ const NAV_GROUPS: Array<{
       { id: 'plugins', label: 'Plugins', icon: Package },
       { id: 'data', label: 'Data', icon: Database },
       { id: 'artifacts', label: 'Artifacts', icon: Archive },
+      { id: 'trace', label: 'Trace', icon: GitBranch },
     ],
   },
   {
@@ -74,6 +77,7 @@ const VIEW_LABEL: Record<AppView, string> = {
   plugins: 'Plugins',
   data: 'Data',
   artifacts: 'Artifacts',
+  trace: 'Trace',
   projects: 'Projects',
   secrets: 'Secrets',
   system: 'System',
@@ -89,7 +93,8 @@ const JUMP_KEYS: Record<string, AppView> = {
 function parseHash(): { view?: AppView; runId?: string } {
   const raw = window.location.hash.replace(/^#\/?/, '')
   if (!raw) return {}
-  const [viewPart, runPart] = raw.split('/')
+  const pathOnly = raw.split('?')[0]
+  const [viewPart, runPart] = pathOnly.split('/')
   const view = VIEW_IDS.has(viewPart as AppView) ? (viewPart as AppView) : undefined
   if (view === 'runs' && runPart) return { view, runId: runPart }
   return { view }
@@ -166,6 +171,13 @@ export default function App() {
 
   React.useEffect(() => {
     const focus = useAppStore.getState().focusRunId
+    if (view === 'trace') {
+      const raw = window.location.hash.replace(/^#\/?/, '')
+      if (!raw.split('?')[0].startsWith('trace')) {
+        window.history.replaceState(null, '', '#/trace')
+      }
+      return
+    }
     const next = view === 'runs' && focus ? `#/runs/${focus}` : `#/${view}`
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', next)
@@ -381,6 +393,7 @@ export default function App() {
             {view === 'projects' && <ProjectsView />}
             {view === 'system' && <SystemView />}
             {view === 'workers' && <WorkersView />}
+            {view === 'trace' && <TraceView />}
             {view === 'secrets' && <SecretsView />}
           </main>
         </div>

@@ -256,6 +256,28 @@ def run_pipeline_async(payload: dict = Body(...)):
     if deprecation_header:
         headers["X-Deprecation-Warning"] = deprecation_header
 
+    try:
+        from app.core.audit import record_audit
+
+        gname = None
+        try:
+            meta = getattr(graph, "metadata", None)
+            if isinstance(meta, dict):
+                gname = meta.get("name")
+            elif meta is not None:
+                gname = getattr(meta, "name", None)
+        except Exception:
+            gname = None
+        record_audit(
+            actor="api",
+            action="run.start",
+            resource_type="run",
+            resource_id=run_id,
+            meta={"graph_name": gname, "mode": "async"},
+        )
+    except Exception:
+        pass
+
     return JSONResponse(content={"run_id": run_id}, headers=headers)
 
 
@@ -429,6 +451,18 @@ def save_template(payload: SaveTemplateRequest):
         }
     )
     _write_template_meta(payload.name, meta)
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor="api",
+            action="template.save",
+            resource_type="template",
+            resource_id=payload.name,
+            meta={"version": version, "description": payload.description or ""},
+        )
+    except Exception:
+        pass
     return {"name": payload.name, "version": version, "saved": True}
 
 

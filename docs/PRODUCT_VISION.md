@@ -93,3 +93,14 @@ A user (or agent) can:
 5. Months later open any output and **fully backtrack** who/what/where produced it  
 
 …without leaving Graphyn.
+
+---
+
+## 8. Progress (shipped toward the vision)
+
+| When | Item | Notes |
+|---|---|---|
+| 2026-09-07 | **Trace UX (Pillar A — Accountability)** | Unified `GET /api/v1/trace` backtrack payload (artifact → node → run → graph → worker); thin append-only `audit/events.jsonl` + `GET /api/v1/audit`; Library → **Trace** UI (`#/trace`) with Open in Trace from Artifacts/Runs. Partial chains when pieces missing. |
+
+Still open from §3: full RBAC, experiment compare board, promotion, edge product loop, OTel.
+
