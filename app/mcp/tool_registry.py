@@ -100,6 +100,18 @@ def register_all_tools(register: Callable) -> None:
         secrets_set_handler,
     )
 
+    from app.mcp.handlers.proposals import (
+        GET_PROPOSAL_DESCRIPTION,
+        GET_PROPOSAL_SCHEMA,
+        LIST_PROPOSALS_DESCRIPTION,
+        LIST_PROPOSALS_SCHEMA,
+        PROPOSE_GRAPH_DESCRIPTION,
+        PROPOSE_GRAPH_SCHEMA,
+        get_proposal_handler,
+        list_proposals_handler,
+        propose_graph_handler,
+    )
+
     register("list_nodes", LIST_NODES_DESCRIPTION, LIST_NODES_SCHEMA, list_nodes_handler)
     register("generate_graph", GENERATE_GRAPH_DESCRIPTION, GENERATE_GRAPH_SCHEMA, generate_graph_handler)
     register("validate_graph", VALIDATE_GRAPH_DESCRIPTION, VALIDATE_GRAPH_SCHEMA, validate_graph_handler)
@@ -120,3 +132,6 @@ def register_all_tools(register: Callable) -> None:
     register("manage_plugin", MANAGE_PLUGIN_DESCRIPTION, MANAGE_PLUGIN_SCHEMA, manage_plugin_handler)
     register("secrets_list", SECRETS_LIST_DESCRIPTION, SECRETS_LIST_SCHEMA, secrets_list_handler)
     register("secrets_set", SECRETS_SET_DESCRIPTION, SECRETS_SET_SCHEMA, secrets_set_handler)
+    register("propose_graph", PROPOSE_GRAPH_DESCRIPTION, PROPOSE_GRAPH_SCHEMA, propose_graph_handler)
+    register("list_proposals", LIST_PROPOSALS_DESCRIPTION, LIST_PROPOSALS_SCHEMA, list_proposals_handler)
+    register("get_proposal", GET_PROPOSAL_DESCRIPTION, GET_PROPOSAL_SCHEMA, get_proposal_handler)

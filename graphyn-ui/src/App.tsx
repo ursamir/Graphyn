@@ -16,6 +16,7 @@ import {
   GitBranch,
   Cpu,
   FlaskConical,
+  GitPullRequest,
   X,
   Menu,
   PanelLeftClose,
@@ -39,6 +40,7 @@ import WorkersView from './features/workers/WorkersView'
 import TraceView from './features/trace/TraceView'
 import EdgeWizardView from './features/edge/EdgeWizardView'
 import ExperimentsView from './features/experiments/ExperimentsView'
+import ProposalsView from './features/proposals/ProposalsView'
 
 const NAV_GROUPS: Array<{
   title: string
@@ -61,6 +63,7 @@ const NAV_GROUPS: Array<{
       { id: 'trace', label: 'Trace', icon: GitBranch },
       { id: 'edge', label: 'Edge', icon: Cpu },
       { id: 'experiments', label: 'Experiments', icon: FlaskConical },
+      { id: 'proposals', label: 'Proposals', icon: GitPullRequest },
     ],
   },
   {
@@ -86,6 +89,7 @@ const VIEW_LABEL: Record<AppView, string> = {
   trace: 'Trace',
   edge: 'Edge',
   experiments: 'Experiments',
+  proposals: 'Proposals',
   projects: 'Projects',
   secrets: 'Secrets',
   system: 'System',
@@ -122,6 +126,8 @@ export default function App() {
   const pushToast = useAppStore((s) => s.pushToast)
   const bootError = useAppStore((s) => s.bootError)
   const bootStatus = useAppStore((s) => s.bootStatus)
+  const pendingProposalCount = useAppStore((s) => s.pendingProposalCount)
+  const setPendingProposalCount = useAppStore((s) => s.setPendingProposalCount)
   const setBootError = useAppStore((s) => s.setBootError)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
@@ -167,6 +173,26 @@ export default function App() {
   }, [refreshCatalog, setRefreshCatalog])
 
   React.useEffect(() => {
+    let cancelled = false
+    const loadPending = async () => {
+      try {
+        const data = await apiJson<{ proposals: unknown[] }>('/proposals?status=pending')
+        if (!cancelled) {
+          setPendingProposalCount(Array.isArray(data?.proposals) ? data.proposals.length : 0)
+        }
+      } catch {
+        /* quiet — badge is optional */
+      }
+    }
+    void loadPending()
+    const t = window.setInterval(() => void loadPending(), 60000)
+    return () => {
+      cancelled = true
+      window.clearInterval(t)
+    }
+  }, [setPendingProposalCount, bootStatus])
+
+  React.useEffect(() => {
     const apply = () => {
       const { view: v, runId } = parseHash()
       if (runId) openRun(runId)
@@ -190,6 +216,13 @@ export default function App() {
       const raw = window.location.hash.replace(/^#\/?/, '')
       if (!raw.split('?')[0].startsWith('experiments')) {
         window.history.replaceState(null, '', '#/experiments')
+      }
+      return
+    }
+    if (view === 'proposals') {
+      const raw = window.location.hash.replace(/^#\/?/, '')
+      if (!raw.split('?')[0].startsWith('proposals')) {
+        window.history.replaceState(null, '', '#/proposals')
       }
       return
     }
@@ -387,7 +420,12 @@ export default function App() {
                             aria-current={active ? 'page' : undefined}
                           >
                             <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
-                            {label}
+                            <span className="flex-1 truncate">{label}</span>
+                            {id === 'proposals' && pendingProposalCount > 0 && (
+                              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                                {pendingProposalCount}
+                              </span>
+                            )}
                           </button>
                         )
                       })}
@@ -411,6 +449,7 @@ export default function App() {
             {view === 'trace' && <TraceView />}
             {view === 'edge' && <EdgeWizardView />}
             {view === 'experiments' && <ExperimentsView />}
+            {view === 'proposals' && <ProposalsView />}
             {view === 'secrets' && <SecretsView />}
           </main>
         </div>

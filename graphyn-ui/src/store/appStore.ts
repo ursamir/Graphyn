@@ -15,6 +15,7 @@ export type AppView =
   | 'trace'
   | 'edge'
   | 'experiments'
+  | 'proposals'
 
 export type ToastTone = 'info' | 'success' | 'error'
 
@@ -31,6 +32,9 @@ interface AppState {
   openRun: (id: string) => void
   openTrace: (opts: { artifactId?: string; runId?: string }) => void
   openExperiments: () => void
+  openProposals: () => void
+  pendingProposalCount: number
+  setPendingProposalCount: (n: number) => void
   catalog: NodeCatalogEntry[]
   setCatalog: (catalog: NodeCatalogEntry[]) => void
   refreshCatalog: (() => Promise<void>) | null
@@ -82,6 +86,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     window.history.replaceState(null, '', '#/experiments')
     set({ view: 'experiments' })
   },
+  openProposals: () => {
+    window.history.replaceState(null, '', '#/proposals')
+    set({ view: 'proposals' })
+  },
+  pendingProposalCount: 0,
+  setPendingProposalCount: (pendingProposalCount) => set({ pendingProposalCount }),
   catalog: [],
   setCatalog: (catalog) => set({ catalog }),
   refreshCatalog: null,

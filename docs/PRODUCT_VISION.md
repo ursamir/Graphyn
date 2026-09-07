@@ -103,6 +103,7 @@ A user (or agent) can:
 | 2026-09-07 | **Trace UX (Pillar A — Accountability)** | Unified `GET /api/v1/trace` backtrack payload (artifact → node → run → graph → worker); thin append-only `audit/events.jsonl` + `GET /api/v1/audit`; Library → **Trace** UI (`#/trace`) with Open in Trace from Artifacts/Runs. Partial chains when pieces missing. |
 | 2026-09-07 | **Edge deploy wizard (Pillar D)** | Template `examples/templates/edge-deploy.graph.json` + `examples/30_edge_deploy/`; Library → **Edge** (`#/edge`) wizard: template → configure model path/target → `run-async` → download package. Hydrate unwraps python_code CodeResult → ModelArtifact. |
 | 2026-09-07 | **Experiments board (Pillar B — ML lifecycle)** | `GET /api/v1/experiments` (+ `/{name}`, `/compare`) aggregates `experiment.json` / meta+metrics; Library → **Experiments** UI (`#/experiments`) with multi-select compare (params/metrics diff). No mlflow package required. |
+| 2026-09-07 | **Agentic Builder proposals (Pillar C)** | `proposals/` store + `POST/GET /api/v1/proposals` (+ accept/reject); MCP `propose_graph` / `list_proposals` / `get_proposal`; Library → **Proposals** UI (`#/proposals`) with Accept → Builder via `loadGraphIntoBuilder`; audit on create/accept/reject. |
 
-Still open from §3: full RBAC, promotion, edge product loop, OTel.
+Still open from §3: full RBAC, promotion, OTel; deepen agentic diffs / promotion approvals.
 

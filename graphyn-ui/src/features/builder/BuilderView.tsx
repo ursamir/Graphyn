@@ -139,6 +139,8 @@ function BuilderInner() {
   const setLastRunId = useAppStore((s) => s.setLastRunId)
   const setStatusMessage = useAppStore((s) => s.setStatusMessage)
   const pushToast = useAppStore((s) => s.pushToast)
+  const pendingProposalCount = useAppStore((s) => s.pendingProposalCount)
+  const openProposals = useAppStore((s) => s.openProposals)
   const openRun = useAppStore((s) => s.openRun)
   const setGetCanvasGraph = useAppStore((s) => s.setGetCanvasGraph)
 
@@ -776,6 +778,16 @@ function BuilderInner() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200/70 bg-white/90 px-3 py-2 backdrop-blur">
+          {pendingProposalCount > 0 && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+              onClick={() => openProposals()}
+              title="Pending graph proposals"
+            >
+              {pendingProposalCount} proposal{pendingProposalCount === 1 ? '' : 's'}
+            </button>
+          )}
           {!isRunning ? (
             <button
               type="button"

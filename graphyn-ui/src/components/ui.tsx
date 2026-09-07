@@ -53,11 +53,11 @@ export function StatusBadge({
 }) {
   const s = status.toLowerCase()
   const tone =
-    s.includes('complete') || s === 'ok' || s === 'ready' || s === 'enabled' || s === 'success'
+    s.includes('complete') || s === 'ok' || s === 'ready' || s === 'enabled' || s === 'success' || s === 'accepted'
       ? 'bg-emerald-100 text-emerald-800'
-      : s.includes('fail') || s.includes('error') || s === 'cancelled'
+      : s.includes('fail') || s.includes('error') || s === 'cancelled' || s === 'rejected'
         ? 'bg-rose-100 text-rose-800'
-        : s.includes('run') || s.includes('install') || s === 'paused'
+        : s.includes('run') || s.includes('install') || s === 'paused' || s === 'pending'
           ? 'bg-amber-100 text-amber-900'
           : 'bg-ink-100 text-ink-700'
   return (
