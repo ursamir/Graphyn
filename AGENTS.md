@@ -10,7 +10,7 @@ General-purpose AI/workflow execution platform (**graphyn-sdk**). Four interface
 | MCP | `graphyn mcp` / `python -m app.mcp.server` |
 | UI | `graphyn-ui/` — Vite React console (`npm run dev`) |
 
-Canonical docs: `docs/README.md`. Architecture: `docs/ARCHITECTURE.md`. Kiro steering (detailed): `.kiro/steering/`.
+Canonical docs: `docs/README.md`. Start: `docs/GETTING_STARTED.md`. Architecture: `docs/ARCHITECTURE.md`. Kiro steering (detailed): `.kiro/steering/`.
 
 **Distributed execution:** multi-machine placement, worker registry/job queue, and
 `GRAPHYN_BACKEND=distributed` are specified in `docs/DISTRIBUTED_EXECUTION.md`
@@ -48,7 +48,7 @@ plugins/          Optional local override via GRAPHYN_PLUGINS_DIR (default insta
 graphyn-ui/       React + Vite console — Build/Observe/Library/Deploy/Admin IA
 unit_test/        Pytest suite
 examples/         End-to-end demos
-docs/             Human docs (source of truth alongside code); PRODUCT_VISION.md
+docs/             Public docs (GETTING_STARTED, PRODUCT_VISION, architecture, refs)
 .kiro/steering/   Detailed agent steering by area
 ```
 

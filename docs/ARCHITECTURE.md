@@ -17,7 +17,7 @@
 8. [Execution Modes](#8-execution-modes)
 9. [IR Version Strategy](#9-ir-version-strategy)
 10. [Security Boundaries](#10-security-boundaries)
-11. [Phase History](#11-phase-history)
+11. [Platform evolution](#11-platform-evolution)
 
 ---
 
@@ -514,7 +514,7 @@ get_backend().execute(graph, ...)
 
 ---
 
-## 11. Phase History
+## 11. Platform evolution
 
 | Phase | Key Features Added |
 |---|---|

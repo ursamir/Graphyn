@@ -5,7 +5,7 @@ fileMatchPattern: "graphyn-ui/src/features/**"
 
 # Frontend — Platform feature screens
 
-`graphyn-ui` feature modules map 1:1 to backend surfaces. Coverage source of truth: `docs/UI_REQUIREMENTS_MATRIX.md`.
+`graphyn-ui` feature modules map 1:1 to backend surfaces. Coverage source of truth: console map in `docs/PRODUCT_VISION.md` and this steering file.
 
 | Feature | Path | Backend |
 |---|---|---|

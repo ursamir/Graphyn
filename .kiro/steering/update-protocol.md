@@ -29,11 +29,11 @@ When you modify code, update the matching steering file AND the matching `docs/`
 
 | Doc | Update when |
 |---|---|
-| `docs/USERGUIDE.md` | New CLI command, SDK method, runtime mode, config option |
+| `docs/GETTING_STARTED.md` | New CLI command, SDK method, runtime mode, config option |
 | `docs/API_REFERENCE.md` | New/changed REST endpoint, request/response field, streaming event |
-| `docs/NODE_SYSTEM.md` | New node base feature, capability field, registry/discovery change |
+| `docs/PLUGIN_GUIDE.md` | New node base feature, capability field, registry/discovery change |
 | `docs/PIPELINE_EXECUTION.md` | New execution mode, IR schema change, executor feature |
-| `docs/BACKEND_CORE.md` | New `RunManager` method, logger event, ingestion change |
+| `docs/ARCHITECTURE.md` | New `RunManager` method, logger event, ingestion change |
 | `docs/MCP_SERVER.md` | New MCP tool, changed tool behavior, new error type |
 | `docs/SDK_AND_CLI.md` | New SDK method, CLI command or flag |
 | `docs/DATA_FLOW_AND_WORKSPACE.md` | New data type, workspace layout change |
@@ -55,9 +55,9 @@ When you modify code, update the matching steering file AND the matching `docs/`
 
 **New API endpoint:** update `api-endpoints.md` → `docs/API_REFERENCE.md`
 
-**New CLI command or SDK method:** update `sdk-cli.md` → `docs/USERGUIDE.md` + `docs/SDK_AND_CLI.md`
+**New CLI command or SDK method:** update `sdk-cli.md` → `docs/GETTING_STARTED.md` + `docs/SDK_AND_CLI.md`
 
-**New MCP tool:** update `mcp-server.md` → `docs/MCP_SERVER.md` + `docs/USERGUIDE.md`
+**New MCP tool:** update `mcp-server.md` → `docs/MCP_SERVER.md` + `docs/GETTING_STARTED.md`
 
 **New env var:** add row to `project-overview.md` Environment Variables table
 

@@ -3,7 +3,7 @@
 > Single platform for AI/workflow **development → deployment → accountability**.  
 > North star (Samir, 2026-09-07): **n8n + MLflow + orchestrator + Edge Impulse + agentic**, with everything backtracked.
 
-Related: [ARCHITECTURE.md](./ARCHITECTURE.md), [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md), [MARKET_READINESS_ROADMAP.md](./MARKET_READINESS_ROADMAP.md).
+Related: [ARCHITECTURE.md](./ARCHITECTURE.md), [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md), [GETTING_STARTED.md](./GETTING_STARTED.md), [KNOWN_ISSUES.md](./KNOWN_ISSUES.md).
 
 ---
 

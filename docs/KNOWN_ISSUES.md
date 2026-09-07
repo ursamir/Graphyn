@@ -1,7 +1,6 @@
-# Known Issues
+# Limitations & known issues
 
-> **Single source of truth for open issues.**  
-> Add new findings here when discovered; remove when fixed.
+> Current platform limitations. Remove entries when fixed; add newly discovered gaps here.
 
 ---
 
