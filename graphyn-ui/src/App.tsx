@@ -51,7 +51,16 @@ const NAV_GROUPS: Array<{
     items: [
       { id: 'builder', label: 'Builder', icon: Workflow },
       { id: 'templates', label: 'Templates', icon: BookOpen },
+      { id: 'proposals', label: 'Proposals', icon: GitPullRequest },
       { id: 'runs', label: 'Runs', icon: History },
+    ],
+  },
+  {
+    title: 'Observe',
+    items: [
+      { id: 'trace', label: 'Trace', icon: GitBranch },
+      { id: 'experiments', label: 'Experiments', icon: FlaskConical },
+      { id: 'artifacts', label: 'Artifacts', icon: Archive },
     ],
   },
   {
@@ -59,18 +68,19 @@ const NAV_GROUPS: Array<{
     items: [
       { id: 'plugins', label: 'Plugins', icon: Package },
       { id: 'data', label: 'Data', icon: Database },
-      { id: 'artifacts', label: 'Artifacts', icon: Archive },
-      { id: 'trace', label: 'Trace', icon: GitBranch },
+    ],
+  },
+  {
+    title: 'Deploy',
+    items: [
       { id: 'edge', label: 'Edge', icon: Cpu },
-      { id: 'experiments', label: 'Experiments', icon: FlaskConical },
-      { id: 'proposals', label: 'Proposals', icon: GitPullRequest },
+      { id: 'workers', label: 'Workers', icon: Server },
     ],
   },
   {
     title: 'Admin',
     items: [
       { id: 'projects', label: 'Projects', icon: FolderKanban },
-      { id: 'workers', label: 'Workers', icon: Server },
       { id: 'secrets', label: 'Secrets', icon: KeyRound },
       { id: 'system', label: 'System', icon: Activity },
     ],
@@ -99,7 +109,13 @@ const VIEW_LABEL: Record<AppView, string> = {
 const JUMP_KEYS: Record<string, AppView> = {
   b: 'builder',
   t: 'templates',
+  p: 'proposals',
   r: 'runs',
+  o: 'trace',
+  e: 'experiments',
+  a: 'artifacts',
+  d: 'edge',
+  w: 'workers',
 }
 
 function parseHash(): { view?: AppView; runId?: string } {
@@ -204,25 +220,14 @@ export default function App() {
   }, [openRun, setView])
 
   React.useEffect(() => {
+    // Preserve query strings for deep links (#/trace?run_id=, #/edge?…, etc.)
+    const PRESERVE_QUERY = new Set<AppView>(['trace', 'edge', 'experiments', 'proposals'])
     const focus = useAppStore.getState().focusRunId
-    if (view === 'trace') {
-      const raw = window.location.hash.replace(/^#\/?/, '')
-      if (!raw.split('?')[0].startsWith('trace')) {
-        window.history.replaceState(null, '', '#/trace')
-      }
-      return
-    }
-    if (view === 'experiments') {
-      const raw = window.location.hash.replace(/^#\/?/, '')
-      if (!raw.split('?')[0].startsWith('experiments')) {
-        window.history.replaceState(null, '', '#/experiments')
-      }
-      return
-    }
-    if (view === 'proposals') {
-      const raw = window.location.hash.replace(/^#\/?/, '')
-      if (!raw.split('?')[0].startsWith('proposals')) {
-        window.history.replaceState(null, '', '#/proposals')
+    const raw = window.location.hash.replace(/^#\/?/, '')
+    const pathOnly = raw.split('?')[0] || ''
+    if (PRESERVE_QUERY.has(view)) {
+      if (pathOnly !== view && !pathOnly.startsWith(`${view}/`)) {
+        window.history.replaceState(null, '', `#/${view}`)
       }
       return
     }

@@ -81,7 +81,7 @@ export default function WorkersView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Workers"
-        description="Distributed execution workers registered with this control plane — status, labels, GPU, and heartbeats."
+        description="Place work on the right machines — registered workers, labels, GPU, and heartbeats (GRAPHYN_BACKEND=distributed)."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -94,7 +94,12 @@ export default function WorkersView() {
       ) : !workers || workers.length === 0 ? (
         <EmptyState
           title="No workers registered"
-          description="Start a worker with graphyn worker start --control-url … or enable GRAPHYN_BACKEND=distributed."
+          description="Enable GRAPHYN_BACKEND=distributed on the control plane, then start a worker: graphyn worker start --control-url <url>. See docs/DISTRIBUTED_EXECUTION.md."
+          action={
+            <p className="max-w-md text-xs text-ink-400 font-mono">
+              GRAPHYN_BACKEND=distributed
+            </p>
+          }
         />
       ) : (
         <div className="overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">

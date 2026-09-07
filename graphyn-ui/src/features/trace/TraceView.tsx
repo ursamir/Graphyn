@@ -160,7 +160,7 @@ export default function TraceView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Trace"
-        description="Backtrack any artifact or run: artifact → node → run → graph version → inputs → worker."
+        description="Accountability chain — artifact → node → run → graph → inputs → worker. Open from Runs or Artifacts."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -226,6 +226,30 @@ export default function TraceView() {
         <EmptyState
           title="Start a backtrack"
           description="Paste an artifact id or run id, or use Open in Trace from Artifacts / Runs."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setView('runs')
+                  window.history.replaceState(null, '', '#/runs')
+                }}
+              >
+                Open Runs
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setView('artifacts')
+                  window.history.replaceState(null, '', '#/artifacts')
+                }}
+              >
+                Open Artifacts
+              </button>
+            </div>
+          }
         />
       )}
 

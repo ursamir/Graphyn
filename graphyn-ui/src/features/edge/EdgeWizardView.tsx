@@ -179,7 +179,7 @@ export default function EdgeWizardView() {
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => setView('artifacts')}
+              onClick={() => { setView('artifacts'); window.history.replaceState(null, '', '#/artifacts') }}
             >
               <Archive className="h-3.5 w-3.5" /> Artifacts
             </button>
@@ -470,7 +470,7 @@ export default function EdgeWizardView() {
             >
               <Download className="h-3.5 w-3.5" /> {downloading ? 'Downloading…' : 'Download'}
             </button>
-            <button type="button" className="btn-secondary" onClick={() => setView('artifacts')}>
+            <button type="button" className="btn-secondary" onClick={() => { setView('artifacts'); window.history.replaceState(null, '', '#/artifacts') }}>
               <Archive className="h-3.5 w-3.5" /> Open Artifacts
             </button>
             {runId && (

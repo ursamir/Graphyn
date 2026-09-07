@@ -66,6 +66,7 @@ function valuesDiffer(a: unknown, b: unknown): boolean {
 export default function ExperimentsView() {
   const openRun = useAppStore((s) => s.openRun)
   const openTrace = useAppStore((s) => s.openTrace)
+  const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
 
   const [blocks, setBlocks] = React.useState<ExperimentBlock[] | null>(null)
@@ -152,7 +153,7 @@ export default function ExperimentsView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Experiments"
-        description="MLflow-shaped board — compare runs, parameters, and metrics across experiment_tracker / metrics.json."
+        description="Compare runs, params, and metrics — MLflow-shaped board on Graphyn runs."
         actions={
           <div className="flex items-center gap-2">
             {selectedIds.length >= 2 && (
@@ -180,6 +181,30 @@ export default function ExperimentsView() {
         <EmptyState
           title="No experiments yet"
           description="Run a pipeline with experiment_tracker (JSON backend) or produce metrics.json under a run to populate this board."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  setView('runs')
+                  window.history.replaceState(null, '', '#/runs')
+                }}
+              >
+                Open Runs
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setView('templates')
+                  window.history.replaceState(null, '', '#/templates')
+                }}
+              >
+                Browse Templates
+              </button>
+            </div>
+          }
         />
       ) : (
         <div className={`grid gap-4 ${flatFew ? 'grid-cols-1' : 'lg:grid-cols-[220px_1fr]'}`}>

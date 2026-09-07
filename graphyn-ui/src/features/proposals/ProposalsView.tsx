@@ -72,6 +72,7 @@ function countLine(p: ProposalSummary): string {
 
 export default function ProposalsView() {
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
+  const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
   const setPendingProposalCount = useAppStore((s) => s.setPendingProposalCount)
 
@@ -230,6 +231,20 @@ export default function ProposalsView() {
                   filter === 'pending'
                     ? 'Agents can submit GraphIR via MCP propose_graph or POST /api/v1/proposals.'
                     : 'Nothing matches this filter.'
+                }
+                action={
+                  filter === 'pending' ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setView('builder')
+                        window.history.replaceState(null, '', '#/builder')
+                      }}
+                    >
+                      Open Builder
+                    </button>
+                  ) : undefined
                 }
               />
             </div>

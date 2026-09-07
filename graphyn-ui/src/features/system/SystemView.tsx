@@ -5,6 +5,7 @@ import {
   formatCleanupToast,
   formatLocaleDateTime,
   formatMetricsSummary,
+  formatRelativeTime,
   pickStatusFacts,
   prettyScalar,
   startCase,
@@ -13,6 +14,7 @@ import { useAppStore } from '../../store/appStore'
 import {
   ConfirmButton,
   CollapsibleJson,
+  EmptyState,
   ErrorBanner,
   LoadingBlock,
   PageHeader,
@@ -65,22 +67,49 @@ export default function SystemView() {
   const [deleteArtifacts, setDeleteArtifacts] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const [auditEvents, setAuditEvents] = React.useState<
+    Array<{
+      event_id?: string
+      ts?: string
+      actor?: string
+      action?: string
+      resource_type?: string
+      resource_id?: string
+    }>
+  >([])
+  const [auditError, setAuditError] = React.useState<string | null>(null)
 
   const refresh = React.useCallback(async () => {
     setError(null)
+    setAuditError(null)
     setLoading(true)
     try {
-      const [h, r, m, w] = await Promise.all([
+      const [h, r, m, w, audit] = await Promise.all([
         apiJson('/system/health'),
         apiJson('/system/readiness'),
         apiJson('/system/metrics'),
         apiJson<{ url?: string; events?: string[] }>('/system/webhooks'),
+        apiJson<{ events?: unknown[] }>('/audit', { query: { limit: 25 } }).catch((err) => {
+          setAuditError(err instanceof Error ? err.message : String(err))
+          return { events: [] }
+        }),
       ])
       setHealth(h)
       setReady(r)
       setMetrics(m)
       setWebhookUrl(w.url ?? '')
       setWebhookEvents(w.events ?? [])
+      const events = Array.isArray(audit?.events) ? audit.events : []
+      setAuditEvents(
+        events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
+          event_id?: string
+          ts?: string
+          actor?: string
+          action?: string
+          resource_type?: string
+          resource_id?: string
+        }>,
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -98,7 +127,7 @@ export default function SystemView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="System"
-        description="Health, webhooks, and cleanup. Dataset projects live under Projects."
+        description="Ops health, webhooks, cleanup, and recent audit events — accountability surface for mutations."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -135,6 +164,54 @@ export default function SystemView() {
           </div>
         </section>
       ) : null}
+
+      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold">Audit — recent events</h3>
+            <p className="text-xs text-ink-500">
+              Append-only actor trail from GET /api/v1/audit (proposals, and other mutations).
+            </p>
+          </div>
+        </div>
+        {auditError && <p className="text-sm text-amber-800">{auditError}</p>}
+        {!auditError && auditEvents.length === 0 ? (
+          <EmptyState
+            title="No audit events yet"
+            description="Accept/reject proposals or other audited mutations will appear here."
+          />
+        ) : (
+          <div className="overflow-hidden rounded-xl border border-ink-100">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-ink-100 bg-ink-50/80 text-[11px] uppercase tracking-wide text-ink-500">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">When</th>
+                  <th className="px-3 py-2 font-semibold">Actor</th>
+                  <th className="px-3 py-2 font-semibold">Action</th>
+                  <th className="px-3 py-2 font-semibold">Resource</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auditEvents.map((ev, i) => (
+                  <tr key={ev.event_id || `${ev.ts}-${i}`} className="border-b border-ink-50 last:border-0">
+                    <td className="px-3 py-2 text-ink-600 whitespace-nowrap" title={formatLocaleDateTime(ev.ts)}>
+                      {ev.ts ? formatRelativeTime(ev.ts) : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-ink-800">{ev.actor || '—'}</td>
+                    <td className="px-3 py-2">
+                      <StatusBadge status={String(ev.action || 'unknown')} />
+                    </td>
+                    <td className="px-3 py-2 font-mono text-[11px] text-ink-600 truncate max-w-[14rem]" title={`${ev.resource_type}:${ev.resource_id}`}>
+                      {ev.resource_type || '—'}
+                      {ev.resource_id ? ` · ${String(ev.resource_id).slice(0, 12)}` : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
         <h3 className="text-sm font-semibold">Projects</h3>
