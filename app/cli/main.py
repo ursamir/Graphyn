@@ -1366,8 +1366,12 @@ def cmd_worker_start(args):
                 refs[port] = http_put_blob(control_url, raw, token=token or None)
         return refs
 
-    def _execute_job(job: dict) -> tuple:
-        """Hydrate inputs, run NodeExecutor, return (outputs, output_refs)."""
+    def _execute_job(job: dict, *, cancel_check=None) -> tuple:
+        """Hydrate inputs, run NodeExecutor, return (outputs, output_refs).
+
+        ``cancel_check`` — optional callable polled during execute / isolated
+        subprocess wait so mid-flight cancel can terminate the process group.
+        """
         from app.core.distributed.models import NodeJob as _NodeJob
         from app.core.node_executor import NodeExecutor
         from app.core.registry_runtime import get_registry
@@ -1391,8 +1395,12 @@ def cmd_worker_start(args):
         node = node_class(config=dict(node_job.config or {}), seed=seed)
         ensure_node_write_dirs(node)
         executor = NodeExecutor(node, run_id=node_job.run_id)
+        if cancel_check is not None:
+            executor.set_cancel_check(cancel_check)
         executor.setup()
         try:
+            if cancel_check is not None and cancel_check():
+                raise RuntimeError("cancelled by control plane")
             outputs = executor.execute(inputs)
         finally:
             try:
@@ -1452,7 +1460,11 @@ def cmd_worker_start(args):
             try:
                 if get_job_queue().is_cancelled(job.job_id):
                     raise RuntimeError("cancelled by control plane")
-                outputs, output_refs = _execute_job(job.model_dump(mode="json"))
+                jid = job.job_id
+                outputs, output_refs = _execute_job(
+                    job.model_dump(mode="json"),
+                    cancel_check=lambda: get_job_queue().is_cancelled(jid),
+                )
                 if get_job_queue().is_cancelled(job.job_id):
                     raise RuntimeError("cancelled by control plane")
                 # Embed outputs only when tiny (debug); control hydrates via refs.
@@ -1589,8 +1601,36 @@ def cmd_worker_start(args):
                 try:
                     if _job_cancelled():
                         raise RuntimeError("cancelled by control plane")
-                    outputs, output_refs = _execute_job(job)
-                    if _job_cancelled():
+                    # Poll cancel more often during long execute; NodeExecutor /
+                    # isolated subprocess terminate the process group on signal.
+                    import threading as _threading
+
+                    _cancel_flag = _threading.Event()
+                    _watch_stop = _threading.Event()
+
+                    def _cancel_watch() -> None:
+                        # ~2 Hz during execute (faster than heartbeat interval).
+                        while not _watch_stop.wait(0.5):
+                            if _job_cancelled():
+                                _cancel_flag.set()
+                                return
+
+                    _watch = _threading.Thread(
+                        target=_cancel_watch,
+                        name=f"graphyn-cancel-watch-{job.get('job_id')}",
+                        daemon=True,
+                    )
+                    _watch.start()
+                    try:
+                        outputs, output_refs = _execute_job(
+                            job,
+                            cancel_check=lambda: (
+                                _cancel_flag.is_set() or _job_cancelled()
+                            ),
+                        )
+                    finally:
+                        _watch_stop.set()
+                    if _job_cancelled() or _cancel_flag.is_set():
                         raise RuntimeError("cancelled by control plane")
                     events = []
                     try:

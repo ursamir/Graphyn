@@ -122,6 +122,7 @@ def _run_local_node(
     seed: int,
     inputs: dict[str, Any],
     run_id: str,
+    cancel_check: Any | None = None,
 ) -> dict[str, Any]:
     """Execute one node on the control plane via NodeExecutor."""
     from app.core.node_executor import NodeExecutor
@@ -137,6 +138,8 @@ def _run_local_node(
     node = node_class(config=dict(config or {}), seed=seed)
     ensure_node_write_dirs(node)
     executor = NodeExecutor(node, run_id=run_id)
+    if cancel_check is not None:
+        executor.set_cancel_check(cancel_check)
     executor.setup()
     try:
         return executor.execute(inputs)
@@ -564,6 +567,7 @@ def run_loopback_worker_once(
             except TypeError:
                 outputs = execute_fn(job) or {}
         else:
+            jid = job.job_id
             outputs = _run_local_node(
                 node_id=job.node_id,
                 node_type=job.node_type,
@@ -571,6 +575,7 @@ def run_loopback_worker_once(
                 seed=int(job.seed or 0),
                 inputs=inputs,
                 run_id=job.run_id,
+                cancel_check=lambda: queue.is_cancelled(jid),
             )
 
         for port, value in (outputs or {}).items():

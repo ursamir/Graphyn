@@ -5,7 +5,8 @@ Responsibility:   Drive a single node through its full lifecycle with retry.
 Owns:             NodeExecutor class — setup/teardown, on_start→process→on_end
                   sequencing, exponential back-off retry, streaming execution.
 Public Surface:   NodeExecutor(node, run_id), .setup(), .teardown(),
-                  .execute(inputs) -> dict, .execute_stream(inputs) -> AsyncGen
+                  .execute(inputs) -> dict, .execute_stream(inputs) -> AsyncGen,
+                  .request_cancel(), .set_cancel_check(), .is_cancel_requested
 Must NOT:         Understand pipeline topology, import from app.domain,
                   import from orchestrator or executor (no intra-BC5 cycles).
 Dependencies:     BC2 (nodes.base, nodes.observers, nodes.retry).
@@ -89,6 +90,8 @@ class NodeExecutor:
         self._node = node
         self._run_id = run_id
         self._setup_done = False
+        self._cancel_requested = False
+        self._cancel_check: Any = None  # optional Callable[[], bool]
 
     def setup(self) -> None:
         """Call node.setup() once before the first execution. Subsequent calls are no-ops.
@@ -106,6 +109,44 @@ class NodeExecutor:
         """Call node.teardown() to release resources."""
         self._node.teardown()
         self._setup_done = False
+
+    def request_cancel(self) -> None:
+        """Cooperative cancel: stop between retries / kill isolated subprocess."""
+        self._cancel_requested = True
+
+    def set_cancel_check(self, cancel_check: Any) -> None:
+        """Optional callable polled during execute / isolated subprocess wait."""
+        self._cancel_check = cancel_check
+
+    def is_cancel_requested(self) -> bool:
+        """True if request_cancel() was called or cancel_check() returned True."""
+        if self._cancel_requested:
+            return True
+        check = self._cancel_check
+        if check is not None:
+            try:
+                if check():
+                    self._cancel_requested = True
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _raise_if_cancelled(self) -> None:
+        if self.is_cancel_requested():
+            raise RuntimeError("cancelled by control plane")
+
+    def _interruptible_sleep(self, seconds: float) -> None:
+        """Sleep in short slices so cancel can abort retry back-off."""
+        if seconds <= 0:
+            return
+        deadline = time.monotonic() + float(seconds)
+        while True:
+            self._raise_if_cancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.25, remaining))
 
     def execute(self, inputs: dict[str, Any]) -> dict[str, Any]:
         """Execute the node synchronously with full lifecycle + retry.
@@ -133,10 +174,11 @@ class NodeExecutor:
         last_exc: Exception | None = None
 
         for attempt in range(max_attempts):
+            self._raise_if_cancelled()
             if attempt > 0 and policy:
                 wait = policy.wait_before_attempt(attempt - 1)
                 if wait > 0:
-                    time.sleep(wait)
+                    self._interruptible_sleep(wait)
 
             try:
                 # on_start() calls observer.on_node_start() internally (base.py).
@@ -151,6 +193,7 @@ class NodeExecutor:
 
             t0 = time.perf_counter()
             try:
+                self._raise_if_cancelled()
                 outputs = self._process(node, inputs)
                 # Guard: a node that forgets to return its outputs dict would
                 # cause an AttributeError on outputs.items() below, which would
@@ -259,6 +302,7 @@ class NodeExecutor:
                 config=config,
                 seed=seed,
                 inputs=inputs,
+                cancel_check=self.is_cancel_requested,
             )
         return node.process(inputs)
 

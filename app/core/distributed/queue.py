@@ -24,7 +24,10 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from app.core.distributed.models import JobResult, JobStatus, NodeJob, WorkerInfo
-from app.core.distributed.placement import worker_eligible_for_job
+from app.core.distributed.placement import (
+    widen_placement_after_reclaim,
+    worker_eligible_for_job,
+)
 
 if TYPE_CHECKING:
     from app.core.distributed.store import DistributedStateStore
@@ -341,15 +344,30 @@ class JobQueue:
                 expires = claimed_at + timedelta(seconds=self._lease_ttl_s)
             if expires > now:
                 continue
-            updated = job.model_copy(
-                update={
-                    "status": "pending",
-                    "claimed_by": None,
-                    "claimed_at": None,
-                    "lease_expires_at": None,
-                    "lease_generation": int(job.lease_generation or 0) + 1,
-                }
+            update: dict[str, Any] = {
+                "status": "pending",
+                "claimed_by": None,
+                "claimed_at": None,
+                "lease_expires_at": None,
+                "lease_generation": int(job.lease_generation or 0) + 1,
+            }
+            # Preferred-worker pin (placement.mode=worker) would trap the job on
+            # the unreachable worker; widen to auto + original GPU/tag constraints.
+            widened = widen_placement_after_reclaim(
+                job.placement,
+                tags=list(job.tags or []),
+                require_gpu=bool(job.require_gpu),
+                min_vram_mib=job.min_vram_mib,
+                pool=job.pool,
             )
+            if widened is not job.placement:
+                update["placement"] = widened
+                log.info(
+                    "JobQueue: widened placement for reclaimed job %s "
+                    "(cleared preferred worker pin → mode=auto)",
+                    jid,
+                )
+            updated = job.model_copy(update=update)
             self._jobs[jid] = updated
             if jid not in self._order:
                 self._order.append(jid)

@@ -48,3 +48,27 @@ def test_run_isolated_subprocess_kills_group_on_nonzero():
             result = iso._run_isolated_subprocess(["python"], env={}, timeout=5)
     assert result.returncode == 1
     term.assert_called_with(9)
+
+
+def test_run_isolated_subprocess_kills_group_on_cancel():
+    proc = MagicMock()
+    proc.pid = 555
+    proc.returncode = None
+    proc.poll.return_value = None
+    proc.communicate.side_effect = [
+        subprocess.TimeoutExpired(cmd="x", timeout=0.5),
+        ("", ""),  # reap after kill
+    ]
+    n = {"calls": 0}
+
+    def cancel_check() -> bool:
+        n["calls"] += 1
+        return n["calls"] >= 2
+
+    with patch("app.core.plugins.isolated_executor.subprocess.Popen", return_value=proc):
+        with patch("app.core.plugins.isolated_executor.terminate_process_group") as term:
+            with pytest.raises(RuntimeError, match="cancelled by control plane"):
+                iso._run_isolated_subprocess(
+                    ["python"], env={}, timeout=30, cancel_check=cancel_check
+                )
+            term.assert_called_with(555)

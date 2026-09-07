@@ -235,7 +235,7 @@ P1 two-box path on Server-99: NFS **or** MinIO; default implementation starts wi
 ## 8. Failure, cancel, resume
 
 - Job lease with TTL; worker heartbeat renews lease; expired lease → requeue (at-most-once → at-least-once with idempotent artifact keys)
-- Cancel: control sets job cancelled; worker polls or receives pub/sub and stops `NodeExecutor` / subprocess
+- Cancel: control sets job cancelled; worker polls (CLI cancel-watch ~2 Hz during execute) and stops via `NodeExecutor.request_cancel` / isolated process-group terminate
 - Checkpoints: write checkpoint blobs to artifact store so resume can continue on another worker (P3)
 - Isolated plugin timeouts stay via `GRAPHYN_PLUGIN_ISOLATED_TIMEOUT`
 - **P2 durable store:** registry + queue persist under `workspace/distributed/*.json` by default (or Redis when `GRAPHYN_REDIS_URL` is set). In-memory remains the fast path; `GRAPHYN_DISTRIBUTED_STORE=memory` disables durability (tests).
@@ -413,8 +413,19 @@ Post-review hardening applied on `cursor/usecase-plugins-workflows`:
 | Worker pin + plugins | `resolve_worker(mode=worker)` fails closed when the pinned worker advertises plugins that omit `node_type` |
 | Empty plugin advertisement | Worker CLI warns when `plugins` stays empty; optional `--plugins` override |
 
-### Known gaps
+### Hardening (pillar E)
 
-- Mid-flight `NodeExecutor` kill on cancel is not implemented; cancel marks the job and workers poll `is_cancelled` / GET status between hydrate and complete.
-- After a preferred-worker pin, lease reclaim does not automatically widen eligibility to other GPU workers (job stays `mode=worker` for the original target until re-enqueued).
+| Issue | Fix |
+|---|---|
+| Mid-flight cancel | Isolated plugin subprocess: `cancel_check` polled during wait → `terminate_process_group`. `NodeExecutor.request_cancel` / `set_cancel_check` checked between retries and before `process`; passed into `run_isolated_node`. Worker CLI HTTP loop: ~2 Hz cancel-watch thread during execute. |
+| Preferred-worker pin after reclaim | `reclaim_expired_leases` calls `widen_placement_after_reclaim`: `mode=worker` → `mode=auto` (clears `worker`), keeps tags / `require_gpu` / VRAM / pool; `lease_generation` still increments. |
+
+### Remaining cancel limits
+
+- [x] Isolated plugin subprocess mid-flight kill on cancel (process group)
+- [x] Cooperative cancel between `NodeExecutor` retry attempts / back-off sleep
+- [x] Worker CLI polls job status during long execute (cancel-watch thread)
+- [x] Reclaim clears preferred-worker pin (widen to tags/GPU eligibility)
+- [ ] In-process `node.process()` (non-isolated) cannot be forcibly interrupted mid-call — cancel is observed only before/after `process`, between retries, or when the call returns
+- [ ] Streaming `execute_stream` does not yet honour `request_cancel`
 

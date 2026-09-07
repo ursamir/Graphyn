@@ -4,9 +4,11 @@ Bounded Context:  BC5 — Execution Runtime
 Responsibility:   Resolve which worker (or local) should run a node given
                   IRPlacement + capability hints and the live worker set.
 Owns:             resolve_worker(), worker_eligible_for_job(),
-                  placement_needs_remote(), effective_job_constraints().
+                  placement_needs_remote(), effective_job_constraints(),
+                  widen_placement_after_reclaim().
 Public Surface:   resolve_worker, worker_eligible_for_job,
-                  placement_needs_remote, effective_job_constraints.
+                  placement_needs_remote, effective_job_constraints,
+                  widen_placement_after_reclaim.
 Must NOT:         Import from app.domain, app.api, or orchestrator.
 Dependencies:     app.core.ir.models (IRPlacement, IRCapabilityMetadata),
                   app.core.distributed.models (WorkerInfo, NodeJob).
@@ -74,6 +76,47 @@ def effective_job_constraints(
         "min_vram_mib": min_vram,
         "pool": pool,
     }
+
+
+
+def widen_placement_after_reclaim(
+    placement: IRPlacement | None,
+    *,
+    tags: list[str] | tuple[str, ...] | None = None,
+    require_gpu: bool = False,
+    min_vram_mib: int | None = None,
+    pool: str | None = None,
+) -> IRPlacement | None:
+    """Clear a preferred-worker pin after lease reclaim.
+
+    Jobs enqueued with ``placement.mode=worker`` (resolved target pin) would
+    otherwise stay exclusive to a dead/unreachable worker. Reclaim widens
+    eligibility to ``mode=auto`` while preserving GPU/tag/pool constraints so
+    another eligible worker can claim. Non-worker placements are unchanged.
+    """
+    if placement is None or placement.mode != "worker":
+        return placement
+
+    out_tags: tuple[str, ...]
+    if tags:
+        out_tags = tuple(tags)
+    elif placement.tags:
+        out_tags = tuple(placement.tags)
+    else:
+        out_tags = ()
+
+    out_require = bool(require_gpu or placement.require_gpu)
+    out_vram = min_vram_mib if min_vram_mib is not None else placement.min_vram_mib
+    out_pool = pool if pool is not None else placement.pool
+
+    return IRPlacement(
+        mode="auto",
+        worker=None,
+        pool=out_pool,
+        tags=out_tags,
+        require_gpu=out_require,
+        min_vram_mib=out_vram,
+    )
 
 
 def worker_eligible_for_job(worker: WorkerInfo, job: NodeJob) -> bool:

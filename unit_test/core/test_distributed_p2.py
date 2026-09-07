@@ -334,3 +334,99 @@ def test_lease_reclaim_increments_generation_and_fences_old_complete():
         )
     )
     assert q.get("fence1").status == "succeeded"
+
+
+def test_reclaim_clears_preferred_worker_pin():
+    """After reclaim, mode=worker pin is widened so another GPU worker can claim."""
+    from app.core.distributed.placement import widen_placement_after_reclaim
+
+    q = JobQueue(store=MemoryStateStore(), load_persisted=False, lease_ttl_s=1.0)
+    pinned = IRPlacement(
+        mode="worker",
+        worker="gpu-dead",
+        tags=("gpu",),
+        require_gpu=True,
+        min_vram_mib=4096,
+    )
+    q.enqueue(
+        NodeJob(
+            job_id="pin1",
+            run_id="r",
+            node_id="n",
+            node_type="trainer",
+            tags=["gpu"],
+            require_gpu=True,
+            min_vram_mib=4096,
+            placement=pinned,
+        )
+    )
+    # Only the pinned worker can claim initially.
+    other = WorkerInfo(
+        worker_id="gpu-alive",
+        labels=["gpu"],
+        resources=WorkerResources(gpu=True, vram_mib_free=8192),
+        plugins=["trainer"],
+    )
+    assert q.claim(other) is None
+
+    dead = WorkerInfo(
+        worker_id="gpu-dead",
+        labels=["gpu"],
+        resources=WorkerResources(gpu=True, vram_mib_free=8192),
+        plugins=["trainer"],
+    )
+    claimed = q.claim(dead)
+    assert claimed is not None
+    assert claimed.placement is not None
+    assert claimed.placement.mode == "worker"
+    assert claimed.placement.worker == "gpu-dead"
+    old_gen = int(claimed.lease_generation or 0)
+
+    with q._lock:
+        q._jobs[claimed.job_id] = claimed.model_copy(
+            update={"lease_expires_at": _utcnow() - timedelta(seconds=5)}
+        )
+    reclaimed = q.reclaim_expired_leases()
+    assert "pin1" in reclaimed
+
+    job = q.get("pin1")
+    assert job is not None
+    assert job.status == "pending"
+    assert int(job.lease_generation) == old_gen + 1
+    assert job.placement is not None
+    assert job.placement.mode == "auto"
+    assert job.placement.worker is None
+    assert job.placement.require_gpu is True
+    assert "gpu" in {t.lower() for t in job.placement.tags}
+    assert job.require_gpu is True
+    assert job.tags == ["gpu"]
+
+    # Another eligible GPU worker can now claim (pin cleared, fencing kept).
+    again = q.claim(other)
+    assert again is not None
+    assert again.claimed_by == "gpu-alive"
+    assert int(again.lease_generation) == old_gen + 1
+
+
+def test_widen_placement_after_reclaim_helper_only_touches_worker_mode():
+    from app.core.distributed.placement import widen_placement_after_reclaim
+
+    auto = IRPlacement(mode="auto", tags=("gpu",), require_gpu=True)
+    assert widen_placement_after_reclaim(auto) is auto
+    assert widen_placement_after_reclaim(None) is None
+
+    pool = IRPlacement(mode="pool", pool="gpu-lab", require_gpu=True)
+    assert widen_placement_after_reclaim(pool) is pool
+
+    pinned = IRPlacement(
+        mode="worker", worker="w1", tags=("gpu",), require_gpu=True, min_vram_mib=2048
+    )
+    widened = widen_placement_after_reclaim(
+        pinned, tags=["gpu"], require_gpu=True, min_vram_mib=2048
+    )
+    assert widened is not None
+    assert widened.mode == "auto"
+    assert widened.worker is None
+    assert widened.require_gpu is True
+    assert widened.min_vram_mib == 2048
+    assert widened.tags == ("gpu",)

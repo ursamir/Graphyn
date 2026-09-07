@@ -35,8 +35,9 @@ import pickle
 import signal
 import subprocess
 import tempfile
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.core.plugins.hydrate import coerce_node_inputs, hydrate_platform_models
 from app.core.plugins.runtime_registry import IsolatedPluginSpec
@@ -170,16 +171,24 @@ def terminate_process_group(pid: int) -> None:
                 pass
 
 
+_CANCEL_POLL_S = 0.5
+
+
 def _run_isolated_subprocess(
     cmd: list[str],
     *,
     env: dict[str, str],
     timeout: float,
+    cancel_check: Callable[[], bool] | None = None,
+    cancel_poll_s: float = _CANCEL_POLL_S,
 ) -> subprocess.CompletedProcess:
-    """Run the worker in a new session; terminate the group on timeout/failure.
+    """Run the worker in a new session; terminate the group on timeout/cancel/failure.
 
     Isolated trainer workers can spawn extra Python processes. Killing only
     the leader left leaked ``python -m app.core.plugins.worker`` rows in htop.
+
+    When ``cancel_check`` is provided, communicate is polled in short slices so
+    mid-flight cancel can SIGTERM+SIGKILL the process group promptly.
     """
     proc = subprocess.Popen(
         cmd,
@@ -190,24 +199,57 @@ def _run_isolated_subprocess(
         start_new_session=True,
     )
     pgid = proc.pid
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        terminate_process_group(pgid)
+
+    def _reap_after_kill() -> tuple[str, str]:
         try:
-            stdout, stderr = proc.communicate(timeout=8)
+            return proc.communicate(timeout=8)
         except subprocess.TimeoutExpired:
-            stdout = stderr = ""
             try:
                 proc.kill()
             except Exception:
                 pass
-        raise RuntimeError(
-            f"Isolated plugin worker timed out after {timeout}s "
-            "(process group terminated)"
-        ) from None
+            return ("", "")
+
+    try:
+        if cancel_check is None:
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                terminate_process_group(pgid)
+                stdout, stderr = _reap_after_kill()
+                raise RuntimeError(
+                    f"Isolated plugin worker timed out after {timeout}s "
+                    "(process group terminated)"
+                ) from None
+        else:
+            deadline = time.monotonic() + float(timeout)
+            poll = max(0.05, float(cancel_poll_s))
+            stdout = stderr = ""
+            while True:
+                if cancel_check():
+                    terminate_process_group(pgid)
+                    stdout, stderr = _reap_after_kill()
+                    raise RuntimeError(
+                        "cancelled by control plane "
+                        "(isolated process group terminated)"
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    terminate_process_group(pgid)
+                    stdout, stderr = _reap_after_kill()
+                    raise RuntimeError(
+                        f"Isolated plugin worker timed out after {timeout}s "
+                        "(process group terminated)"
+                    )
+                try:
+                    stdout, stderr = proc.communicate(timeout=min(poll, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
     except BaseException:
-        terminate_process_group(pgid)
+        # Ensure group is reaped on unexpected errors (cancel/timeout already killed).
+        if proc.poll() is None:
+            terminate_process_group(pgid)
         raise
     result = subprocess.CompletedProcess(cmd, proc.returncode or 0, stdout, stderr)
     if result.returncode != 0:
@@ -234,8 +276,13 @@ def run_isolated_node(
     seed: int,
     inputs: dict[str, Any],
     timeout: float | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    """Execute *node_type* in the plugin venv worker; return process outputs."""
+    """Execute *node_type* in the plugin venv worker; return process outputs.
+
+    ``cancel_check`` — optional callable polled during the subprocess wait; when
+    it returns True the worker process group is terminated (mid-flight cancel).
+    """
     from app.core.config import plugin_isolated_timeout
 
     if timeout is None:
@@ -289,7 +336,9 @@ def run_isolated_node(
             spec.venv_python,
             timeout,
         )
-        result = _run_isolated_subprocess(cmd, env=env, timeout=timeout)
+        result = _run_isolated_subprocess(
+            cmd, env=env, timeout=timeout, cancel_check=cancel_check
+        )
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(
