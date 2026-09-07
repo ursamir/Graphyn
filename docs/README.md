@@ -26,6 +26,7 @@ This index is the entry point for all documentation. Start here, then follow the
 | [USERGUIDE.md](./USERGUIDE.md) | Complete user guide — SDK, CLI, API, MCP, nodes, plugins, advanced runtime |
 | [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Open issues and deferred items (single source of truth) |
 | [MARKET_READINESS_ROADMAP.md](./MARKET_READINESS_ROADMAP.md) | Detailed feature roadmap and phased market-readiness plan |
+| [PRODUCT_VISION.md](./PRODUCT_VISION.md) | North-star product vision (n8n + MLflow + orchestrator + edge + agentic) |
 | [SOURCE_TRUTH_CODE_REVIEW_2026-07-29.md](./SOURCE_TRUTH_CODE_REVIEW_2026-07-29.md) | Code-first review findings (backend, plugins, frontend, tests) |
 | [graphyn-customer-architecture-review.canvas.tsx](./graphyn-customer-architecture-review.canvas.tsx) | Canvas artifact for customer/architecture assessment |
 
