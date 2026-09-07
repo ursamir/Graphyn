@@ -4,8 +4,9 @@ Bounded Context:  BC5 — Execution Runtime
 Responsibility:   Resolve which worker (or local) should run a node given
                   IRPlacement + capability hints and the live worker set.
 Owns:             resolve_worker(), worker_eligible_for_job(),
-                  placement_needs_remote().
-Public Surface:   resolve_worker, worker_eligible_for_job, placement_needs_remote.
+                  placement_needs_remote(), effective_job_constraints().
+Public Surface:   resolve_worker, worker_eligible_for_job,
+                  placement_needs_remote, effective_job_constraints.
 Must NOT:         Import from app.domain, app.api, or orchestrator.
 Dependencies:     app.core.ir.models (IRPlacement, IRCapabilityMetadata),
                   app.core.distributed.models (WorkerInfo, NodeJob).
@@ -41,6 +42,38 @@ def placement_needs_remote(
     if capability is not None and capability.requires_gpu:
         return True
     return False
+
+
+
+def effective_job_constraints(
+    placement: IRPlacement | None,
+    capability: IRCapabilityMetadata | None = None,
+) -> dict:
+    """Derive job constraint fields mirroring :func:`resolve_worker`.
+
+    Returns a dict with keys ``require_gpu``, ``tags``, ``min_vram_mib``, ``pool``.
+    Capability ``requires_gpu`` promotes ``require_gpu`` and ensures a ``gpu`` tag
+    even when placement omitted those fields — so enqueued jobs stay GPU-bound.
+    """
+    tags: list[str] = list(placement.tags) if placement and placement.tags else []
+    require_gpu = bool(placement.require_gpu) if placement else False
+    min_vram = placement.min_vram_mib if placement else None
+    pool = placement.pool if placement else None
+
+    if capability is not None and capability.requires_gpu:
+        require_gpu = True
+        if "gpu" not in {t.lower() for t in tags}:
+            tags = [*tags, "gpu"]
+
+    if placement is not None and placement.mode == "pool":
+        pool = placement.pool or pool
+
+    return {
+        "require_gpu": require_gpu,
+        "tags": tags,
+        "min_vram_mib": min_vram,
+        "pool": pool,
+    }
 
 
 def worker_eligible_for_job(worker: WorkerInfo, job: NodeJob) -> bool:
@@ -115,31 +148,30 @@ def resolve_worker(
     if placement is not None and placement.mode == "local":
         return LOCAL
 
-    # Explicit worker pin
+    # Explicit worker pin (fail closed if advertised plugins omit node_type)
     if placement is not None and placement.mode == "worker":
         wid = placement.worker
         if not wid:
             return None
         for w in alive:
             if w.worker_id == wid:
+                plugins = list(w.plugins or [])
+                if plugins and node_type and node_type not in plugins:
+                    return None
                 return wid
         return None
 
-    # Build a synthetic job for eligibility checks
-    tags: list[str] = list(placement.tags) if placement and placement.tags else []
-    require_gpu = bool(placement.require_gpu) if placement else False
-    min_vram = placement.min_vram_mib if placement else None
-    pool = placement.pool if placement else None
-
-    if capability is not None and capability.requires_gpu:
-        require_gpu = True
-        if "gpu" not in {t.lower() for t in tags}:
-            tags = [*tags, "gpu"]
+    # Build a synthetic job for eligibility checks (shared with enqueue path)
+    constraints = effective_job_constraints(placement, capability=capability)
+    tags = list(constraints["tags"])
+    require_gpu = bool(constraints["require_gpu"])
+    min_vram = constraints["min_vram_mib"]
+    pool = constraints["pool"]
 
     needs_remote = placement_needs_remote(placement, capability=capability)
 
     if placement is not None and placement.mode == "pool":
-        pool = placement.pool
+        pool = placement.pool or pool
         needs_remote = True
 
     # Unconstrained nodes stay on the control plane / local worker.

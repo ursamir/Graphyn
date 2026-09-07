@@ -375,6 +375,14 @@ GRAPHYN_CONTROL_URL=http://127.0.0.1:8001/api/v1 \
   --worker-id local-gpu --labels gpu --once
 ```
 
+
+### Optional trainer-oriented graph (not the checked-in example)
+
+The checked-in `examples/29_distributed_placement/pipeline.graph.json` uses light
+Common nodes so ports validate. A trainer/evaluator sketch would wire
+`features→trainer.dataset` / `model` and `trainer→evaluator.model_artifact` with
+matching port names — keep that as a custom graph; do not replace the Common demo.
+
 ### Env reference (P1)
 
 | Variable | Role |
@@ -387,4 +395,26 @@ GRAPHYN_CONTROL_URL=http://127.0.0.1:8001/api/v1 \
 | `GRAPHYN_DISTRIBUTED_STORE` | `disk` (default), `redis`, or `memory` — registry/queue durability |
 | `GRAPHYN_REDIS_URL` | When set, distributed store prefers Redis (same URL as run_control) |
 | `GRAPHYN_JOB_LEASE_TTL_S` | Claimed-job lease TTL before reclaim (default 60s) |
+
+
+## 15. Review fixes (P0–P2 hardening)
+
+Post-review hardening applied on `cursor/usecase-plugins-workflows`:
+
+| Issue | Fix |
+|---|---|
+| Job GPU constraints dropped on enqueue | `effective_job_constraints(placement, capability)` mirrors `resolve_worker`; backend stamps `require_gpu` / `tags` / VRAM / pool onto `NodeJob`, and pins `placement.mode=worker` to the resolved target when known |
+| Example graph invalid ports | `examples/29_distributed_placement` uses Common `python_code` → `set_map` (gpu-tagged) → `json_transform` with `input`/`output` ports |
+| Blob path jail | `_safe_path` uses `Path.is_relative_to(root)` |
+| HTTP GET blob nested keys | `http_get_blob` percent-encodes with `urllib.parse.quote(key, safe="/")` |
+| Cross-process wait | `wait_for_result` polls the durable store (disk/Redis) so CLI enqueue + API complete wake without sharing a process Event |
+| Complete authz + lease fencing | `complete` requires status ∈ {claimed,running}, `worker_id == claimed_by`, and matching `lease_generation` (reclaim increments generation) |
+| Per-job timeout | Each remote wait uses `job.timeout_s` / `GRAPHYN_DISTRIBUTED_JOB_TIMEOUT` (no shared graph-wide deadline) |
+| Worker pin + plugins | `resolve_worker(mode=worker)` fails closed when the pinned worker advertises plugins that omit `node_type` |
+| Empty plugin advertisement | Worker CLI warns when `plugins` stays empty; optional `--plugins` override |
+
+### Known gaps
+
+- Mid-flight `NodeExecutor` kill on cancel is not implemented; cancel marks the job and workers poll `is_cancelled` / GET status between hydrate and complete.
+- After a preferred-worker pin, lease reclaim does not automatically widen eligibility to other GPU workers (job stays `mode=worker` for the original target until re-enqueued).
 

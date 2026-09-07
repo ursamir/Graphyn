@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -160,6 +161,88 @@ class JobQueue:
             job = self._jobs.get(job_id)
             return job is not None and job.status == "cancelled"
 
+
+    def _sync_from_store_unlocked(self, *, job_id: str | None = None) -> None:
+        """Merge durable store snapshot into in-memory state (cross-process).
+
+        Pulls results (and optionally a single job) written by another process
+        sharing the same DiskStateStore / RedisStateStore. Local Event wakeups
+        still work for in-process tests; this path covers CLI↔API splits.
+        """
+        if self._store is None:
+            return
+        try:
+            snap = self._store.load_queue()
+        except Exception as exc:
+            log.warning("JobQueue: store sync failed: %s", exc)
+            return
+
+        results_raw = snap.get("results") or {}
+        jobs_raw = snap.get("jobs") or {}
+        order_raw = snap.get("order") or []
+        events_raw = snap.get("events") or {}
+
+        # Merge results — store wins for unknown / terminal updates.
+        for jid, payload in results_raw.items():
+            if job_id is not None and jid != job_id:
+                continue
+            if jid in self._results:
+                continue
+            try:
+                self._results[jid] = JobResult.model_validate(payload)
+                self._waiters.setdefault(jid, threading.Event()).set()
+            except Exception as exc:
+                log.warning("JobQueue: skip corrupt store result %r: %s", jid, exc)
+
+        # Merge jobs we don't know about (pending enqueued by another process).
+        for jid, payload in jobs_raw.items():
+            if job_id is not None and jid != job_id:
+                # Still allow updating the watched job's status from store.
+                pass
+            try:
+                remote = NodeJob.model_validate(payload)
+            except Exception as exc:
+                log.warning("JobQueue: skip corrupt store job %r: %s", jid, exc)
+                continue
+            local = self._jobs.get(jid)
+            if local is None:
+                self._jobs[jid] = remote
+                self._waiters.setdefault(jid, threading.Event())
+                if remote.status == "pending" and jid not in self._order:
+                    self._order.append(jid)
+            else:
+                # Prefer store when it is further along (terminal / claimed by other).
+                terminal = ("succeeded", "failed", "cancelled")
+                if local.status not in terminal and remote.status in terminal:
+                    self._jobs[jid] = remote
+                    if jid in self._order:
+                        self._order.remove(jid)
+                elif local.status == "pending" and remote.status in ("claimed", "running"):
+                    self._jobs[jid] = remote
+                    if jid in self._order:
+                        self._order.remove(jid)
+                elif (
+                    local.status in ("claimed", "running")
+                    and remote.status == "pending"
+                    and remote.lease_generation > local.lease_generation
+                ):
+                    # Reclaimed elsewhere
+                    self._jobs[jid] = remote
+                    if jid not in self._order:
+                        self._order.append(jid)
+
+        # Repair order from store for pending jobs we now know.
+        for jid in order_raw:
+            job = self._jobs.get(jid)
+            if job is not None and job.status == "pending" and jid not in self._order:
+                self._order.append(jid)
+
+        for jid, events in events_raw.items():
+            if job_id is not None and jid != job_id:
+                continue
+            if isinstance(events, list) and jid not in self._events:
+                self._events[jid] = list(events)
+
     def claim(self, worker: WorkerInfo) -> NodeJob | None:
         """Claim the oldest pending job this worker is eligible for.
 
@@ -170,6 +253,7 @@ class JobQueue:
         Returns the claimed job, or ``None`` if none match.
         """
         with self._lock:
+            self._sync_from_store_unlocked()
             self._reclaim_expired_leases_unlocked(now=_utcnow())
             for job_id in list(self._order):
                 job = self._jobs.get(job_id)
@@ -263,6 +347,7 @@ class JobQueue:
                     "claimed_by": None,
                     "claimed_at": None,
                     "lease_expires_at": None,
+                    "lease_generation": int(job.lease_generation or 0) + 1,
                 }
             )
             self._jobs[jid] = updated
@@ -298,17 +383,40 @@ class JobQueue:
     def complete(self, result: JobResult) -> NodeJob:
         """Mark a job finished from a worker result.
 
+        Authz / fencing (P1):
+        * Job must be ``claimed`` or ``running``.
+        * ``result.worker_id`` must equal ``job.claimed_by``.
+        * ``result.lease_generation`` must equal ``job.lease_generation``.
+
         Raises:
             KeyError: unknown job_id.
-            ValueError: job already terminal or result status invalid.
+            ValueError: authz/fencing failure or job already terminal (→ HTTP 409).
         """
         with self._lock:
+            self._sync_from_store_unlocked(job_id=result.job_id)
             job = self._jobs.get(result.job_id)
             if job is None:
                 raise KeyError(result.job_id)
             if job.status in ("succeeded", "failed", "cancelled"):
                 raise ValueError(
                     f"Job {result.job_id} already terminal ({job.status})"
+                )
+            if job.status not in ("claimed", "running"):
+                raise ValueError(
+                    f"Job {result.job_id} is not claimable for complete "
+                    f"(status={job.status})"
+                )
+            if not result.worker_id or result.worker_id != job.claimed_by:
+                raise ValueError(
+                    f"Job {result.job_id} complete worker mismatch: "
+                    f"result.worker_id={result.worker_id!r} "
+                    f"claimed_by={job.claimed_by!r}"
+                )
+            expected_gen = int(job.lease_generation or 0)
+            if result.lease_generation is None or int(result.lease_generation) != expected_gen:
+                raise ValueError(
+                    f"Job {result.job_id} lease_generation mismatch: "
+                    f"result={result.lease_generation!r} expected={expected_gen}"
                 )
             status: JobStatus = result.status  # type: ignore[assignment]
             updated = job.model_copy(
@@ -377,17 +485,41 @@ class JobQueue:
         job_id: str,
         *,
         timeout_s: float | None = None,
+        poll_interval_s: float | None = None,
     ) -> JobResult | None:
-        """Block until the job has a result (or timeout)."""
-        with self._lock:
-            if job_id in self._results:
-                return self._results[job_id]
-            evt = self._waiters.setdefault(job_id, threading.Event())
-        ok = evt.wait(timeout=timeout_s)
-        if not ok:
-            return None
-        with self._lock:
-            return self._results.get(job_id)
+        """Block until the job has a result (or timeout).
+
+        In-process callers still wake via ``threading.Event``. Cross-process
+        (CLI enqueue vs API complete on a shared durable store) is covered by
+        periodically reloading results from the store when the Event is unset.
+        """
+        poll = poll_interval_s
+        if poll is None:
+            poll = float(os.environ.get("GRAPHYN_JOB_WAIT_POLL_S", "0.25") or "0.25")
+        poll = max(0.05, float(poll))
+
+        deadline = None if timeout_s is None else (time.monotonic() + float(timeout_s))
+
+        while True:
+            with self._lock:
+                if job_id in self._results:
+                    return self._results[job_id]
+                self._sync_from_store_unlocked(job_id=job_id)
+                if job_id in self._results:
+                    return self._results[job_id]
+                evt = self._waiters.setdefault(job_id, threading.Event())
+
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    with self._lock:
+                        self._sync_from_store_unlocked(job_id=job_id)
+                        return self._results.get(job_id)
+                slice_s = min(poll, remaining)
+            else:
+                slice_s = poll
+
+            evt.wait(timeout=slice_s)
 
     def pending_count(self) -> int:
         with self._lock:

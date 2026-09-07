@@ -93,6 +93,8 @@ class NodeJob(BaseModel):
     min_vram_mib: int | None = None
     tags: list[str] = Field(default_factory=list)
     pool: str | None = None
+    lease_generation: int = 0
+    """Incremented on lease reclaim; complete must present the same value."""
 
 
 class JobResult(BaseModel):
@@ -107,3 +109,5 @@ class JobResult(BaseModel):
     error: str | None = None
     worker_id: str | None = None
     duration_s: float | None = None
+    lease_generation: int | None = None
+    """Must match NodeJob.lease_generation when completing a claimed job."""

@@ -314,8 +314,8 @@ class DistributedBackend(RuntimeBackend):
         waves = compute_ir_waves(graph)
         node_outputs: dict[str, dict[str, Any]] = {}
         node_workers: dict[str, str] = {}
-        timeout_s = float(os.environ.get("GRAPHYN_DISTRIBUTED_JOB_TIMEOUT", "120"))
-        deadline = time.monotonic() + timeout_s
+        # Per-job waits use GRAPHYN_DISTRIBUTED_JOB_TIMEOUT / job.timeout_s
+        # (no shared graph-wide deadline).
 
         execution_order = [nid for wave in waves for nid in wave]
 
@@ -359,7 +359,36 @@ class DistributedBackend(RuntimeBackend):
                     input_refs[port] = put_port_value(value)
 
                 placement = getattr(ir_node, "placement", None)
-                tags = list(placement.tags) if placement and placement.tags else []
+                from app.core.distributed.placement import effective_job_constraints
+                from app.core.ir.models import IRPlacement as _IRPlacement
+
+                cap = getattr(ir_node, "capability_metadata", None)
+                try:
+                    from app.core.registry_runtime import get_registry, resolve_capability
+                    import warnings as _warnings
+
+                    with _warnings.catch_warnings():
+                        _warnings.simplefilter("ignore", RuntimeWarning)
+                        cap = resolve_capability(ir_node, get_registry())
+                except Exception:
+                    pass
+                constraints = effective_job_constraints(placement, capability=cap)
+
+                # Prefer the resolved worker so claim eligibility stays tight.
+                job_placement = placement
+                if isinstance(target, str) and target not in ("local", ""):
+                    job_placement = _IRPlacement(
+                        mode="worker",
+                        worker=str(target),
+                        pool=constraints["pool"],
+                        tags=tuple(constraints["tags"]),
+                        require_gpu=bool(constraints["require_gpu"]),
+                        min_vram_mib=constraints["min_vram_mib"],
+                    )
+
+                default_timeout = float(
+                    os.environ.get("GRAPHYN_DISTRIBUTED_JOB_TIMEOUT", "120") or "120"
+                )
                 job = NodeJob(
                     job_id=str(uuid.uuid4()),
                     run_id=run_id,
@@ -368,23 +397,30 @@ class DistributedBackend(RuntimeBackend):
                     config=dict(ir_node.config) if ir_node.config else {},
                     seed=seed,
                     input_refs=input_refs,
-                    placement=placement,
-                    require_gpu=bool(placement.require_gpu) if placement else False,
-                    min_vram_mib=placement.min_vram_mib if placement else None,
-                    tags=tags,
-                    pool=placement.pool if placement else None,
+                    placement=job_placement,
+                    require_gpu=bool(constraints["require_gpu"]),
+                    min_vram_mib=constraints["min_vram_mib"],
+                    tags=list(constraints["tags"]),
+                    pool=constraints["pool"],
+                    timeout_s=default_timeout,
                 )
                 stored = queue.enqueue(job)
                 log.info(
-                    "Enqueued remote job %s for node %s → target %s refs=%s",
+                    "Enqueued remote job %s for node %s → target %s refs=%s "
+                    "require_gpu=%s tags=%s",
                     stored.job_id,
                     node_id,
                     target,
                     list(input_refs),
+                    stored.require_gpu,
+                    stored.tags,
                 )
 
-                remaining = max(0.0, deadline - time.monotonic())
-                result = queue.wait_for_result(stored.job_id, timeout_s=remaining)
+                # Per-job timeout (do not share one graph-wide deadline).
+                job_timeout = float(
+                    stored.timeout_s if stored.timeout_s is not None else default_timeout
+                )
+                result = queue.wait_for_result(stored.job_id, timeout_s=job_timeout)
                 if result is None:
                     raise TimeoutError(
                         f"Timed out waiting for distributed job {stored.job_id} "
@@ -499,6 +535,7 @@ def run_loopback_worker_once(
                 ),
                 worker_id=worker_id,
                 duration_s=0.0,
+                lease_generation=int(job.lease_generation or 0),
             )
         )
         return True
@@ -560,6 +597,8 @@ def run_loopback_worker_once(
             return True
 
     try:
+        # Refresh job for current lease_generation (may have been renewed).
+        latest = queue.get(job.job_id) or job
         queue.complete(
             JobResult(
                 job_id=job.job_id,
@@ -569,6 +608,7 @@ def run_loopback_worker_once(
                 error=error,
                 worker_id=worker_id,
                 duration_s=time.monotonic() - started,
+                lease_generation=int(latest.lease_generation or 0),
             )
         )
     except ValueError:

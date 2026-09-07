@@ -1277,16 +1277,35 @@ def cmd_worker_start(args):
     }
 
     # Prefer advertising known registry node types when available.
-    try:
-        from app.core.registry_runtime import get_registry
-        reg = get_registry()
-        info["plugins"] = [
-            getattr(m, "node_type", None) or getattr(m, "name", "")
-            for m in reg.list_nodes()
-        ]
-        info["plugins"] = [p for p in info["plugins"] if p]
-    except Exception:
-        pass
+    plugins_override = [
+        x.strip()
+        for x in (getattr(args, "plugins", None) or "").split(",")
+        if x.strip()
+    ]
+    if plugins_override:
+        info["plugins"] = plugins_override
+    else:
+        try:
+            from app.core.registry_runtime import get_registry
+            reg = get_registry()
+            info["plugins"] = [
+                getattr(m, "node_type", None) or getattr(m, "name", "")
+                for m in reg.list_nodes()
+            ]
+            info["plugins"] = [p for p in info["plugins"] if p]
+        except Exception as exc:
+            print(
+                f"[worker] warning: failed to load registry plugins "
+                f"(hard-refuse inactive if empty): {exc}",
+                file=sys.stderr,
+            )
+    if not info["plugins"]:
+        print(
+            f"[worker] warning: advertising empty plugins for {worker_id!r} — "
+            "hard-refuse is inactive (any node_type may be claimed). "
+            "Check registry load or pass --plugins.",
+            file=sys.stderr,
+        )
 
     def _hydrate_inputs(input_refs: dict) -> dict:
         """Resolve input_refs to in-memory port values (local store or HTTP)."""
@@ -1417,6 +1436,7 @@ def cmd_worker_start(args):
                         ),
                         worker_id=worker_id,
                         duration_s=0.0,
+                        lease_generation=int(job.lease_generation or 0),
                     )
                 )
                 if once:
@@ -1451,6 +1471,9 @@ def cmd_worker_start(args):
                         events=events,
                         worker_id=worker_id,
                         duration_s=time.time() - started,
+                        lease_generation=int(
+                            (get_job_queue().get(job.job_id) or job).lease_generation or 0
+                        ),
                     )
                 )
                 print(f"[worker] completed job {job.job_id}")
@@ -1470,6 +1493,10 @@ def cmd_worker_start(args):
                                     error="cancelled by control plane",
                                     worker_id=worker_id,
                                     duration_s=time.time() - started,
+                                    lease_generation=int(
+                                        (get_job_queue().get(job.job_id) or job).lease_generation
+                                        or 0
+                                    ),
                                 )
                             )
                         except ValueError:
@@ -1483,6 +1510,9 @@ def cmd_worker_start(args):
                             error=str(exc),
                             worker_id=worker_id,
                             duration_s=time.time() - started,
+                            lease_generation=int(
+                                (get_job_queue().get(job.job_id) or job).lease_generation or 0
+                            ),
                         )
                     )
                     print(f"[worker] job {job.job_id} failed: {exc}", file=sys.stderr)
@@ -1535,6 +1565,7 @@ def cmd_worker_start(args):
                             ),
                             "worker_id": worker_id,
                             "duration_s": 0.0,
+                            "lease_generation": int(job.get("lease_generation") or 0),
                         },
                     )
                     if once:
@@ -1575,6 +1606,7 @@ def cmd_worker_start(args):
                         "error": None,
                         "worker_id": worker_id,
                         "duration_s": time.time() - started,
+                        "lease_generation": int(job.get("lease_generation") or 0),
                     }
                 except Exception as exc:
                     cancelled = (
@@ -1590,6 +1622,7 @@ def cmd_worker_start(args):
                         ),
                         "worker_id": worker_id,
                         "duration_s": time.time() - started,
+                        "lease_generation": int(job.get("lease_generation") or 0),
                     }
                     print(
                         f"[worker] job {'cancelled' if cancelled else 'failed'}: {exc}",
@@ -2057,6 +2090,16 @@ def build_parser():
         "--in-process",
         action="store_true",
         help="Use in-memory registry/queue instead of HTTP (dev/tests)",
+    )
+    worker_start.add_argument(
+        "--plugins",
+        default="",
+        metavar="LIST",
+        help=(
+            "Comma-separated node_type advertisement override "
+            "(default: all registry node types). Empty advertisement "
+            "disables hard-refuse."
+        ),
     )
     worker_start.set_defaults(func=cmd_worker_start)
 

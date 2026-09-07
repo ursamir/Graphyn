@@ -58,7 +58,13 @@ def test_queue_claim_eligibility():
     assert claimed.status == "claimed"
 
     q.complete(
-        JobResult(job_id="j1", status="succeeded", worker_id="gpu1", output_refs={})
+        JobResult(
+            job_id="j1",
+            status="succeeded",
+            worker_id="gpu1",
+            output_refs={},
+            lease_generation=int(claimed.lease_generation or 0),
+        )
     )
     assert q.get("j1").status == "succeeded"
 

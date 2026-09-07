@@ -3,21 +3,18 @@
   "metadata": {
     "name": "distributed_placement_demo",
     "seed": 42,
-    "description": "Two-box demo: light CPU nodes local, GPU trainer pinned to a gpu-labelled worker (Server-99). Use with GRAPHYN_BACKEND=distributed and graphyn worker start --labels gpu.",
+    "description": "Two-box demo with Common nodes: local python_code → remote set_map pinned with placement.tags=[\"gpu\"], require_gpu=true → local json_transform sink. Use GRAPHYN_BACKEND=distributed and graphyn worker start --labels gpu (Server-99). Trainer-style graphs belong in the runbook, not this checked-in example.",
     "created_at": null,
     "tags": ["example", "distributed", "placement", "gpu"]
   },
   "nodes": [
     {
-      "id": "ingest",
-      "node_type": "dataset_ingest",
+      "id": "prepare",
+      "node_type": "python_code",
       "config": {
-        "path": "workspace/datasets/input/wake-word/wake_word",
-        "source_type": "filesystem",
-        "recursive": false,
-        "limit": 4
+        "source": "output = {\"batch\": 1, \"features\": [0.1, 0.2, 0.3], \"device_hint\": \"cpu\"}\n"
       },
-      "label": "Local ingest",
+      "label": "Local prepare",
       "capability_metadata": null,
       "event_trigger": null,
       "placement": {
@@ -25,46 +22,25 @@
       }
     },
     {
-      "id": "conditioner",
-      "node_type": "audio_conditioner",
+      "id": "gpu_step",
+      "node_type": "set_map",
       "config": {
-        "target_sample_rate": 16000
+        "set": {
+          "device_hint": "gpu",
+          "worker_step": true
+        },
+        "copy_fields": {
+          "batch": "batch",
+          "features": "features"
+        }
       },
-      "label": "Local conditioner",
-      "capability_metadata": null,
-      "event_trigger": null,
-      "placement": {
-        "mode": "local"
-      }
-    },
-    {
-      "id": "features",
-      "node_type": "feature_frontend",
-      "config": {
-        "feature_type": "mfcc",
-        "n_mfcc": 40
-      },
-      "label": "Local features",
-      "capability_metadata": null,
-      "event_trigger": null,
-      "placement": {
-        "mode": "auto"
-      }
-    },
-    {
-      "id": "trainer_gpu",
-      "node_type": "trainer",
-      "config": {
-        "epochs": 1,
-        "batch_size": 8
-      },
-      "label": "GPU trainer (remote)",
+      "label": "GPU-tagged remote step (Server-99)",
       "capability_metadata": {
         "requires_gpu": true,
         "supports_cpu": false,
         "supports_edge": false,
-        "deterministic": false,
-        "cacheable": false,
+        "deterministic": true,
+        "cacheable": true,
         "streaming_support": false,
         "realtime_support": false
       },
@@ -72,52 +48,35 @@
       "placement": {
         "mode": "auto",
         "tags": ["gpu"],
-        "require_gpu": true,
-        "min_vram_mib": 4096
+        "require_gpu": true
       }
     },
     {
-      "id": "evaluator",
-      "node_type": "evaluator",
-      "config": {},
-      "label": "GPU evaluator (remote)",
-      "capability_metadata": {
-        "requires_gpu": true
+      "id": "sink",
+      "node_type": "json_transform",
+      "config": {
+        "pick": ["batch", "device_hint", "worker_step", "features"]
       },
+      "label": "Local sink",
+      "capability_metadata": null,
       "event_trigger": null,
       "placement": {
-        "mode": "auto",
-        "tags": ["gpu"],
-        "require_gpu": true
+        "mode": "local"
       }
     }
   ],
   "edges": [
     {
-      "src_id": "ingest",
+      "src_id": "prepare",
       "src_port": "output",
-      "dst_id": "conditioner",
+      "dst_id": "gpu_step",
       "dst_port": "input",
       "condition": null
     },
     {
-      "src_id": "conditioner",
+      "src_id": "gpu_step",
       "src_port": "output",
-      "dst_id": "features",
-      "dst_port": "input",
-      "condition": null
-    },
-    {
-      "src_id": "features",
-      "src_port": "output",
-      "dst_id": "trainer_gpu",
-      "dst_port": "input",
-      "condition": null
-    },
-    {
-      "src_id": "trainer_gpu",
-      "src_port": "output",
-      "dst_id": "evaluator",
+      "dst_id": "sink",
       "dst_port": "input",
       "condition": null
     }

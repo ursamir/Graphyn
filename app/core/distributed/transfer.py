@@ -65,7 +65,7 @@ def _safe_path(key: str) -> Path:
         raise ValueError(f"Invalid blob key: {key!r}")
     path = (blob_root() / key).resolve()
     root = blob_root().resolve()
-    if not str(path).startswith(str(root)):
+    if not path.is_relative_to(root):
         raise ValueError(f"Invalid blob key: {key!r}")
     return path
 
@@ -169,7 +169,9 @@ def http_get_blob(
     if not base:
         raise ValueError("control_url is required for http_get_blob")
     key = uri_to_key(uri)
-    url = f"{base}/artifacts/blob/{key}"
+    # Preserve path separators; encode other reserved characters.
+    encoded_key = quote(key, safe="/")
+    url = f"{base}/artifacts/blob/{encoded_key}"
     headers = {"Accept": "application/octet-stream"}
     tok = token if token is not None else os.environ.get("GRAPHYN_API_TOKEN", "")
     if tok:
