@@ -1,5 +1,5 @@
 import React from 'react'
-import { GitBranch, Download, Pause, Play, Square, RefreshCw } from 'lucide-react'
+import { GitBranch, Download, Pause, Play, RefreshCw } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
@@ -285,7 +285,7 @@ export default function RunsView() {
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
           title="Runs"
-          description="Execution sessions from Builder — live status and logs. Use Observe → Trace for accountability backtrack, Experiments to compare metrics."
+          description="Execution history & ops — live status, logs, pause/cancel. For lineage/provenance deep-dive use Trace (View lineage). Experiments compares metrics."
           actions={
             <button type="button" onClick={() => void load()} className="btn-secondary">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -298,7 +298,7 @@ export default function RunsView() {
         ) : runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
-            description="Run a graph from Builder to create an execution session here. Trace and Experiments live under Observe."
+            description="Run a graph from Builder to create an execution session here. Trace is for lineage/provenance deep-dive; Experiments compares metrics."
             action={
               <div className="flex flex-wrap justify-center gap-2">
                 <button
@@ -381,7 +381,7 @@ export default function RunsView() {
 
       <div className="overflow-y-auto space-y-4 p-5">
         {!selected ? (
-          <EmptyState title="Select a run" description="This session's logs, files, and lineage. Open Trace for the full accountability chain." />
+          <EmptyState title="Select a run" description="This run's logs, files, and ops controls. Open View lineage for provenance deep-dive." />
         ) : (
           <>
             <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm">
@@ -426,7 +426,7 @@ export default function RunsView() {
                 className="btn-secondary"
                 onClick={() => openTrace({ runId: selected })}
               >
-                <GitBranch className="h-3.5 w-3.5" /> Open in Trace
+                <GitBranch className="h-3.5 w-3.5" /> View lineage
               </button>
               {['running'].includes(runStatus.toLowerCase()) && (
                 <button type="button" className="btn-secondary" onClick={() => void control(selected, 'pause')}>
@@ -439,9 +439,12 @@ export default function RunsView() {
                 </button>
               )}
               {['running', 'paused'].includes(runStatus.toLowerCase()) && (
-                <button type="button" className="btn-danger" onClick={() => void control(selected, 'cancel')}>
-                  <Square className="h-3.5 w-3.5" /> Cancel
-                </button>
+                <ConfirmButton
+                  label="Cancel run"
+                  confirmLabel="Confirm cancel"
+                  danger
+                  onConfirm={() => void control(selected, 'cancel')}
+                />
               )}
               {!['running', 'paused'].includes(runStatus.toLowerCase()) && (
                 <ConfirmButton
@@ -584,7 +587,7 @@ export default function RunsView() {
                 return (
                   <div className="space-y-3">
                     <p className="text-xs text-ink-500">
-                      Session lineage for this run. For the full accountability chain, use Open in Trace.
+                      Session lineage for this run. For provenance deep-dive, use View lineage (Trace).
                     </p>
                     <KeyValue data={provenance} empty="No lineage recorded for this run." />
                   </div>
@@ -593,7 +596,7 @@ export default function RunsView() {
               return (
                 <div className="space-y-3">
                   <p className="text-xs text-ink-500">
-                    Session lineage for this run. For the full accountability chain, use Open in Trace.
+                    Session lineage for this run. For provenance deep-dive, use View lineage (Trace).
                   </p>
                   <ol className="space-y-2">
                   {rows.map((row, i) => {

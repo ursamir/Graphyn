@@ -30,18 +30,69 @@ export function LoadingBlock({ label = 'Loading…' }: { label?: string }) {
   )
 }
 
-export function ErrorBanner({ message, onRetry, title }: { message: string; onRetry?: () => void; title?: string }) {
+export function ErrorBanner({
+  message,
+  onRetry,
+  title,
+  detail,
+  onDismiss,
+  actions,
+}: {
+  /** Short primary message (kept for backward compat). */
+  message: string
+  onRetry?: () => void
+  /** Short title above the message. */
+  title?: string
+  /** Longer detail (shown under the message). */
+  detail?: string
+  onDismiss?: () => void
+  /** Extra recovery CTAs (Open run, Copy error, …). */
+  actions?: React.ReactNode
+}) {
+  const [copied, setCopied] = React.useState(false)
+  const copyText = detail || message
   return (
-    <div className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-        <span title={title}>{message}</span>
+    <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-900">
+      <div className="flex min-w-0 flex-1 items-start gap-2">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+        <div className="min-w-0">
+          {title ? <div className="font-semibold text-rose-950">{title}</div> : null}
+          <div className={title ? 'mt-0.5 text-rose-800' : ''} title={detail && !title ? detail : undefined}>
+            {message}
+          </div>
+          {detail && detail !== message ? (
+            <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-rose-700/90">
+              {detail}
+            </pre>
+          ) : null}
+        </div>
       </div>
-      {onRetry && (
-        <button type="button" className="btn-secondary" onClick={onRetry}>
-          Retry
+      <div className="flex flex-wrap items-center gap-1.5">
+        {actions}
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            void navigator.clipboard.writeText(copyText).then(() => {
+              setCopied(true)
+              window.setTimeout(() => setCopied(false), 1200)
+            })
+          }}
+        >
+          <Copy className="h-3.5 w-3.5" />
+          {copied ? 'Copied' : 'Copy error'}
         </button>
-      )}
+        {onRetry && (
+          <button type="button" className="btn-secondary" onClick={onRetry}>
+            Retry
+          </button>
+        )}
+        {onDismiss && (
+          <button type="button" className="btn-icon" aria-label="Dismiss" onClick={onDismiss}>
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
     </div>
   )
 }

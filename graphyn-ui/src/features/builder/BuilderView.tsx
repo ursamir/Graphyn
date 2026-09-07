@@ -32,8 +32,8 @@ import {
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState } from '../../components/ui'
-import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, skipConsecutiveByText, startCase } from '../../lib/format'
+import { ConfirmButton, EmptyState, ErrorBanner, StatusBadge } from '../../components/ui'
+import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   catalogPorts,
@@ -41,7 +41,7 @@ import {
   type NodeCatalogEntry,
   canonicalPort,
 } from '../../types/graph'
-import GraphynNode, { ConfigFieldEditor, categoryLook, type GraphynNodeData } from './GraphynNode'
+import GraphynNode, { ConfigFieldEditor, categoryLook, normalizeExecStatus, type GraphynNodeData, type NodeExecStatus } from './GraphynNode'
 import DeletableEdge from './DeletableEdge'
 
 const nodeTypes = { graphyn: GraphynNode }
@@ -156,6 +156,8 @@ function BuilderInner() {
   const [logCollapsed, setLogCollapsed] = React.useState(true)
   const [runHadErrors, setRunHadErrors] = React.useState(false)
   const [inspectorId, setInspectorId] = React.useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null)
+  const [actionError, setActionError] = React.useState<{ title: string; message: string; detail?: string } | null>(null)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
   const abortRef = React.useRef<AbortController | null>(null)
   const nodesRef = React.useRef(nodes)
@@ -219,6 +221,60 @@ function BuilderInner() {
       },
     }),
     [setNodes, setEdges, pushToast],
+  )
+
+
+  const setNodeExecStatus = React.useCallback(
+    (matcher: { index?: number; nodeId?: string; nodeType?: string }, status: NodeExecStatus) => {
+      const norm = normalizeExecStatus(status)
+      setNodes((nds) =>
+        nds.map((n, i) => {
+          if (matcher.nodeId && n.id === matcher.nodeId) return { ...n, data: { ...n.data, status: norm } }
+          if (matcher.index != null && !Number.isNaN(matcher.index) && i === matcher.index) {
+            return { ...n, data: { ...n.data, status: norm } }
+          }
+          // Fallback: first idle/pending match by type only when index missing
+          if (
+            matcher.nodeType &&
+            matcher.index == null &&
+            !matcher.nodeId &&
+            n.data.nodeType === matcher.nodeType &&
+            normalizeExecStatus(n.data.status) === 'pending'
+          ) {
+            return { ...n, data: { ...n.data, status: norm } }
+          }
+          return n
+        }),
+      )
+    },
+    [setNodes],
+  )
+
+  const applyStatusesFromEvents = React.useCallback(
+    (events: Array<Record<string, unknown>>) => {
+      const byIndex = new Map<number, NodeExecStatus>()
+      const byId = new Map<string, NodeExecStatus>()
+      for (const ev of events) {
+        const t = String(ev.type ?? '')
+        const idx = Number(ev.node_index)
+        const nodeId = typeof ev.node_id === 'string' ? ev.node_id : undefined
+        let st: NodeExecStatus | null = null
+        if (t === 'node_start') st = 'running'
+        else if (t === 'node_end' || t === 'node_complete') st = 'succeeded'
+        else if (t === 'node_error') st = 'failed'
+        else if (t === 'node_skip') st = 'skipped'
+        if (!st) continue
+        if (!Number.isNaN(idx)) byIndex.set(idx, st)
+        if (nodeId) byId.set(nodeId, st)
+      }
+      setNodes((nds) =>
+        nds.map((n, i) => {
+          const st = byId.get(n.id) ?? byIndex.get(i)
+          return st ? { ...n, data: { ...n.data, status: st } } : n
+        }),
+      )
+    },
+    [setNodes],
   )
 
   const currentGraph = React.useCallback(
@@ -370,18 +426,20 @@ function BuilderInner() {
         { method: 'POST', body: JSON.stringify(graph) },
       )
       if (result.valid) {
+        setActionError(null)
         setStatusMessage(`Valid graph (${result.node_count ?? graph.nodes.length} nodes)`)
         pushToast('Validation passed', 'success')
         addLog('Validation passed', 'success')
       } else {
-        setStatusMessage(result.error ?? 'Validation failed')
-        pushToast(result.error ?? 'Validation failed', 'error')
-        addLog(result.error ?? 'Validation failed', 'error')
+        const msg = result.error ?? 'Validation failed'
+        setStatusMessage(msg)
+        setActionError({ title: 'Validation failed', message: msg, detail: msg })
+        addLog(msg, 'error')
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setStatusMessage(msg)
-      pushToast(msg, 'error')
+      setActionError({ title: 'Validation failed', message: msg, detail: msg })
     }
   }
 
@@ -396,10 +454,11 @@ function BuilderInner() {
   const handleRun = async () => {
     clearLogs()
     setRunHadErrors(false)
+    setActionError(null)
     setLogCollapsed(false)
     setIsRunning(true)
     setStatusMessage('Running…')
-    setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'idle' } })))
+    setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'pending' } })))
     const controller = new AbortController()
     abortRef.current = controller
     try {
@@ -417,6 +476,7 @@ function BuilderInner() {
       const decoder = new TextDecoder()
       let buffer = ''
       let hadError = false
+      let lastErrorDetail = ''
       let runId: string | null = null
       while (true) {
         const { done, value } = await reader.read()
@@ -433,37 +493,35 @@ function BuilderInner() {
               runId = ev.run_id
               setLastRunId(ev.run_id)
             }
-            if (ev.type === 'node_start' && typeof ev.node_type === 'string') {
-              const idx = Number(ev.node_index)
+            const t = String(ev.type ?? '')
+            const idx = Number(ev.node_index)
+            const nodeId = typeof ev.node_id === 'string' ? ev.node_id : undefined
+            if (t === 'pipeline_start') {
+              setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'pending' } })))
+            }
+            if (t === 'node_start') {
+              setNodeExecStatus({ index: idx, nodeId, nodeType: typeof ev.node_type === 'string' ? ev.node_type : undefined }, 'running')
+            }
+            if (t === 'node_end' || t === 'node_complete') {
+              setNodeExecStatus({ index: idx, nodeId }, 'succeeded')
+            }
+            if (t === 'node_skip') {
+              setNodeExecStatus({ index: idx, nodeId, nodeType: typeof ev.node_type === 'string' ? ev.node_type : undefined }, 'skipped')
+            }
+            if (t === 'node_error' || t === 'error') {
+              hadError = true
+              const errMsg = String(ev.error_message ?? ev.message ?? ev.error ?? 'Node failed')
+              lastErrorDetail = errMsg
+              setNodeExecStatus({ index: idx, nodeId }, 'failed')
+            }
+            if (t === 'cancelled' || t === 'pipeline_cancelled') {
               setNodes((nds) =>
-                nds.map((n, i) =>
-                  i === idx || n.data.nodeType === ev.node_type
-                    ? { ...n, data: { ...n.data, status: i === idx ? 'running' : n.data.status } }
+                nds.map((n) =>
+                  normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
+                    ? { ...n, data: { ...n.data, status: 'cancelled' } }
                     : n,
                 ),
               )
-              if (!Number.isNaN(idx)) {
-                setNodes((nds) =>
-                  nds.map((n, i) => (i === idx ? { ...n, data: { ...n.data, status: 'running' } } : n)),
-                )
-              }
-            }
-            if (ev.type === 'node_end') {
-              const idx = Number(ev.node_index)
-              if (!Number.isNaN(idx)) {
-                setNodes((nds) =>
-                  nds.map((n, i) => (i === idx ? { ...n, data: { ...n.data, status: 'success' } } : n)),
-                )
-              }
-            }
-            if (ev.type === 'node_error' || ev.type === 'error') {
-              hadError = true
-              const idx = Number(ev.node_index)
-              if (!Number.isNaN(idx)) {
-                setNodes((nds) =>
-                  nds.map((n, i) => (i === idx ? { ...n, data: { ...n.data, status: 'error' } } : n)),
-                )
-              }
             }
             const formatted = formatExecutionLine(trimmed)
             addLog(
@@ -479,16 +537,40 @@ function BuilderInner() {
       }
       setRunHadErrors(hadError)
       setStatusMessage(hadError ? 'Run finished with errors' : 'Run complete')
-      pushToast(hadError ? 'Run finished with errors' : 'Run complete', hadError ? 'error' : 'success')
+      if (hadError) {
+        setActionError({
+          title: 'Run finished with errors',
+          message: lastErrorDetail ? lastErrorDetail.slice(0, 180) : 'One or more nodes failed during execution.',
+          detail: lastErrorDetail || undefined,
+        })
+      } else {
+        pushToast('Run complete', 'success')
+      }
       if (runId) setLastRunId(runId)
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setNodes((nds) =>
+          nds.map((n) =>
+            normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
+              ? { ...n, data: { ...n.data, status: 'cancelled' } }
+              : n,
+          ),
+        )
+        return
+      }
       if (err instanceof ApiError && err.status === 0) return
       const msg = err instanceof Error ? err.message : String(err)
       addLog(msg, 'error')
       setRunHadErrors(true)
       setStatusMessage(msg)
-      pushToast(msg, 'error')
+      setActionError({ title: 'Run failed', message: msg, detail: msg })
+      setNodes((nds) =>
+        nds.map((n) =>
+          normalizeExecStatus(n.data.status) === 'running'
+            ? { ...n, data: { ...n.data, status: 'failed' } }
+            : n,
+        ),
+      )
     } finally {
       setIsRunning(false)
       abortRef.current = null
@@ -496,6 +578,7 @@ function BuilderInner() {
   }
 
   const handleRunAsync = async () => {
+    setActionError(null)
     try {
       const graph = currentGraph()
       const res = await apiJson<{ run_id: string }>('/pipelines/run-async', {
@@ -506,7 +589,8 @@ function BuilderInner() {
       pushToast(`Async run started: ${res.run_id}`, 'success')
       openRun(res.run_id)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      const msg = err instanceof Error ? err.message : String(err)
+      setActionError({ title: 'Could not start background run', message: msg, detail: msg })
     }
   }
 
@@ -621,23 +705,45 @@ function BuilderInner() {
     window.addEventListener('pointerup', onUp)
   }
 
+
+  React.useEffect(() => {
+    if (!lastRunId || isRunning) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const detail = await apiJson<{ logs?: Array<Record<string, unknown>> }>(`/runs/${lastRunId}`)
+        if (cancelled || !Array.isArray(detail.logs)) return
+        const events = detail.logs.filter((l) => l && typeof l === 'object') as Array<Record<string, unknown>>
+        if (events.some((e) => typeof e.type === 'string' && String(e.type).startsWith('node_'))) {
+          applyStatusesFromEvents(events)
+        }
+      } catch {
+        /* optional inspect hydrate */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [lastRunId, isRunning, applyStatusesFromEvents])
+
   const secondaryActions = (
     <>
-      <button
-        type="button"
-        className="btn-quiet"
-        onClick={() => {
-          if (!window.confirm('Clear the canvas?')) return
+      <ConfirmButton
+        label="Clear canvas"
+        confirmLabel="Confirm clear"
+        danger
+        onConfirm={() => {
           setNodes([])
           setEdges([])
           setGraphName('pipeline')
           setRunHadErrors(false)
+          setActionError(null)
+          setInspectorId(null)
+          setSelectedEdgeId(null)
           clearLogs()
           setMoreOpen(false)
         }}
-      >
-        <Trash2 className="h-3.5 w-3.5" /> Clear
-      </button>
+      />
       <button
         type="button"
         disabled={nodes.length === 0 || isRunning}
@@ -866,6 +972,24 @@ function BuilderInner() {
           </div>
         </div>
 
+        {actionError && (
+          <div className="border-b border-rose-100 px-3 py-2">
+            <ErrorBanner
+              title={actionError.title}
+              message={actionError.message}
+              detail={actionError.detail}
+              onDismiss={() => setActionError(null)}
+              onRetry={runHadErrors || actionError.title.toLowerCase().includes('run') ? () => void handleRun() : undefined}
+              actions={
+                lastRunId ? (
+                  <button type="button" className="btn-secondary" onClick={() => openRun(lastRunId)}>
+                    Open run
+                  </button>
+                ) : null
+              }
+            />
+          </div>
+        )}
         <div className="relative flex min-h-0 flex-1 bg-canvas">
           <div className="relative min-h-0 min-w-0 flex-1">
           <ReactFlow
@@ -879,7 +1003,18 @@ function BuilderInner() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={(c) => void onConnect(c)}
-            onNodeClick={(_, n) => setInspectorId(n.id)}
+            onNodeClick={(_, n) => {
+              setInspectorId(n.id)
+              setSelectedEdgeId(null)
+            }}
+            onEdgeClick={(_, e) => {
+              setSelectedEdgeId(e.id)
+              setInspectorId(null)
+            }}
+            onPaneClick={() => {
+              setInspectorId(null)
+              setSelectedEdgeId(null)
+            }}
             deleteKeyCode={['Backspace', 'Delete']}
             edgesFocusable
             elementsSelectable
@@ -911,57 +1046,176 @@ function BuilderInner() {
             </div>
           )}
           </div>
-          {inspectorId && nodes.find((n) => n.id === inspectorId) && (
-            <aside className="z-20 flex w-[380px] shrink-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur">
-              {(() => {
-                const node = nodes.find((n) => n.id === inspectorId)
-                if (!node) return null
-                const entries = Object.entries(node.data.schemaProps ?? {})
-                return (
-                  <>
-                    <div className="flex items-start justify-between gap-2 border-b border-ink-100 px-3 py-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-ink-950">
-                          {node.data.label || node.data.nodeType}
-                        </div>
-                        <div className="truncate text-[11px] text-ink-400">{node.data.nodeType}</div>
+          <aside className="z-20 flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur">
+            {(() => {
+              const node = inspectorId ? nodes.find((n) => n.id === inspectorId) : null
+              const edge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) : null
+              const mode: 'node' | 'edge' | 'graph' = node ? 'node' : edge ? 'edge' : 'graph'
+              const title =
+                mode === 'node'
+                  ? node!.data.label || node!.data.nodeType
+                  : mode === 'edge'
+                    ? 'Connection'
+                    : 'Graph settings'
+              const subtitle =
+                mode === 'node'
+                  ? node!.data.nodeType
+                  : mode === 'edge'
+                    ? edge!.id
+                    : graphName || 'pipeline'
+              return (
+                <>
+                  <div className="flex items-start justify-between gap-2 border-b border-ink-100 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                        {mode === 'node' ? 'Node' : mode === 'edge' ? 'Edge' : 'Graph'}
                       </div>
+                      <div className="truncate text-sm font-semibold text-ink-950">{title}</div>
+                      <div className="truncate text-[11px] text-ink-400" title={subtitle}>
+                        {subtitle}
+                      </div>
+                    </div>
+                    {(inspectorId || selectedEdgeId) && (
                       <button
                         type="button"
                         className="btn-icon"
-                        aria-label="Close inspector"
-                        onClick={() => setInspectorId(null)}
+                        aria-label="Clear selection"
+                        onClick={() => {
+                          setInspectorId(null)
+                          setSelectedEdgeId(null)
+                        }}
                       >
                         <X className="h-4 w-4" />
                       </button>
+                    )}
+                  </div>
+
+                  {lastRunId || isRunning ? (
+                    <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 bg-ink-50/70 px-3 py-1.5 text-[11px] text-ink-600">
+                      <span className="font-semibold uppercase tracking-wide text-ink-400">Execution</span>
+                      {isRunning ? <StatusBadge status="running" /> : lastRunId ? <StatusBadge status={runHadErrors ? 'failed' : 'complete'} /> : null}
+                      {lastRunId ? (
+                        <>
+                          <span className="font-mono text-ink-500" title={lastRunId}>
+                            {shortRunId(lastRunId)}
+                          </span>
+                          <button
+                            type="button"
+                            className="text-accent-700 hover:underline"
+                            onClick={() => openRun(lastRunId)}
+                          >
+                            Open run
+                          </button>
+                        </>
+                      ) : null}
                     </div>
-                    <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2">
-                      {entries.length === 0 ? (
-                        <div className="text-sm text-ink-400">No config fields</div>
-                      ) : (
-                        entries.map(([key, def]) => (
-                          <label key={key} className="block text-[12px] text-ink-700" title={schemaFieldHint(def)}>
-                            <span className="font-medium">{schemaFieldLabel(key, def)}</span>
-                            {schemaFieldHint(def) ? (
-                              <span className="mt-0.5 block text-[10px] leading-snug text-ink-400">
-                                {schemaFieldHint(def)}
-                              </span>
-                            ) : null}
-                            <ConfigFieldEditor
-                              fieldKey={key}
-                              def={def}
-                              value={node.data.config?.[key] ?? def.default}
-                              onChange={(v) => node.data.onChangeConfig?.(key, v)}
-                            />
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  </>
-                )
-              })()}
-            </aside>
-          )}
+                  ) : null}
+
+                  <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2">
+                    {mode === 'graph' && (
+                      <>
+                        <label className="block text-[12px] text-ink-700">
+                          <span className="font-medium">Graph name</span>
+                          <input
+                            value={graphName}
+                            onChange={(e) => setGraphName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '-'))}
+                            onBlur={() => setGraphName((n) => slugifyName(n))}
+                            className="field-control mt-1"
+                            placeholder="pipeline"
+                          />
+                        </label>
+                        <label className="block text-[12px] text-ink-700">
+                          <span className="font-medium">Seed</span>
+                          <input
+                            type="number"
+                            value={seed}
+                            onChange={(e) => setSeed(Number(e.target.value) || 0)}
+                            className="field-control mt-1 font-mono"
+                          />
+                        </label>
+                        <div className="rounded-lg border border-ink-100 bg-ink-50 px-2.5 py-2 text-[11px] text-ink-500">
+                          {nodes.length} nodes · {edges.length} connections
+                          {lastRunId ? (
+                            <div className="mt-1">
+                              Linked run{' '}
+                              <button type="button" className="font-mono text-accent-700 hover:underline" onClick={() => openRun(lastRunId)}>
+                                {shortRunId(lastRunId)}
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="mt-1">Select a node or connection to inspect details.</div>
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                    {mode === 'edge' && edge && (
+                      <>
+                        <div className="space-y-1.5 text-[12px] text-ink-700">
+                          <div className="grid grid-cols-[4.5rem_1fr] gap-1">
+                            <span className="text-ink-400">From</span>
+                            <span className="font-mono text-[11px]">{edge.source}</span>
+                          </div>
+                          <div className="grid grid-cols-[4.5rem_1fr] gap-1">
+                            <span className="text-ink-400">Port</span>
+                            <span className="font-mono text-[11px]">{canonicalPort(edge.sourceHandle, 'output')}</span>
+                          </div>
+                          <div className="grid grid-cols-[4.5rem_1fr] gap-1">
+                            <span className="text-ink-400">To</span>
+                            <span className="font-mono text-[11px]">{edge.target}</span>
+                          </div>
+                          <div className="grid grid-cols-[4.5rem_1fr] gap-1">
+                            <span className="text-ink-400">Port</span>
+                            <span className="font-mono text-[11px]">{canonicalPort(edge.targetHandle, 'input')}</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-danger mt-2"
+                          onClick={() => {
+                            setEdges((eds) => eds.filter((e) => e.id !== edge.id))
+                            setSelectedEdgeId(null)
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Remove connection
+                        </button>
+                      </>
+                    )}
+
+                    {mode === 'node' && node && (
+                      <>
+                        {normalizeExecStatus(node.data.status) !== 'idle' && (
+                          <div className="mb-1">
+                            <StatusBadge status={normalizeExecStatus(node.data.status)} />
+                          </div>
+                        )}
+                        {(() => {
+                          const entries = Object.entries(node.data.schemaProps ?? {})
+                          if (entries.length === 0) return <div className="text-sm text-ink-400">No config fields</div>
+                          return entries.map(([key, def]) => (
+                            <label key={key} className="block text-[12px] text-ink-700" title={schemaFieldHint(def)}>
+                              <span className="font-medium">{schemaFieldLabel(key, def)}</span>
+                              {schemaFieldHint(def) ? (
+                                <span className="mt-0.5 block text-[10px] leading-snug text-ink-400">
+                                  {schemaFieldHint(def)}
+                                </span>
+                              ) : null}
+                              <ConfigFieldEditor
+                                fieldKey={key}
+                                def={def}
+                                value={node.data.config?.[key] ?? def.default}
+                                onChange={(v) => node.data.onChangeConfig?.(key, v)}
+                              />
+                            </label>
+                          ))
+                        })()}
+                      </>
+                    )}
+                  </div>
+                </>
+              )
+            })()}
+          </aside>
         </div>
 
         <div className="relative z-20 border-t border-ink-800 bg-[#12181f] text-ink-100">

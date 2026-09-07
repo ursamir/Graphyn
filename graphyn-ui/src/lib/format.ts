@@ -112,7 +112,11 @@ export function formatExecutionEvent(
     const parts = [node || 'Node', cache, dur].filter(Boolean)
     return { text: parts.join(' · '), level: 'success' }
   }
-  if (kind === 'node_error') {
+  if (kind === 'node_skip') {
+    const reason = typeof ev.reason === 'string' ? ev.reason : ''
+    return { text: `${node || 'Node'} · skipped${reason ? ` · ${reason}` : ''}`, level: 'info' }
+  }
+    if (kind === 'node_error') {
     const err = errorFromEvent(ev) ?? 'failed'
     return { text: `${node || 'Node'} · failed · ${err}`, level: 'error' }
   }

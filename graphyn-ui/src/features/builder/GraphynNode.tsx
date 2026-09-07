@@ -12,7 +12,7 @@ export type GraphynNodeData = {
   schemaProps?: Record<string, Record<string, unknown>>
   inputs: PortDef[]
   outputs: PortDef[]
-  status?: 'idle' | 'running' | 'success' | 'error'
+  status?: 'idle' | 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled' | 'success' | 'error'
   runtime?: string
   onChangeConfig?: (key: string, value: unknown) => void
   onDelete?: () => void
@@ -269,11 +269,51 @@ export function categoryLook(cat?: string) {
   return { bg: 'bg-[#2c3641]', Icon: Box }
 }
 
+export type NodeExecStatus =
+  | 'idle'
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+  | 'success'
+  | 'error'
+
+/** Normalize legacy success/error aliases used during streaming. */
+export function normalizeExecStatus(status?: string): NodeExecStatus {
+  const s = (status || 'idle').toLowerCase()
+  if (s === 'success' || s === 'complete' || s === 'completed' || s === 'ok') return 'succeeded'
+  if (s === 'error' || s === 'fail' || s === 'failed') return 'failed'
+  if (s === 'skip' || s === 'skipped') return 'skipped'
+  if (s === 'cancel' || s === 'cancelled' || s === 'canceled') return 'cancelled'
+  if (s === 'run' || s === 'running') return 'running'
+  if (s === 'pending' || s === 'queued' || s === 'waiting') return 'pending'
+  if (s === 'idle') return 'idle'
+  return 'idle'
+}
+
 const STATUS_DOT: Record<string, string> = {
   idle: 'bg-ink-300',
+  pending: 'bg-ink-400',
   running: 'bg-accent-500 animate-pulse',
+  succeeded: 'bg-emerald-500',
   success: 'bg-emerald-500',
+  failed: 'bg-rose-500',
   error: 'bg-rose-500',
+  skipped: 'bg-ink-400',
+  cancelled: 'bg-amber-500',
+}
+
+const STATUS_RING: Record<string, string> = {
+  pending: 'ring-1 ring-ink-300/80',
+  running: 'ring-2 ring-accent-400/80 ring-offset-1 ring-offset-white',
+  succeeded: 'ring-1 ring-emerald-400/70',
+  success: 'ring-1 ring-emerald-400/70',
+  failed: 'ring-2 ring-rose-400/60',
+  error: 'ring-2 ring-rose-400/60',
+  skipped: 'ring-1 ring-dashed ring-ink-300',
+  cancelled: 'ring-1 ring-amber-400/70',
 }
 
 export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeData>) {
@@ -281,20 +321,26 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
   const entries = Object.entries(props)
   const inputs = data.inputs?.length ? data.inputs : [{ name: 'input' }]
   const outputs = data.outputs?.length ? data.outputs : [{ name: 'output' }]
-  const status = data.status ?? 'idle'
+  const status = normalizeExecStatus(data.status)
   const isolated = data.runtime === 'isolated' || data.nodeType.startsWith('Isolated_')
   const look = categoryLook(data.category)
   const Icon = look.Icon
+  const failed = status === 'failed'
+  const skipped = status === 'skipped'
 
   return (
     <div
-      title={data.nodeType}
+      title={`${data.nodeType}${status !== 'idle' ? ` · ${status}` : ''}`}
       className={clsx(
         'graphyn-node relative w-[240px] overflow-visible rounded-[10px] border bg-white',
         selected ? 'is-selected border-ink-900' : 'border-ink-200',
+        STATUS_RING[status],
         status === 'running' && 'border-accent-500',
-        status === 'success' && 'border-emerald-500',
-        status === 'error' && 'border-rose-500',
+        status === 'succeeded' && 'border-emerald-400',
+        failed && 'border-rose-300 bg-rose-50/40 opacity-90',
+        skipped && 'opacity-60',
+        status === 'cancelled' && 'border-amber-300 opacity-80',
+        status === 'pending' && 'border-ink-300',
       )}
     >
       {inputs.flatMap((p, i) => {
@@ -313,12 +359,17 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <div className="truncate text-[13px] font-semibold leading-tight text-ink-950">
+            <div className={clsx('truncate text-[13px] font-semibold leading-tight', failed ? 'text-rose-900' : 'text-ink-950')}>
               {data.label || data.nodeType}
             </div>
-            <span className={clsx('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[status] ?? STATUS_DOT.idle)} />
+            <span
+              className={clsx('h-2 w-2 shrink-0 rounded-full ring-2 ring-white', STATUS_DOT[status] ?? STATUS_DOT.idle)}
+              title={status}
+              aria-label={`Status ${status}`}
+            />
           </div>
-          <div className="mt-0.5 truncate text-[11px] text-ink-400">
+          <div className={clsx('mt-0.5 truncate text-[11px]', failed ? 'text-rose-500' : 'text-ink-400')}>
+            {status !== 'idle' ? `${status} · ` : ''}
             {data.category || 'node'}
             {isolated ? ' · isolated' : ''}
             {entries.length ? ` · ${entries.length} fields` : ''}

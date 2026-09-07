@@ -125,7 +125,6 @@ export default function TraceView() {
         const msg = err instanceof Error ? err.message : String(err)
         setError(msg)
         setTrace(null)
-        pushToast(msg, 'error')
       } finally {
         setLoading(false)
       }
@@ -160,7 +159,7 @@ export default function TraceView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Trace"
-        description="Accountability backtrack (canonical) — artifact → node → run → graph → inputs → worker. Artifacts is the library; Runs is the execution session."
+        description="Lineage & provenance deep-dive — artifact → node → run → graph → inputs → worker. Runs is execution history/ops; Artifacts is the library."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -225,7 +224,7 @@ export default function TraceView() {
       {!loading && !error && !trace && (
         <EmptyState
           title="Start a backtrack"
-          description="Paste an artifact id or run id, or use Open in Trace from Artifacts / Runs. This is the accountability surface — not the artifact library."
+          description="Paste an artifact id or run id, or use View lineage from Runs / Artifacts. This is provenance deep-dive — not execution ops (see Runs)."
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <button
