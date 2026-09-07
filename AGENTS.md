@@ -83,3 +83,7 @@ Mode A: start API without GRAPHYN_BACKEND; run UI; run graphs via CLI (see docs/
 Mode B: set GRAPHYN_BACKEND=distributed on the control plane; on workers run worker start with --control-url / --labels / --pool.
 
 Tests: venv/bin/pytest unit_test/  (or GRAPHYN_SKIP_PLUGIN_LOAD=1 for faster isolation).
+
+## Security notes (plugins)
+
+`GRAPHYN_PLUGIN_ALLOWED_SOURCES` uses structural URL matching (host + path-segment boundary), not `str.startswith`. Redirect downloads re-validate every hop fail-closed.

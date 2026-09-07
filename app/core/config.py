@@ -13,7 +13,7 @@ Public Surface:   All functions above.
 Must NOT:         Import from any other app module. Pure stdlib only.
                   Must never cache env var reads at module level (token
                   rotation must take effect without process restart).
-Dependencies:     stdlib (os, pathlib).
+Dependencies:     stdlib (os, pathlib, urllib.parse).
 Reason To Change: New environment variables are added, directory layout
                   changes, or the three-tier model is restructured.
 
@@ -30,7 +30,7 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_PLUGIN_PACKAGE_DIR      Default: <repo>/PluginPackage
   GRAPHYN_SKIP_PLUGIN_LOAD        Default: "" (set 1 to skip bundled install+load)
   GRAPHYN_PLUGIN_INDEX_URL        Default: "" (no remote index)
-  GRAPHYN_PLUGIN_ALLOWED_SOURCES  Default: "" (all sources allowed)
+  GRAPHYN_PLUGIN_ALLOWED_SOURCES  Default: "" (all sources allowed; structural URL match when set)
   GRAPHYN_PLUGIN_VENVS_DIR        Default: {GRAPHYN_HOME}/plugins/venvs/
   GRAPHYN_PLUGIN_ISOLATED_TIMEOUT Default: 3600 (seconds; isolated worker subprocess)
   GRAPHYN_REDIS_URL               Default: "" (use in-process store)
@@ -186,26 +186,26 @@ def plugin_venvs_dir() -> Path:
 
 
 def plugin_allowed_sources() -> list[str]:
-    """Return the list of allowed plugin source URL prefixes.
+    """Return the list of allowed plugin source base URLs.
 
-    Override: GRAPHYN_PLUGIN_ALLOWED_SOURCES env var — comma-separated URL
-    prefixes (e.g. ``"https://plugins.example.com/,git+https://github.com/myorg/"``).
+    Override: GRAPHYN_PLUGIN_ALLOWED_SOURCES env var — comma-separated base
+    URLs (e.g. ``"https://plugins.example.com/,git+https://github.com/myorg/"``).
 
     When the env var is unset or empty, all sources are allowed (backward
-    compatible default). When set, ``PluginInstaller.resolve()`` rejects any
-    remote source that does not start with one of the listed prefixes.
+    compatible default). When set, matching is structural (see
+    :func:`plugin_source_is_allowed`) — not raw string-prefix matching.
 
-    Local path sources (no ``git+``, ``http://``, ``https://`` prefix) are
+    Local path sources (no ``git+``, ``http://``, ``https://`` scheme) are
     never subject to the allowlist — they are always permitted.
 
-    When the env var is set, the same prefix check must also be applied to
+    When the env var is set, the same structural check must also be applied to
     plugin-index ``download_url`` values, HTTP redirect targets, and PEP 508
     direct-reference URLs in plugin requirements.
     """
     raw = _env("GRAPHYN_PLUGIN_ALLOWED_SOURCES")
     if not raw:
         return []
-    result = [prefix.strip() for prefix in raw.split(",") if prefix.strip()]
+    result = [entry.strip() for entry in raw.split(",") if entry.strip()]
     if not result:
         raise ValueError(
             f"GRAPHYN_PLUGIN_ALLOWED_SOURCES={raw!r} parsed to an empty list; "
@@ -214,19 +214,147 @@ def plugin_allowed_sources() -> list[str]:
     return result
 
 
+# Hosts treated as the same repository origin for GitHub archive/raw/codeload
+# URLs under an allowlisted github.com owner/repo base.
+_GITHUB_EQUIV_HOSTS = frozenset(
+    {
+        "github.com",
+        "www.github.com",
+        "raw.githubusercontent.com",
+        "codeload.github.com",
+    }
+)
+_GITLAB_EQUIV_HOSTS = frozenset({"gitlab.com", "www.gitlab.com"})
+
+
+def _canonical_plugin_host(hostname: str) -> str:
+    """Map known GitHub/GitLab CDN hosts to their primary repository host."""
+    host = hostname.lower().rstrip(".")
+    if host in _GITHUB_EQUIV_HOSTS:
+        return "github.com"
+    if host in _GITLAB_EQUIV_HOSTS:
+        return "gitlab.com"
+    return host
+
+
+def _plugin_source_path_segments(path: str) -> list[str] | None:
+    """Split and decode a URL path into segments; None if unsafe.
+
+    Rejects ``..`` / ``.`` traversal (including percent-encoded forms) and
+    encoded separators / NUL. Strips a trailing ``.git`` from the final
+    segment and drops a trailing git ref (``@ref``) embedded in the path.
+    """
+    from urllib.parse import unquote
+
+    # git+https://host/owner/repo.git@v1 → path may contain "@v1"
+    if "@" in path:
+        path = path.split("@", 1)[0]
+
+    segments: list[str] = []
+    for part in path.split("/"):
+        if part == "":
+            continue
+        decoded = unquote(part)
+        if decoded in ("", ".", "..") or "/" in decoded or "\\" in decoded or "\x00" in decoded:
+            return None
+        segments.append(decoded)
+
+    if segments and segments[-1].endswith(".git"):
+        segments[-1] = segments[-1][: -len(".git")]
+        if not segments[-1]:
+            return None
+    return segments
+
+
+def _parse_plugin_source_url(
+    source: str,
+) -> tuple[str, str, int | None, list[str]] | None:
+    """Parse a remote plugin source into (scheme, host, port, path_segments).
+
+    Returns None when the URL is not a usable remote http(s)/git URL (missing
+    host, unsafe path, unsupported scheme).
+    """
+    from urllib.parse import urlparse
+
+    raw = source.strip()
+    if raw.startswith("git+"):
+        raw = raw[4:]
+
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https", "git"):
+        return None
+
+    hostname = parsed.hostname
+    if not hostname:
+        return None
+
+    segments = _plugin_source_path_segments(parsed.path or "")
+    if segments is None:
+        return None
+
+    return scheme, _canonical_plugin_host(hostname), parsed.port, segments
+
+
+def _plugin_source_matches_allowed(source: str, allowed_entry: str) -> bool:
+    """True when *source* is the allowlisted base or a path-segment subpath of it."""
+    src = _parse_plugin_source_url(source)
+    base = _parse_plugin_source_url(allowed_entry)
+    if src is None or base is None:
+        return False
+
+    src_scheme, src_host, src_port, src_segs = src
+    base_scheme, base_host, base_port, base_segs = base
+
+    # Schemes must agree after stripping git+ (http vs https are distinct).
+    if src_scheme != base_scheme:
+        return False
+    if src_host != base_host:
+        return False
+    if src_port != base_port:
+        return False
+
+    # Empty base path → any path on that host (org/registry root allowlist).
+    if not base_segs:
+        return True
+
+    # Exact repository (or exact path) match.
+    if src_segs == base_segs:
+        return True
+
+    # Subpath under /owner/repo/... with a real path-segment boundary.
+    if len(src_segs) > len(base_segs) and src_segs[: len(base_segs)] == base_segs:
+        return True
+
+    return False
+
 
 def plugin_source_is_allowed(source: str) -> bool:
     """Return True if *source* is permitted by GRAPHYN_PLUGIN_ALLOWED_SOURCES.
 
     Empty allowlist (unset env) → allow all. Local paths without a remote
     scheme are always allowed.
+
+    Matching is structural (``urllib.parse``), not ``str.startswith``:
+    hosts must match (with GitHub/GitLab CDN host aliases), and paths must be
+    an exact match or a path-segment subpath of an allowlisted base
+    (``/owner/repo`` does **not** authorize ``/owner/repo-evil``).
+
+    Path traversal (``..`` / encoded ``..``) is rejected. Common GitHub/GitLab
+    archive and raw URL shapes under an exact repository base are allowed when
+    the path remains under that repository.
+
+    **Redirect policy:** callers that follow HTTP redirects (installer download,
+    plugin index fetch) must re-validate every hop and the final URL with this
+    function and fail closed on any disallowed hop. Redirect handling itself
+    lives in those callers, not here.
     """
-    if not source.startswith(("git+", "http://", "https://")):
+    if not source.startswith(("git+", "http://", "https://", "git://")):
         return True
     allowed = plugin_allowed_sources()
     if not allowed:
         return True
-    return any(source.startswith(prefix) for prefix in allowed)
+    return any(_plugin_source_matches_allowed(source, entry) for entry in allowed)
 
 
 def plugin_isolated_timeout() -> float:

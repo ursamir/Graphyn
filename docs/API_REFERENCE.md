@@ -872,7 +872,7 @@ Plugin lifecycle management. All operations delegate to `PluginManager`. Error r
 - `upgrade` (optional, default `false`) — replace existing installation
 - `expected_sha256` (optional) — SHA-256 hex digest of the downloaded archive; verified before extraction for HTTP archive sources (SEC-6 fix)
 
-**Security:** When `GRAPHYN_PLUGIN_ALLOWED_SOURCES` is set, remote sources not matching any listed prefix are rejected with HTTP 502.
+**Security:** When `GRAPHYN_PLUGIN_ALLOWED_SOURCES` is set, remote sources that do not structurally match any listed base URL (host + path-segment boundary) are rejected with HTTP 502.
 
 **Error code mapping:**
 

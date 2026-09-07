@@ -263,5 +263,5 @@ data: {"type": "summary", "total_files": 3, "total_duration_seconds": 12.5, "lab
 - CORS is restricted to localhost origins only.
 - Uploaded filenames are replaced with timestamped names to prevent path injection.
 - Ingestion download filenames are prefixed with a UUID to prevent collisions and path traversal.
-- `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated URL prefix allowlist for plugin installs; empty = allow all.
+- `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated base-URL allowlist for plugin installs (structural host/path match); empty = allow all.
 - Run IDs validated against ASCII-only alphanumeric regex before any filesystem access.

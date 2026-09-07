@@ -212,7 +212,9 @@ Remote sources (`git+`, `http://`, `https://`) install asynchronously — poll `
 
 ## Security
 
-**Source allowlist (`GRAPHYN_PLUGIN_ALLOWED_SOURCES`):** Set this env var to a comma-separated list of URL prefixes to restrict which remote sources are permitted. When unset, all sources are allowed (backward-compatible default). When set, any remote source not matching a listed prefix is rejected with `PluginInstallError` before any network request is made.
+**Source allowlist (`GRAPHYN_PLUGIN_ALLOWED_SOURCES`):** Set this env var to a comma-separated list of base URLs to restrict which remote sources are permitted. Matching is structural (`urllib.parse`): host must match (GitHub/GitLab CDN aliases included), and the path must be an exact match or a path-segment subpath of the base (`https://github.com/org/repo` does **not** authorize `.../repo-evil` or `.../repo2`). Raw string-prefix matching is not used. When unset, all sources are allowed (backward-compatible default). When set, any remote source that does not structurally match a listed base is rejected with `PluginInstallError` before any network request is made.
+
+**Redirect policy:** HTTP downloads and plugin-index fetches re-validate every redirect hop and the final URL against the same allowlist and fail closed if any hop is off-list.
 
 ```bash
 # Only allow plugins from your org's GitHub and internal registry

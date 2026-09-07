@@ -186,8 +186,8 @@ class PluginInstaller:
         Raises
         ------
         PluginInstallError
-            When the allowlist is non-empty and *source* does not start with
-            any of the listed prefixes.
+            When the allowlist is non-empty and *source* does not structurally
+            match any of the listed base URLs.
         """
         from app.core.config import plugin_allowed_sources as _allowed_sources  # noqa: PLC0415
 
@@ -202,9 +202,9 @@ class PluginInstaller:
 
         raise PluginInstallError(
             f"Plugin source {source!r} is not in the allowed sources list. "
-            f"Set GRAPHYN_PLUGIN_ALLOWED_SOURCES to include this prefix, "
+            f"Set GRAPHYN_PLUGIN_ALLOWED_SOURCES to include this base URL, "
             f"or leave it unset to allow all sources. "
-            f"Current allowed prefixes: {allowed}"
+            f"Current allowed bases: {allowed}"
         )
 
     def _resolve_git(self, url: str) -> Path:

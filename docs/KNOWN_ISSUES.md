@@ -78,6 +78,11 @@
 
 ## Resolved (kept for history)
 
+### (resolved 2026-09-07) SEC-001 plugin source allowlist prefix matching
+
+`plugin_source_is_allowed` now parses URLs structurally and requires host + path-segment boundaries (exact repo or subpath under `/owner/repo/`). Similarly prefixed repos (`repo` vs `repo-evil`/`repo2`), malicious hosts, and `..` / encoded traversal are rejected. Redirect hops continue to be re-checked fail-closed in installer/index download paths.
+
+
 ### (resolved 2026-07-29) EDGE-DROP-1 / EDGE-DROP-2 / AUTH-MOUNT-1 / FE-YAML-1 / BACKEND-PATH-1 / AUTH-DEFAULT-1
 
 - Pipelines/artifacts replay execute GraphIR via `get_backend().execute(graph)`.
