@@ -417,6 +417,16 @@ class DistributedBackend(RuntimeBackend):
                 else:
                     node_workers[node_id] = str(target)
 
+                if run_manager is not None:
+                    try:
+                        write_field = getattr(run_manager, "_write_meta_field", None)
+                        if callable(write_field):
+                            write_field(
+                                "distributed_node_workers", dict(node_workers)
+                            )
+                    except Exception:
+                        pass
+
                 if logger is not None:
                     try:
                         logger.info(
@@ -430,9 +440,13 @@ class DistributedBackend(RuntimeBackend):
         self.last_node_workers = dict(node_workers)
         if run_manager is not None:
             try:
-                meta = getattr(run_manager, "metadata", None)
-                if isinstance(meta, dict):
-                    meta["distributed_node_workers"] = dict(node_workers)
+                write_field = getattr(run_manager, "_write_meta_field", None)
+                if callable(write_field):
+                    write_field("distributed_node_workers", dict(node_workers))
+                else:
+                    meta = getattr(run_manager, "metadata", None)
+                    if isinstance(meta, dict):
+                        meta["distributed_node_workers"] = dict(node_workers)
             except Exception:
                 pass
 
@@ -472,12 +486,37 @@ def run_loopback_worker_once(
     if job is None:
         return False
 
+    # Hard refuse missing plugin (claim should already skip; belt-and-suspenders).
+    plugins = list(worker.plugins or [])
+    if plugins and job.node_type not in plugins:
+        queue.complete(
+            JobResult(
+                job_id=job.job_id,
+                status="failed",
+                error=(
+                    f"Worker {worker_id!r} refuses job: node_type "
+                    f"{job.node_type!r} not in advertised plugins {plugins}"
+                ),
+                worker_id=worker_id,
+                duration_s=0.0,
+            )
+        )
+        return True
+
+    if queue.is_cancelled(job.job_id):
+        return True
+
+    queue.mark_running(job.job_id)
     started = time.monotonic()
     error = None
     outputs: dict[str, Any] = {}
     status = "succeeded"
     output_refs: dict[str, str] = {}
     try:
+        if queue.is_cancelled(job.job_id):
+            status = "cancelled"
+            error = "cancelled by control plane"
+            raise RuntimeError(error)
         inputs: dict[str, Any] = {}
         for port, uri in (job.input_refs or {}).items():
             inputs[port] = get_port_value(uri)
@@ -499,21 +538,42 @@ def run_loopback_worker_once(
 
         for port, value in (outputs or {}).items():
             output_refs[port] = put_port_value(value)
+        if queue.is_cancelled(job.job_id):
+            status = "cancelled"
+            error = "cancelled by control plane"
+            output_refs = {}
     except Exception as exc:  # noqa: BLE001 — surface to JobResult
-        status = "failed"
-        error = str(exc)
+        if queue.is_cancelled(job.job_id) or status == "cancelled":
+            status = "cancelled"
+            error = "cancelled by control plane"
+        else:
+            status = "failed"
+            error = str(exc)
 
-    queue.complete(
-        JobResult(
-            job_id=job.job_id,
-            status=status,  # type: ignore[arg-type]
-            output_refs=output_refs,
-            events=[],
-            error=error,
-            worker_id=worker_id,
-            duration_s=time.monotonic() - started,
+    # If control cancelled while we ran, prefer cancelled over succeeded/failed.
+    if queue.is_cancelled(job.job_id):
+        status = "cancelled"
+        error = "cancelled by control plane"
+        # cancel() already set a result — only complete if not terminal.
+        existing = queue.get(job.job_id)
+        if existing is not None and existing.status == "cancelled":
+            return True
+
+    try:
+        queue.complete(
+            JobResult(
+                job_id=job.job_id,
+                status=status,  # type: ignore[arg-type]
+                output_refs=output_refs if status == "succeeded" else {},
+                events=[],
+                error=error,
+                worker_id=worker_id,
+                duration_s=time.monotonic() - started,
+            )
         )
-    )
+    except ValueError:
+        # Already terminal (e.g. cancelled by control) — ok.
+        pass
     return True
 
 

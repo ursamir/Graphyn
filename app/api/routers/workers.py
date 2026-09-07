@@ -68,7 +68,7 @@ class JobEventsBody(BaseModel):
 
 @router.post("/workers/register", summary="Register or refresh a worker")
 def register_worker(info: WorkerInfo):
-    """Register / refresh a worker in the in-memory registry."""
+    """Register / refresh a worker in the durable registry (disk/Redis)."""
     _validate_worker_id(info.worker_id)
     stored = get_worker_registry().register(info)
     return stored.model_dump(mode="json")
@@ -86,6 +86,11 @@ def worker_heartbeat(worker_id: str, body: HeartbeatBody = HeartbeatBody()):
         )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown worker {worker_id}")
+    # Heartbeat renews leases for jobs claimed by this worker (P2).
+    try:
+        get_job_queue().renew_leases_for_worker(worker_id)
+    except Exception:
+        pass
     return stored.model_dump(mode="json")
 
 

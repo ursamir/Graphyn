@@ -2,7 +2,7 @@
 
 > Source of truth for multi-machine Graphyn orchestration.  
 > Complements [ARCHITECTURE.md](./ARCHITECTURE.md) and [PIPELINE_EXECUTION.md](./PIPELINE_EXECUTION.md).  
-> Status: **implementing** (P0 foundation → P1 two-box MVP → P2 operable).
+> Status: **implementing** (P0–P2 operable; P3 scale later).
 
 ---
 
@@ -236,16 +236,18 @@ P1 two-box path on Server-99: NFS **or** MinIO; default implementation starts wi
 
 - Job lease with TTL; worker heartbeat renews lease; expired lease → requeue (at-most-once → at-least-once with idempotent artifact keys)
 - Cancel: control sets job cancelled; worker polls or receives pub/sub and stops `NodeExecutor` / subprocess
-- Checkpoints: write checkpoint blobs to artifact store so resume can continue on another worker (P2)
+- Checkpoints: write checkpoint blobs to artifact store so resume can continue on another worker (P3)
 - Isolated plugin timeouts stay via `GRAPHYN_PLUGIN_ISOLATED_TIMEOUT`
+- **P2 durable store:** registry + queue persist under `workspace/distributed/*.json` by default (or Redis when `GRAPHYN_REDIS_URL` is set). In-memory remains the fast path; `GRAPHYN_DISTRIBUTED_STORE=memory` disables durability (tests).
+- **P2 cancel → worker:** `POST /jobs/{id}/cancel` marks the job cancelled; claiming workers poll status (CLI / loopback) and stop before/after execute. Heartbeats renew leases; expired leases reclaim to `pending`.
 
 ---
 
 ## 9. UI (P2)
 
-- **Workers** page under Admin (online, GPU, labels, last heartbeat)
-- Builder: optional placement chip on selected node
-- Run detail: per-node `worker_id` in provenance / status strip
+- **Workers** page under Admin (`#/workers`): id, status, labels/pools, GPU/VRAM, last heartbeat, **stale** badge (>45s)
+- Run detail: per-node placement map from `meta.distributed_node_workers` (written by `DistributedBackend` when `run_manager` is available)
+- Builder: optional placement chip on selected node (stretch / P3)
 
 ---
 
@@ -271,10 +273,10 @@ P1 two-box path on Server-99: NFS **or** MinIO; default implementation starts wi
 - [x] Document Server-99 + second host runbook (below)
 
 ### P2 — Operable
-- [ ] Persistent registry (Redis or disk) for multi-API-worker control
-- [ ] Cancel to worker; lease reclaim
-- [ ] UI Workers + run placement column
-- [ ] Plugin list advertised; refuse job if node_type missing
+- [x] Persistent registry (Redis or disk) for multi-API-worker control
+- [x] Cancel to worker; lease reclaim
+- [x] UI Workers + run placement column
+- [x] Plugin list advertised; refuse job if node_type missing
 
 ### P3 — Scale (later)
 - [ ] K8s backend implementing same job protocol
@@ -382,4 +384,7 @@ GRAPHYN_CONTROL_URL=http://127.0.0.1:8001/api/v1 \
 | `GRAPHYN_WORKER_ID` | Stable worker identity |
 | `GRAPHYN_API_TOKEN` | Shared Bearer token |
 | `GRAPHYN_DISTRIBUTED_JOB_TIMEOUT` | Control wait per remote job (default 120s) |
+| `GRAPHYN_DISTRIBUTED_STORE` | `disk` (default), `redis`, or `memory` — registry/queue durability |
+| `GRAPHYN_REDIS_URL` | When set, distributed store prefers Redis (same URL as run_control) |
+| `GRAPHYN_JOB_LEASE_TTL_S` | Claimed-job lease TTL before reclaim (default 60s) |
 

@@ -1404,9 +1404,37 @@ def cmd_worker_start(args):
                 time.sleep(heartbeat_s)
                 continue
             print(f"[worker] claimed job {job.job_id} node={job.node_id} type={job.node_type}")
+            # Hard refuse missing plugin (claim should already skip).
+            advertised = list(info.get("plugins") or [])
+            if advertised and job.node_type not in advertised:
+                get_job_queue().complete(
+                    JobResult(
+                        job_id=job.job_id,
+                        status="failed",
+                        error=(
+                            f"Worker {worker_id!r} refuses job: node_type "
+                            f"{job.node_type!r} not in advertised plugins"
+                        ),
+                        worker_id=worker_id,
+                        duration_s=0.0,
+                    )
+                )
+                if once:
+                    return
+                continue
+            if get_job_queue().is_cancelled(job.job_id):
+                print(f"[worker] job {job.job_id} cancelled before start")
+                if once:
+                    return
+                continue
+            get_job_queue().mark_running(job.job_id)
             started = time.time()
             try:
+                if get_job_queue().is_cancelled(job.job_id):
+                    raise RuntimeError("cancelled by control plane")
                 outputs, output_refs = _execute_job(job.model_dump(mode="json"))
+                if get_job_queue().is_cancelled(job.job_id):
+                    raise RuntimeError("cancelled by control plane")
                 # Embed outputs only when tiny (debug); control hydrates via refs.
                 events = []
                 try:
@@ -1427,16 +1455,37 @@ def cmd_worker_start(args):
                 )
                 print(f"[worker] completed job {job.job_id}")
             except Exception as exc:
-                get_job_queue().complete(
-                    JobResult(
-                        job_id=job.job_id,
-                        status="failed",
-                        error=str(exc),
-                        worker_id=worker_id,
-                        duration_s=time.time() - started,
-                    )
+                cancelled = (
+                    get_job_queue().is_cancelled(job.job_id)
+                    or "cancelled by control plane" in str(exc)
                 )
-                print(f"[worker] job {job.job_id} failed: {exc}", file=sys.stderr)
+                if cancelled:
+                    existing = get_job_queue().get(job.job_id)
+                    if existing is None or existing.status != "cancelled":
+                        try:
+                            get_job_queue().complete(
+                                JobResult(
+                                    job_id=job.job_id,
+                                    status="cancelled",
+                                    error="cancelled by control plane",
+                                    worker_id=worker_id,
+                                    duration_s=time.time() - started,
+                                )
+                            )
+                        except ValueError:
+                            pass
+                    print(f"[worker] job {job.job_id} cancelled", file=sys.stderr)
+                else:
+                    get_job_queue().complete(
+                        JobResult(
+                            job_id=job.job_id,
+                            status="failed",
+                            error=str(exc),
+                            worker_id=worker_id,
+                            duration_s=time.time() - started,
+                        )
+                    )
+                    print(f"[worker] job {job.job_id} failed: {exc}", file=sys.stderr)
             if once:
                 return
 
@@ -1469,9 +1518,49 @@ def cmd_worker_start(args):
                     f"[worker] claimed job {job.get('job_id')} "
                     f"node={job.get('node_id')} type={job.get('node_type')}"
                 )
+                advertised = list(info.get("plugins") or [])
+                node_type = job.get("node_type") or ""
+                if advertised and node_type not in advertised:
+                    _http_json(
+                        "POST",
+                        f"/jobs/{job['job_id']}/complete",
+                        {
+                            "job_id": job["job_id"],
+                            "status": "failed",
+                            "output_refs": {},
+                            "events": [],
+                            "error": (
+                                f"Worker {worker_id!r} refuses job: node_type "
+                                f"{node_type!r} not in advertised plugins"
+                            ),
+                            "worker_id": worker_id,
+                            "duration_s": 0.0,
+                        },
+                    )
+                    if once:
+                        return
+                    continue
+
+                def _job_cancelled() -> bool:
+                    try:
+                        st = _http_json("GET", f"/jobs/{job['job_id']}")
+                        j = (st or {}).get("job") or {}
+                        return j.get("status") == "cancelled"
+                    except Exception:
+                        return False
+
+                if _job_cancelled():
+                    print(f"[worker] job {job.get('job_id')} cancelled before start")
+                    if once:
+                        return
+                    continue
                 started = time.time()
                 try:
+                    if _job_cancelled():
+                        raise RuntimeError("cancelled by control plane")
                     outputs, output_refs = _execute_job(job)
+                    if _job_cancelled():
+                        raise RuntimeError("cancelled by control plane")
                     events = []
                     try:
                         if sum(len(repr(v)) for v in (outputs or {}).values()) < 2048:
@@ -1488,17 +1577,32 @@ def cmd_worker_start(args):
                         "duration_s": time.time() - started,
                     }
                 except Exception as exc:
+                    cancelled = (
+                        "cancelled by control plane" in str(exc) or _job_cancelled()
+                    )
                     result = {
                         "job_id": job["job_id"],
-                        "status": "failed",
+                        "status": "cancelled" if cancelled else "failed",
                         "output_refs": {},
                         "events": [],
-                        "error": str(exc),
+                        "error": (
+                            "cancelled by control plane" if cancelled else str(exc)
+                        ),
                         "worker_id": worker_id,
                         "duration_s": time.time() - started,
                     }
-                    print(f"[worker] job failed: {exc}", file=sys.stderr)
-                _http_json("POST", f"/jobs/{job['job_id']}/complete", result)
+                    print(
+                        f"[worker] job {'cancelled' if cancelled else 'failed'}: {exc}",
+                        file=sys.stderr,
+                    )
+                try:
+                    _http_json("POST", f"/jobs/{job['job_id']}/complete", result)
+                except Exception as complete_exc:
+                    # Control may have already marked cancelled.
+                    print(
+                        f"[worker] complete report: {complete_exc}",
+                        file=sys.stderr,
+                    )
                 print(f"[worker] reported completion for {job['job_id']}")
                 if once:
                     return

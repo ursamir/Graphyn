@@ -82,9 +82,10 @@ def worker_eligible_for_job(worker: WorkerInfo, job: NodeJob) -> bool:
         if free is None or free < min_vram:
             return False
 
-    if job.node_type and worker.plugins:
-        # If the worker advertises a plugin list, require the node_type.
-        if job.node_type not in worker.plugins:
+    # Hard refuse (P2): advertised non-empty plugins must include node_type.
+    plugins = list(worker.plugins or [])
+    if plugins:
+        if not job.node_type or job.node_type not in plugins:
             return False
 
     return True

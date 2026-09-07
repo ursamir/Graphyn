@@ -11,6 +11,7 @@ export type AppView =
   | 'projects'
   | 'system'
   | 'secrets'
+  | 'workers'
 
 export type ToastTone = 'info' | 'success' | 'error'
 

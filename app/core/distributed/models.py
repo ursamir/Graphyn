@@ -88,6 +88,7 @@ class NodeJob(BaseModel):
     status: JobStatus = "pending"
     claimed_by: str | None = None
     claimed_at: datetime | None = None
+    lease_expires_at: datetime | None = None
     require_gpu: bool = False
     min_vram_mib: int | None = None
     tags: list[str] = Field(default_factory=list)

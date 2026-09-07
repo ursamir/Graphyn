@@ -12,6 +12,7 @@ import {
   Activity,
   Settings,
   KeyRound,
+  Server,
   X,
   Menu,
   PanelLeftClose,
@@ -31,6 +32,7 @@ import DataView from './features/data/DataView'
 import ProjectsView from './features/projects/ProjectsView'
 import SystemView from './features/system/SystemView'
 import SecretsView from './features/secrets/SecretsView'
+import WorkersView from './features/workers/WorkersView'
 
 const NAV_GROUPS: Array<{
   title: string
@@ -56,6 +58,7 @@ const NAV_GROUPS: Array<{
     title: 'Admin',
     items: [
       { id: 'projects', label: 'Projects', icon: FolderKanban },
+      { id: 'workers', label: 'Workers', icon: Server },
       { id: 'secrets', label: 'Secrets', icon: KeyRound },
       { id: 'system', label: 'System', icon: Activity },
     ],
@@ -74,6 +77,7 @@ const VIEW_LABEL: Record<AppView, string> = {
   projects: 'Projects',
   secrets: 'Secrets',
   system: 'System',
+  workers: 'Workers',
 }
 
 const JUMP_KEYS: Record<string, AppView> = {
@@ -376,6 +380,7 @@ export default function App() {
             {view === 'data' && <DataView />}
             {view === 'projects' && <ProjectsView />}
             {view === 'system' && <SystemView />}
+            {view === 'workers' && <WorkersView />}
             {view === 'secrets' && <SecretsView />}
           </main>
         </div>

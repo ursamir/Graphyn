@@ -384,6 +384,27 @@ export default function RunsView() {
                   </span>
                 )}
               </div>
+              {(() => {
+                const place = (detail?.meta as { distributed_node_workers?: Record<string, string> } | undefined)
+                  ?.distributed_node_workers
+                if (!place || typeof place !== 'object') return null
+                const entries = Object.entries(place)
+                if (entries.length === 0) return null
+                return (
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-ink-600">
+                    <span className="font-medium text-ink-500">Workers</span>
+                    {entries.map(([nid, wid]) => (
+                      <span
+                        key={nid}
+                        className="rounded-md bg-ink-100 px-1.5 py-0.5 font-mono text-ink-800"
+                        title={`Node ${nid}`}
+                      >
+                        {humanNodeLabel(nid)} → {wid}
+                      </span>
+                    ))}
+                  </div>
+                )
+              })()}
             </div>
 
             <div className="flex flex-wrap gap-2">
