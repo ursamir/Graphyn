@@ -12,14 +12,27 @@ General-purpose AI/workflow execution platform (**graphyn-sdk**). Four interface
 
 Canonical docs: `docs/README.md`. Start: `docs/GETTING_STARTED.md`. Architecture: `docs/ARCHITECTURE.md`. Kiro steering (detailed): `.kiro/steering/`.
 
-**Distributed execution:** multi-machine placement, worker registry/job queue, and
-`GRAPHYN_BACKEND=distributed` are specified in `docs/DISTRIBUTED_EXECUTION.md`
-(IR `placement`, `artifact://` URIs, `graphyn worker start`). Default remains
-`LocalPythonBackend` when `GRAPHYN_BACKEND` is unset.
+**How to run:** Mode A (single machine, default local backend) vs Mode B
+(`GRAPHYN_BACKEND=distributed` + workers). User steps in `docs/GETTING_STARTED.md`.
+Contracts (IR `placement`, artifact URIs, worker CLI) in `docs/DISTRIBUTED_EXECUTION.md`.
 
 ## Vision
 
 Build, run, and manage typed DAG pipelines — domain-agnostic via plugins (audio ML is a first-party pack, not the product identity). Graph IR (`.graph.json`) is the single pipeline language. Interfaces execute via `get_backend().execute(graph)`.
+
+
+## Operating modes (read before starting processes)
+
+| Mode | Env | Behavior |
+|---|---|---|
+| **A — Single machine** | leave GRAPHYN_BACKEND unset | LocalPythonBackend; one API host runs all nodes; install full plugin set here |
+| **B — Multi machine** | GRAPHYN_BACKEND=distributed | Control plane schedules; workers use CLI worker start with control-url, labels, pool |
+
+Capability models:
+- **Full-capability host/worker** — Audio + Common installed; can execute advertised node types.
+- **Specialized worker** — subset of plugins + labels/pools (gpu, gpu-lab); scheduler matches IR placement / capability.
+
+User-facing steps: docs/GETTING_STARTED.md. Protocol details: docs/DISTRIBUTED_EXECUTION.md. Do not invent a third backend.
 
 ## Hard Rules
 
@@ -65,10 +78,8 @@ docs/             Public docs (GETTING_STARTED, PRODUCT_VISION, architecture, re
 
 ## Quick Commands
 
-```bash
-venv/bin/uvicorn app.api.main:app --reload --port 8001
-cd graphyn-ui && npm run dev
-venv/bin/python -m app.cli.main run --graph <file.graph.json>
-venv/bin/pytest unit_test/
-GRAPHYN_SKIP_PLUGIN_LOAD=1 venv/bin/pytest unit_test/   # faster / isolated
-```
+Mode A: start API without GRAPHYN_BACKEND; run UI; run graphs via CLI (see docs/GETTING_STARTED.md).
+
+Mode B: set GRAPHYN_BACKEND=distributed on the control plane; on workers run worker start with --control-url / --labels / --pool.
+
+Tests: venv/bin/pytest unit_test/  (or GRAPHYN_SKIP_PLUGIN_LOAD=1 for faster isolation).

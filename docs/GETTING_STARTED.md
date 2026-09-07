@@ -1,102 +1,111 @@
 # Getting Started
 
-Graphyn is a typed DAG workflow platform: design pipelines as Graph IR, run them locally or across workers, and inspect artifacts, experiments, and lineage from the console, SDK, CLI, REST API, or MCP.
+Graphyn runs typed DAG pipelines (Graph IR) from a console, SDK, CLI, REST API, or MCP.
+
+**This guide owns:** install, first run, and how to operate Graphyn (single machine vs multi-machine).
+Deep design: [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md). Docker: [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+## Choose an operating mode
+
+| Mode | When | Backend | Who runs nodes |
+|---|---|---|---|
+| **A — Single machine** | Dev laptop, one box, all plugins here | `LocalPythonBackend` (default) | This process runs every node |
+| **B — Multi machine** | Split light work and GPU/specialized workers | `GRAPHYN_BACKEND=distributed` | Control plane schedules; workers claim by labels/capabilities |
+
+In mode B you can run a **full-capability** worker (all plugins) or **specialized** workers (e.g. `--labels gpu` with only GPU plugins). IR `placement` on each node routes work.
+
+---
 
 ## Prerequisites
 
 - Python 3.11+
 - Node.js 20+ (console only)
-- Optional: Docker / Docker Compose (see [DEPLOYMENT.md](./DEPLOYMENT.md))
+- Mode B: same Graphyn version + needed plugins on every worker host
 
-## Install
+## Install (once per machine)
 
 ```bash
 git clone https://github.com/ursamir/Graphyn.git
 cd Graphyn
 python3 -m venv venv
 venv/bin/pip install -e .
-# First-party plugins
-venv/bin/python -c "from pathlib import Path; from app.core.plugins.manager import PluginManager as M; m=M() ; \
-[m.install(str(p), upgrade=True) for d in ('Audio','Common') for p in Path('PluginPackage',d).iterdir() if (p/'plugin.toml').exists(Y]"
+venv/bin/python -c "from pathlib import Path; from app.core.plugins.manager import PluginManager as M; m=M(); [m.install(str(p), upgrade=True) for d in ('Audio','Common') for p in Path('PluginPackage', d).iterdir() if (p / 'plugin.toml').exists()]"
 ```
 
-## Run the API
+---
 
-```bash
-venv/bin/uvicorn app.api.main:app --reload --port 8001
-```
+## Mode A — Single machine (full catalog locally)
 
-API base: `http://localhost:8001/api/v1/`
+Default local backend. Do not set GRAPHYN_BACKEND.
 
-## Run the console
 
-```bash
-cd graphyn-ui && npm install && npm run dev
-```
+### Start API and console
 
-Open `http://localhost:5173`. Sidebar:
+- API: `venv/bin/uvicorn app.api.main:app --reload --port 8001`
+- Console: `cd graphyn-ui && npm install && npm run dev`
+- API URL: `http://localhost:8001/api/v1/`
+- UI URL: `http://localhost:5173`
 
-| Group | Views |
+### Run a graph
+
+- `venv/bin/python -m app.cli.main run --graph examples/templates/basic-wakeword.graph.json`
+
+### SDK
+
+Use `Pipeline` and `PipelineNode` from `app.core.sdk`; call pipeline.run(). See [SDK_AND_CLI.md](./SDK_AND_CLI.md) for full examples.
+
+### MCP
+
+- `venv/bin/python -m app.mcp.server`
+
+Console groups: **Build** (Builder, Templates, Proposals, Runs) · **Observe** (Trace, Experiments, Artifacts) · **Library** (Plugins, Data) · **Deploy** (Edge, Workers) · **Admin** (Projects, Secrets, System).
+
+---
+
+## Mode B — Multi machine (control plane + workers)
+
+Use when some nodes need another host (GPU, edge, specialized plugins).
+
+### B1 — Control plane
+
+- Set env GRAPHYN_BACKEND=distributed (optional GRAPHYN_API_TOKEN)
+- Start API with host 0.0.0.0 port 8001 (control plane)
+- Local / unconstrained nodes run on the control plane; GPU-tagged nodes wait for a worker
+
+### B2 — Worker hosts
+
+Install Graphyn plus plugins that worker should own, then start a worker against the control URL (/api/v1) with worker-id, labels, and optional pool.
+
+Example:
+
+- `venv/bin/python -m app.cli.main worker start --control-url http://<CONTROL_IP>:8001/api/v1 --worker-id gpu-1 --labels gpu,lab --pool gpu-lab`
+
+| Worker style | How |
 |---|---|
-| **Build** | Builder, Templates, Proposals, Runs |
-| **Observe** | Trace, Experiments, Artifacts |
-| **Library** | Plugins, Data |
-| **Deploy** | Edge, Workers |
-| **Admin** | Projects, Secrets, System |
+| **Full-capability** | Install Audio + Common; broad labels; can claim most node types |
+| **Specialized** | Install only needed plugins; labels like gpu and pool like gpu-lab; only matching jobs claimed |
 
-## Run a graph (CLI)
+Check Deploy → Workers in the console. Demo: examples/29_distributed_placement/pipeline.graph.json with GRAPHYN_BACKEND=distributed.
 
-```bash
-venv/bin/python -m app.cli.main run --graph examples/01_basic_pipeline/pipeline.graph.json
-# or< if installed:
-graphyn run --graph path/to/graph.graph.json
-```
+IR placement (schema 1.2): mode auto|local|worker|pool, plus tags, require_gpu, min_vram_mib, pool, worker. Full contracts: [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md).
 
-## Python SDK (minimal)
+### Same-host smoke
 
-``ppython
-from app.core.sdk import Pipeline, PipelineNode
+Run distributed API locally, then start a worker with control-url http://127.0.0.1:8001/api/v1, worker-id local-gpu, labels gpu, and --once.
 
-pipeline = Pipeline(
-    [
-        PipelineNode("dataset_ingest", {"path": "workspace/datasets/input/speech"}),
-        PipelineNode("audio_conditioner", {"sample_rate": 16000}),
-    ],
-    seed=42,
-    name="demo",
-)
-outputs = pipeline.run()
-```
+Exact flags and env table: [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md) (CLI + runbook sections).
 
-## MCP (agents)
-
-```bash
-graphyn mcp
-# or
-python -m app.mcp.server
-```
-
-23 tools including discovery, execute, artifacts, plugins, secrets, and `propose_graph`. See [MCP_SERVER.md](./MCP_SERVER.md).
-
-## Distributed workers (optional)
-
-```bash
-export GRAPHYN_BACKEND=distributed
-venv/bin/uvicorn app.api.main:app --port 8001
-# on a worker host:
-graphyn worker start --api-url http://<api-host>:8001
-```
-
-Details: [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md).
+---
 
 ## Next reading
 
-| Goal | Doc |
+| Need | Doc |
 |---|---|
 | Product direction | [PRODUCT_VISION.md](./PRODUCT_VISION.md) |
-| System design | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| Nodes & ports | [NODE_CATALOGUE.md](./NODE_CATALOGUE.md) |
-| Write a plugin | [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md) |
-| REST / SDK / CLI | [API_REFERENCE.md](./API_REFERENCE.md), [SDK_AND_CLI.md](./SDK_AND_CLI.md) |
-| Deploy | [DEPLOYMENT.md](./DEPLOYMENT.md) |
-| Open limitations | [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) |
+| Distributed contracts | [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md) |
+| Docker Compose | [DEPLOYMENT.md](./DEPLOYMENT.md) |
+| Architecture | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| Nodes | [NODE_CATALOGUE.md](./NODE_CATALOGUE.md) |
+| Plugins | [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md) |
+| REST / SDK / CLI / MCP | [API_REFERENCE.md](./API_REFERENCE.md), [SDK_AND_CLI.md](./SDK_AND_CLI.md), [MCP_SERVER.md](./MCP_SERVER.md) |
+| Limits | [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) |

@@ -85,6 +85,8 @@ docker exec graphyn-api /data/graphyn-home/plugins/venvs/trainer/bin/pip install
 
 ## Distributed workers (second host)
 
+First-run Mode A vs Mode B: [GETTING_STARTED.md](./GETTING_STARTED.md). This section is Compose/host deploy notes only.
+
 Default Compose is single-machine `LocalPythonBackend`. For multi-machine placement:
 
 1. On the control / API host: `GRAPHYN_BACKEND=distributed` (and the usual auth vars).

@@ -2,7 +2,19 @@
 
 **Typed DAG workflows for AI, ML, and automation.**
 
-Design pipelines as Graph IR, run them locally or on distributed workers, and keep full accountability across console, SDK, CLI, REST, and MCP.
+Design pipelines as Graph IR, run them on one machine or across workers, and keep accountability via console, SDK, CLI, REST, and MCP.
+
+## Operating modes
+
+| Mode | Backend | Idea |
+|---|---|---|
+| **A — Single machine** | Default local backend | One host runs the API and every node (full plugin catalog locally) |
+| **B — Multi machine** | Distributed backend | Control plane schedules; workers claim jobs by labels / pools / GPU / installed plugins |
+
+Mode B supports a **full-capability** worker (all plugins) or **specialized** workers (subset of plugins + capability labels).
+
+How to run both modes: **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**.
+Contracts: [docs/DISTRIBUTED_EXECUTION.md](docs/DISTRIBUTED_EXECUTION.md).
 
 ## Why Graphyn
 
@@ -15,33 +27,33 @@ Design pipelines as Graph IR, run them locally or on distributed workers, and ke
 | Agentic | MCP tools + human-approved graph proposals |
 | Accountability | Trace any artifact back to run, graph, and worker |
 
-North star: [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md).
+Vision: [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md).
 
 ## Quick start
 
-See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) for install, API, console, SDK, CLI, and MCP.
+Follow **[Getting Started](docs/GETTING_STARTED.md)** — install once, then Mode A (single machine) or Mode B (control plane + workers).
 
 ## Interfaces
 
 | Surface | Entry |
 |---|---|
-| REST | http://localhost:8001/api/v1/ |
-| Console | graphyn-ui/ (Vite, port 5173) |
+| REST | API host, path /api/v1/ (default port 8001) |
+| Console | graphyn-ui (default port 5173) |
 | SDK | app.core.sdk Pipeline / PipelineNode |
-| CLI | python -m app.cli.main |
-| MCP | graphyn mcp (23 tools) |
+| CLI | app.cli.main |
+| MCP | app.mcp.server (23 tools) |
 
 ## Documentation
 
-| Doc | |
+| Doc | Purpose |
 |---|---|
-| [Getting started](docs/GETTING_STARTED.md) | Install and first pipeline |
+| [Getting started](docs/GETTING_STARTED.md) | Install and Mode A / Mode B operations |
+| [Distributed execution](docs/DISTRIBUTED_EXECUTION.md) | Placement, workers, jobs, env |
 | [Architecture](docs/ARCHITECTURE.md) | System design |
-| [Distributed execution](docs/DISTRIBUTED_EXECUTION.md) | Workers and placement |
 | [API reference](docs/API_REFERENCE.md) | REST |
-| [Plugin guide](docs/PLUGIN_GUIDE.md) | Extend with nodes |
+| [Plugin guide](docs/PLUGIN_GUIDE.md) | Author nodes |
 | [Doc index](docs/README.md) | Full map |
 
 ## Development
 
-Run unit_test/ with venv pytest. Contributor guide: [AGENTS.md](AGENTS.md). Limitations: [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
+Contributor / agent guide: [AGENTS.md](AGENTS.md). Limitations: [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).

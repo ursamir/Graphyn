@@ -6,6 +6,8 @@
 
 ---
 
+> **First run?** See [GETTING_STARTED.md](./GETTING_STARTED.md) for Mode A vs Mode B. This file owns contracts, APIs, CLI flags, and the multi-host runbook.
+
 ## 1. Goal
 
 Run one GraphIR pipeline across **two or more physical machines**, placing each node on an appropriate worker (e.g. GPU trainer on Server-99, light nodes on a laptop/API host).

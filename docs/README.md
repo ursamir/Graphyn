@@ -2,17 +2,17 @@
 
 Typed DAG workflows for AI/ML and general automation. Graph IR is the shared language across console, SDK, CLI, REST, and MCP.
 
-Start here: **[Getting Started](./GETTING_STARTED.md)**.
+Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine vs Mode B distributed).
 
 ## Guides
 
 | Document | Audience |
 |---|---|
-| [GETTING_STARTED.md](./GETTING_STARTED.md) | Install, first run, console map |
+| [GETTING_STARTED.md](./GETTING_STARTED.md) | Install + Mode A/B operations (single vs multi-machine) |
 | [PRODUCT_VISION.md](./PRODUCT_VISION.md) | Product north star and console IA |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Docker Compose and production baseline |
 | [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md) | Author and ship plugins |
-| [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md) | Multi-machine workers and placement |
+| [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md) | Worker protocol, placement IR, env, runbook |
 
 ## Reference
 
