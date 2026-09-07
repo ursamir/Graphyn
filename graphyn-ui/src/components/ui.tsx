@@ -52,7 +52,10 @@ export function ErrorBanner({
   const [copied, setCopied] = React.useState(false)
   const copyText = detail || message
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-900">
+    <div
+      role="alert"
+      className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-900"
+    >
       <div className="flex min-w-0 flex-1 items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
         <div className="min-w-0">
@@ -133,16 +136,32 @@ export function ConfirmButton({
   disabled?: boolean
 }) {
   const [armed, setArmed] = React.useState(false)
+  const btnRef = React.useRef<HTMLButtonElement>(null)
   React.useEffect(() => {
     if (!armed) return
     const t = setTimeout(() => setArmed(false), 4000)
     return () => clearTimeout(t)
   }, [armed])
+  React.useEffect(() => {
+    if (!armed) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setArmed(false)
+        btnRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [armed])
   return (
     <button
+      ref={btnRef}
       type="button"
       disabled={disabled}
       className={danger ? 'btn-danger' : 'btn-secondary'}
+      aria-pressed={armed}
+      aria-label={armed ? confirmLabel : label}
       onClick={() => {
         if (!armed) {
           setArmed(true)
@@ -150,6 +169,12 @@ export function ConfirmButton({
         }
         setArmed(false)
         onConfirm()
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && armed) {
+          e.preventDefault()
+          setArmed(false)
+        }
       }}
     >
       {armed ? confirmLabel : label}
@@ -184,7 +209,12 @@ export function ToastHost({
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
           )}
           <div className="min-w-0 flex-1 break-words text-sm">{t.message}</div>
-          <button type="button" className="text-ink-400 hover:text-ink-700" onClick={() => onDismiss(t.id)}>
+          <button
+            type="button"
+            className="text-ink-400 hover:text-ink-700"
+            aria-label="Dismiss notification"
+            onClick={() => onDismiss(t.id)}
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -230,7 +260,7 @@ export function PageHeader({
   return (
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h2 className="text-xl font-semibold text-ink-950">{title}</h2>
+        <h1 className="text-xl font-semibold text-ink-950">{title}</h1>
         {description && <p className="mt-0.5 max-w-2xl text-sm text-ink-500">{description}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

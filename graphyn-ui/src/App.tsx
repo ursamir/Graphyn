@@ -170,6 +170,9 @@ export default function App() {
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const [tokenDraft, setTokenDraft] = React.useState('')
   const [tokenVisible, setTokenVisible] = React.useState(false)
+  const settingsPanelRef = React.useRef<HTMLDivElement>(null)
+  const settingsTriggerRef = React.useRef<HTMLElement | null>(null)
+  const tokenInputRef = React.useRef<HTMLInputElement>(null)
   const [navOpen, setNavOpen] = React.useState(() =>
     typeof window !== 'undefined' ? window.matchMedia('(min-width: 768px)').matches : true,
   )
@@ -262,13 +265,37 @@ export default function App() {
     if (settingsOpen) {
       setTokenDraft(getApiToken())
       setTokenVisible(false)
+      settingsTriggerRef.current = document.activeElement as HTMLElement | null
+      requestAnimationFrame(() => tokenInputRef.current?.focus())
+    } else if (settingsTriggerRef.current) {
+      settingsTriggerRef.current.focus?.()
+      settingsTriggerRef.current = null
     }
   }, [settingsOpen])
 
   React.useEffect(() => {
     if (!settingsOpen) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSettingsOpen(false)
+      if (e.key === 'Escape') {
+        setSettingsOpen(false)
+        return
+      }
+      if (e.key !== 'Tab') return
+      const root = settingsPanelRef.current
+      if (!root) return
+      const focusables = root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )
+      if (focusables.length === 0) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -397,7 +424,7 @@ export default function App() {
         </header>
 
         {bootError && (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950">
+          <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950">
             <span title={bootError}>
               {bootStatus === 401 ? 'Sign in with your API token' : "Can't reach the API"}
             </span>
@@ -497,6 +524,7 @@ export default function App() {
             onClick={() => setSettingsOpen(false)}
           >
             <div
+              ref={settingsPanelRef}
               className="w-full max-w-md rounded-2xl border border-ink-200 bg-white p-5 shadow-xl"
               onClick={(e) => e.stopPropagation()}
             >
@@ -512,6 +540,7 @@ export default function App() {
                 API Bearer token
                 <div className="mt-1 flex items-center gap-2">
                   <input
+                    ref={tokenInputRef}
                     type={tokenVisible ? 'text' : 'password'}
                     value={tokenDraft}
                     onChange={(e) => setTokenDraft(e.target.value)}

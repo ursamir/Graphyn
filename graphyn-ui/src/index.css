@@ -29,6 +29,37 @@ body {
 }
 
 
+/* Keyboard focus: visible outlines; do not remove for mouse-only :focus */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid #159288;
+  outline-offset: 2px;
+}
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-danger:focus-visible,
+.btn-quiet:focus-visible,
+.btn-icon:focus-visible,
+.tab-pill:focus-visible,
+.catalog-pill:focus-visible,
+nav button:focus-visible {
+  outline: 2px solid #159288;
+  outline-offset: 2px;
+}
+.field-control:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #159288;
+  outline-offset: 1px;
+}
+
+
 * {
   scrollbar-width: thin;
   scrollbar-color: #a3b3c2 #e4e9ee;
@@ -165,4 +196,8 @@ body {
 }
 .code-field .field-control:focus {
   box-shadow: none;
+}
+.code-field .field-control:focus-visible {
+  outline: 2px solid #71e6d6;
+  outline-offset: -2px;
 }

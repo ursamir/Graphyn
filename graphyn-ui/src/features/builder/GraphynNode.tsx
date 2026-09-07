@@ -368,7 +368,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
               aria-label={`Status ${status}`}
             />
           </div>
-          <div className={clsx('mt-0.5 truncate text-[11px]', failed ? 'text-rose-500' : 'text-ink-400')}>
+          <div className={clsx('mt-0.5 truncate text-[11px]', failed ? 'text-rose-700' : 'text-ink-500')}>
             {status !== 'idle' ? `${status} · ` : ''}
             {data.category || 'node'}
             {isolated ? ' · isolated' : ''}

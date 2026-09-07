@@ -176,8 +176,15 @@ function BuilderInner() {
     const onDoc = (e: MouseEvent) => {
       if (moreRef.current && !moreRef.current.contains(e.target as HTMLElement)) setMoreOpen(false)
     }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMoreOpen(false)
+    }
     document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('keydown', onKey)
+    }
   }, [moreOpen])
 
   const attachHandlers = React.useCallback(
@@ -778,6 +785,7 @@ function BuilderInner() {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Search nodes…"
+            aria-label="Search node catalog"
             className="w-full rounded-lg border border-ink-200 bg-ink-50 px-2.5 py-1.5 text-sm"
           />
           <select
@@ -936,6 +944,8 @@ function BuilderInner() {
               className="btn-quiet"
               onClick={() => setMoreOpen((o) => !o)}
               aria-expanded={moreOpen}
+              aria-haspopup="menu"
+              aria-label="More builder actions"
             >
               <MoreHorizontal className="h-3.5 w-3.5" />
             </button>

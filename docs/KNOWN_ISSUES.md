@@ -52,6 +52,18 @@
 
 ## Open — Deferred (Architectural Work Required)
 
+
+### UI-A11Y-1 — Accessibility polish incomplete (not WCAG-certified)
+
+**Files:** `graphyn-ui/src/**`  
+**Detail:** Phase 7 added focus-visible outlines, `role="alert"` on ErrorBanner, page `h1` via PageHeader, icon-button labels, Settings dialog focus restore/Tab trap, ConfirmButton Escape-to-disarm, and a contrast bump for failed-node status text. Remaining gaps (not claimed fixed):
+- No full screen-reader audit of every route; React Flow canvas/handles remain weakly announced.
+- Some muted/meta text still uses `text-ink-400` (~3.4:1 on white) for non-critical chrome.
+- Dropdown/action menus (plugins/templates/builder “more”) are not full ARIA menus with arrow-key roving tabindex.
+- Toasts lack live-region politeness tuning; ConfirmButton is two-click arming, not a modal dialog.
+**Do not claim** full WCAG 2.x AA compliance in product or trust docs.
+
+
 ### SCALE-3 — `run-async` status tracking uses `meta.json` polling
 
 **File:** `app/api/routers/pipelines.py` → `GET /api/v1/runs/{run_id}/status`  
