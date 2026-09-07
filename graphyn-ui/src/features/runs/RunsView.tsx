@@ -54,21 +54,9 @@ const PANEL_LABELS: Record<string, string> = {
   debug: 'Debug',
   checkpoints: 'Checkpoints',
   artifacts: 'Files',
-  provenance: 'Lineage',
 }
 
 
-function provenanceRows(data: unknown): Array<Record<string, unknown>> | null {
-  if (Array.isArray(data)) return data.filter((x) => x && typeof x === 'object') as Array<Record<string, unknown>>
-  if (data && typeof data === 'object') {
-    const rec = data as Record<string, unknown>
-    for (const key of ['records', 'provenance', 'nodes', 'items']) {
-      const v = rec[key]
-      if (Array.isArray(v)) return v.filter((x) => x && typeof x === 'object') as Array<Record<string, unknown>>
-    }
-  }
-  return null
-}
 
 export default function RunsView() {
   const focusRunId = useAppStore((s) => s.focusRunId)
@@ -90,8 +78,7 @@ export default function RunsView() {
   const [artifacts, setArtifacts] = React.useState<unknown>(null)
   const [outputFiles, setOutputFiles] = React.useState<OutputFile[]>([])
   const [previewUrls, setPreviewUrls] = React.useState<Record<string, string>>({})
-  const [provenance, setProvenance] = React.useState<unknown>(null)
-  const [panel, setPanel] = React.useState<'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'provenance'>('logs')
+  const [panel, setPanel] = React.useState<'logs' | 'debug' | 'checkpoints' | 'artifacts'>('logs')
   const [error, setError] = React.useState<string | null>(null)
   const limit = 50
 
@@ -122,17 +109,15 @@ export default function RunsView() {
     setSamples(null)
     setArtifacts(null)
     setOutputFiles([])
-    setProvenance(null)
     setError(null)
     try {
-      const [d, st, dbg, cps, arts, outs, prov] = await Promise.all([
+      const [d, st, dbg, cps, arts, outs] = await Promise.all([
         apiJson<Record<string, unknown>>(`/runs/${id}`),
         apiJson<Record<string, unknown>>(`/runs/${id}/status`).catch(() => null),
         apiJson<Record<string, unknown>>(`/runs/${id}/debug-report`).catch(() => null),
         apiJson<string[]>(`/runs/${id}/checkpoints`).catch(() => []),
         apiJson(`/runs/${id}/artifacts`).catch(() => []),
         apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
-        apiJson(`/runs/${id}/provenance`).catch(() => null),
       ])
       setDetail(d)
       setStatus(st)
@@ -140,7 +125,6 @@ export default function RunsView() {
       setCheckpoints(Array.isArray(cps) ? cps : [])
       setArtifacts(arts)
       setOutputFiles(Array.isArray(outs) ? outs : [])
-      setProvenance(prov)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -329,7 +313,7 @@ export default function RunsView() {
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
           title="Runs"
-          description="Execution history & ops — live status, logs, pause/cancel. For lineage/provenance deep-dive use Trace (View lineage). Experiments compares metrics."
+          description="Execution history, logs, and ops controls."
           actions={
             <button type="button" onClick={() => void load()} className="btn-secondary">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -544,7 +528,7 @@ export default function RunsView() {
               )}
             </div>
             <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1">
-              {(['logs', 'debug', 'checkpoints', 'artifacts', 'provenance'] as const).map((p) => (
+              {(['logs', 'debug', 'checkpoints', 'artifacts'] as const).map((p) => (
                 <button
                   key={p}
                   type="button"
@@ -669,45 +653,6 @@ export default function RunsView() {
                 <KeyValue data={artifacts} empty="No artifact records for this run." />
               </div>
             )}
-            {panel === 'provenance' && (() => {
-              const rows = provenanceRows(provenance)
-              if (!rows || rows.length === 0) {
-                return (
-                  <div className="space-y-3">
-                    <p className="text-xs text-ink-500">
-                      Session lineage for this run. For provenance deep-dive, use View lineage (Trace).
-                    </p>
-                    <KeyValue data={provenance} empty="No lineage recorded for this run." />
-                  </div>
-                )
-              }
-              return (
-                <div className="space-y-3">
-                  <p className="text-xs text-ink-500">
-                    Session lineage for this run. For provenance deep-dive, use View lineage (Trace).
-                  </p>
-                  <ol className="space-y-2">
-                  {rows.map((row, i) => {
-                    const label = humanNodeLabel(String(row.node_id ?? row.node_type ?? row.node ?? `step ${i + 1}`))
-                    const when = String(row.created_at ?? row.ts ?? '')
-                    const kind = String(row.artifact_type ?? row.type ?? '')
-                    return (
-                      <li key={String(row.artifact_id ?? i)} className="flex gap-3 rounded-2xl border border-ink-200/70 bg-white px-3 py-2.5 shadow-sm">
-                        <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-accent-500" />
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-ink-900">{label}</div>
-                          <div className="mt-0.5 text-[11px] text-ink-500">
-                            {kind ? `${kind} · ` : ''}
-                            {when || shortRunId(String(row.artifact_id ?? ''))}
-                          </div>
-                        </div>
-                      </li>
-                    )
-                  })}
-                  </ol>
-                </div>
-              )
-            })()}
           </>
         )}
       </div>

@@ -239,7 +239,7 @@ export default function ArtifactsView() {
       <div className="overflow-y-auto border-r border-ink-300 bg-white p-4">
         <PageHeader
           title="Artifacts"
-          description="Outputs from completed runs. Filter by run, then Trace lineage or open the run — Builder closes the Observe→Deploy loop."
+          description="Browse pipeline outputs across runs."
         />
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <label className="text-[11px] font-medium text-ink-500">
@@ -373,24 +373,25 @@ export default function ArtifactsView() {
                       <span className="ml-2 text-sm font-normal text-ink-500">{artifactType}</span>
                     ) : null}
                   </div>
-                  <div className="text-sm text-ink-600">
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-ink-600">
                     {runId ? (
-                      <>
-                        From run{' '}
-                        <button
-                          type="button"
-                          className="font-mono text-accent-800 hover:underline"
-                          onClick={() => openRun(runId)}
-                          title={runId}
-                        >
-                          {shortRunId(runId)}
-                        </button>
-                      </>
+                      <button
+                        type="button"
+                        className="inline-flex items-center rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 font-mono text-xs text-accent-800 hover:border-accent-300 hover:bg-accent-50"
+                        onClick={() => openRun(runId)}
+                        title={runId}
+                      >
+                        run {shortRunId(runId)}
+                      </button>
                     ) : (
-                      'No linked run'
+                      <span className="text-ink-400">No linked run</span>
                     )}
-                    {graphName ? ` · ${humanizeTemplateName(graphName)}` : ''}
-                    {created ? ` · ${formatLocaleDateTime(created)}` : ''}
+                    {graphName ? (
+                      <span className="text-xs text-ink-500">{humanizeTemplateName(graphName)}</span>
+                    ) : null}
+                    {created ? (
+                      <span className="text-xs text-ink-400">{formatLocaleDateTime(created)}</span>
+                    ) : null}
                   </div>
                   <div className="font-mono text-[11px] text-ink-400">{selected}</div>
                 </div>
@@ -471,8 +472,16 @@ export default function ArtifactsView() {
                 )}
               </div>
             )}
-            <h3 className="text-sm font-semibold">Detail</h3>
-            <KeyValue data={detail} />
+            <h3 className="text-sm font-semibold">Artifact</h3>
+            <KeyValue
+              data={(() => {
+                if (!detail || typeof detail !== 'object') return detail
+                const omit = new Set(['run', 'run_meta', 'run_detail', 'graph', 'logs', 'status_detail'])
+                return Object.fromEntries(
+                  Object.entries(detail as Record<string, unknown>).filter(([k]) => !omit.has(k)),
+                )
+              })()}
+            />
             <h3 className="text-sm font-semibold">Lineage</h3>
             <LineageList lineage={lineage} onOpen={(id) => void open(id)} />
           </>

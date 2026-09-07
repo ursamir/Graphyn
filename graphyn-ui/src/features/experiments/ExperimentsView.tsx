@@ -43,7 +43,16 @@ function metricColumns(runs: ExperimentRun[]): string[] {
   }
   const preferred = PREFERRED_METRICS.filter((k) => keys.has(k))
   const rest = [...keys].filter((k) => !preferred.includes(k)).sort()
-  return [...preferred, ...rest]
+  const ordered = [...preferred, ...rest]
+  return ordered.filter((k) =>
+    runs.some((r) => {
+      const v = r.metrics?.[k]
+      if (v == null) return false
+      if (typeof v === 'string' && !v.trim()) return false
+      if (Array.isArray(v) && v.length === 0) return false
+      return true
+    }),
+  )
 }
 
 function fmtMetric(value: unknown): string {
@@ -181,7 +190,7 @@ export default function ExperimentsView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Experiments"
-        description="Compare runs, params, and metrics across training sessions. Start runs from Builder; open Trace for accountability backtrack."
+        description="Compare params and metrics across runs."
         actions={
           <div className="flex items-center gap-2">
             {selectedIds.length >= 2 && (
@@ -332,19 +341,19 @@ export default function ExperimentsView() {
                             <div className="flex items-center gap-1">
                               <button
                                 type="button"
-                                className="btn-secondary !px-2 !py-1 text-xs"
+                                className="btn-primary !px-2 !py-1 text-xs"
                                 onClick={() => openRun(r.run_id)}
                               >
-                                Open run
+                                Open
                               </button>
                               <button
                                 type="button"
-                                className="btn-secondary !px-2 !py-1 text-xs"
+                                className="btn-quiet !px-2 !py-1"
                                 onClick={() => openTrace({ runId: r.run_id })}
-                                title="View lineage"
+                                title="Trace lineage"
+                                aria-label="Trace lineage"
                               >
-                                <GitBranch className="h-3 w-3" />
-                                <span className="ml-1 hidden lg:inline">Lineage</span>
+                                <GitBranch className="h-3.5 w-3.5" />
                               </button>
                             </div>
                           </td>
@@ -355,7 +364,7 @@ export default function ExperimentsView() {
                 </table>
               </div>
               <div className="px-3 py-2 text-[11px] text-ink-400 border-t border-ink-50">
-                Select 2–5 runs, then Compare. Open run returns to ops; Lineage opens the accountability chain.
+                Select 2–5 runs to Compare. Open goes to Runs; Trace is secondary.
               </div>
             </div>
 
