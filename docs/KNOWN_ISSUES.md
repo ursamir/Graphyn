@@ -130,6 +130,10 @@ Chose **Option A — trusted workflows only**. UI/docs/metadata no longer call A
 
 All whole-snapshot `JobQueue` mutators (`enqueue`, `claim`, `complete`, `renew_lease`, `append_events`, `cancel`, `mark_running`, `reclaim_expired_leases`, `renew_leases_for_worker`, `clear`) route through `store.mutate_queue` / `_durable_mutate` when a durable store is configured. In-memory path keeps `_reclaim_expired_leases_unlocked` + `_persist_unlocked`. Concurrent DiskStateStore races covered in `test_distributed_p2.py`.
 
+### (resolved 2026-09-07) DIST-003 worker registry lost-update race
+
+`WorkerRegistry` register/heartbeat/remove/clear now RMW via `store.mutate_workers` / `_durable_mutate_workers` (disk exclusive `workers.lock` + unique temp files; Redis lock-or-WATCH; memory RLock). Blind full-snapshot `save_workers` from a stale local cache is not used for production RMW. Regression: concurrent register/heartbeat/remove + unique-temp + Redis fake contract in `unit_test/core/test_distributed_registry_mutate.py`. Live Redis integration still pending (CI has no Redis).
+
 ### (resolved 2026-09) Distributed P0–P2 + harden; pillars A–E console IA
 
 See `docs/DISTRIBUTED_EXECUTION.md`, `docs/PRODUCT_VISION.md`. Mid-flight in-process cancel + stream cancel remain open above.

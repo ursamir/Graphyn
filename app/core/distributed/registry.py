@@ -9,7 +9,8 @@ Public Surface:   WorkerRegistry, get_worker_registry(),
                   _reset_worker_registry() (tests).
 Must NOT:         Import from app.domain, app.api, or orchestrator.
 Dependencies:     stdlib (threading, datetime), app.core.distributed.models,
-                  app.core.distributed.store (lazy via get_distributed_store).
+                  app.core.distributed.store (lazy via get_distributed_store;
+                  mutate_workers for cross-process-safe RMW).
 Reason To Change: Persistence backend added (Redis/disk), or TTL policy changes.
 """
 from __future__ import annotations
@@ -70,23 +71,59 @@ class WorkerRegistry:
         if loaded:
             log.debug("WorkerRegistry: hydrated %s worker(s) from %s", loaded, self._store.backend_id)
 
-    def _persist(self) -> None:
+    def _apply_workers_snapshot_unlocked(self, raw: dict[str, Any] | None) -> None:
+        """Replace local cache from a durable workers snapshot."""
+        refreshed: dict[str, WorkerInfo] = {}
+        for wid, payload in (raw or {}).items():
+            try:
+                info = WorkerInfo.model_validate(payload)
+                refreshed[info.worker_id] = info
+            except Exception as exc:
+                log.warning("WorkerRegistry: skip corrupt worker %r: %s", wid, exc)
+        self._workers = refreshed
+
+    def _persist_unlocked(self) -> None:
+        """Blind full-snapshot persist (in-memory / legacy only).
+
+        Prefer ``_durable_mutate_workers`` for cross-process safety (DIST-003):
+        blind replace from a stale local cache can lose concurrent updates.
+        """
         if self._store is None:
             return
         try:
             snapshot = {
                 wid: w.model_dump(mode="json") for wid, w in self._workers.items()
             }
-            self._store.save_workers(snapshot)
+            # Route through mutate so disk/Redis hold the exclusive lock for the write.
+            self._store.mutate_workers(lambda _snap: (snapshot, None))
         except Exception as exc:
             log.warning("WorkerRegistry: persist failed: %s", exc)
+
+    def _durable_mutate_workers(self, mutator):
+        """Apply ``mutator(workers) -> (new_workers, result)`` under store lock; refresh."""
+        assert self._store is not None
+        result = self._store.mutate_workers(mutator)
+        try:
+            self._apply_workers_snapshot_unlocked(self._store.load_workers())
+        except Exception as exc:
+            log.warning("WorkerRegistry: durable refresh failed: %s", exc)
+        return result
 
     def register(self, info: WorkerInfo) -> WorkerInfo:
         """Register or refresh a worker. Updates ``heartbeat_at`` to now."""
         with self._lock:
+            if self._store is not None:
+                updated = info.model_copy(update={"heartbeat_at": _utcnow()})
+
+                def mut(workers: dict[str, Any]):
+                    workers = dict(workers or {})
+                    workers[updated.worker_id] = updated.model_dump(mode="json")
+                    return workers, updated
+
+                return self._durable_mutate_workers(mut)
+
             updated = info.model_copy(update={"heartbeat_at": _utcnow()})
             self._workers[updated.worker_id] = updated
-            self._persist()
             return updated
 
     def heartbeat(
@@ -103,6 +140,29 @@ class WorkerRegistry:
             KeyError: if ``worker_id`` is not registered.
         """
         with self._lock:
+            if self._store is not None:
+                def mut(workers: dict[str, Any]):
+                    workers = dict(workers or {})
+                    payload = workers.get(worker_id)
+                    if payload is None:
+                        raise KeyError(worker_id)
+                    existing = WorkerInfo.model_validate(payload)
+                    updates: dict[str, Any] = {"heartbeat_at": _utcnow()}
+                    res = resources
+                    if res is not None:
+                        if isinstance(res, dict):
+                            res = WorkerResources.model_validate(res)
+                        updates["resources"] = res
+                    if status is not None:
+                        updates["status"] = status
+                    if active_jobs is not None:
+                        updates["active_jobs"] = active_jobs
+                    updated = existing.model_copy(update=updates)
+                    workers[worker_id] = updated.model_dump(mode="json")
+                    return workers, updated
+
+                return self._durable_mutate_workers(mut)
+
             existing = self._workers.get(worker_id)
             if existing is None:
                 raise KeyError(worker_id)
@@ -117,7 +177,6 @@ class WorkerRegistry:
                 updates["active_jobs"] = active_jobs
             updated = existing.model_copy(update=updates)
             self._workers[worker_id] = updated
-            self._persist()
             return updated
 
     def get(self, worker_id: str) -> WorkerInfo | None:
@@ -127,9 +186,15 @@ class WorkerRegistry:
     def remove(self, worker_id: str) -> bool:
         """Deregister a worker. Returns True if it existed."""
         with self._lock:
+            if self._store is not None:
+                def mut(workers: dict[str, Any]):
+                    workers = dict(workers or {})
+                    existed = workers.pop(worker_id, None) is not None
+                    return workers, existed
+
+                return bool(self._durable_mutate_workers(mut))
+
             existed = self._workers.pop(worker_id, None) is not None
-            if existed:
-                self._persist()
             return existed
 
     def list(
@@ -170,8 +235,13 @@ class WorkerRegistry:
 
     def clear(self) -> None:
         with self._lock:
+            if self._store is not None:
+                def mut(_workers: dict[str, Any]):
+                    return {}, None
+
+                self._durable_mutate_workers(mut)
+                return
             self._workers.clear()
-            self._persist()
 
 
 _REGISTRY: WorkerRegistry | None = None

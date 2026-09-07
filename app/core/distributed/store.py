@@ -9,7 +9,7 @@ Responsibility:   Persistence backends for worker registry + job queue so the
 Owns:             DistributedStateStore protocol, MemoryStateStore,
                   DiskStateStore, RedisStateStore, get_distributed_store(),
                   _reset_distributed_store() (tests).
-Public Surface:   All classes/functions above; mutate_queue for atomic RMW.
+Public Surface:   All classes/functions above; mutate_queue / mutate_workers for atomic RMW.
 Must NOT:         Import from app.domain, app.api, or orchestrator.
 Dependencies:     stdlib (json, os, threading, pathlib, fcntl, typing),
                   app.core.config (project_dir, redis_url) — lazy.
@@ -64,6 +64,19 @@ class DistributedStateStore(ABC):
 
         Used by ``JobQueue.claim`` so pending→claimed is CAS-safe across
         processes sharing the same durable store.
+        """
+        ...
+
+    @abstractmethod
+    def mutate_workers(
+        self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
+    ) -> T:
+        """Atomically load → mutate → save the workers snapshot.
+
+        ``mutator(workers)`` returns ``(new_workers, result)``. Same locking
+        contract as ``mutate_queue`` (disk flock / Redis lock-or-WATCH /
+        memory RLock). Prefer this over ``load_workers`` + ``save_workers``
+        for any production read-modify-write on shared worker state.
         """
         ...
 
@@ -148,6 +161,20 @@ class MemoryStateStore(DistributedStateStore):
             }
             return result
 
+    def mutate_workers(
+        self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
+    ) -> T:
+        with self._lock:
+            snap = {
+                k: dict(v) if isinstance(v, dict) else v for k, v in self._workers.items()
+            }
+            new_snap, result = mutator(snap)
+            self._workers = {
+                k: dict(v) if isinstance(v, dict) else v
+                for k, v in (new_snap or {}).items()
+            }
+            return result
+
 
 def _distributed_dir(root: Path | None = None) -> Path:
     if root is not None:
@@ -165,6 +192,7 @@ class DiskStateStore(DistributedStateStore):
 
     ``mutate_queue`` holds an exclusive flock on ``jobs.lock`` for the full
     read-modify-write so pending→claimed is atomic across processes.
+    ``mutate_workers`` likewise locks ``workers.lock`` for worker registry RMW.
     """
 
     def __init__(self, root: Path | str | None = None) -> None:
@@ -175,9 +203,14 @@ class DiskStateStore(DistributedStateStore):
     def backend_id(self) -> str:
         return "disk"
 
-    def _paths(self) -> tuple[Path, Path, Path]:
+    def _paths(self) -> tuple[Path, Path, Path, Path]:
         base = _distributed_dir(self._root)
-        return base / "workers.json", base / "jobs.json", base / "jobs.lock"
+        return (
+            base / "workers.json",
+            base / "jobs.json",
+            base / "jobs.lock",
+            base / "workers.lock",
+        )
 
     def _empty_queue(self) -> dict[str, Any]:
         return {"jobs": {}, "order": [], "results": {}, "events": {}}
@@ -215,24 +248,41 @@ class DiskStateStore(DistributedStateStore):
             return default
 
     def _write_json(self, path: Path, data: Any) -> None:
-        """Atomic replace write. Caller must hold jobs.lock for queue files."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        payload = json.dumps(data, indent=2, default=str, sort_keys=True)
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(payload)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        """Atomic replace write with a unique temp file (no shared ``*.tmp``).
 
-    def _with_jobs_lock(self, exclusive: bool, fn: Callable[[], T]) -> T:
-        """Run ``fn`` while holding the queue lock file (cross-process)."""
+        Caller must hold the matching exclusive lock (``jobs.lock`` /
+        ``workers.lock``) for durable RMW. Unique temps prevent concurrent
+        writers from colliding on a shared ``workers.json.tmp`` path.
+        """
+        import uuid
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.parent / (
+            f".{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+        )
+        payload = json.dumps(data, indent=2, default=str, sort_keys=True)
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+
+    def _with_lock_file(
+        self, lock_path: Path, exclusive: bool, fn: Callable[[], T]
+    ) -> T:
+        """Run ``fn`` while holding an advisory lock file (cross-process)."""
         try:
             import fcntl
         except ImportError:  # pragma: no cover
             fcntl = None  # type: ignore[assignment]
 
-        _, _, lock_path = self._paths()
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         # threading lock serializes in-process; flock covers cross-process.
         with self._lock:
@@ -248,19 +298,36 @@ class DiskStateStore(DistributedStateStore):
                     if fcntl is not None:
                         fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
+    def _with_jobs_lock(self, exclusive: bool, fn: Callable[[], T]) -> T:
+        """Run ``fn`` while holding the queue lock file (cross-process)."""
+        _, _, jobs_lock, _ = self._paths()
+        return self._with_lock_file(jobs_lock, exclusive, fn)
+
+    def _with_workers_lock(self, exclusive: bool, fn: Callable[[], T]) -> T:
+        """Run ``fn`` while holding the workers lock file (cross-process)."""
+        _, _, _, workers_lock = self._paths()
+        return self._with_lock_file(workers_lock, exclusive, fn)
+
     def load_workers(self) -> dict[str, Any]:
-        workers_path, _, _ = self._paths()
-        data = self._read_json(workers_path, {})
-        return data if isinstance(data, dict) else {}
+        def _load() -> dict[str, Any]:
+            workers_path, _, _, _ = self._paths()
+            data = self._read_json(workers_path, {})
+            return data if isinstance(data, dict) else {}
+
+        return self._with_workers_lock(False, _load)
 
     def save_workers(self, workers: dict[str, Any]) -> None:
-        workers_path, _, _ = self._paths()
-        with self._lock:
+        """Blind full replace — prefer ``mutate_workers`` for production RMW."""
+
+        def _save() -> None:
+            workers_path, _, _, _ = self._paths()
             self._write_json(workers_path, workers or {})
+
+        self._with_workers_lock(True, _save)
 
     def load_queue(self) -> dict[str, Any]:
         def _load() -> dict[str, Any]:
-            _, jobs_path, _ = self._paths()
+            _, jobs_path, _, _ = self._paths()
             return self._normalize_queue(
                 self._read_json(jobs_path, self._empty_queue())
             )
@@ -269,7 +336,7 @@ class DiskStateStore(DistributedStateStore):
 
     def save_queue(self, snapshot: dict[str, Any]) -> None:
         def _save() -> None:
-            _, jobs_path, _ = self._paths()
+            _, jobs_path, _, _ = self._paths()
             self._write_json(
                 jobs_path,
                 {
@@ -286,7 +353,7 @@ class DiskStateStore(DistributedStateStore):
         self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
     ) -> T:
         def _mutate() -> T:
-            _, jobs_path, _ = self._paths()
+            _, jobs_path, _, _ = self._paths()
             snap = self._normalize_queue(
                 self._read_json(jobs_path, self._empty_queue())
             )
@@ -303,6 +370,19 @@ class DiskStateStore(DistributedStateStore):
             return result
 
         return self._with_jobs_lock(True, _mutate)
+
+    def mutate_workers(
+        self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
+    ) -> T:
+        def _mutate() -> T:
+            workers_path, _, _, _ = self._paths()
+            data = self._read_json(workers_path, {})
+            snap = data if isinstance(data, dict) else {}
+            new_snap, result = mutator(dict(snap))
+            self._write_json(workers_path, new_snap or {})
+            return result
+
+        return self._with_workers_lock(True, _mutate)
 
 
 class RedisStateStore(DistributedStateStore):
@@ -355,6 +435,7 @@ class RedisStateStore(DistributedStateStore):
             return {}
 
     def save_workers(self, workers: dict[str, Any]) -> None:
+        """Blind full replace — prefer ``mutate_workers`` for production RMW."""
         client = self._redis()
         if client is None:
             return
@@ -516,6 +597,89 @@ class RedisStateStore(DistributedStateStore):
                         raise
                 raise RuntimeError(
                     "RedisStateStore.mutate_queue: exceeded WATCH retries"
+                )
+        except Exception:
+            if lock is not None:
+                try:
+                    lock.release()
+                except Exception:
+                    pass
+            raise
+
+    def mutate_workers(
+        self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
+    ) -> T:
+        """Optimistic CAS via Redis WATCH/MULTI; falls back to process lock."""
+        client = self._redis()
+        if client is None:
+            with self._lock:
+                new_snap, result = mutator({})
+                return result
+
+        lock = None
+        try:
+            try:
+                lock = client.lock(
+                    self.WORKERS_KEY + ":lock",
+                    timeout=10,
+                    blocking_timeout=10,
+                )
+                acquired = lock.acquire(blocking=True)
+            except Exception as exc:
+                log.warning(
+                    "RedisStateStore.mutate_workers: lock acquire failed "
+                    "(falling back to WATCH): %s",
+                    exc,
+                )
+                acquired = False
+                lock = None
+
+            with self._lock:
+                if acquired:
+                    try:
+                        raw = client.get(self.WORKERS_KEY)
+                        snap = json.loads(raw) if raw else {}
+                        if not isinstance(snap, dict):
+                            snap = {}
+                        new_snap, result = mutator(dict(snap))
+                        client.set(
+                            self.WORKERS_KEY,
+                            json.dumps(new_snap or {}, default=str),
+                            ex=self.TTL_S,
+                        )
+                        return result
+                    finally:
+                        try:
+                            lock.release()
+                        except Exception:
+                            pass
+
+                for _ in range(32):
+                    try:
+                        pipe = client.pipeline()
+                        pipe.watch(self.WORKERS_KEY)
+                        raw = pipe.get(self.WORKERS_KEY)
+                        snap = json.loads(raw) if raw else {}
+                        if not isinstance(snap, dict):
+                            snap = {}
+                        new_snap, result = mutator(dict(snap))
+                        pipe.multi()
+                        pipe.set(
+                            self.WORKERS_KEY,
+                            json.dumps(new_snap or {}, default=str),
+                            ex=self.TTL_S,
+                        )
+                        pipe.execute()
+                        return result
+                    except Exception as exc:
+                        if "Watch" in type(exc).__name__:
+                            continue
+                        log.warning(
+                            "RedisStateStore.mutate_workers failed: %s", exc
+                        )
+                        raise
+                raise RuntimeError(
+                    "RedisStateStore.mutate_workers: exceeded WATCH retries"
                 )
         except Exception:
             if lock is not None:

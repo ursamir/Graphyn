@@ -424,6 +424,18 @@ Post-review hardening applied on `cursor/usecase-plugins-workflows`:
 | Preferred-worker pin after reclaim | `reclaim_expired_leases` calls `widen_placement_after_reclaim`: `mode=worker` → `mode=auto` (clears `worker`), keeps tags / `require_gpu` / VRAM / pool; `lease_generation` still increments. |
 | Atomic job claim (DIST-001) | `JobQueue.claim` uses `DistributedStateStore.mutate_queue` (disk: exclusive `jobs.lock` flock RMW; Redis: lock / WATCH) so pending→claimed is CAS-safe across processes — not `threading.Lock` alone |
 | Queue snapshot lost updates (DIST-002) | All durable `JobQueue` mutators (`enqueue` / `claim` / `complete` / `renew_lease` / `append_events` / `cancel` / `mark_running` / `reclaim_expired_leases` / `renew_leases_for_worker` / `clear`) apply patches inside `mutate_queue` / `_durable_mutate` — not blind full-snapshot replace from a stale local cache |
+| Worker registry lost updates (DIST-003) | All durable `WorkerRegistry` mutators (`register` / `heartbeat` / `remove` / `clear`) apply patches inside `mutate_workers` / `_durable_mutate_workers` (disk: exclusive `workers.lock` flock + unique temp files; Redis: lock / WATCH; memory: RLock) — not blind `save_workers` from a stale local cache |
+
+
+### Persistence invariant (shared distributed state)
+
+Any **production read-modify-write** on shared distributed state (workers or job queue) **must** use the cross-process-safe mutation APIs:
+
+- Prefer `load_*` for reads and `mutate_*` (`mutate_workers` / `mutate_queue`) for RMW.
+- Keep `save_*` only for justified **init / import / test** full replaces — never for concurrent production updates from a process-local cache.
+- Disk backends use exclusive flock on a dedicated lock file for the full RMW and **unique per-write temp filenames** (never a shared `*.json.tmp`).
+- Redis backends use a distributed lock and/or WATCH/MULTI — not a process-local `threading.Lock` alone.
+- In-memory backends use an `RLock` (sufficient only within one process).
 
 ### Remaining cancel limits
 
