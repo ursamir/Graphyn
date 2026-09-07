@@ -153,7 +153,7 @@ export default function ExperimentsView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Experiments"
-        description="Compare runs, params, and metrics — MLflow-shaped board on Graphyn runs."
+        description="Compare runs, params, and metrics across training sessions. Start runs from Builder; open Trace for accountability backtrack."
         actions={
           <div className="flex items-center gap-2">
             {selectedIds.length >= 2 && (
@@ -180,18 +180,18 @@ export default function ExperimentsView() {
       ) : !blocks || blocks.length === 0 || tableRuns.length === 0 ? (
         <EmptyState
           title="No experiments yet"
-          description="Run a pipeline with experiment_tracker (JSON backend) or produce metrics.json under a run to populate this board."
+          description="Run a pipeline from Builder with experiment_tracker (or metrics.json under a run) to populate this board."
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <button
                 type="button"
                 className="btn-primary"
                 onClick={() => {
-                  setView('runs')
-                  window.history.replaceState(null, '', '#/runs')
+                  setView('builder')
+                  window.history.replaceState(null, '', '#/builder')
                 }}
               >
-                Open Runs
+                Open Builder
               </button>
               <button
                 type="button"
@@ -202,6 +202,16 @@ export default function ExperimentsView() {
                 }}
               >
                 Browse Templates
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setView('runs')
+                  window.history.replaceState(null, '', '#/runs')
+                }}
+              >
+                Open Runs
               </button>
             </div>
           }

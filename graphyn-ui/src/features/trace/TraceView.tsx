@@ -160,7 +160,7 @@ export default function TraceView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Trace"
-        description="Accountability chain — artifact → node → run → graph → inputs → worker. Open from Runs or Artifacts."
+        description="Accountability backtrack (canonical) — artifact → node → run → graph → inputs → worker. Artifacts is the library; Runs is the execution session."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -225,7 +225,7 @@ export default function TraceView() {
       {!loading && !error && !trace && (
         <EmptyState
           title="Start a backtrack"
-          description="Paste an artifact id or run id, or use Open in Trace from Artifacts / Runs."
+          description="Paste an artifact id or run id, or use Open in Trace from Artifacts / Runs. This is the accountability surface — not the artifact library."
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <button

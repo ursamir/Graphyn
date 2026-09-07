@@ -322,7 +322,7 @@ export default function DataView() {
     <div className="h-full overflow-y-auto p-6 space-y-4">
       <PageHeader
         title="Data"
-        description="Browse pipeline outputs, upload inputs, ingest URLs, and merge dataset versions."
+        description="Files & ingest — upload inputs, browse outputs, and merge dataset files. Dataset project workspaces (versions, snapshots) live under Admin → Projects."
         actions={
           <div className="flex gap-2">
             <button type="button" className="btn-secondary" onClick={upload}>
@@ -385,7 +385,31 @@ export default function DataView() {
             outputs.length === 0 ? (
               <EmptyState
                 title="No output datasets"
-                description="Pipeline dataset versions live under workspace/datasets/output. Run a pipeline or merge datasets to create one."
+                description="Pipeline dataset versions live under workspace/datasets/output. Run a pipeline from Builder, or open Projects for versioned workspaces."
+                action={
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        useAppStore.getState().setView('builder')
+                        window.history.replaceState(null, '', '#/builder')
+                      }}
+                    >
+                      Open Builder
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        useAppStore.getState().setView('projects')
+                        window.history.replaceState(null, '', '#/projects')
+                      }}
+                    >
+                      Open Projects
+                    </button>
+                  </div>
+                }
               />
             ) : (
             <div className="flex flex-wrap items-center gap-2">

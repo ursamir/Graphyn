@@ -73,7 +73,7 @@ const NAV_GROUPS: Array<{
   {
     title: 'Deploy',
     items: [
-      { id: 'edge', label: 'Edge', icon: Cpu },
+      { id: 'edge', label: 'Edge deploy', icon: Cpu },
       { id: 'workers', label: 'Workers', icon: Server },
     ],
   },
@@ -97,13 +97,31 @@ const VIEW_LABEL: Record<AppView, string> = {
   data: 'Data',
   artifacts: 'Artifacts',
   trace: 'Trace',
-  edge: 'Edge',
+  edge: 'Edge deploy',
   experiments: 'Experiments',
   proposals: 'Proposals',
   projects: 'Projects',
   secrets: 'Secrets',
   system: 'System',
   workers: 'Workers',
+}
+
+
+const NAV_HINTS: Partial<Record<AppView, string>> = {
+  builder: 'Design Graph IR pipelines on the canvas',
+  templates: 'Open starter or saved graphs in Builder',
+  proposals: 'Review agent-proposed graphs before they enter Builder',
+  runs: 'Execution sessions started from Builder',
+  trace: 'Accountability backtrack — artifact → run → graph → worker',
+  experiments: 'Compare params and metrics across runs',
+  artifacts: 'Artifact library across runs (use Trace for backtrack)',
+  plugins: 'Install node packs for the Builder catalog',
+  data: 'Files & ingest — upload, browse, merge dataset files',
+  edge: 'Package optimized models for on-device runtimes',
+  workers: 'Distributed workers (Mode B) — labels, GPU, heartbeats',
+  projects: 'Dataset project workspaces — versions, snapshots, lineage',
+  secrets: 'Named credentials — never put secrets in Graph IR',
+  system: 'Health, cleanup, webhooks, audit trail',
 }
 
 const JUMP_KEYS: Record<string, AppView> = {
@@ -114,8 +132,11 @@ const JUMP_KEYS: Record<string, AppView> = {
   o: 'trace',
   e: 'experiments',
   a: 'artifacts',
-  d: 'edge',
+  d: 'data',
+  g: 'edge',
   w: 'workers',
+  l: 'plugins',
+  s: 'system',
 }
 
 function parseHash(): { view?: AppView; runId?: string } {
@@ -415,6 +436,12 @@ export default function App() {
                           <button
                             key={id}
                             type="button"
+                            title={(() => {
+                              const hint = NAV_HINTS[id]
+                              if (!hint) return undefined
+                              const jump = Object.entries(JUMP_KEYS).find(([, v]) => v === id)?.[0]
+                              return jump ? `${hint} · Press ${jump}` : hint
+                            })()}
                             onClick={() => go(id)}
                             className={clsx(
                               'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',

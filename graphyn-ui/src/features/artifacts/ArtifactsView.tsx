@@ -204,7 +204,7 @@ export default function ArtifactsView() {
       <div className="overflow-y-auto border-r border-ink-300 bg-white p-4">
         <PageHeader
           title="Artifacts"
-          description="Outputs from completed nodes — inspect lineage and replay a producing run."
+          description="Outputs from completed nodes. Inspect lineage here; use Observe → Trace for the full chain (artifact → run → graph → worker)."
         />
         <div className="mb-3 flex flex-wrap items-end gap-2">
           <label className="text-[11px] font-medium text-ink-500">
@@ -243,19 +243,31 @@ export default function ArtifactsView() {
           <LoadingBlock />
         ) : items.length === 0 ? (
           <EmptyState
-            title="No artifacts"
-            description="Run a pipeline that produces artifacts, then refresh."
+            title="No artifacts yet"
+            description="Run a pipeline from Builder that produces node outputs, then refresh. Trace is the backtrack surface; this page is the library."
             action={
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => {
-                  useAppStore.getState().setView('builder')
-                  window.history.replaceState(null, '', '#/builder')
-                }}
-              >
-                Open Builder
-              </button>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    useAppStore.getState().setView('builder')
+                    window.history.replaceState(null, '', '#/builder')
+                  }}
+                >
+                  Open Builder
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    useAppStore.getState().setView('runs')
+                    window.history.replaceState(null, '', '#/runs')
+                  }}
+                >
+                  Open Runs
+                </button>
+              </div>
             }
           />
         ) : (
@@ -287,7 +299,7 @@ export default function ArtifactsView() {
       </div>
       <div className="overflow-y-auto border-l border-ink-200/80 bg-ink-50/40 p-4 space-y-3">
         {!selected ? (
-          <EmptyState title="Select an artifact" description="Inspect lineage and replay producing runs." />
+          <EmptyState title="Select an artifact" description="Inspect this output, replay its run, or open Trace for the accountability chain." />
         ) : (
           <>
             <div className="flex flex-wrap gap-2">

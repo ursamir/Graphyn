@@ -170,7 +170,7 @@ export default function EdgeWizardView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Edge deploy"
-        description="Train elsewhere → optimize → package → download. Graphyn-native path using edge_optimizer and deployment_packager."
+        description="Train elsewhere → optimize → package → download for on-device runtimes. For multi-machine pipeline workers, use Workers (Mode B)."
         actions={
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn-secondary" onClick={openInBuilder}>
@@ -260,7 +260,24 @@ export default function EdgeWizardView() {
           {!ready && (
             <EmptyState
               title="No graph selected"
-              description="Use the edge template to continue the wizard."
+              description="Start with the edge template to continue packaging, or open Templates for other starters."
+              action={
+                <div className="flex flex-wrap justify-center gap-2">
+                  <button type="button" className="btn-primary" onClick={useEdgeTemplate}>
+                    Use edge template
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setView('templates')
+                      window.history.replaceState(null, '', '#/templates')
+                    }}
+                  >
+                    Browse Templates
+                  </button>
+                </div>
+              }
             />
           )}
           {ready && (

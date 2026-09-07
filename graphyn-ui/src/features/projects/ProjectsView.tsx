@@ -9,6 +9,7 @@ import {
   ErrorBanner,
   KeyValue,
   LoadingBlock,
+  PageHeader,
   StatusBadge,
 } from '../../components/ui'
 
@@ -296,14 +297,20 @@ export default function ProjectsView() {
   )
 
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-[320px_1fr]">
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b border-ink-200/70 bg-white/60 px-5 pt-5 pb-3">
+        <PageHeader
+          title="Projects"
+          description="Dataset project workspaces — versions, snapshots, and lineage. For file upload and ingest, use Library → Data."
+          actions={
+            <button type="button" className="btn-secondary" onClick={() => void load()}>
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
+          }
+        />
+      </div>
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[320px_1fr]">
       <div className="overflow-y-auto border-r border-ink-200 p-3 space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold text-ink-950">Projects</h2>
-          <button type="button" className="btn-icon" onClick={() => void load()} aria-label="Refresh">
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-        </div>
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         <div className="flex gap-2">
           <input
@@ -321,10 +328,22 @@ export default function ProjectsView() {
         {loading || projects == null ? (
           <LoadingBlock />
         ) : projects.length === 0 ? (
-          <p className="px-1 text-xs leading-relaxed text-ink-500">
-            Nothing under <code className="font-mono text-[11px]">workspace/datasets/output</code> yet.
-            Type a name above to create one.
-          </p>
+          <EmptyState
+            title="No dataset projects"
+            description="Create a named workspace above, or upload/ingest files under Library → Data first."
+            action={
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  useAppStore.getState().setView('data')
+                  window.history.replaceState(null, '', '#/data')
+                }}
+              >
+                Open Data
+              </button>
+            }
+          />
         ) : (
           <ul className="space-y-2">
             {projects.map((p) => (
@@ -350,11 +369,11 @@ export default function ProjectsView() {
       <div className="overflow-y-auto p-4 space-y-4">
         {!selected ? (
           <div className="mx-auto max-w-md rounded-2xl border border-ink-200/80 bg-white px-6 py-8 shadow-sm">
-            <h3 className="text-lg font-semibold text-ink-950">Dataset projects</h3>
+            <h3 className="text-lg font-semibold text-ink-950">Select a dataset project</h3>
             <p className="mt-2 text-sm leading-relaxed text-ink-500">
-              A project is a named folder under{' '}
-              <code className="font-mono text-[12px] text-ink-700">workspace/datasets/output</code>.
-              Versions, snapshots, and lineage live here so you can restore or compare dataset cuts.
+              A project is a named workspace under{' '}
+              <code className="font-mono text-[12px] text-ink-700">workspace/datasets/output</code>
+              {' '}with versions, snapshots, and lineage. File upload and URL ingest live under Library → Data.
             </p>
             <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-ink-700">
               <li>Create a project with the name field on the left.</li>
@@ -573,6 +592,7 @@ export default function ProjectsView() {
             )}
           </>
         )}
+      </div>
       </div>
     </div>
   )

@@ -81,7 +81,7 @@ export default function WorkersView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Workers"
-        description="Place work on the right machines — registered workers, labels, GPU, and heartbeats (GRAPHYN_BACKEND=distributed)."
+        description="Distributed compute placement (Mode B) — registered workers, labels, GPU, and heartbeats. For packaging models onto devices, use Edge deploy."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -94,11 +94,23 @@ export default function WorkersView() {
       ) : !workers || workers.length === 0 ? (
         <EmptyState
           title="No workers registered"
-          description="Enable GRAPHYN_BACKEND=distributed on the control plane, then start a worker: graphyn worker start --control-url <url>. See docs/DISTRIBUTED_EXECUTION.md."
+          description="Mode B runs a control plane plus workers. Enable distributed backend, start a worker with graphyn worker start --control-url <url>, then refresh. See Getting Started (Mode B)."
           action={
-            <p className="max-w-md text-xs text-ink-400 font-mono">
-              GRAPHYN_BACKEND=distributed
-            </p>
+            <div className="flex flex-col items-center gap-2">
+              <p className="max-w-md text-xs text-ink-400 font-mono">
+                GRAPHYN_BACKEND=distributed
+              </p>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  useAppStore.getState().setView('edge')
+                  window.history.replaceState(null, '', '#/edge')
+                }}
+              >
+                Edge deploy instead
+              </button>
+            </div>
           }
         />
       ) : (

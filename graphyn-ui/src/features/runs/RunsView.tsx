@@ -51,8 +51,8 @@ const PANEL_LABELS: Record<string, string> = {
   logs: 'Logs',
   debug: 'Debug',
   checkpoints: 'Checkpoints',
-  artifacts: 'Artifacts',
-  provenance: 'Provenance',
+  artifacts: 'Files',
+  provenance: 'Lineage',
 }
 
 
@@ -285,7 +285,7 @@ export default function RunsView() {
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
           title="Runs"
-          description="History, live status, and logs for pipeline executions."
+          description="Execution sessions from Builder — live status and logs. Use Observe → Trace for accountability backtrack, Experiments to compare metrics."
           actions={
             <button type="button" onClick={() => void load()} className="btn-secondary">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -298,18 +298,30 @@ export default function RunsView() {
         ) : runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
-            description="Execute a graph from Builder to see history here."
+            description="Run a graph from Builder to create an execution session here. Trace and Experiments live under Observe."
             action={
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => {
-                  useAppStore.getState().setView('builder')
-                  window.history.replaceState(null, '', '#/builder')
-                }}
-              >
-                Open Builder
-              </button>
+              <div className="flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    useAppStore.getState().setView('builder')
+                    window.history.replaceState(null, '', '#/builder')
+                  }}
+                >
+                  Open Builder
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    useAppStore.getState().setView('templates')
+                    window.history.replaceState(null, '', '#/templates')
+                  }}
+                >
+                  Browse Templates
+                </button>
+              </div>
             }
           />
         ) : (
@@ -369,7 +381,7 @@ export default function RunsView() {
 
       <div className="overflow-y-auto space-y-4 p-5">
         {!selected ? (
-          <EmptyState title="Select a run" description="Inspect logs, checkpoints, artifacts, and control active runs." />
+          <EmptyState title="Select a run" description="This session's logs, files, and lineage. Open Trace for the full accountability chain." />
         ) : (
           <>
             <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm">
@@ -490,6 +502,9 @@ export default function RunsView() {
             )}
             {panel === 'artifacts' && (
               <div className="space-y-3">
+                <p className="text-xs text-ink-500">
+                  This run&apos;s downloadable outputs. Browse the Artifacts library for cross-run search; open Trace for backtrack.
+                </p>
                 {(() => {
                   const artifactsDir =
                     (typeof detail?.artifacts_dir === 'string' && detail.artifacts_dir) ||
@@ -566,10 +581,21 @@ export default function RunsView() {
             {panel === 'provenance' && (() => {
               const rows = provenanceRows(provenance)
               if (!rows || rows.length === 0) {
-                return <KeyValue data={provenance} empty="No lineage recorded for this run." />
+                return (
+                  <div className="space-y-3">
+                    <p className="text-xs text-ink-500">
+                      Session lineage for this run. For the full accountability chain, use Open in Trace.
+                    </p>
+                    <KeyValue data={provenance} empty="No lineage recorded for this run." />
+                  </div>
+                )
               }
               return (
-                <ol className="space-y-2">
+                <div className="space-y-3">
+                  <p className="text-xs text-ink-500">
+                    Session lineage for this run. For the full accountability chain, use Open in Trace.
+                  </p>
+                  <ol className="space-y-2">
                   {rows.map((row, i) => {
                     const label = humanNodeLabel(String(row.node_id ?? row.node_type ?? row.node ?? `step ${i + 1}`))
                     const when = String(row.created_at ?? row.ts ?? '')
@@ -587,7 +613,8 @@ export default function RunsView() {
                       </li>
                     )
                   })}
-                </ol>
+                  </ol>
+                </div>
               )
             })()}
           </>
