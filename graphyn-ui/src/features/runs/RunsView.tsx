@@ -381,7 +381,28 @@ export default function RunsView() {
 
       <div className="overflow-y-auto space-y-4 p-5">
         {!selected ? (
-          <EmptyState title="Select a run" description="This run's logs, files, and ops controls. Open View lineage for provenance deep-dive." />
+          <EmptyState
+            title="Select a run"
+            description="This run's logs, files, and ops controls. Open View lineage for provenance deep-dive."
+            action={
+              runs && runs.length > 0 ? (
+                <button type="button" className="btn-secondary" onClick={() => void open(runs[0].run_id)}>
+                  Open latest run
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    useAppStore.getState().setView('builder')
+                    window.history.replaceState(null, '', '#/builder')
+                  }}
+                >
+                  Open Builder
+                </button>
+              )
+            }
+          />
         ) : (
           <>
             <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm">

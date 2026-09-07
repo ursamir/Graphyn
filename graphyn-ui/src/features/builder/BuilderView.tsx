@@ -232,13 +232,25 @@ function BuilderInner() {
 
 
   const setNodeExecStatus = React.useCallback(
-    (matcher: { index?: number; nodeId?: string; nodeType?: string }, status: NodeExecStatus) => {
+    (
+      matcher: { index?: number; nodeId?: string; nodeType?: string },
+      status: NodeExecStatus,
+      extra?: { lastError?: string },
+    ) => {
       const norm = normalizeExecStatus(status)
       setNodes((nds) =>
         nds.map((n, i) => {
-          if (matcher.nodeId && n.id === matcher.nodeId) return { ...n, data: { ...n.data, status: norm } }
+          const patch = (data: typeof n.data) => ({
+            ...n,
+            data: {
+              ...data,
+              status: norm,
+              lastError: extra?.lastError !== undefined ? extra.lastError : (norm === 'failed' ? data.lastError : undefined),
+            },
+          })
+          if (matcher.nodeId && n.id === matcher.nodeId) return patch(n.data)
           if (matcher.index != null && !Number.isNaN(matcher.index) && i === matcher.index) {
-            return { ...n, data: { ...n.data, status: norm } }
+            return patch(n.data)
           }
           // Fallback: first idle/pending match by type only when index missing
           if (
@@ -248,7 +260,7 @@ function BuilderInner() {
             n.data.nodeType === matcher.nodeType &&
             normalizeExecStatus(n.data.status) === 'pending'
           ) {
-            return { ...n, data: { ...n.data, status: norm } }
+            return patch(n.data)
           }
           return n
         }),
@@ -519,7 +531,7 @@ function BuilderInner() {
               hadError = true
               const errMsg = String(ev.error_message ?? ev.message ?? ev.error ?? 'Node failed')
               lastErrorDetail = errMsg
-              setNodeExecStatus({ index: idx, nodeId }, 'failed')
+              setNodeExecStatus({ index: idx, nodeId }, 'failed', { lastError: errMsg })
             }
             if (t === 'cancelled' || t === 'pipeline_cancelled') {
               setNodes((nds) =>
@@ -1002,6 +1014,11 @@ function BuilderInner() {
         )}
         <div className="relative flex min-h-0 flex-1 bg-canvas">
           <div className="relative min-h-0 min-w-0 flex-1">
+          {nodes.length > 0 && (
+            <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-xs rounded-lg border border-ink-200/80 bg-white/90 px-2.5 py-1.5 text-type-meta text-ink-500 shadow-sm backdrop-blur">
+              Drag from a teal output handle to a dark input handle to connect. Hover a handle for port type.
+            </div>
+          )}
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1077,7 +1094,7 @@ function BuilderInner() {
                 <>
                   <div className="flex items-start justify-between gap-2 border-b border-ink-100 px-3 py-2">
                     <div className="min-w-0">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                      <div className="text-type-meta font-semibold uppercase tracking-wide text-ink-400">
                         {mode === 'node' ? 'Node' : mode === 'edge' ? 'Edge' : 'Graph'}
                       </div>
                       <div className="truncate text-sm font-semibold text-ink-950">{title}</div>
@@ -1197,6 +1214,29 @@ function BuilderInner() {
                         {normalizeExecStatus(node.data.status) !== 'idle' && (
                           <div className="mb-1">
                             <StatusBadge status={normalizeExecStatus(node.data.status)} />
+                          </div>
+                        )}
+                        {normalizeExecStatus(node.data.status) === 'failed' && (
+                          <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-type-secondary text-rose-900">
+                            <div className="font-semibold text-rose-950">Node failed</div>
+                            <p className="mt-1 line-clamp-4 whitespace-pre-wrap break-words">
+                              {node.data.lastError || 'See the execution log for details.'}
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button type="button" className="btn-secondary" onClick={focusLogErrors}>
+                                Jump to log errors
+                              </button>
+                              {lastRunId ? (
+                                <button type="button" className="btn-secondary" onClick={() => openRun(lastRunId)}>
+                                  Open run
+                                </button>
+                              ) : null}
+                              {!isRunning ? (
+                                <button type="button" className="btn-primary" onClick={() => void handleRun()}>
+                                  Retry run
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
                         )}
                         {(() => {

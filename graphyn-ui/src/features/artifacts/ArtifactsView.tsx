@@ -299,7 +299,28 @@ export default function ArtifactsView() {
       </div>
       <div className="overflow-y-auto border-l border-ink-200/80 bg-ink-50/40 p-4 space-y-3">
         {!selected ? (
-          <EmptyState title="Select an artifact" description="Inspect this output, replay its run, or open Trace for the accountability chain." />
+          <EmptyState
+            title="Select an artifact"
+            description="Inspect this output, replay its run, or open Trace for the accountability chain."
+            action={
+              items && items.length > 0 ? (
+                <button type="button" className="btn-secondary" onClick={() => void open(idOf(items[0]))}>
+                  Open first artifact
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    useAppStore.getState().setView('builder')
+                    window.history.replaceState(null, '', '#/builder')
+                  }}
+                >
+                  Open Builder
+                </button>
+              )
+            }
+          />
         ) : (
           <>
             <div className="flex flex-wrap gap-2">

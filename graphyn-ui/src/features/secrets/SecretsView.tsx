@@ -75,6 +75,7 @@ export default function SecretsView() {
           Name
           <input
             className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 font-mono text-sm"
+            id="secret-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="OPENAI_API_KEY"
@@ -113,6 +114,16 @@ export default function SecretsView() {
         <EmptyState
           title="No secrets stored"
           description="Add a named credential above (for example OPENAI_API_KEY) to use live providers."
+          action={
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => document.querySelector<HTMLInputElement>('input[name="secret-name"], #secret-name')?.focus()
+                || document.querySelector<HTMLInputElement>('form input')?.focus()}
+            >
+              Add a secret
+            </button>
+          }
         />
       ) : (
         <ul className="max-w-xl divide-y divide-ink-100 rounded-2xl border border-ink-200 bg-white">

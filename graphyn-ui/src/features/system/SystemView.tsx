@@ -179,6 +179,18 @@ export default function SystemView() {
           <EmptyState
             title="No audit events yet"
             description="Accept/reject proposals or other audited mutations will appear here."
+            action={
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setView('proposals')
+                  window.history.replaceState(null, '', '#/proposals')
+                }}
+              >
+                Open Proposals
+              </button>
+            }
           />
         ) : (
           <div className="overflow-hidden rounded-xl border border-ink-100">

@@ -230,11 +230,23 @@ Start a pipeline run in a background thread and return the `run_id` immediately.
 
 ### `GET /api/v1/pipelines/templates`
 
-List available pipeline template names.
+List available pipeline templates with card summaries for the console.
 
-**Response:**
+**Response:** array of objects (always includes `name`; other fields when Graph IR is readable):
 ```json
-["audio-classification", "audio-quality-check", "basic-wakeword", "podcast-leveling", "speech-recognition"]
+[
+  {
+    "name": "basic-wakeword",
+    "description": "…",
+    "difficulty": null,
+    "required_plugins": ["audio"],
+    "inputs": ["workspace/datasets/input/…"],
+    "outputs": ["dataset_export"],
+    "tags": ["audio", "example"],
+    "node_count": 4,
+    "node_types": ["dataset_ingest", "…"]
+  }
+]
 ```
 
 ---

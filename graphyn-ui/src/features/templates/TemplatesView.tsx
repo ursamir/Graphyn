@@ -4,22 +4,71 @@ import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
-import { humanizeTemplateName } from '../../lib/format'
+import { humanizeTemplateName, humanNodeLabel } from '../../lib/format'
 
 function isExampleTemplate(name: string): boolean {
   return name.startsWith('ex-')
 }
 
+export type TemplateSummary = {
+  name: string
+  description?: string
+  difficulty?: string | null
+  required_plugins?: string[]
+  inputs?: string[]
+  outputs?: string[]
+  tags?: string[]
+  node_count?: number
+  node_types?: string[]
+}
+
+function normalizeList(raw: unknown): TemplateSummary[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item) => {
+    if (typeof item === 'string') return { name: item }
+    if (item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string') {
+      return item as TemplateSummary
+    }
+    return { name: String(item) }
+  })
+}
+
+function chipList(items: string[] | undefined, empty: string, mapLabel?: (s: string) => string) {
+  if (!items || items.length === 0) {
+    return <span className="text-type-meta text-ink-400">{empty}</span>
+  }
+  return (
+    <span className="flex flex-wrap gap-1">
+      {items.slice(0, 4).map((item) => (
+        <span
+          key={item}
+          className="max-w-[12rem] truncate rounded-md bg-ink-50 px-1.5 py-0.5 text-type-meta text-ink-600"
+          title={item}
+        >
+          {mapLabel ? mapLabel(item) : item}
+        </span>
+      ))}
+      {items.length > 4 ? (
+        <span className="text-type-meta text-ink-400">+{items.length - 4}</span>
+      ) : null}
+    </span>
+  )
+}
+
 export default function TemplatesView() {
   const getCanvasGraph = useAppStore((s) => s.getCanvasGraph)
   const pushToast = useAppStore((s) => s.pushToast)
-  const [names, setNames] = React.useState<string[] | null>(null)
+  const [items, setItems] = React.useState<TemplateSummary[] | null>(null)
   const [versionsMap, setVersionsMap] = React.useState<Record<string, string[]>>({})
   const [latestMap, setLatestMap] = React.useState<Record<string, string | null>>({})
   const [selectedVersion, setSelectedVersion] = React.useState<Record<string, string>>({})
   const [saveName, setSaveName] = React.useState('')
   const [saveOpen, setSaveOpen] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [syncBanner, setSyncBanner] = React.useState<{
+    written: number
+    errors: Array<{ id?: string; error?: string } | string>
+  } | null>(null)
   const [syncing, setSyncing] = React.useState(false)
   const [filter, setFilter] = React.useState<'all' | 'examples' | 'saved'>('all')
   const [menuFor, setMenuFor] = React.useState<string | null>(null)
@@ -28,12 +77,12 @@ export default function TemplatesView() {
   const load = React.useCallback(async () => {
     setError(null)
     try {
-      const list = await apiJson<string[]>('/pipelines/templates')
-      setNames(list)
+      const list = normalizeList(await apiJson<unknown>('/pipelines/templates'))
+      setItems(list)
       const versions: Record<string, string[]> = {}
       const latest: Record<string, string | null> = {}
       await Promise.all(
-        list.map(async (name) => {
+        list.map(async ({ name }) => {
           try {
             const v = await apiJson<{
               latest_version?: string | null
@@ -52,7 +101,7 @@ export default function TemplatesView() {
       setLatestMap(latest)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-      setNames([])
+      setItems([])
     }
   }, [])
 
@@ -71,17 +120,20 @@ export default function TemplatesView() {
 
   const importExamples = async () => {
     setSyncing(true)
+    setSyncBanner(null)
     try {
-      const res = await apiJson<{ count_written?: number; errors?: unknown[] }>(
-        '/pipelines/templates/sync-examples',
-        { method: 'POST', query: { force: true } },
-      )
+      const res = await apiJson<{
+        count_written?: number
+        errors?: Array<{ id?: string; error?: string } | string>
+      }>('/pipelines/templates/sync-examples', { method: 'POST', query: { force: true } })
       const n = res.count_written ?? 0
-      const errs = Array.isArray(res.errors) ? res.errors.length : 0
-      pushToast(
-        errs ? `Imported ${n} examples (${errs} errors)` : `Imported ${n} example templates`,
-        errs ? 'error' : 'success',
-      )
+      const errs = Array.isArray(res.errors) ? res.errors : []
+      if (errs.length > 0) {
+        setSyncBanner({ written: n, errors: errs })
+        pushToast(`Imported ${n} examples — ${errs.length} issue${errs.length === 1 ? '' : 's'}`, 'error')
+      } else {
+        pushToast(`Imported ${n} example templates`, 'success')
+      }
       setFilter('examples')
       await load()
     } catch (err) {
@@ -170,12 +222,12 @@ export default function TemplatesView() {
     'basic-wakeword',
   ])
   const isExample = (name: string) => isExampleTemplate(name) || starters.has(name)
-  const filtered = (names ?? []).filter((name) => {
-    if (filter === 'examples') return isExample(name)
-    if (filter === 'saved') return !isExample(name)
+  const filtered = (items ?? []).filter((t) => {
+    if (filter === 'examples') return isExample(t.name)
+    if (filter === 'saved') return !isExample(t.name)
     return true
   })
-  const exampleCount = (names ?? []).filter(isExample).length
+  const exampleCount = (items ?? []).filter((t) => isExample(t.name)).length
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-5">
@@ -225,13 +277,24 @@ export default function TemplatesView() {
         }
       />
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
+      {syncBanner && (
+        <ErrorBanner
+          title={`Sync finished with ${syncBanner.errors.length} issue${syncBanner.errors.length === 1 ? '' : 's'}`}
+          message={`Imported ${syncBanner.written} template${syncBanner.written === 1 ? '' : 's'}. Review the issues below — cards still list what succeeded.`}
+          detail={syncBanner.errors
+            .map((e) => (typeof e === 'string' ? e : `${e.id ?? 'item'}: ${e.error ?? 'unknown'}`))
+            .join('\n')}
+          onDismiss={() => setSyncBanner(null)}
+          onRetry={() => void importExamples()}
+        />
+      )}
 
       <div className="flex flex-wrap gap-1.5">
         {(
           [
-            ['all', 'All', names?.length ?? 0],
+            ['all', 'All', items?.length ?? 0],
             ['examples', 'Examples', exampleCount],
-            ['saved', 'Saved', Math.max(0, (names?.length ?? 0) - exampleCount)],
+            ['saved', 'Saved', Math.max(0, (items?.length ?? 0) - exampleCount)],
           ] as const
         ).map(([id, label, count]) => (
           <button
@@ -241,12 +304,12 @@ export default function TemplatesView() {
             onClick={() => setFilter(id)}
           >
             {label}
-            {names ? ` ${count}` : ''}
+            {items ? ` ${count}` : ''}
           </button>
         ))}
       </div>
 
-      {names === null ? (
+      {items === null ? (
         <LoadingBlock />
       ) : filtered.length === 0 ? (
         <EmptyState
@@ -263,112 +326,152 @@ export default function TemplatesView() {
           }
         />
       ) : (
-        <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((name) => {
+        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((tpl) => {
+            const name = tpl.name
             const versions = versionsMap[name] ?? []
             const latest = latestMap[name]
             return (
               <li
                 key={name}
-                className="group flex items-start gap-3 rounded-xl border border-ink-200/70 bg-white px-3 py-2.5 shadow-sm transition hover:shadow-soft"
+                className="group flex flex-col gap-2 rounded-xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm transition hover:shadow-soft"
               >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className="truncate text-sm font-semibold text-ink-950">
-                      {humanizeTemplateName(name)}
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-type-body font-semibold text-ink-950">
+                        {humanizeTemplateName(name)}
+                      </div>
+                      {isExample(name) && (
+                        <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-type-meta font-medium uppercase tracking-wide text-ink-500">
+                          Example
+                        </span>
+                      )}
+                      {tpl.difficulty ? (
+                        <span className="shrink-0 rounded-md bg-accent-50 px-1.5 py-px text-type-meta font-medium capitalize text-accent-800">
+                          {tpl.difficulty}
+                        </span>
+                      ) : null}
                     </div>
-                    {isExample(name) && (
-                      <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-ink-500">
-                        Example
+                    <p className="mt-1 line-clamp-2 text-type-secondary text-ink-600">
+                      {tpl.description?.trim()
+                        ? tpl.description
+                        : 'Open in Builder to inspect nodes and run this pipeline.'}
+                    </p>
+                  </div>
+                  <div className="relative shrink-0" ref={menuFor === name ? menuRef : undefined}>
+                    <button
+                      type="button"
+                      className="btn-icon"
+                      aria-label={`More actions for ${humanizeTemplateName(name)}`}
+                      onClick={() => setMenuFor((cur) => (cur === name ? null : name))}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </button>
+                    {menuFor === name && (
+                      <div className="absolute right-0 z-20 mt-1 w-48 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
+                        {versions.length > 0 && (
+                          <ConfirmButton
+                            label="Delete version"
+                            confirmLabel="Confirm version"
+                            danger
+                            onConfirm={() => {
+                              const ver = selectedVersion[name] || latest
+                              if (!ver || ver === 'unversioned') return
+                              void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
+                                method: 'DELETE',
+                                query: { version: ver },
+                              })
+                                .then(load)
+                                .then(() => {
+                                  setMenuFor(null)
+                                  pushToast('Deleted version', 'success')
+                                })
+                                .catch((err) =>
+                                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                                )
+                            }}
+                          />
+                        )}
+                        <div className={versions.length > 0 ? 'mt-1' : ''}>
+                          <ConfirmButton
+                            label="Delete"
+                            confirmLabel="Confirm delete"
+                            danger
+                            onConfirm={() =>
+                              void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
+                                method: 'DELETE',
+                              })
+                                .then(load)
+                                .then(() => {
+                                  setMenuFor(null)
+                                  pushToast(`Deleted ${humanizeTemplateName(name)}`, 'success')
+                                })
+                                .catch((err) =>
+                                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                                )
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <dl className="grid gap-1.5 text-type-secondary text-ink-600">
+                  <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
+                    <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Inputs</dt>
+                    <dd>{chipList(tpl.inputs, 'None declared')}</dd>
+                  </div>
+                  <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
+                    <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Outputs</dt>
+                    <dd>{chipList(tpl.outputs, 'None declared', (s) => (s.includes('/') ? s : humanNodeLabel(s)))}</dd>
+                  </div>
+                  <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
+                    <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Plugins</dt>
+                    <dd>{chipList(tpl.required_plugins, '—')}</dd>
+                  </div>
+                  {(tpl.node_count ?? 0) > 0 && (
+                    <div className="text-type-meta text-ink-400">
+                      {tpl.node_count} node{(tpl.node_count ?? 0) === 1 ? '' : 's'}
+                      {tpl.node_types?.length
+                        ? ` · ${tpl.node_types.slice(0, 3).map(humanNodeLabel).join(', ')}${tpl.node_types.length > 3 ? '…' : ''}`
+                        : ''}
+                    </div>
+                  )}
+                </dl>
+
+                <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-ink-100 pt-2">
+                  {versions.length > 0 ? (
+                    <>
+                      <span className="text-type-meta text-ink-500">
+                        Latest {latest && latest !== 'unversioned' ? latest : versions[0]}
                       </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-ink-500">
-                    {versions.length > 0 ? (
-                      <>
-                        <span>Latest {latest && latest !== 'unversioned' ? latest : versions[0]}</span>
-                        <select
-                          className="rounded-md border border-ink-200 bg-white px-1.5 py-0.5 text-[11px]"
-                          value={selectedVersion[name] ?? latest ?? ''}
-                          onChange={(e) =>
-                            setSelectedVersion((s) => ({ ...s, [name]: e.target.value }))
-                          }
-                        >
-                          {versions.map((v) => (
-                            <option key={v} value={v}>
-                              {v}
-                            </option>
-                          ))}
-                        </select>
-                      </>
-                    ) : (
-                      <span className="text-ink-300">—</span>
-                    )}
-                  </div>
+                      <select
+                        className="rounded-md border border-ink-200 bg-white px-1.5 py-0.5 text-type-meta"
+                        value={selectedVersion[name] ?? latest ?? ''}
+                        onChange={(e) =>
+                          setSelectedVersion((s) => ({ ...s, [name]: e.target.value }))
+                        }
+                        aria-label={`Version for ${humanizeTemplateName(name)}`}
+                      >
+                        {versions.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : (
+                    <span className="text-type-meta text-ink-300">Unversioned</span>
+                  )}
                   <button
                     type="button"
-                    className="btn-primary mt-2"
+                    className="btn-primary ml-auto"
                     onClick={() => void loadIntoBuilder(name)}
                   >
                     Open in Builder
                   </button>
-                </div>
-                <div className="relative shrink-0" ref={menuFor === name ? menuRef : undefined}>
-                  <button
-                    type="button"
-                    className="btn-icon"
-                    aria-label={`More actions for ${humanizeTemplateName(name)}`}
-                    onClick={() => setMenuFor((cur) => (cur === name ? null : name))}
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                  </button>
-                  {menuFor === name && (
-                    <div className="absolute right-0 z-20 mt-1 w-48 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
-                      {versions.length > 0 && (
-                        <ConfirmButton
-                          label="Delete version"
-                          confirmLabel="Confirm version"
-                          danger
-                          onConfirm={() => {
-                            const ver = selectedVersion[name] || latest
-                            if (!ver || ver === 'unversioned') return
-                            void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
-                              method: 'DELETE',
-                              query: { version: ver },
-                            })
-                              .then(load)
-                              .then(() => {
-                                setMenuFor(null)
-                                pushToast('Deleted version', 'success')
-                              })
-                              .catch((err) =>
-                                pushToast(err instanceof Error ? err.message : String(err), 'error'),
-                              )
-                          }}
-                        />
-                      )}
-                      <div className={versions.length > 0 ? 'mt-1' : ''}>
-                        <ConfirmButton
-                          label="Delete"
-                          confirmLabel="Confirm delete"
-                          danger
-                          onConfirm={() =>
-                            void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
-                              method: 'DELETE',
-                            })
-                              .then(load)
-                              .then(() => {
-                                setMenuFor(null)
-                                pushToast(`Deleted ${humanizeTemplateName(name)}`, 'success')
-                              })
-                              .catch((err) =>
-                                pushToast(err instanceof Error ? err.message : String(err), 'error'),
-                              )
-                          }
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
               </li>
             )

@@ -14,8 +14,8 @@ export function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink-200 bg-white/60 px-6 py-16 text-center">
-      <div className="text-lg font-semibold text-ink-800">{title}</div>
-      {description && <p className="mt-2 max-w-md text-sm text-ink-500">{description}</p>}
+      <div className="text-type-section text-ink-800">{title}</div>
+      {description && <p className="mt-2 max-w-md text-type-body text-ink-500">{description}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   )
@@ -115,7 +115,7 @@ export function StatusBadge({
           ? 'bg-amber-100 text-amber-900'
           : 'bg-ink-100 text-ink-700'
   return (
-    <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide', tone)}>
+    <span className={clsx('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-type-meta font-semibold uppercase tracking-wide', tone)}>
       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
       {status}
     </span>
@@ -190,10 +190,16 @@ export function ToastHost({
   onDismiss: (id: string) => void
 }) {
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-full max-w-sm flex-col gap-2">
+    <div
+      className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-full max-w-sm flex-col gap-2"
+      aria-live="polite"
+      aria-relevant="additions text"
+      aria-atomic="false"
+    >
       {toasts.map((t) => (
         <div
           key={t.id}
+          role={t.tone === 'error' ? 'alert' : 'status'}
           className={clsx(
             'pointer-events-auto flex items-start gap-2 rounded-xl border px-3 py-2 shadow-lg backdrop-blur',
             t.tone === 'error' && 'border-rose-200 bg-rose-50 text-rose-900',
@@ -260,8 +266,8 @@ export function PageHeader({
   return (
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="text-xl font-semibold text-ink-950">{title}</h1>
-        {description && <p className="mt-0.5 max-w-2xl text-sm text-ink-500">{description}</p>}
+        <h1 className="text-type-page text-ink-950">{title}</h1>
+        {description && <p className="mt-0.5 max-w-2xl text-type-body text-ink-500">{description}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
@@ -325,7 +331,7 @@ export function CopyableMono({
   return (
     <span className="inline-flex min-w-0 max-w-full items-center gap-1">
       <code
-        className="min-w-0 break-all font-mono text-[11px] text-ink-800"
+        className="min-w-0 break-all text-type-mono text-ink-800"
         title={title ?? value}
       >
         <span className="sm:hidden">{middleTruncate(value)}</span>

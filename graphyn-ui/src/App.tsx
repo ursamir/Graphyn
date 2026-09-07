@@ -27,6 +27,7 @@ import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
 import { useAppStore, type AppView } from './store/appStore'
 import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
+import { KeyboardHelp } from './components/KeyboardHelp'
 import BuilderView from './features/builder/BuilderView'
 import RunsView from './features/runs/RunsView'
 import ArtifactsView from './features/artifacts/ArtifactsView'
@@ -168,6 +169,7 @@ export default function App() {
   const setBootError = useAppStore((s) => s.setBootError)
   const settingsOpen = useAppStore((s) => s.settingsOpen)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
+  const [helpOpen, setHelpOpen] = React.useState(false)
   const [tokenDraft, setTokenDraft] = React.useState('')
   const [tokenVisible, setTokenVisible] = React.useState(false)
   const settingsPanelRef = React.useRef<HTMLDivElement>(null)
@@ -329,6 +331,13 @@ export default function App() {
           el.tagName === 'SELECT' ||
           el.isContentEditable)
       if (settingsOpen) return
+      if (helpOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setHelpOpen(false)
+        }
+        return
+      }
       const metaK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'
       const slash = e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey
       if (metaK || (slash && !typing)) {
@@ -339,6 +348,11 @@ export default function App() {
         return
       }
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+        e.preventDefault()
+        setHelpOpen(true)
+        return
+      }
       const dest = JUMP_KEYS[e.key.toLowerCase()]
       if (dest) {
         e.preventDefault()
@@ -347,7 +361,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [view, settingsOpen, narrow])
+  }, [view, settingsOpen, helpOpen, narrow])
 
   const chipLabel = isRunning
     ? statusMessage && statusMessage !== 'Running…'
@@ -412,6 +426,15 @@ export default function App() {
                 Last run {lastRunId.slice(0, 8)}
               </button>
             )}
+            <button
+              type="button"
+              className="btn-icon"
+              onClick={() => setHelpOpen(true)}
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts (?)"
+            >
+              <span className="text-[13px] font-semibold">?</span>
+            </button>
             <button
               type="button"
               className="btn-icon"
@@ -513,6 +536,7 @@ export default function App() {
           </main>
         </div>
 
+        <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         <ToastHost toasts={toasts} onDismiss={dismissToast} />
 
         {settingsOpen && (

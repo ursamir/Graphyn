@@ -13,6 +13,8 @@ export type GraphynNodeData = {
   inputs: PortDef[]
   outputs: PortDef[]
   status?: 'idle' | 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled' | 'success' | 'error'
+  /** Last execution error snippet when status is failed */
+  lastError?: string
   runtime?: string
   onChangeConfig?: (key: string, value: unknown) => void
   onDelete?: () => void
@@ -346,10 +348,10 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
       {inputs.flatMap((p, i) => {
         const top = `${((i + 1) / (inputs.length + 1)) * 100}%`
         const left = `${((i + 1) / (inputs.length + 1)) * 100}%`
-        const title = `${p.name}${p.data_type ? ` (${p.data_type})` : ''}`
+        const title = `Input “${p.name}”${p.data_type ? ` · ${p.data_type}` : ''} — drop a wire here`
         return [
-          <Handle key={`in-l-${p.name}`} id={p.name} type="target" position={Position.Left} style={{ top }} className="graphyn-handle graphyn-handle-in" title={title} />,
-          <Handle key={`in-t-${p.name}`} id={`${p.name}::top`} type="target" position={Position.Top} style={{ left }} className="graphyn-handle graphyn-handle-in" title={`${title} (top)`} />,
+          <Handle key={`in-l-${p.name}`} id={p.name} type="target" position={Position.Left} style={{ top }} className="graphyn-handle graphyn-handle-in" title={title} aria-label={title} />,
+          <Handle key={`in-t-${p.name}`} id={`${p.name}::top`} type="target" position={Position.Top} style={{ left }} className="graphyn-handle graphyn-handle-in" title={`${title} (top)`} aria-label={`${title} (top)`} />,
         ]
       })}
 
@@ -410,10 +412,10 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
       {outputs.flatMap((p, i) => {
         const top = `${((i + 1) / (outputs.length + 1)) * 100}%`
         const left = `${((i + 1) / (outputs.length + 1)) * 100}%`
-        const title = `${p.name}${p.data_type ? ` (${p.data_type})` : ''}`
+        const title = `Output “${p.name}”${p.data_type ? ` · ${p.data_type}` : ''} — drag to an input handle`
         return [
-          <Handle key={`out-r-${p.name}`} id={p.name} type="source" position={Position.Right} style={{ top }} className="graphyn-handle graphyn-handle-out" title={title} />,
-          <Handle key={`out-b-${p.name}`} id={`${p.name}::bottom`} type="source" position={Position.Bottom} style={{ left }} className="graphyn-handle graphyn-handle-out" title={`${title} (bottom)`} />,
+          <Handle key={`out-r-${p.name}`} id={p.name} type="source" position={Position.Right} style={{ top }} className="graphyn-handle graphyn-handle-out" title={title} aria-label={title} />,
+          <Handle key={`out-b-${p.name}`} id={`${p.name}::bottom`} type="source" position={Position.Bottom} style={{ left }} className="graphyn-handle graphyn-handle-out" title={`${title} (bottom)`} aria-label={`${title} (bottom)`} />,
         ]
       })}
     </div>

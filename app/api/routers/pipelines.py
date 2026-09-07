@@ -68,6 +68,117 @@ def _read_template_meta(name: str) -> dict[str, Any]:
         return {"name": name, "latest_version": None, "versions": {}}
 
 
+
+def _load_template_graph_dict(name: str) -> dict[str, Any] | None:
+    """Best-effort load of a template Graph IR dict (latest version or legacy flat)."""
+    templates_dir = _templates_dir()
+    meta = _read_template_meta(name)
+    latest = meta.get("latest_version")
+    candidates: list[Path] = []
+    if isinstance(latest, str) and _SAFE_VERSION_RE.match(latest):
+        candidates.append(_template_version_path(name, latest))
+    candidates.append(templates_dir / f"{name}.graph.json")
+    template_dir = templates_dir / name
+    if template_dir.is_dir():
+        versions = sorted(
+            p for p in template_dir.glob("*.graph.json") if p.name != "latest.graph.json"
+        )
+        if versions:
+            candidates.append(versions[-1])
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "nodes" in data:
+                return data
+        except Exception:
+            continue
+    return None
+
+
+_SOURCE_HINTS = ("ingest", "input", "load", "read", "fetch", "dataset")
+_SINK_HINTS = ("export", "write", "save", "output", "upload", "publish")
+
+
+def _summarize_template(name: str) -> dict[str, Any]:
+    """Card-facing fields for Templates UI (description, I/O, plugins, difficulty)."""
+    summary: dict[str, Any] = {
+        "name": name,
+        "description": "",
+        "difficulty": None,
+        "required_plugins": [],
+        "inputs": [],
+        "outputs": [],
+        "tags": [],
+        "node_count": 0,
+        "node_types": [],
+    }
+    graph = _load_template_graph_dict(name)
+    if not graph:
+        return summary
+    meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    summary["description"] = str(meta.get("description") or "")[:400]
+    difficulty = meta.get("difficulty")
+    if isinstance(difficulty, str) and difficulty.strip():
+        summary["difficulty"] = difficulty.strip()
+    tags = meta.get("tags") if isinstance(meta.get("tags"), list) else []
+    summary["tags"] = [str(t) for t in tags if t is not None][:12]
+    plugins = meta.get("required_plugins") or meta.get("plugins") or []
+    if isinstance(plugins, list):
+        summary["required_plugins"] = [str(p) for p in plugins if p][:16]
+    node_types: list[str] = []
+    inputs: list[str] = []
+    outputs: list[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        nt = str(node.get("node_type") or "")
+        if not nt:
+            continue
+        clean = nt.replace("Isolated_", "")
+        node_types.append(clean)
+        low = clean.lower()
+        cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+        if any(h in low for h in _SOURCE_HINTS):
+            path = cfg.get("path") or cfg.get("source") or cfg.get("uri") or cfg.get("url")
+            inputs.append(str(path) if path else clean)
+        if any(h in low for h in _SINK_HINTS):
+            out = cfg.get("path") or cfg.get("destination") or cfg.get("output_dir") or clean
+            outputs.append(str(out))
+    # Deduplicate while preserving order
+    def _uniq(items: list[str], limit: int = 8) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in items:
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
+    summary["node_count"] = len(node_types)
+    summary["node_types"] = _uniq(node_types, 12)
+    summary["inputs"] = _uniq(inputs)
+    summary["outputs"] = _uniq(outputs)
+    if not summary["required_plugins"]:
+        # Derive crude plugin pack hints from node type prefixes / known packs
+        packs: list[str] = []
+        for nt in summary["node_types"]:
+            if "_" in nt:
+                packs.append(nt.split("_", 1)[0].lower())
+            else:
+                packs.append(nt.lower())
+        # Prefer unique short names that look like packs, skip generic verbs
+        skip = {"dataset", "python", "http", "file", "code", "branch", "if", "map"}
+        derived = [p for p in _uniq(packs, 10) if p not in skip and len(p) > 2]
+        summary["required_plugins"] = derived[:8]
+    return summary
+
+
 def _write_template_meta(name: str, meta: dict[str, Any]) -> None:
     meta_path = _template_meta_path(name)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
@@ -305,7 +416,11 @@ def list_examples():
 
 @router.get("/templates", summary="List pipeline templates")
 def list_templates():
-    """Return a list of available pipeline template names.
+    """Return card summaries for available pipeline templates.
+
+    Each item includes ``name`` plus optional card fields (description,
+    difficulty, required_plugins, inputs, outputs, tags, node_count) derived
+    from the latest Graph IR when readable.
 
     Supports both legacy flat templates (`{name}.graph.json`) and
     versioned templates (`{name}/{version}.graph.json` + meta.json).
@@ -319,7 +434,7 @@ def list_templates():
     for d in sorted(templates_dir.iterdir()):
         if d.is_dir() and _SAFE_NAME_RE.match(d.name):
             names.add(d.name)
-    return sorted(names)
+    return [_summarize_template(name) for name in sorted(names)]
 
 
 @router.get("/templates/{name}/versions", summary="List template versions")

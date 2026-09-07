@@ -277,24 +277,70 @@ export default function PluginsView() {
           <ul className="space-y-2">
             {plugins.map((p) => {
               const missingReq = p.dependency_summary?.missing_required?.length ?? 0
+              const showMissingOptCount = p.dependency_summary?.missing_optional?.length ?? 0
+              const optionalDeclared =
+                (p.manifest?.optional_dependencies?.length ?? 0) > 0 || showMissingOptCount > 0
               const runtime = p.runtime ?? p.dependency_summary?.runtime ?? p.manifest?.runtime ?? 'inprocess'
               const isolated = isIsolatedRuntime(runtime, p.name)
+              const panelMissingOpt = depStatus?.missing_optional?.length ?? showMissingOptCount
+              const panelHasOptional =
+                (depStatus?.dependencies.some((d) => d.optional) ?? false) ||
+                optionalDeclared ||
+                panelMissingOpt > 0 ||
+                (p.manifest?.optional_dependencies?.length ?? 0) > 0
               return (
                 <li key={p.name} className="rounded-2xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="font-medium">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-type-body">
                         {p.name} {p.version ? `v${p.version}` : ''}
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-ink-500">
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-type-meta text-ink-500">
                         <StatusBadge status={p.enabled === false ? 'disabled' : p.status ?? 'enabled'} />
-                        <span className="rounded bg-ink-50 px-1.5 py-0.5 font-mono">{runtime}</span>
+                        <span className="rounded bg-ink-50 px-1.5 py-0.5 font-mono text-type-mono">{runtime}</span>
                         {p.node_types?.length ? `${p.node_types.length} nodes` : null}
                         {missingReq > 0 ? (
-                          <span className="text-amber-700">{missingReq} missing required dep(s)</span>
+                          <span className="text-amber-700">{missingReq} missing required</span>
                         ) : (
-                          <span className="text-emerald-700">deps ok</span>
+                          <span className="text-emerald-700">required deps ok</span>
                         )}
+                        {showMissingOptCount > 0 ? (
+                          <span className="text-amber-700">{showMissingOptCount} missing optional</span>
+                        ) : optionalDeclared ? (
+                          <span className="text-ink-500">optional extras available</span>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {missingReq > 0 && (
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            onClick={() => void installDeps(p.name, false)}
+                          >
+                            <PackagePlus className="h-3.5 w-3.5" /> Install required deps
+                          </button>
+                        )}
+                        {(showMissingOptCount > 0 || optionalDeclared || isolated) && (
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => void installDeps(p.name, true)}
+                            title={
+                              isolated
+                                ? 'Install optional extras into this plugin’s isolated venv'
+                                : 'Install optional extras'
+                            }
+                          >
+                            <PackagePlus className="h-3.5 w-3.5" /> Install optional extras
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn-quiet"
+                          onClick={() => void toggleDeps(p.name)}
+                        >
+                          {expanded === p.name ? 'Hide dependencies' : 'Show dependencies'}
+                        </button>
                       </div>
                     </div>
                     <div className="relative">
@@ -311,11 +357,6 @@ export default function PluginsView() {
                           <button type="button" className="btn-quiet w-full justify-start" onClick={() => { void toggleDeps(p.name); setMenuFor(null) }}>
                             Dependencies
                           </button>
-                          {isolated && (
-                            <button type="button" className="btn-quiet w-full justify-start" onClick={() => { void installDeps(p.name, true); setMenuFor(null) }}>
-                              Install extras
-                            </button>
-                          )}
                           {p.enabled === false ? (
                             <button type="button" className="btn-quiet w-full justify-start" onClick={() => { void setEnabled(p.name, true); setMenuFor(null) }}>
                               Enable
@@ -346,23 +387,27 @@ export default function PluginsView() {
                     </div>
                   </div>
                   {isolated && (
-                    <p className="mt-2 text-[11px] text-ink-500">
+                    <p className="mt-2 text-type-meta text-ink-500">
                       Optional extras (TensorFlow, …) install into this plugin’s isolated venv — they are not added to
                       the API image.
                     </p>
                   )}
                   {expanded === p.name && depStatus && (
                     <div className="mt-3 space-y-2 border-t border-ink-100 pt-3 text-sm">
-                      <div className="text-[11px] text-ink-500">
+                      <div className="text-type-meta text-ink-500">
                         runtime={depStatus.runtime}
                         {depStatus.python ? ` · ${depStatus.python}` : ''}
                       </div>
-                      <ul className="space-y-1 font-mono text-[11px]">
+                      <ul className="space-y-1 font-mono text-type-mono">
                         {depStatus.dependencies.map((d) => (
-                          <li key={d.requirement} className="flex justify-between gap-2">
+                          <li key={d.requirement} className="flex flex-wrap items-center justify-between gap-2">
                             <span>
                               {d.requirement}
-                              {d.optional ? ' (optional)' : ''}
+                              {d.optional ? (
+                                <span className="ml-1 rounded bg-ink-100 px-1 py-px text-type-meta font-sans text-ink-500">
+                                  optional
+                                </span>
+                              ) : null}
                             </span>
                             <span className={d.satisfied ? 'text-emerald-700' : 'text-amber-700'}>
                               {d.satisfied ? `ok ${d.installed_version ?? ''}` : 'missing'}
@@ -371,12 +416,19 @@ export default function PluginsView() {
                         ))}
                       </ul>
                       <div className="flex flex-wrap gap-2">
-                        <button type="button" className="btn-primary" onClick={() => void installDeps(p.name, false)}>
-                          <PackagePlus className="h-3.5 w-3.5" /> Install required
-                        </button>
+                        {(depStatus.missing_required?.length ?? 0) > 0 && (
+                          <button type="button" className="btn-primary" onClick={() => void installDeps(p.name, false)}>
+                            <PackagePlus className="h-3.5 w-3.5" /> Install required deps
+                          </button>
+                        )}
+                        {panelHasOptional && (
+                          <button type="button" className="btn-secondary" onClick={() => void installDeps(p.name, true)}>
+                            <PackagePlus className="h-3.5 w-3.5" /> Install optional extras
+                          </button>
+                        )}
                       </div>
                       {isolated && (
-                        <p className="text-[11px] text-ink-500">
+                        <p className="text-type-meta text-ink-500">
                           Optional extras (TensorFlow, …) install into this plugin’s isolated venv — they are not added
                           to the API image.
                         </p>

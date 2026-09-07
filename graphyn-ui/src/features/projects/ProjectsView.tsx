@@ -518,6 +518,7 @@ export default function ProjectsView() {
               <section className="space-y-3">
                 <div className="flex gap-2">
                   <input
+                    id="snapshot-name"
                     value={snapshotName}
                     onChange={(e) => setSnapshotName(e.target.value)}
                     placeholder="snapshot-name"
@@ -528,7 +529,19 @@ export default function ProjectsView() {
                   </button>
                 </div>
                 {snapshots.length === 0 ? (
-                  <EmptyState title="No snapshots" />
+                  <EmptyState
+                    title="No snapshots"
+                    description="Create a named snapshot to restore this project later."
+                    action={
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => document.getElementById('snapshot-name')?.focus()}
+                      >
+                        Name a snapshot
+                      </button>
+                    }
+                  />
                 ) : (
                   <ul className="space-y-2">
                     {snapshots.map((s, i) => {
