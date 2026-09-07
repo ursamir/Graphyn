@@ -14,6 +14,7 @@ import {
   KeyRound,
   Server,
   GitBranch,
+  FlaskConical,
   X,
   Menu,
   PanelLeftClose,
@@ -35,6 +36,7 @@ import SystemView from './features/system/SystemView'
 import SecretsView from './features/secrets/SecretsView'
 import WorkersView from './features/workers/WorkersView'
 import TraceView from './features/trace/TraceView'
+import ExperimentsView from './features/experiments/ExperimentsView'
 
 const NAV_GROUPS: Array<{
   title: string
@@ -55,6 +57,7 @@ const NAV_GROUPS: Array<{
       { id: 'data', label: 'Data', icon: Database },
       { id: 'artifacts', label: 'Artifacts', icon: Archive },
       { id: 'trace', label: 'Trace', icon: GitBranch },
+      { id: 'experiments', label: 'Experiments', icon: FlaskConical },
     ],
   },
   {
@@ -78,6 +81,7 @@ const VIEW_LABEL: Record<AppView, string> = {
   data: 'Data',
   artifacts: 'Artifacts',
   trace: 'Trace',
+  experiments: 'Experiments',
   projects: 'Projects',
   secrets: 'Secrets',
   system: 'System',
@@ -175,6 +179,13 @@ export default function App() {
       const raw = window.location.hash.replace(/^#\/?/, '')
       if (!raw.split('?')[0].startsWith('trace')) {
         window.history.replaceState(null, '', '#/trace')
+      }
+      return
+    }
+    if (view === 'experiments') {
+      const raw = window.location.hash.replace(/^#\/?/, '')
+      if (!raw.split('?')[0].startsWith('experiments')) {
+        window.history.replaceState(null, '', '#/experiments')
       }
       return
     }
@@ -394,6 +405,7 @@ export default function App() {
             {view === 'system' && <SystemView />}
             {view === 'workers' && <WorkersView />}
             {view === 'trace' && <TraceView />}
+            {view === 'experiments' && <ExperimentsView />}
             {view === 'secrets' && <SecretsView />}
           </main>
         </div>

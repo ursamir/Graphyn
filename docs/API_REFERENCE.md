@@ -917,6 +917,44 @@ Newest-first append-only audit events from `{project}/audit/events.jsonl`.
 
 Seed hooks: template save, async run start, worker register.
 
+
+## Experiments — `/api/v1/experiments`
+
+MLflow-shaped experiment board (Pillar B). Aggregates from `{project}/runs/*/experiment.json` when present; otherwise run `meta.json` + `metrics.json` (run dir or artifacts). Corrupt files are skipped. Does not require the `mlflow` package.
+
+### `GET /api/v1/experiments`
+
+List of experiment blocks:
+
+```json
+[
+  {
+    "experiment_name": "default",
+    "runs": [
+      {
+        "run_id": "...",
+        "status": "completed",
+        "created_at": "...",
+        "graph_name": "...",
+        "parameters": {},
+        "metrics": {"accuracy": 0.9},
+        "tags": []
+      }
+    ]
+  }
+]
+```
+
+### `GET /api/v1/experiments/{name}`
+
+One experiment block (`404` if no runs under that name).
+
+### `GET /api/v1/experiments/compare`
+
+**Query:** `run_ids` — comma-separated run ids.
+
+**Response:** `run_ids`, `missing_run_ids`, `param_keys`, `metric_keys` (preferred metrics first), `runs` (aligned rows for a comparison table).
+
 ## Static File Serving
 
 | Mount | Filesystem | Example URL |

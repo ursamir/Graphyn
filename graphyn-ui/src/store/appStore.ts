@@ -13,6 +13,7 @@ export type AppView =
   | 'secrets'
   | 'workers'
   | 'trace'
+  | 'experiments'
 
 export type ToastTone = 'info' | 'success' | 'error'
 
@@ -28,6 +29,7 @@ interface AppState {
   focusRunId: string | null
   openRun: (id: string) => void
   openTrace: (opts: { artifactId?: string; runId?: string }) => void
+  openExperiments: () => void
   catalog: NodeCatalogEntry[]
   setCatalog: (catalog: NodeCatalogEntry[]) => void
   refreshCatalog: (() => Promise<void>) | null
@@ -74,6 +76,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const qs = params.toString()
     window.history.replaceState(null, '', qs ? `#/trace?${qs}` : '#/trace')
     set({ view: 'trace' })
+  },
+  openExperiments: () => {
+    window.history.replaceState(null, '', '#/experiments')
+    set({ view: 'experiments' })
   },
   catalog: [],
   setCatalog: (catalog) => set({ catalog }),

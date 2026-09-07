@@ -44,6 +44,7 @@ from app.api.routers.plugins import router as plugins_router
 from app.api.routers.secrets import router as secrets_router
 from app.api.routers.workers import router as workers_router
 from app.api.routers.trace import router as trace_router
+from app.api.routers.experiments import router as experiments_router
 from app.api.observability import record_request
 from app.core.config import api_token, auth_required, datasets_output_dir, datasets_input_dir, runs_dir
 
@@ -174,6 +175,7 @@ app.include_router(outputs_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(plugins_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(secrets_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(trace_router,       prefix="/api/v1", dependencies=_deps)
+app.include_router(experiments_router, prefix="/api/v1", dependencies=_deps)
 
 
 @app.get("/")
