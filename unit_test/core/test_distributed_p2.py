@@ -430,3 +430,273 @@ def test_widen_placement_after_reclaim_helper_only_touches_worker_mode():
     assert widened.require_gpu is True
     assert widened.min_vram_mib == 2048
     assert widened.tags == ("gpu",)
+
+
+# ---------------------------------------------------------------------------
+# DIST-001 — atomic cross-process claim (module-level workers for spawn/fork)
+# ---------------------------------------------------------------------------
+
+
+def _dist001_claim_worker(root: str, wid: str, out_path: str) -> None:
+    """Claim once against shared DiskStateStore; write ``wid:job_id`` (or empty)."""
+    import time
+    from pathlib import Path as P
+
+    from app.core.distributed.models import WorkerInfo, WorkerResources
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    time.sleep(0.02)
+    wq = JobQueue(
+        store=DiskStateStore(root=P(root)),
+        load_persisted=True,
+        lease_ttl_s=60.0,
+    )
+    worker = WorkerInfo(
+        worker_id=wid,
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    claimed = wq.claim(worker)
+    P(out_path).write_text(
+        f"{wid}:{'' if claimed is None else claimed.job_id}\n",
+        encoding="utf-8",
+    )
+
+
+def _dist001_claim_loop_worker(
+    root: str, wid: str, out_path: str, max_rounds: int
+) -> None:
+    """Claim until empty; write ``wid:job1,job2,...``."""
+    import time
+    from pathlib import Path as P
+
+    from app.core.distributed.models import WorkerInfo, WorkerResources
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    wq = JobQueue(
+        store=DiskStateStore(root=P(root)),
+        load_persisted=True,
+        lease_ttl_s=60.0,
+    )
+    worker = WorkerInfo(
+        worker_id=wid,
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    claimed_ids: list[str] = []
+    for _ in range(max_rounds):
+        c = wq.claim(worker)
+        if c is None:
+            time.sleep(0.005)
+            c = wq.claim(worker)
+        if c is None:
+            break
+        claimed_ids.append(c.job_id)
+    P(out_path).write_text(
+        f"{wid}:{','.join(claimed_ids)}\n", encoding="utf-8"
+    )
+
+
+def test_atomic_claim_across_processes(tmp_path: Path):
+    """DIST-001: independent JobQueue clients + shared DiskStateStore → one claim."""
+    import multiprocessing as mp
+
+    store = DiskStateStore(root=tmp_path)
+    q = JobQueue(store=store, load_persisted=False, lease_ttl_s=60.0)
+    q.enqueue(NodeJob(job_id="race1", run_id="r", node_id="n", node_type="x"))
+
+    n = 8
+    outs = [tmp_path / f"out{i}.txt" for i in range(n)]
+    procs = [
+        mp.Process(
+            target=_dist001_claim_worker,
+            args=(str(tmp_path), f"w{i}", str(outs[i])),
+        )
+        for i in range(n)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=20)
+        assert p.exitcode == 0, f"worker exited {p.exitcode}"
+
+    results = [o.read_text(encoding="utf-8").strip() for o in outs]
+    wins = [r for r in results if r.endswith(":race1")]
+    assert len(wins) == 1, f"expected exactly one claim, got {results!r}"
+
+    final = JobQueue(store=DiskStateStore(root=tmp_path), load_persisted=True)
+    job = final.get("race1")
+    assert job is not None
+    assert job.status == "claimed"
+    assert job.claimed_by == wins[0].split(":", 1)[0]
+
+
+def test_atomic_claim_stress_multiprocess(tmp_path: Path):
+    """DIST-001 stress: N jobs, M workers, total successful claims == N (no dupes)."""
+    import multiprocessing as mp
+
+    n_jobs = 20
+    n_workers = 12
+    store = DiskStateStore(root=tmp_path)
+    q = JobQueue(store=store, load_persisted=False, lease_ttl_s=60.0)
+    for i in range(n_jobs):
+        q.enqueue(
+            NodeJob(job_id=f"j{i}", run_id="r", node_id=f"n{i}", node_type="x")
+        )
+
+    outs = [tmp_path / f"stress{i}.txt" for i in range(n_workers)]
+    procs = [
+        mp.Process(
+            target=_dist001_claim_loop_worker,
+            args=(str(tmp_path), f"w{i}", str(outs[i]), n_jobs + 5),
+        )
+        for i in range(n_workers)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=40)
+        assert p.exitcode == 0, f"worker exited {p.exitcode}"
+
+    all_claims: list[str] = []
+    for o in outs:
+        line = o.read_text(encoding="utf-8").strip()
+        _wid, _, ids = line.partition(":")
+        if ids:
+            all_claims.extend([x for x in ids.split(",") if x])
+
+    assert len(all_claims) == n_jobs, (
+        f"expected {n_jobs} claims, got {len(all_claims)}: {sorted(all_claims)}"
+    )
+    assert len(set(all_claims)) == n_jobs, (
+        f"duplicate claims detected: {sorted(all_claims)}"
+    )
+
+
+
+def test_atomic_claim_two_queues_shared_memory_store():
+    """Two JobQueue clients on one MemoryStateStore: second claim loses (CAS path).
+
+    Cross-thread stress is covered by DiskStateStore multiprocess tests; the
+    suite's autouse ``patch_threads`` no-ops ``Thread.start``.
+    """
+    store = MemoryStateStore()
+    q_a = JobQueue(store=store, load_persisted=False, lease_ttl_s=60.0)
+    q_a.enqueue(NodeJob(job_id="t1", run_id="r", node_id="n", node_type="x"))
+
+    q_b = JobQueue(store=store, load_persisted=True, lease_ttl_s=60.0)
+    worker_a = WorkerInfo(
+        worker_id="wa",
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    worker_b = WorkerInfo(
+        worker_id="wb",
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    c1 = q_a.claim(worker_a)
+    c2 = q_b.claim(worker_b)
+    assert c1 is not None and c1.job_id == "t1" and c1.claimed_by == "wa"
+    assert c2 is None
+    # Store truth
+    snap = store.load_queue()
+    assert snap["jobs"]["t1"]["status"] == "claimed"
+    assert snap["jobs"]["t1"]["claimed_by"] == "wa"
+
+
+def test_disk_mutate_queue_cas_helper(tmp_path: Path):
+    """DiskStateStore.mutate_queue serializes RMW and returns mutator result."""
+    store = DiskStateStore(root=tmp_path)
+    store.save_queue(
+        {
+            "jobs": {"a": {"job_id": "a", "status": "pending"}},
+            "order": ["a"],
+            "results": {},
+            "events": {},
+        }
+    )
+
+    def mutator(snap):
+        jobs = dict(snap.get("jobs") or {})
+        jobs["a"] = {**jobs["a"], "status": "claimed", "claimed_by": "w"}
+        order = [j for j in snap.get("order") or [] if j != "a"]
+        return {**snap, "jobs": jobs, "order": order}, "ok"
+
+    assert store.mutate_queue(mutator) == "ok"
+    snap = store.load_queue()
+    assert snap["jobs"]["a"]["status"] == "claimed"
+    assert "a" not in snap["order"]
+
+
+def _dist002_append_worker(root: str, job_id: str, out_path: str) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=60.0)
+    n = q.append_events(job_id, [{"type": "log", "msg": "from-append"}])
+    P(out_path).write_text(str(n), encoding="utf-8")
+
+
+def _dist002_renew_worker(root: str, job_id: str, worker_id: str, out_path: str) -> None:
+    from pathlib import Path as P
+    from app.core.distributed.queue import JobQueue
+    from app.core.distributed.store import DiskStateStore
+
+    q = JobQueue(store=DiskStateStore(root=P(root)), load_persisted=True, lease_ttl_s=60.0)
+    job = q.renew_lease(job_id, worker_id=worker_id)
+    P(out_path).write_text(
+        "ok" if job is not None and job.lease_expires_at is not None else "fail",
+        encoding="utf-8",
+    )
+
+
+def test_concurrent_append_and_renew_no_lost_update(tmp_path: Path):
+    """DIST-002: append_events and renew_lease against shared disk must both land."""
+    import multiprocessing as mp
+
+    store = DiskStateStore(root=tmp_path)
+    q = JobQueue(store=store, load_persisted=False, lease_ttl_s=60.0)
+    q.enqueue(NodeJob(job_id="cu1", run_id="r", node_id="n", node_type="x"))
+    worker = WorkerInfo(
+        worker_id="w1",
+        labels=["cpu"],
+        resources=WorkerResources(gpu=False),
+        plugins=["x"],
+    )
+    claimed = q.claim(worker)
+    assert claimed is not None
+
+    out_a = tmp_path / "append.txt"
+    out_r = tmp_path / "renew.txt"
+    pa = mp.Process(
+        target=_dist002_append_worker, args=(str(tmp_path), "cu1", str(out_a))
+    )
+    pr = mp.Process(
+        target=_dist002_renew_worker,
+        args=(str(tmp_path), "cu1", "w1", str(out_r)),
+    )
+    pa.start()
+    pr.start()
+    pa.join(timeout=15)
+    pr.join(timeout=15)
+    assert pa.exitcode == 0 and pr.exitcode == 0
+    assert out_a.read_text(encoding="utf-8").strip() == "1"
+    assert out_r.read_text(encoding="utf-8").strip() == "ok"
+
+    final = JobQueue(store=DiskStateStore(root=tmp_path), load_persisted=True)
+    snap = DiskStateStore(root=tmp_path).load_queue()
+    assert any(
+        ev.get("msg") == "from-append" for ev in (snap.get("events") or {}).get("cu1", [])
+    ), snap.get("events")
+    job = final.get("cu1")
+    assert job is not None and job.status == "claimed"
+    assert job.claimed_by == "w1"
+    assert job.lease_expires_at is not None

@@ -9,11 +9,11 @@ Responsibility:   Persistence backends for worker registry + job queue so the
 Owns:             DistributedStateStore protocol, MemoryStateStore,
                   DiskStateStore, RedisStateStore, get_distributed_store(),
                   _reset_distributed_store() (tests).
-Public Surface:   All classes/functions above.
+Public Surface:   All classes/functions above; mutate_queue for atomic RMW.
 Must NOT:         Import from app.domain, app.api, or orchestrator.
-Dependencies:     stdlib (json, os, threading, pathlib, fcntl), app.core.config
-                  (project_dir, redis_url) — lazy.
-Reason To Change: New store backends, key layout, or durability policy.
+Dependencies:     stdlib (json, os, threading, pathlib, fcntl, typing),
+                  app.core.config (project_dir, redis_url) — lazy.
+Reason To Change: New store backends, key layout, atomic claim / CAS policy.
 """
 from __future__ import annotations
 
@@ -23,9 +23,11 @@ import os
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 log = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 # Optional override: memory | disk | redis (empty → auto: redis if URL else disk).
 _STORE_ENV = "GRAPHYN_DISTRIBUTED_STORE"
@@ -48,6 +50,21 @@ class DistributedStateStore(ABC):
 
     @abstractmethod
     def save_queue(self, snapshot: dict[str, Any]) -> None:
+        ...
+
+    @abstractmethod
+    def mutate_queue(
+        self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
+    ) -> T:
+        """Atomically load → mutate → save the queue snapshot.
+
+        ``mutator(snapshot)`` returns ``(new_snapshot, result)``. The new
+        snapshot is persisted under an exclusive cross-process lock (disk /
+        Redis WATCH) or an in-process lock (memory). Returns ``result``.
+
+        Used by ``JobQueue.claim`` so pending→claimed is CAS-safe across
+        processes sharing the same durable store.
+        """
         ...
 
     @property
@@ -106,6 +123,31 @@ class MemoryStateStore(DistributedStateStore):
                 },
             }
 
+    def mutate_queue(
+        self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
+    ) -> T:
+        with self._lock:
+            snap = {
+                "jobs": dict(self._queue.get("jobs") or {}),
+                "order": list(self._queue.get("order") or []),
+                "results": dict(self._queue.get("results") or {}),
+                "events": {
+                    k: list(v) if isinstance(v, list) else v
+                    for k, v in (self._queue.get("events") or {}).items()
+                },
+            }
+            new_snap, result = mutator(snap)
+            self._queue = {
+                "jobs": dict(new_snap.get("jobs") or {}),
+                "order": list(new_snap.get("order") or []),
+                "results": dict(new_snap.get("results") or {}),
+                "events": {
+                    k: list(v) if isinstance(v, list) else v
+                    for k, v in (new_snap.get("events") or {}).items()
+                },
+            }
+            return result
+
 
 def _distributed_dir(root: Path | None = None) -> Path:
     if root is not None:
@@ -119,7 +161,11 @@ def _distributed_dir(root: Path | None = None) -> Path:
 
 
 class DiskStateStore(DistributedStateStore):
-    """JSON files under ``{project_dir}/distributed/`` with advisory file locks."""
+    """JSON files under ``{project_dir}/distributed/`` with advisory file locks.
+
+    ``mutate_queue`` holds an exclusive flock on ``jobs.lock`` for the full
+    read-modify-write so pending→claimed is atomic across processes.
+    """
 
     def __init__(self, root: Path | str | None = None) -> None:
         self._root = Path(root) if root is not None else None
@@ -129,9 +175,22 @@ class DiskStateStore(DistributedStateStore):
     def backend_id(self) -> str:
         return "disk"
 
-    def _paths(self) -> tuple[Path, Path]:
+    def _paths(self) -> tuple[Path, Path, Path]:
         base = _distributed_dir(self._root)
-        return base / "workers.json", base / "jobs.json"
+        return base / "workers.json", base / "jobs.json", base / "jobs.lock"
+
+    def _empty_queue(self) -> dict[str, Any]:
+        return {"jobs": {}, "order": [], "results": {}, "events": {}}
+
+    def _normalize_queue(self, data: Any) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            return self._empty_queue()
+        return {
+            "jobs": data.get("jobs") if isinstance(data.get("jobs"), dict) else {},
+            "order": data.get("order") if isinstance(data.get("order"), list) else [],
+            "results": data.get("results") if isinstance(data.get("results"), dict) else {},
+            "events": data.get("events") if isinstance(data.get("events"), dict) else {},
+        }
 
     def _read_json(self, path: Path, default: Any) -> Any:
         try:
@@ -156,62 +215,94 @@ class DiskStateStore(DistributedStateStore):
             return default
 
     def _write_json(self, path: Path, data: Any) -> None:
+        """Atomic replace write. Caller must hold jobs.lock for queue files."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        payload = json.dumps(data, indent=2, default=str, sort_keys=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+
+    def _with_jobs_lock(self, exclusive: bool, fn: Callable[[], T]) -> T:
+        """Run ``fn`` while holding the queue lock file (cross-process)."""
         try:
             import fcntl
         except ImportError:  # pragma: no cover
             fcntl = None  # type: ignore[assignment]
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        payload = json.dumps(data, indent=2, default=str, sort_keys=True)
+        _, _, lock_path = self._paths()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        # threading lock serializes in-process; flock covers cross-process.
         with self._lock:
-            with open(tmp, "w", encoding="utf-8") as f:
+            with open(lock_path, "a+", encoding="utf-8") as lf:
                 if fcntl is not None:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    fcntl.flock(
+                        lf.fileno(),
+                        fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
+                    )
                 try:
-                    f.write(payload)
-                    f.flush()
-                    os.fsync(f.fileno())
+                    return fn()
                 finally:
                     if fcntl is not None:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            os.replace(tmp, path)
+                        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
 
     def load_workers(self) -> dict[str, Any]:
-        workers_path, _ = self._paths()
+        workers_path, _, _ = self._paths()
         data = self._read_json(workers_path, {})
         return data if isinstance(data, dict) else {}
 
     def save_workers(self, workers: dict[str, Any]) -> None:
-        workers_path, _ = self._paths()
-        self._write_json(workers_path, workers or {})
+        workers_path, _, _ = self._paths()
+        with self._lock:
+            self._write_json(workers_path, workers or {})
 
     def load_queue(self) -> dict[str, Any]:
-        _, jobs_path = self._paths()
-        data = self._read_json(
-            jobs_path,
-            {"jobs": {}, "order": [], "results": {}, "events": {}},
-        )
-        if not isinstance(data, dict):
-            return {"jobs": {}, "order": [], "results": {}, "events": {}}
-        return {
-            "jobs": data.get("jobs") if isinstance(data.get("jobs"), dict) else {},
-            "order": data.get("order") if isinstance(data.get("order"), list) else [],
-            "results": data.get("results") if isinstance(data.get("results"), dict) else {},
-            "events": data.get("events") if isinstance(data.get("events"), dict) else {},
-        }
+        def _load() -> dict[str, Any]:
+            _, jobs_path, _ = self._paths()
+            return self._normalize_queue(
+                self._read_json(jobs_path, self._empty_queue())
+            )
+
+        return self._with_jobs_lock(False, _load)
 
     def save_queue(self, snapshot: dict[str, Any]) -> None:
-        _, jobs_path = self._paths()
-        self._write_json(
-            jobs_path,
-            {
-                "jobs": snapshot.get("jobs") or {},
-                "order": snapshot.get("order") or [],
-                "results": snapshot.get("results") or {},
-                "events": snapshot.get("events") or {},
-            },
-        )
+        def _save() -> None:
+            _, jobs_path, _ = self._paths()
+            self._write_json(
+                jobs_path,
+                {
+                    "jobs": snapshot.get("jobs") or {},
+                    "order": snapshot.get("order") or [],
+                    "results": snapshot.get("results") or {},
+                    "events": snapshot.get("events") or {},
+                },
+            )
+
+        self._with_jobs_lock(True, _save)
+
+    def mutate_queue(
+        self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
+    ) -> T:
+        def _mutate() -> T:
+            _, jobs_path, _ = self._paths()
+            snap = self._normalize_queue(
+                self._read_json(jobs_path, self._empty_queue())
+            )
+            new_snap, result = mutator(snap)
+            self._write_json(
+                jobs_path,
+                {
+                    "jobs": new_snap.get("jobs") or {},
+                    "order": new_snap.get("order") or [],
+                    "results": new_snap.get("results") or {},
+                    "events": new_snap.get("events") or {},
+                },
+            )
+            return result
+
+        return self._with_jobs_lock(True, _mutate)
 
 
 class RedisStateStore(DistributedStateStore):
@@ -320,6 +411,114 @@ class RedisStateStore(DistributedStateStore):
                 )
         except Exception as exc:
             log.warning("RedisStateStore.save_queue failed: %s", exc)
+
+    def _normalize_queue(self, data: Any) -> dict[str, Any]:
+        empty = {"jobs": {}, "order": [], "results": {}, "events": {}}
+        if not isinstance(data, dict):
+            return empty
+        return {
+            "jobs": data.get("jobs") if isinstance(data.get("jobs"), dict) else {},
+            "order": data.get("order") if isinstance(data.get("order"), list) else [],
+            "results": data.get("results") if isinstance(data.get("results"), dict) else {},
+            "events": data.get("events") if isinstance(data.get("events"), dict) else {},
+        }
+
+    def mutate_queue(
+        self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
+    ) -> T:
+        """Optimistic CAS via Redis WATCH/MULTI; falls back to process lock."""
+        client = self._redis()
+        empty = {"jobs": {}, "order": [], "results": {}, "events": {}}
+        if client is None:
+            # No Redis: mutate in-memory empty snapshot (non-durable).
+            with self._lock:
+                new_snap, result = mutator(dict(empty))
+                return result
+
+        # Prefer Redis lock for fairness across processes; WATCH as CAS backup.
+        lock = None
+        try:
+            try:
+                lock = client.lock(
+                    self.QUEUE_KEY + ":lock",
+                    timeout=10,
+                    blocking_timeout=10,
+                )
+                acquired = lock.acquire(blocking=True)
+            except Exception:
+                acquired = False
+                lock = None
+
+            with self._lock:
+                if acquired:
+                    try:
+                        raw = client.get(self.QUEUE_KEY)
+                        snap = self._normalize_queue(
+                            json.loads(raw) if raw else empty
+                        )
+                        new_snap, result = mutator(snap)
+                        client.set(
+                            self.QUEUE_KEY,
+                            json.dumps(
+                                {
+                                    "jobs": new_snap.get("jobs") or {},
+                                    "order": new_snap.get("order") or [],
+                                    "results": new_snap.get("results") or {},
+                                    "events": new_snap.get("events") or {},
+                                },
+                                default=str,
+                            ),
+                            ex=self.TTL_S,
+                        )
+                        return result
+                    finally:
+                        try:
+                            lock.release()
+                        except Exception:
+                            pass
+
+                # WATCH/MULTI optimistic retry loop
+                for _ in range(32):
+                    try:
+                        pipe = client.pipeline()
+                        pipe.watch(self.QUEUE_KEY)
+                        raw = pipe.get(self.QUEUE_KEY)
+                        snap = self._normalize_queue(
+                            json.loads(raw) if raw else empty
+                        )
+                        new_snap, result = mutator(snap)
+                        pipe.multi()
+                        pipe.set(
+                            self.QUEUE_KEY,
+                            json.dumps(
+                                {
+                                    "jobs": new_snap.get("jobs") or {},
+                                    "order": new_snap.get("order") or [],
+                                    "results": new_snap.get("results") or {},
+                                    "events": new_snap.get("events") or {},
+                                },
+                                default=str,
+                            ),
+                            ex=self.TTL_S,
+                        )
+                        pipe.execute()
+                        return result
+                    except Exception as exc:
+                        # redis.WatchError → retry; other errors abort.
+                        if "Watch" in type(exc).__name__:
+                            continue
+                        log.warning("RedisStateStore.mutate_queue failed: %s", exc)
+                        raise
+                raise RuntimeError(
+                    "RedisStateStore.mutate_queue: exceeded WATCH retries"
+                )
+        except Exception:
+            if lock is not None:
+                try:
+                    lock.release()
+                except Exception:
+                    pass
+            raise
 
 
 _STORE: DistributedStateStore | None = None

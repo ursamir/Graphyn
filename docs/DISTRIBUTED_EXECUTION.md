@@ -422,6 +422,8 @@ Post-review hardening applied on `cursor/usecase-plugins-workflows`:
 |---|---|
 | Mid-flight cancel | Isolated plugin subprocess: `cancel_check` polled during wait → `terminate_process_group`. `NodeExecutor.request_cancel` / `set_cancel_check` checked between retries and before `process`; passed into `run_isolated_node`. Worker CLI HTTP loop: ~2 Hz cancel-watch thread during execute. |
 | Preferred-worker pin after reclaim | `reclaim_expired_leases` calls `widen_placement_after_reclaim`: `mode=worker` → `mode=auto` (clears `worker`), keeps tags / `require_gpu` / VRAM / pool; `lease_generation` still increments. |
+| Atomic job claim (DIST-001) | `JobQueue.claim` uses `DistributedStateStore.mutate_queue` (disk: exclusive `jobs.lock` flock RMW; Redis: lock / WATCH) so pending→claimed is CAS-safe across processes — not `threading.Lock` alone |
+| Queue snapshot lost updates (DIST-002 partial) | Durable `enqueue` / `complete` / `renew_lease` / `append_events` apply record-level patches inside `mutate_queue`; remaining mutators still use locked full-snapshot persist |
 
 ### Remaining cancel limits
 

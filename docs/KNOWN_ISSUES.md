@@ -33,6 +33,13 @@
 
 ## Open — Distributed / cancel limits
 
+### DIST-002 — Remaining whole-snapshot mutators (partial)
+
+**Files:** `app/core/distributed/queue.py` (`renew_leases_for_worker`, `mark_running`, `cancel`, `reclaim_expired_leases`, `clear`)  
+**Detail:** DIST-001 atomic claim + record-level durable paths for enqueue/complete/renew_lease/append_events landed. Other mutators still persist via locked full local snapshot and can lose concurrent cross-process updates under heavy contention.  
+**Fix:** Route remaining mutators through `store.mutate_queue` patches (same pattern as claim/complete).
+
+
 ### DIST-CANCEL-1 — In-process `node.process()` cannot be forcibly interrupted mid-call
 
 **Files:** `app/core/node_executor.py`, `app/core/distributed/backend.py`, worker CLI  
@@ -85,6 +92,10 @@
 - `audiobuilder/` removed; `graphyn-ui/` is IR-native.
 - CLI/API replay paths use `get_backend()`.
 - `GRAPHYN_AUTH_REQUIRED=1` / `GRAPHYN_ENV=production|staging` fail-closed on empty tokens.
+
+### (resolved 2026-09-07) DIST-001 atomic cross-process job claim
+
+`JobQueue.claim` + `DiskStateStore.mutate_queue` (exclusive flock) / Redis lock-or-WATCH. Regression: multiprocess claim stress in `unit_test/core/test_distributed_p2.py`.
 
 ### (resolved 2026-09) Distributed P0–P2 + harden; pillars A–E console IA
 

@@ -10,8 +10,8 @@ Public Surface:   JobQueue, get_job_queue(), _reset_job_queue() (tests),
 Must NOT:         Import from app.domain, app.api, or orchestrator.
 Dependencies:     stdlib (threading, datetime, uuid), app.core.distributed.models,
                   app.core.distributed.placement (eligibility),
-                  app.core.distributed.store (lazy).
-Reason To Change: Lease/TTL reclaim, Redis-backed queue, or cancel fan-out.
+                  app.core.distributed.store (lazy; mutate_queue for CAS claim).
+Reason To Change: Lease/TTL reclaim, atomic cross-process claim, or cancel fan-out.
 """
 from __future__ import annotations
 
@@ -113,24 +113,71 @@ class JobQueue:
         )
 
     def _persist_unlocked(self) -> None:
+        """Persist local snapshot under the store's exclusive lock.
+
+        Prefer ``_durable_mutate`` for cross-process safety (DIST-002): blind
+        full-snapshot replace from a stale local cache can still lose concurrent
+        record updates. This path remains for in-memory-only / legacy callers.
+        """
         if self._store is None:
             return
         try:
-            snapshot = {
-                "jobs": {jid: j.model_dump(mode="json") for jid, j in self._jobs.items()},
-                "order": list(self._order),
-                "results": {
-                    jid: r.model_dump(mode="json") for jid, r in self._results.items()
-                },
-                "events": {jid: list(evs) for jid, evs in self._events.items()},
-            }
-            self._store.save_queue(snapshot)
+            snapshot = self._queue_snapshot_unlocked()
+            # mutate_queue holds the cross-process lock for the write.
+            self._store.mutate_queue(lambda _snap: (snapshot, None))
         except Exception as exc:
             log.warning("JobQueue: persist failed: %s", exc)
+
+    def _durable_mutate(self, mutator):
+        """Apply ``mutator(snap) -> (new_snap, result)`` under store lock; refresh."""
+        assert self._store is not None
+        result = self._store.mutate_queue(mutator)
+        try:
+            self._apply_queue_snapshot_unlocked(self._store.load_queue())
+        except Exception as exc:
+            log.warning("JobQueue: durable refresh failed: %s", exc)
+        return result
 
     def enqueue(self, job: NodeJob) -> NodeJob:
         """Add a pending job. Assigns ``job_id`` if empty."""
         with self._lock:
+            if self._store is not None:
+                job_id = job.job_id or str(uuid.uuid4())
+                created = job.created_at or _utcnow()
+
+                def mut(snap: dict[str, Any]):
+                    snap = self._reclaim_in_snapshot(
+                        snap, lease_ttl_s=self._lease_ttl_s, now=_utcnow()
+                    )
+                    stored = job.model_copy(
+                        update={
+                            "job_id": job_id,
+                            "status": "pending",
+                            "created_at": created,
+                            "claimed_by": None,
+                            "claimed_at": None,
+                            "lease_expires_at": None,
+                        }
+                    )
+                    jobs = dict(snap.get("jobs") or {})
+                    order = list(snap.get("order") or [])
+                    events = dict(snap.get("events") or {})
+                    jobs[job_id] = stored.model_dump(mode="json")
+                    if job_id not in order:
+                        order.append(job_id)
+                    events.setdefault(job_id, [])
+                    new_snap = {
+                        "jobs": jobs,
+                        "order": order,
+                        "results": dict(snap.get("results") or {}),
+                        "events": events,
+                    }
+                    return new_snap, stored
+
+                stored = self._durable_mutate(mut)
+                self._waiters.setdefault(stored.job_id, threading.Event())
+                return stored
+
             self._reclaim_expired_leases_unlocked(now=_utcnow())
             job_id = job.job_id or str(uuid.uuid4())
             stored = job.model_copy(
@@ -246,6 +293,154 @@ class JobQueue:
             if isinstance(events, list) and jid not in self._events:
                 self._events[jid] = list(events)
 
+    def _queue_snapshot_unlocked(self) -> dict[str, Any]:
+        return {
+            "jobs": {jid: j.model_dump(mode="json") for jid, j in self._jobs.items()},
+            "order": list(self._order),
+            "results": {
+                jid: r.model_dump(mode="json") for jid, r in self._results.items()
+            },
+            "events": {jid: list(evs) for jid, evs in self._events.items()},
+        }
+
+    def _apply_queue_snapshot_unlocked(self, snap: dict[str, Any]) -> None:
+        """Replace in-memory queue maps from a durable snapshot (keep waiters)."""
+        jobs_raw = snap.get("jobs") or {}
+        new_jobs: dict[str, NodeJob] = {}
+        for jid, payload in jobs_raw.items():
+            try:
+                new_jobs[jid] = NodeJob.model_validate(payload)
+            except Exception as exc:
+                log.warning("JobQueue: skip corrupt job %r in apply: %s", jid, exc)
+        order = [jid for jid in (snap.get("order") or []) if jid in new_jobs]
+        for jid, job in new_jobs.items():
+            if job.status == "pending" and jid not in order:
+                order.append(jid)
+        new_results: dict[str, JobResult] = {}
+        for jid, payload in (snap.get("results") or {}).items():
+            try:
+                new_results[jid] = JobResult.model_validate(payload)
+            except Exception as exc:
+                log.warning("JobQueue: skip corrupt result %r in apply: %s", jid, exc)
+        new_events: dict[str, list[dict[str, Any]]] = {}
+        for jid, events in (snap.get("events") or {}).items():
+            if isinstance(events, list):
+                new_events[jid] = list(events)
+        self._jobs = new_jobs
+        self._order = order
+        self._results = new_results
+        self._events = new_events
+        for jid in self._jobs:
+            self._waiters.setdefault(jid, threading.Event())
+            if jid in self._results:
+                self._waiters[jid].set()
+
+    @staticmethod
+    def _reclaim_in_snapshot(
+        snap: dict[str, Any],
+        *,
+        lease_ttl_s: float,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Return a new snapshot with expired leases requeued (pure)."""
+        now = _as_aware(now) or _utcnow()
+        jobs_raw = dict(snap.get("jobs") or {})
+        order = list(snap.get("order") or [])
+        changed = False
+        for jid, payload in list(jobs_raw.items()):
+            try:
+                job = NodeJob.model_validate(payload)
+            except Exception:
+                continue
+            if job.status not in ("claimed", "running"):
+                continue
+            expires = _as_aware(job.lease_expires_at)
+            if expires is None:
+                claimed_at = _as_aware(job.claimed_at)
+                if claimed_at is None:
+                    continue
+                expires = claimed_at + timedelta(seconds=lease_ttl_s)
+            if expires > now:
+                continue
+            update: dict[str, Any] = {
+                "status": "pending",
+                "claimed_by": None,
+                "claimed_at": None,
+                "lease_expires_at": None,
+                "lease_generation": int(job.lease_generation or 0) + 1,
+            }
+            widened = widen_placement_after_reclaim(
+                job.placement,
+                tags=list(job.tags or []),
+                require_gpu=bool(job.require_gpu),
+                min_vram_mib=job.min_vram_mib,
+                pool=job.pool,
+            )
+            if widened is not job.placement:
+                update["placement"] = widened
+            updated = job.model_copy(update=update)
+            jobs_raw[jid] = updated.model_dump(mode="json")
+            if jid not in order:
+                order.append(jid)
+            changed = True
+            log.info(
+                "JobQueue: reclaimed expired lease for job %s (was claimed by %s)",
+                jid,
+                job.claimed_by,
+            )
+        if not changed:
+            return snap
+        return {
+            "jobs": jobs_raw,
+            "order": order,
+            "results": dict(snap.get("results") or {}),
+            "events": dict(snap.get("events") or {}),
+        }
+
+    def _claim_in_snapshot(
+        self, snap: dict[str, Any], worker: WorkerInfo
+    ) -> tuple[dict[str, Any], NodeJob | None]:
+        """CAS claim against a queue snapshot. At most one pending→claimed."""
+        snap = self._reclaim_in_snapshot(
+            snap, lease_ttl_s=self._lease_ttl_s, now=_utcnow()
+        )
+        jobs_raw = dict(snap.get("jobs") or {})
+        order = list(snap.get("order") or [])
+        for job_id in list(order):
+            payload = jobs_raw.get(job_id)
+            if payload is None:
+                continue
+            try:
+                job = NodeJob.model_validate(payload)
+            except Exception:
+                continue
+            if job.status != "pending":
+                continue
+            if not _plugins_allow(worker, job.node_type):
+                continue
+            if not worker_eligible_for_job(worker, job):
+                continue
+            now = _utcnow()
+            claimed = job.model_copy(
+                update={
+                    "status": "claimed",
+                    "claimed_by": worker.worker_id,
+                    "claimed_at": now,
+                    "lease_expires_at": now
+                    + timedelta(seconds=self._lease_ttl_s),
+                }
+            )
+            jobs_raw[job_id] = claimed.model_dump(mode="json")
+            order = [jid for jid in order if jid != job_id]
+            new_snap = {
+                "jobs": jobs_raw,
+                "order": order,
+                "results": dict(snap.get("results") or {}),
+                "events": dict(snap.get("events") or {}),
+            }
+            return new_snap, claimed
+        return snap, None
+
     def claim(self, worker: WorkerInfo) -> NodeJob | None:
         """Claim the oldest pending job this worker is eligible for.
 
@@ -253,10 +448,28 @@ class JobQueue:
         advertised ``plugins`` list (when non-empty). Reclaims expired leases
         before scanning.
 
+        When a durable store is configured, the pending→claimed transition runs
+        inside ``store.mutate_queue`` (file lock / Redis lock) so at most one
+        worker across processes wins. Threading locks alone are not sufficient.
+
         Returns the claimed job, or ``None`` if none match.
         """
         with self._lock:
-            self._sync_from_store_unlocked()
+            if self._store is not None:
+                claimed = self._store.mutate_queue(
+                    lambda snap: self._claim_in_snapshot(snap, worker)
+                )
+                # Refresh local cache from durable truth after CAS.
+                try:
+                    self._apply_queue_snapshot_unlocked(self._store.load_queue())
+                except Exception as exc:
+                    log.warning("JobQueue: post-claim refresh failed: %s", exc)
+                    if claimed is not None:
+                        self._jobs[claimed.job_id] = claimed
+                        if claimed.job_id in self._order:
+                            self._order.remove(claimed.job_id)
+                return claimed
+
             self._reclaim_expired_leases_unlocked(now=_utcnow())
             for job_id in list(self._order):
                 job = self._jobs.get(job_id)
@@ -286,6 +499,31 @@ class JobQueue:
     def renew_lease(self, job_id: str, *, worker_id: str | None = None) -> NodeJob | None:
         """Extend lease for a claimed/running job (heartbeat renews lease)."""
         with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    payload = (snap.get("jobs") or {}).get(job_id)
+                    if payload is None:
+                        return snap, None
+                    try:
+                        job = NodeJob.model_validate(payload)
+                    except Exception:
+                        return snap, None
+                    if job.status not in ("claimed", "running"):
+                        return snap, job
+                    if worker_id is not None and job.claimed_by and job.claimed_by != worker_id:
+                        return snap, job
+                    updated = job.model_copy(
+                        update={
+                            "lease_expires_at": _utcnow()
+                            + timedelta(seconds=self._lease_ttl_s),
+                        }
+                    )
+                    jobs = dict(snap.get("jobs") or {})
+                    jobs[job_id] = updated.model_dump(mode="json")
+                    return {**snap, "jobs": jobs}, updated
+
+                return self._durable_mutate(mut)
+
             job = self._jobs.get(job_id)
             if job is None:
                 return None
@@ -411,6 +649,67 @@ class JobQueue:
             ValueError: authz/fencing failure or job already terminal (→ HTTP 409).
         """
         with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    jobs = dict(snap.get("jobs") or {})
+                    payload = jobs.get(result.job_id)
+                    if payload is None:
+                        raise KeyError(result.job_id)
+                    job = NodeJob.model_validate(payload)
+                    if job.status in ("succeeded", "failed", "cancelled"):
+                        raise ValueError(
+                            f"Job {result.job_id} already terminal ({job.status})"
+                        )
+                    if job.status not in ("claimed", "running"):
+                        raise ValueError(
+                            f"Job {result.job_id} is not claimable for complete "
+                            f"(status={job.status})"
+                        )
+                    if not result.worker_id or result.worker_id != job.claimed_by:
+                        raise ValueError(
+                            f"Job {result.job_id} complete worker mismatch: "
+                            f"result.worker_id={result.worker_id!r} "
+                            f"claimed_by={job.claimed_by!r}"
+                        )
+                    expected_gen = int(job.lease_generation or 0)
+                    if (
+                        result.lease_generation is None
+                        or int(result.lease_generation) != expected_gen
+                    ):
+                        raise ValueError(
+                            f"Job {result.job_id} lease_generation mismatch: "
+                            f"result={result.lease_generation!r} expected={expected_gen}"
+                        )
+                    status: JobStatus = result.status  # type: ignore[assignment]
+                    updated = job.model_copy(
+                        update={"status": status, "lease_expires_at": None}
+                    )
+                    jobs[result.job_id] = updated.model_dump(mode="json")
+                    results = dict(snap.get("results") or {})
+                    results[result.job_id] = result.model_dump(mode="json")
+                    evmap = {
+                        k: list(v) if isinstance(v, list) else []
+                        for k, v in (snap.get("events") or {}).items()
+                    }
+                    if result.events:
+                        bucket = list(evmap.get(result.job_id) or [])
+                        bucket.extend(result.events)
+                        evmap[result.job_id] = bucket
+                    order = [j for j in (snap.get("order") or []) if j != result.job_id]
+                    new_snap = {
+                        "jobs": jobs,
+                        "order": order,
+                        "results": results,
+                        "events": evmap,
+                    }
+                    return new_snap, updated
+
+                updated = self._durable_mutate(mut)
+                evt = self._waiters.get(result.job_id)
+                if evt is not None:
+                    evt.set()
+                return updated
+
             self._sync_from_store_unlocked(job_id=result.job_id)
             job = self._jobs.get(result.job_id)
             if job is None:
@@ -482,6 +781,39 @@ class JobQueue:
     def append_events(self, job_id: str, events: list[dict[str, Any]]) -> int:
         """Append log/event payloads for a job. Returns new event count."""
         with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    jobs = dict(snap.get("jobs") or {})
+                    if job_id not in jobs:
+                        raise KeyError(job_id)
+                    evmap = {
+                        k: list(v) if isinstance(v, list) else []
+                        for k, v in (snap.get("events") or {}).items()
+                    }
+                    bucket = list(evmap.get(job_id) or [])
+                    bucket.extend(events)
+                    evmap[job_id] = bucket
+                    try:
+                        job = NodeJob.model_validate(jobs[job_id])
+                    except Exception:
+                        job = None
+                    if job is not None and job.status in ("claimed", "running"):
+                        jobs[job_id] = job.model_copy(
+                            update={
+                                "lease_expires_at": _utcnow()
+                                + timedelta(seconds=self._lease_ttl_s),
+                            }
+                        ).model_dump(mode="json")
+                    new_snap = {
+                        "jobs": jobs,
+                        "order": list(snap.get("order") or []),
+                        "results": dict(snap.get("results") or {}),
+                        "events": evmap,
+                    }
+                    return new_snap, len(bucket)
+
+                return self._durable_mutate(mut)
+
             if job_id not in self._jobs:
                 raise KeyError(job_id)
             bucket = self._events.setdefault(job_id, [])
