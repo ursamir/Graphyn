@@ -330,12 +330,17 @@ class NodeExecutor:
         from app.core.write_paths import ensure_node_write_dirs
 
         node._current_run_id = self._run_id  # type: ignore[attr-defined]
+        # Cooperative cancel (DIST-CANCEL-2): honour request_cancel / cancel_check
+        # before start and between stream items. Does not interrupt mid-yield
+        # inside process_stream (same cooperative model as sync process()).
+        self._raise_if_cancelled()
         started = False
         try:
             ensure_node_write_dirs(node)
             node.on_start()
             started = True
             async for item in node.process_stream(inputs):
+                self._raise_if_cancelled()
                 yield item
         except Exception as exc:
             node.on_error(exc)

@@ -33,16 +33,20 @@
 **Detail:** Isolated plugin subprocesses honour cancel via process-group terminate; cooperative cancel runs between retries / before `process`. Non-isolated in-process `process()` is observed only before/after the call, between retries, or when it returns.  
 **Workaround:** Prefer `runtime=isolated` for long GPU/training nodes; use job cancel + worker cancel-watch for remote jobs.
 
-### DIST-CANCEL-2 — Streaming `execute_stream` does not honour `request_cancel`
+### DIST-CANCEL-2 — Streaming `execute_stream` cancel is cooperative only (partial)
 
 **Files:** `app/core/node_executor.py`  
-**Detail:** Streaming path does not yet thread cancel checks through `execute_stream`.  
-**Status:** Deferred with DIST-CANCEL-1; tracked in `docs/DISTRIBUTED_EXECUTION.md` §15.
+**Detail:** `execute_stream` now polls `request_cancel` / `cancel_check` before start and between yielded items (raises `cancelled by control plane`). It still cannot interrupt mid-yield inside `node.process_stream` — same cooperative limit as non-isolated `process()` (DIST-CANCEL-1).  
+**Status:** Cooperative checks landed; full mid-stream interrupt deferred. Regression: `unit_test/core/test_node_executor_cancel.py`.
 
 ### DIST-RECLAIM-1 — Preferred-worker pin after lease reclaim (mitigated)
 
 **Was:** Reclaimed jobs could stay pinned to a dead preferred worker.  
-**Now:** `reclaim_expired_leases` calls `widen_placement_after_reclaim` (`mode=worker` → `mode=auto`, clears pin; keeps tags/GPU/VRAM/pool). Remaining edge cases: very short lease windows under network partition — widen further if reclaim storms appear in ops.
+**Now:** `reclaim_expired_leases` calls `widen_placement_after_reclaim` (`mode=worker` → `mode=auto`, clears pin; keeps tags/GPU/VRAM/pool). `lease_generation` increments so a stale worker `complete` after reclaim is rejected (fencing).  
+**Remaining edge cases (still open):**
+- Very short lease TTL under network partition / clock skew can cause reclaim storms (job flip-flops pending↔claimed).
+- A dead worker that still holds a process may finish after reclaim; fencing rejects that complete, but the late side-effects (artifacts written locally) are not rolled back.
+- Heartbeat lease renew failures are logged but do not fail the heartbeat response — missed renewals still rely on reclaim.
 
 ---
 

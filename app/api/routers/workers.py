@@ -84,8 +84,12 @@ def register_worker(info: WorkerInfo):
                 "pools": list(getattr(info, "pools", None) or []),
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning(
+            "workers.register: audit record failed for %s: %s",
+            info.worker_id,
+            exc,
+        )
     return stored.model_dump(mode="json")
 
 
@@ -104,8 +108,15 @@ def worker_heartbeat(worker_id: str, body: HeartbeatBody = HeartbeatBody()):
     # Heartbeat renews leases for jobs claimed by this worker (P2).
     try:
         get_job_queue().renew_leases_for_worker(worker_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Do not fail the heartbeat (registry update already succeeded), but
+        # never swallow lease-renew errors as silent success — operators need
+        # the log line when reclaim storms follow missed renewals.
+        log.warning(
+            "workers.heartbeat: lease renew failed for worker %s: %s",
+            worker_id,
+            exc,
+        )
     return stored.model_dump(mode="json")
 
 

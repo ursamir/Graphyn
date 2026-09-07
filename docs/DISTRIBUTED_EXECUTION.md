@@ -432,5 +432,5 @@ Post-review hardening applied on `cursor/usecase-plugins-workflows`:
 - [x] Worker CLI polls job status during long execute (cancel-watch thread)
 - [x] Reclaim clears preferred-worker pin (widen to tags/GPU eligibility)
 - [ ] In-process `node.process()` (non-isolated) cannot be forcibly interrupted mid-call — cancel is observed only before/after `process`, between retries, or when the call returns
-- [ ] Streaming `execute_stream` does not yet honour `request_cancel`
+- [x] Streaming `execute_stream` polls cancel before start / between items (cooperative; mid-yield still open — DIST-CANCEL-2)
 

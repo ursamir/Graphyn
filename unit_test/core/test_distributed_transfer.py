@@ -92,3 +92,20 @@ def test_put_get_nested_content_addressed_key(tmp_path, monkeypatch):
     assert "sha256/" in captured["url"]
     # Encoded form should match quote(key, safe="/")
     assert url_quote(key, safe="/") in captured["url"]
+
+
+def test_load_port_value_rejects_disallowed_globals():
+    """Host RestrictedUnpickler must refuse attacker-style pickle globals."""
+    import os
+    import pickle
+
+    from app.core.distributed.transfer import load_port_value
+
+    class Evil:
+        def __reduce__(self):
+            return (os.system, ("true",))
+
+    raw = pickle.dumps({"x": Evil()}, protocol=pickle.HIGHEST_PROTOCOL)
+    with pytest.raises(pickle.UnpicklingError):
+        load_port_value(raw)
+

@@ -445,7 +445,12 @@ class RedisStateStore(DistributedStateStore):
                     blocking_timeout=10,
                 )
                 acquired = lock.acquire(blocking=True)
-            except Exception:
+            except Exception as exc:
+                log.warning(
+                    "RedisStateStore.mutate_queue: lock acquire failed "
+                    "(falling back to WATCH): %s",
+                    exc,
+                )
                 acquired = False
                 lock = None
 

@@ -146,8 +146,13 @@ def _run_local_node(
     finally:
         try:
             executor.teardown()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "distributed._run_local_node: teardown failed for %s/%s: %s",
+                node_type,
+                node_id,
+                exc,
+            )
 
 
 class DistributedBackend(RuntimeBackend):

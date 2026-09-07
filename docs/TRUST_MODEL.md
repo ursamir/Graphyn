@@ -119,6 +119,27 @@ Default remains **trusted** so existing deployments do not break.
 
 ---
 
+
+
+## 5. Pickle trust boundary (distributed + isolated plugins)
+
+Graphyn uses `pickle` for **same-trust-plane** port payloads (isolated plugin IPC and distributed blob transfer). This is **not** a public deserialization API.
+
+| Actor | May create pickle payloads? | Load path |
+|---|---|---|
+| Control plane / trusted operators | Yes — enqueue materializes port values via `dump_port_value` → content-addressed blobs | Host loads with `RestrictedUnpickler` (`load_port_value`) |
+| Registered workers (same bearer) | Yes — job outputs uploaded as blobs the host later loads | Host: restricted; worker may use broader loads for **its own** trusted inputs |
+| Unauthenticated / attacker-controlled bytes | **Never** — do not accept pickle over unauthenticated channels or from untrusted plugin sources | Fail closed |
+
+Rules:
+
+1. **Never deserialize attacker-controlled bytes** with `pickle.loads` / unrestricted `Unpickler`.
+2. Host-side loads of worker/isolated outputs must go through `RestrictedUnpickler` (allowlist: builtins / numpy / `app.models.*`). Unknown globals raise `UnpicklingError`.
+3. Workers run as trusted operators on the shared bearer — they may receive host-produced pickles for job inputs; treat worker→host outputs as **semi-trusted** and keep the restricted loader on the host.
+4. Plugin authors must not ship pickle gadgets; isolated worker outputs are recast onto platform types before host unpickle when possible (`recast_plugin_types`).
+
+Regression: `RestrictedUnpickler` tests in `unit_test/core/plugins/test_dep_isolation.py`; transfer path in `unit_test/core/test_distributed_transfer.py`.
+
 ## Related
 
 - Architecture security table: `docs/ARCHITECTURE.md` §10

@@ -1011,3 +1011,143 @@ def test_mark_running_durable_two_queues(tmp_path: Path):
     q_c = JobQueue(store=DiskStateStore(root=tmp_path), load_persisted=True, lease_ttl_s=60.0)
     job = q_c.get("mr1")
     assert job is not None and job.status == "running"
+
+
+# ── Phase 4 — crash / reclaim narrative + idempotent complete + large queue ──
+
+
+def test_worker_crash_lease_reclaim_other_worker_claims_and_fence():
+    """Worker disappears → lease expires → reclaim → other worker claims;
+    stale complete from the dead worker is fenced by lease_generation.
+    """
+    q = JobQueue(store=MemoryStateStore(), load_persisted=False, lease_ttl_s=1.0)
+    q.enqueue(
+        NodeJob(job_id="crash1", run_id="r", node_id="n", node_type="trainer")
+    )
+    dead = WorkerInfo(
+        worker_id="dead-w",
+        labels=["gpu"],
+        resources=WorkerResources(gpu=True),
+        plugins=["trainer"],
+    )
+    claimed = q.claim(dead)
+    assert claimed is not None and claimed.claimed_by == "dead-w"
+    stale_gen = int(claimed.lease_generation or 0)
+
+    # Simulate crash: no heartbeats; force lease expiry then reclaim.
+    _expire_job_lease(q, "crash1")
+    reclaimed = q.reclaim_expired_leases()
+    assert "crash1" in reclaimed
+    pending = q.get("crash1")
+    assert pending is not None
+    assert pending.status == "pending"
+    assert pending.claimed_by is None
+    assert int(pending.lease_generation or 0) == stale_gen + 1
+
+    # Dead worker's late complete while pending is fenced (status / ownership).
+    with pytest.raises(ValueError):
+        q.complete(
+            JobResult(
+                job_id="crash1",
+                status="succeeded",
+                worker_id="dead-w",
+                lease_generation=stale_gen,
+            )
+        )
+    assert q.get("crash1").status == "pending"
+
+    alive = WorkerInfo(
+        worker_id="alive-w",
+        labels=["gpu"],
+        resources=WorkerResources(gpu=True),
+        plugins=["trainer"],
+    )
+    again = q.claim(alive)
+    assert again is not None
+    assert again.claimed_by == "alive-w"
+    assert int(again.lease_generation or 0) == stale_gen + 1
+
+    # Even after re-claim, dead worker cannot complete (worker / generation fence).
+    with pytest.raises(ValueError):
+        q.complete(
+            JobResult(
+                job_id="crash1",
+                status="succeeded",
+                worker_id="dead-w",
+                lease_generation=stale_gen,
+            )
+        )
+    # Alive worker completes successfully with the new generation.
+    q.complete(
+        JobResult(
+            job_id="crash1",
+            status="succeeded",
+            worker_id="alive-w",
+            lease_generation=int(again.lease_generation or 0),
+        )
+    )
+    assert q.get("crash1").status == "succeeded"
+
+
+def test_double_complete_does_not_corrupt_queue():
+    """Second complete after terminal raises; queue stays succeeded (no flip)."""
+    q = JobQueue(store=MemoryStateStore(), load_persisted=False, lease_ttl_s=60.0)
+    q.enqueue(NodeJob(job_id="dc1", run_id="r", node_id="n", node_type="x"))
+    w = WorkerInfo(worker_id="w", plugins=["x"])
+    claimed = q.claim(w)
+    assert claimed is not None
+    gen = int(claimed.lease_generation or 0)
+    q.complete(
+        JobResult(
+            job_id="dc1",
+            status="succeeded",
+            worker_id="w",
+            lease_generation=gen,
+            output_refs={"out": "artifact://local/a"},
+        )
+    )
+    with pytest.raises(ValueError, match="already terminal"):
+        q.complete(
+            JobResult(
+                job_id="dc1",
+                status="failed",
+                worker_id="w",
+                lease_generation=gen,
+                error="should-not-stick",
+            )
+        )
+    job = q.get("dc1")
+    assert job is not None and job.status == "succeeded"
+    result = q.get_result("dc1")
+    assert result is not None and result.status == "succeeded"
+    assert result.error is None
+
+
+def test_double_cancel_is_idempotent():
+    q = JobQueue(store=MemoryStateStore(), load_persisted=False, lease_ttl_s=60.0)
+    q.enqueue(NodeJob(job_id="dcan1", run_id="r", node_id="n", node_type="x"))
+    first = q.cancel("dcan1")
+    second = q.cancel("dcan1")
+    assert first.status == "cancelled"
+    assert second.status == "cancelled"
+    assert q.get("dcan1").status == "cancelled"
+    assert q.get_result("dcan1").status == "cancelled"
+
+
+def test_large_queue_enqueue_claim_all_uniquely():
+    """Lightweight stress: enqueue N jobs, claim all uniquely (single process)."""
+    n = 200
+    q = JobQueue(store=MemoryStateStore(), load_persisted=False, lease_ttl_s=60.0)
+    for i in range(n):
+        q.enqueue(NodeJob(job_id=f"lq{i}", run_id="r", node_id=f"n{i}", node_type="x"))
+    worker = WorkerInfo(worker_id="w-bulk", plugins=["x"])
+    claimed_ids: list[str] = []
+    while True:
+        job = q.claim(worker)
+        if job is None:
+            break
+        claimed_ids.append(job.job_id)
+    assert len(claimed_ids) == n
+    assert len(set(claimed_ids)) == n
+    assert set(claimed_ids) == {f"lq{i}" for i in range(n)}
+

@@ -350,7 +350,10 @@ class JobQueue:
         for jid, payload in list(jobs_raw.items()):
             try:
                 job = NodeJob.model_validate(payload)
-            except Exception:
+            except Exception as exc:
+                log.warning(
+                    "JobQueue: skip corrupt job %r during reclaim: %s", jid, exc
+                )
                 continue
             if job.status not in ("claimed", "running"):
                 continue
@@ -412,7 +415,10 @@ class JobQueue:
                 continue
             try:
                 job = NodeJob.model_validate(payload)
-            except Exception:
+            except Exception as exc:
+                log.warning(
+                    "JobQueue: skip corrupt job %r during claim: %s", job_id, exc
+                )
                 continue
             if job.status != "pending":
                 continue
@@ -506,7 +512,12 @@ class JobQueue:
                         return snap, None
                     try:
                         job = NodeJob.model_validate(payload)
-                    except Exception:
+                    except Exception as exc:
+                        log.warning(
+                            "JobQueue: renew_lease skip corrupt job %r: %s",
+                            job_id,
+                            exc,
+                        )
                         return snap, None
                     if job.status not in ("claimed", "running"):
                         return snap, job
@@ -552,7 +563,13 @@ class JobQueue:
                     for jid, payload in list(jobs.items()):
                         try:
                             job = NodeJob.model_validate(payload)
-                        except Exception:
+                        except Exception as exc:
+                            log.warning(
+                                "JobQueue: renew_leases_for_worker skip corrupt "
+                                "job %r: %s",
+                                jid,
+                                exc,
+                            )
                             continue
                         if job.claimed_by != worker_id:
                             continue
@@ -681,7 +698,12 @@ class JobQueue:
                         return snap, None
                     try:
                         job = NodeJob.model_validate(payload)
-                    except Exception:
+                    except Exception as exc:
+                        log.warning(
+                            "JobQueue: mark_running skip corrupt job %r: %s",
+                            job_id,
+                            exc,
+                        )
                         return snap, None
                     if job.status not in ("claimed", "running"):
                         return snap, job
@@ -903,7 +925,12 @@ class JobQueue:
                     evmap[job_id] = bucket
                     try:
                         job = NodeJob.model_validate(jobs[job_id])
-                    except Exception:
+                    except Exception as exc:
+                        log.warning(
+                            "JobQueue: append_events skip corrupt job %r: %s",
+                            job_id,
+                            exc,
+                        )
                         job = None
                     if job is not None and job.status in ("claimed", "running"):
                         jobs[job_id] = job.model_copy(
@@ -1054,8 +1081,8 @@ def _reset_job_queue(
         if _QUEUE is not None:
             try:
                 _QUEUE.clear()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("JobQueue reset: clear previous queue failed: %s", exc)
         _QUEUE = JobQueue(
             store=store, load_persisted=False, lease_ttl_s=lease_ttl_s
         )
