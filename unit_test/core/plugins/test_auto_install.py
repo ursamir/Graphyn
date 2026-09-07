@@ -118,13 +118,24 @@ def test_maybe_auto_install_respects_flag_when_plugins_present(
     manager = _make_manager(tmp_path, registry=fresh_registry)
     from app.core.plugins.store import PluginStore
 
+    # Install dir must be loadable (manifest present) so auto-install stays off.
+    already_dir = tmp_path / "plugins" / "already"
+    already_dir.mkdir(parents=True)
+    (already_dir / "plugin.toml").write_text(
+        '[plugin]\nname = "already"\nversion = "1.0.0"\n'
+        'description = "x"\nauthor = "t"\nplatform_version = ">=0.0"\n'
+        'entry_points = ["nodes.py"]\n',
+        encoding="utf-8",
+    )
+    (already_dir / "nodes.py").write_text("# stub\n", encoding="utf-8")
+
     store = PluginStore(base_dir=str(tmp_path))
     store.save(
         PluginRecord(
             name="already",
             version="1.0.0",
             source="/tmp/already",
-            install_path=str(tmp_path / "plugins" / "already"),
+            install_path=str(already_dir),
             enabled=True,
             installed_at="2024-01-01T00:00:00+00:00",
             manifest={"name": "already", "version": "1.0.0"},
@@ -137,6 +148,39 @@ def test_maybe_auto_install_respects_flag_when_plugins_present(
     assert n == 0
     manager.install_bundled_plugins.assert_not_called()
     load.assert_called_once()
+
+
+def test_maybe_auto_install_when_only_stale_enabled(
+    tmp_path: Path, fresh_registry: NodeRegistry, monkeypatch
+) -> None:
+    """Vanished install paths must not block bundled auto-install."""
+    monkeypatch.setenv("GRAPHYN_SKIP_PLUGIN_LOAD", "")
+    monkeypatch.setenv("GRAPHYN_AUTO_INSTALL_PLUGINS", "0")
+    monkeypatch.setenv("GRAPHYN_ENV", "development")
+    _write_package_plugin(tmp_path, "Common", "auto-fx")
+    manager = _make_manager(tmp_path, registry=fresh_registry)
+    from app.core.plugins.store import PluginStore
+
+    store = PluginStore(base_dir=str(tmp_path))
+    store.save(
+        PluginRecord(
+            name="ghost",
+            version="1.0.0",
+            source="/tmp/pytest-of-box/gone/ghost",
+            install_path="/tmp/pytest-of-box/gone/ghost",
+            enabled=True,
+            installed_at="2024-01-01T00:00:00+00:00",
+            manifest={"name": "ghost", "version": "1.0.0", "entry_points": ["nodes.py"]},
+        )
+    )
+
+    with _patch_loader_load(["fixture_node"]):
+        n = manager.maybe_auto_install_and_load(tmp_path / "PluginPackage")
+
+    assert n == 1
+    names = {r.name for r in manager.list_installed()}
+    assert "auto-fx" in names
+    assert "ghost" not in names  # pruned
 
 
 def test_install_bundled_continues_on_failure(

@@ -621,11 +621,13 @@ class PluginManager:
         self,
         package_root: Path | None = None,
     ) -> int:
-        """Install bundled plugins when requested or none are enabled, then load.
+        """Install bundled plugins when requested or none are loadable, then load.
 
         Skip entirely when ``GRAPHYN_SKIP_PLUGIN_LOAD`` is set.
         Installs when ``GRAPHYN_AUTO_INSTALL_PLUGINS`` is true (default true
-        in production) **or** the enabled-plugin list is empty.
+        in production) **or** no *loadable* enabled plugins remain (missing
+        install dirs / vanished ``/tmp/pytest-of-*`` paths are ignored so they
+        cannot block bundled install and leave the catalog empty).
 
         Returns the number of bundled plugins installed (0 if skipped).
         """
@@ -634,29 +636,56 @@ class PluginManager:
         if skip_plugin_load():
             log.info("Startup: GRAPHYN_SKIP_PLUGIN_LOAD set — skipping plugin install/load")
             return 0
-        enabled = [r for r in self.list_installed() if r.enabled]
+        loadable = [
+            r for r in self.list_installed()
+            if r.enabled and self._resolve_loadable_install_path(r) is not None
+        ]
         did_install = 0
-        if auto_install_plugins() or not enabled:
+        if auto_install_plugins() or not loadable:
             did_install = self.install_bundled_plugins(package_root, upgrade=True)
         self.load_enabled_plugins()
+        # If everything was stale/pruned and auto-install was off, the first
+        # install may have been skipped when records *looked* enabled. After
+        # prune, if nothing loadable remains and the catalog is empty, install
+        # bundled plugins once (PLUGIN-LOAD-1 / vanished pytest paths).
+        if len(self._registry) == 0 and did_install == 0:
+            still_loadable = [
+                r for r in self.list_installed()
+                if r.enabled and self._resolve_loadable_install_path(r) is not None
+            ]
+            if not still_loadable:
+                log.warning(
+                    "Startup: node registry still empty after load — "
+                    "installing bundled PluginPackage plugins as recovery"
+                )
+                did_install = self.install_bundled_plugins(package_root, upgrade=True)
+                self.load_enabled_plugins()
         return did_install
 
-    def load_enabled_plugins(self) -> None:
+    def load_enabled_plugins(self) -> int:
         """Load all enabled plugins from the store.
 
         Called at platform startup before ``AutoDiscovery`` runs.  Each
         enabled plugin is loaded via :class:`~app.core.plugins.loader.PluginLoader`.
         Failures are logged at WARNING level and do not abort startup.
 
+        Stale records whose ``install_path`` vanished (e.g. pytest tmp dirs)
+        are healed when ``{plugins_home}/{name}`` still has a manifest, or
+        pruned from the store so they cannot leave the catalog empty.
+
+        Returns:
+            Number of plugins successfully loaded (or skipped as already present).
+
         Requirements: req-03 §4.8
         """
+        loaded = 0
         try:
             records = self._store.list()
         except Exception as exc:
             log.warning(
                 "Startup: failed to read plugin registry: %s", exc, exc_info=True
             )
-            return
+            return 0
         for record in records:
             if not record.enabled:
                 continue
@@ -665,6 +694,7 @@ class PluginManager:
                     "Startup: plugin '%s' already loaded — skipping",
                     record.name,
                 )
+                loaded += 1
                 continue
             declared = list((record.manifest or {}).get("node_types") or [])
             if declared and all(nt in self._registry._classes for nt in declared):
@@ -673,8 +703,37 @@ class PluginManager:
                     record.name,
                 )
                 self._loader._loaded_plugins.add(record.name)
+                loaded += 1
                 continue
-            install_path = Path(record.install_path)
+
+            install_path = self._resolve_loadable_install_path(record)
+            if install_path is None:
+                healed = self._heal_or_prune_stale_record(record)
+                if healed is None:
+                    continue
+                record, install_path = healed
+            elif Path(record.install_path).resolve() != install_path.resolve():
+                # Recorded path vanished but plugins_home still has the package.
+                updated = record.model_copy(
+                    update={"install_path": str(install_path.resolve())}
+                )
+                try:
+                    self._store.save(updated)
+                    log.warning(
+                        "Startup: healed stale install_path for plugin '%s' "
+                        "(%s → %s)",
+                        record.name,
+                        record.install_path,
+                        updated.install_path,
+                    )
+                    record = updated
+                except Exception as exc:
+                    log.warning(
+                        "Startup: failed to persist healed path for '%s': %s",
+                        record.name,
+                        exc,
+                    )
+
             try:
                 node_types = self._loader.load(install_path)
                 log.info(
@@ -683,11 +742,12 @@ class PluginManager:
                     record.version,
                     node_types,
                 )
+                loaded += 1
             except Exception as exc:
                 log.warning(
                     "Startup: failed to load enabled plugin '%s' from '%s': %s",
                     record.name,
-                    record.install_path,
+                    install_path,
                     exc,
                     exc_info=True,
                 )
@@ -702,12 +762,90 @@ class PluginManager:
                         record.name,
                         node_types,
                     )
+                    loaded += 1
                 except Exception:
                     pass
+        return loaded
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _plugin_dir_has_manifest(path: Path) -> bool:
+        """True when *path* is a directory containing plugin.toml or plugin.json."""
+        return path.is_dir() and (
+            (path / "plugin.toml").is_file() or (path / "plugin.json").is_file()
+        )
+
+    def _resolve_loadable_install_path(self, record: PluginRecord) -> Path | None:
+        """Return a usable install dir for *record*, or None if missing/stale.
+
+        Prefers ``record.install_path`` when it still has a manifest. Falls
+        back to ``{plugins_home}/{name}`` when the recorded path vanished but
+        the package is still present under the current plugins home (common
+        after tests left ``/tmp/pytest-of-*`` paths in registry.json).
+        """
+        recorded = Path(record.install_path)
+        if self._plugin_dir_has_manifest(recorded):
+            return recorded
+        candidate = Path(self._plugins_dir) / record.name
+        if candidate.resolve() != recorded.resolve() and self._plugin_dir_has_manifest(candidate):
+            return candidate
+        return None
+
+    def _heal_or_prune_stale_record(
+        self, record: PluginRecord
+    ) -> tuple[PluginRecord, Path] | None:
+        """Rewrite install_path to plugins_home or delete an unrecoverable record.
+
+        When ``{plugins_home}/{name}`` still has a manifest, persist the healed
+        path. Otherwise prune the registry row (no source reinstall — that is
+        handled by bundled auto-install when the loadable set is empty).
+
+        Returns ``(updated_record, path)`` when healed, else ``None`` after prune.
+        """
+        candidate = Path(self._plugins_dir) / record.name
+        if self._plugin_dir_has_manifest(candidate):
+            updated = record.model_copy(
+                update={"install_path": str(candidate.resolve())}
+            )
+            try:
+                self._store.save(updated)
+                log.warning(
+                    "Startup: healed stale install_path for plugin '%s' "
+                    "(%s → %s)",
+                    record.name,
+                    record.install_path,
+                    updated.install_path,
+                )
+            except Exception as exc:
+                log.warning(
+                    "Startup: failed to persist healed path for '%s': %s",
+                    record.name,
+                    exc,
+                )
+            return updated, candidate
+
+        # Do not reinstall from source here — that can block API startup for
+        # minutes when many pytest-stale rows point at PluginPackage/*. Prune
+        # and let maybe_auto_install_and_load() refill via bundled install when
+        # nothing loadable remains.
+        log.warning(
+            "Startup: pruning stale plugin record '%s' — install path missing "
+            "or has no manifest: %s",
+            record.name,
+            record.install_path,
+        )
+        try:
+            self._store.delete(record.name)
+        except Exception as exc:
+            log.debug(
+                "Startup: could not delete stale record '%s': %s",
+                record.name,
+                exc,
+            )
+        return None
 
     def _clear_plugin_pycache(self, install_path: Path) -> None:
         """Best-effort clear of stale __pycache__ directories for one plugin."""

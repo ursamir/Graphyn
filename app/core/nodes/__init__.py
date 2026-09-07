@@ -98,7 +98,16 @@ def initialize_registry() -> None:
             from app.core.plugins.manager import PluginManager  # noqa: PLC0415
             n = PluginManager().maybe_auto_install_and_load()
             _log.info("Startup: bundled plugin auto-install processed %d plugin(s)", n)
-            _plugins_loaded_by_manager = True
+            # Only treat the manager path as authoritative when it actually
+            # registered node types. An empty registry (all stale records,
+            # load failures) must fall through to AutoDiscovery scanning
+            # plugins_home so GET /api/v1/nodes is not left empty.
+            _plugins_loaded_by_manager = len(registry) > 0
+            if not _plugins_loaded_by_manager:
+                _log.warning(
+                    "Startup: PluginManager finished with empty registry — "
+                    "AutoDiscovery will scan plugins_home as a fallback"
+                )
         except Exception as exc:
             _log.warning(
                 "Startup: PluginManager.maybe_auto_install_and_load() failed — "
@@ -131,6 +140,14 @@ def initialize_registry() -> None:
             f"app.core.nodes.initialize_registry() failed: {_exc}. "
             "Check plugin files for duplicate node_type declarations or import errors."
         ) from _exc
+
+    if not _skip_plugin_load and len(registry) == 0:
+        _log.error(
+            "Startup: NodeRegistry is still empty after initialize_registry(). "
+            "Check GRAPHYN_HOME / GRAPHYN_PLUGINS_DIR, ensure plugins are installed "
+            "under plugins/installed/, and that GRAPHYN_SKIP_PLUGIN_LOAD is unset. "
+            "Builder catalog will show no node types until plugins load."
+        )
 
 
 __all__ = [

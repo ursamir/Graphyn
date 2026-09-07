@@ -6,10 +6,11 @@
 
 ## Open — Fix This Sprint
 
-### PLUGIN-LOAD-1 — Plugin startup can fail with stale installed bytecode
+### PLUGIN-LOAD-1 — Plugin startup can fail with stale installed bytecode / vanished paths — mitigated
 
-**Detail:** After loader module-naming changes, old `__pycache__` entries under `~/.graphyn/plugins/installed/` can cause startup warnings such as: `Plugin 'feature-frontend' declared 1 entry point(s) but no node types were registered`. Runtime install/upgrade still succeeds.  
-**Workaround:** Clear stale plugin caches (`~/.graphyn/plugins/installed/**/__pycache__`) and rerun plugin load/install.
+**Detail:** After loader module-naming changes, old `__pycache__` entries under `~/.graphyn/plugins/installed/` can cause startup warnings such as: `Plugin 'feature-frontend' declared 1 entry point(s) but no node types were registered`. Separately, pytest runs can leave `registry.json` entries pointing at vanished `/tmp/pytest-of-*/...` paths; previously those enabled-but-missing records blocked bundled auto-install and left `GET /api/v1/nodes` empty.  
+**Mitigation (2026-09):** `PluginManager.load_enabled_plugins()` heals records when `{GRAPHYN_HOME}/plugins/installed/<name>` still has a manifest, otherwise prunes the stale record. `maybe_auto_install_and_load()` treats non-loadable enabled records as empty and installs bundled `PluginPackage` plugins. `initialize_registry()` falls back to AutoDiscovery on `plugins_home` when the manager leaves the registry empty.  
+**Workaround (bytecode only):** Clear stale plugin caches (`~/.graphyn/plugins/installed/**/__pycache__`) and rerun plugin load/install. Do **not** set `GRAPHYN_SKIP_PLUGIN_LOAD=1` when starting the API/UI catalog.
 
 ### EVENT-DRIVEN-EXIT-1 — Event-driven demos may not terminate promptly
 

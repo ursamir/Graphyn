@@ -47,6 +47,8 @@ Default local backend. Do not set GRAPHYN_BACKEND.
 
 ### Start API and console
 
+Ensure `GRAPHYN_SKIP_PLUGIN_LOAD` is **unset** (if set to `1`, `/api/v1/nodes` returns `[]` and the Builder catalog is empty). Optional: `export GRAPHYN_HOME=$PWD/.graphyn-e2e` when using the e2e plugin tree, or rely on `~/.graphyn/plugins/installed/`.
+
 - API: `venv/bin/uvicorn app.api.main:app --reload --port 8001`
 - Console: `cd graphyn-ui && npm install && npm run dev`
 - API URL: `http://localhost:8001/api/v1/`

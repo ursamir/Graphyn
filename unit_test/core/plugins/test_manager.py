@@ -192,6 +192,17 @@ def test_load_enabled_plugins_fault_isolation(
 
     store = PluginStore(base_dir=str(tmp_path))
 
+    for name in ("good-plugin", "bad-plugin"):
+        d = tmp_path / "plugins" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "plugin.toml").write_text(
+            f'[plugin]\nname = "{name}"\nversion = "1.0.0"\n'
+            'description = "x"\nauthor = "Tester"\n'
+            'platform_version = ">=0.0"\nentry_points = ["nodes.py"]\n',
+            encoding="utf-8",
+        )
+        (d / "nodes.py").write_text("# stub\n", encoding="utf-8")
+
     good_record = PluginRecord(
         name="good-plugin",
         version="1.0.0",

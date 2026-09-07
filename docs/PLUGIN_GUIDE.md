@@ -174,7 +174,20 @@ class MyNode(Node):
 
 ## Bundled auto-install (Docker / production)
 
-On API startup, if `GRAPHYN_SKIP_PLUGIN_LOAD` is not set **and** (`GRAPHYN_AUTO_INSTALL_PLUGINS` is true — default when `GRAPHYN_ENV=production` — **or** no enabled plugins are installed), Graphyn installs every `PluginPackage/*/*/plugin.toml` via `PluginManager.install(upgrade=True)` then `load_enabled_plugins()`. Docker Compose sets `GRAPHYN_AUTO_INSTALL_PLUGINS=1` because the `GRAPHYN_HOME` volume starts empty.
+On API startup, if `GRAPHYN_SKIP_PLUGIN_LOAD` is not set **and** (`GRAPHYN_AUTO_INSTALL_PLUGINS` is true — default when `GRAPHYN_ENV=production` — **or** no *loadable* enabled plugins remain), Graphyn installs every `PluginPackage/*/*/plugin.toml` via `PluginManager.install(upgrade=True)` then `load_enabled_plugins()`. Enabled registry rows whose `install_path` vanished (e.g. leftover `/tmp/pytest-of-*` paths) are healed against `{GRAPHYN_HOME}/plugins/installed/<name>` or pruned so they cannot leave the Builder catalog empty. Docker Compose sets `GRAPHYN_AUTO_INSTALL_PLUGINS=1` because the `GRAPHYN_HOME` volume starts empty.
+
+### Environment variables (plugin catalog)
+
+| Variable | Default | Role |
+|---|---|---|
+| `GRAPHYN_HOME` | `~/.graphyn/` | Platform home: `plugins/registry.json`, `plugins/installed/`, venvs |
+| `GRAPHYN_PLUGINS_DIR` | `{GRAPHYN_HOME}/plugins/installed/` | Override install root scanned/loaded at startup |
+| `GRAPHYN_PROJECT_DIR` | `workspace/` | Project runtime data (runs, artifacts) — not the plugin install root |
+| `GRAPHYN_PLUGIN_PACKAGE_DIR` | `<repo>/PluginPackage` | Bundled plugin sources for auto-install |
+| `GRAPHYN_AUTO_INSTALL_PLUGINS` | on when `GRAPHYN_ENV=production` | Force/skip bundled install at startup |
+| `GRAPHYN_SKIP_PLUGIN_LOAD` | unset | Set `1` only in tests — skips install+load (API catalog will be empty) |
+
+For a normal `uvicorn app.api.main:app` session, leave `GRAPHYN_SKIP_PLUGIN_LOAD` unset and point `GRAPHYN_HOME` at a home that contains installed plugins (or enable auto-install).
 
 ## Installing a Plugin
 
