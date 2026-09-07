@@ -1,7 +1,7 @@
 [plugin]
 name             = "asr-transcribe"
 version          = "1.0.0"
-description      = "Adapter node: transcribe audio via OpenAI-compatible (default), AssemblyAI (poll), Deepgram, or mock."
+description      = "Adapter node: transcribe audio via OpenAI-compatible (default), AssemblyAI (poll), or Deepgram."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
@@ -21,7 +21,7 @@ runtime = "inprocess"
 node_types = ["asr_transcribe"]
 
 [config_schema.asr_transcribe]
-provider = { type = "string", title = "Provider", default = "openai_compat", description = "Remote or local service provider. One of: openai_compat, assemblyai, deepgram, mock.", enum = ["openai_compat", "assemblyai", "deepgram", "mock"] }
+provider = { type = "string", title = "Provider", default = "openai_compat", description = "Remote ASR provider. One of: openai_compat, assemblyai, deepgram. Requires the matching API key secret/env.", enum = ["openai_compat", "assemblyai", "deepgram"] }
 language = { type = "string", title = "Language", default = "en", description = "BCP-47 / ISO language code (e.g. en)." }
 model = { type = "string", title = "Model", default = "", description = "Provider model id (empty = provider default)." }
 base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible API base URL when provider is openai_compat." }

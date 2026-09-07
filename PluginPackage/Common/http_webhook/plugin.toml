@@ -24,5 +24,4 @@ timeout_s = { type = "number", title = "Timeout (s)", default = 10.0, descriptio
 hmac_secret = { type = "string", title = "HMAC secret", default = "", description = "Prefer a Secrets store name via hmac_env when possible.", widget = "secret" }
 hmac_env = { type = "string", title = "HMAC env / secret name", default = "", description = "Env var or Graphyn secret name holding the HMAC key." }
 hmac_header = { type = "string", title = "HMAC header", default = "X-Graphyn-Signature", description = "Header that carries the signature." }
-provider = { type = "string", title = "Provider", default = "http", description = "Remote or local service provider. One of: http, mock.", enum = ["http", "mock"] }
-mock_response = { type = "object", title = "Mock response", default = {}, description = "Synthetic response when provider is mock.", widget = "json" }
+provider = { type = "string", title = "Provider", default = "http", description = "HTTP provider. Only http (real network) is supported.", enum = ["http"] }

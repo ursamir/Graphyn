@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.plugins.manager import PluginManager
 
@@ -81,8 +82,9 @@ def test_http_error(installed_cls):
             node.process({"input": {}})
 
 
-def test_mock_provider_no_network(installed_cls):
-    node = installed_cls(config={"url": "https://example.com/hook", "provider": "mock", "mock_response": {"status_code": 200, "body": {"ok": True}}}, seed=0)
-    out = node.process({"input": {"hello": "world"}})["output"]
-    assert out.ok is True
-    assert out.status_code == 200
+def test_mock_provider_rejected(installed_cls):
+    with pytest.raises((ValidationError, ValueError, RuntimeError)):
+        installed_cls(config={
+            "url": "https://example.com/hook",
+            "provider": "mock",
+        }, seed=0)

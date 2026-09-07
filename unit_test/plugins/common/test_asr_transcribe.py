@@ -1,11 +1,12 @@
 
-"""Tests for the asr_transcribe plugin (offline mock, no API keys)."""
+"""Tests for the asr_transcribe plugin (real providers only; no product mock mode)."""
 from __future__ import annotations
 
 import os
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from app.core.plugins.manager import PluginManager
 from app.models.audio_sample import AudioSample
@@ -50,29 +51,14 @@ def _sample(n=16000, sr=16000, **meta):
 
 
 def test_empty_input(installed_cls):
-    node = installed_cls(config={"provider": "mock"}, seed=0)
+    node = installed_cls(config={"provider": "openai_compat"}, seed=0)
     result = node.process({"input": []})["output"]
     assert result.text == ""
 
 
-def test_mock_deterministic(installed_cls):
-    node = installed_cls(config={"provider": "mock", "language": "en"}, seed=0)
-    sample = _sample(n=16000)
-    a = node.process({"input": [sample]})["output"]
-    b = node.process({"input": [sample]})["output"]
-    assert a.text == b.text
-    assert a.language == "en"
-    assert a.words
-    assert a.words[0].start == 0.0
-    assert a.words[-1].end > 0
-
-
-def test_mock_uses_metadata_transcript(installed_cls):
-    node = installed_cls(config={"provider": "mock"}, seed=0)
-    sample = _sample(n=8000, transcript="hello world")
-    result = node.process({"input": [sample]})["output"]
-    assert result.text == "hello world"
-    assert len(result.words) == 2
+def test_mock_provider_rejected(installed_cls):
+    with pytest.raises((ValidationError, ValueError, RuntimeError)):
+        installed_cls(config={"provider": "mock"}, seed=0)
 
 
 def test_http_provider_missing_key(installed_cls):

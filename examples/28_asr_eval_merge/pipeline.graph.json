@@ -3,7 +3,7 @@
   "metadata": {
     "name": "asr_eval_merge",
     "seed": 42,
-    "description": "Fan-out ingest to ASR + python_code, merge, eval_gate, csv_table.",
+    "description": "Fan-out ingest to openai_compat ASR + python_code, merge, eval_gate, csv_table. Requires OPENAI_API_KEY.",
     "created_at": null,
     "tags": [
       "example",
@@ -31,7 +31,7 @@
       "id": "asr",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "mock",
+        "provider": "openai_compat",
         "language": "en"
       },
       "label": null,

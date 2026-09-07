@@ -1,7 +1,7 @@
 [plugin]
 name             = "http-request"
 version          = "1.0.0"
-description      = "Generic HTTP request node with mock provider, retries, and env-based auth."
+description      = "Generic HTTP request node with retries and env-based auth (real network only)."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
@@ -27,8 +27,7 @@ json_body = { type = "object", title = "Json Body", description = "Json Body." }
 body = { type = "string", title = "Body", default = "", description = "Request body (string or JSON)." }
 timeout_s = { type = "number", title = "Timeout S", default = 30.0, description = "Request timeout in seconds." }
 retry = { type = "integer", title = "Retry", default = 0, description = "Retry." }
-provider = { type = "string", title = "Provider", default = "http", description = "Remote or local service provider. One of: http, mock.", enum = ["http", "mock"] }
-mock_response = { type = "object", title = "Mock Response", default = {  }, description = "Mock Response." }
+provider = { type = "string", title = "Provider", default = "http", description = "HTTP provider. Only http (real network) is supported.", enum = ["http"] }
 auth_env = { type = "string", title = "Auth Env", default = "", description = "Auth Env." }
 auth_header = { type = "string", title = "Auth Header", default = "Authorization", description = "Auth Header." }
 auth_prefix = { type = "string", title = "Auth Prefix", default = "Bearer ", description = "Auth Prefix." }

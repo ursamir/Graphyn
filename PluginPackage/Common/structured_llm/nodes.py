@@ -1,4 +1,4 @@
-"""StructuredLlmNode — JSON-schema extract via mock or OpenAI-compatible HTTP."""
+"""StructuredLlmNode — JSON-schema extract via OpenAI-compatible HTTP."""
 from __future__ import annotations
 
 import importlib
@@ -47,36 +47,6 @@ def _text_of(value: Any) -> str:
     return str(value)
 
 
-def _fill_schema(schema: Any, key: str = "value") -> Any:
-    if not isinstance(schema, dict):
-        return f"mock_{key}"
-    t = schema.get("type")
-    if t is None and "properties" in schema:
-        t = "object"
-    if t == "object" or (t is None and "properties" in schema):
-        props = schema.get("properties") or {}
-        out = {}
-        for k, sub in props.items():
-            out[k] = _fill_schema(sub if isinstance(sub, dict) else {"type": "string"}, k)
-        return out
-    if t == "array":
-        items = schema.get("items") or {"type": "string"}
-        return [_fill_schema(items, key)]
-    if t == "integer":
-        return 0
-    if t == "number":
-        return 0.0
-    if t == "boolean":
-        return False
-    if t == "null":
-        return None
-    # string / default
-    enum = schema.get("enum")
-    if isinstance(enum, list) and enum:
-        return enum[0]
-    return f"mock_{key}"
-
-
 class StructuredLlmNode(Node):
     """Extract a JSON object matching json_schema from transcript/text."""
 
@@ -87,7 +57,7 @@ class StructuredLlmNode(Node):
         label="Structured LLM",
         description=(
             "Extract JSON matching a schema from text. "
-            "Default provider is openai_compat (OPENAI_API_KEY). Use provider=mock only for offline CI."
+            "Default provider is openai_compat (requires OPENAI_API_KEY)."
         ),
         category="Processing",
         version="1.0.0",
@@ -120,7 +90,7 @@ class StructuredLlmNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: Literal["openai_compat", "mock"] = Field(default='openai_compat', title="Provider", description="Remote or local service provider. One of: openai_compat, mock.")
+        provider: Literal["openai_compat"] = Field(default='openai_compat', title="Provider", description="LLM provider backend. Only openai_compat is supported.")
         json_schema: dict = Field(default={}, title="Json Schema", description="Json Schema.")
         schema_name: str = Field(default='extracted', title="Schema Name", description="Schema Name.")
         model: str = Field(default='gpt-4o-mini', title="Model", description="Model.")
@@ -132,18 +102,9 @@ class StructuredLlmNode(Node):
         schema = self.config.json_schema or {"type": "object", "properties": {}}
         provider = (self.config.provider or "openai_compat").strip().lower()
         text = _text_of(value)
-        if provider == "mock":
-            data = _fill_schema(schema)
-            return StructuredDocument(
-                data=data if isinstance(data, dict) else {"value": data},
-                schema_name=self.config.schema_name,
-                provider="mock",
-                raw_text=text,
-                metadata={"empty_input": not bool(text)},
-            )
         if provider != "openai_compat":
             raise RuntimeError(
-                f"StructuredLlmNode: unknown provider {provider!r}. Use mock or openai_compat."
+                f"StructuredLlmNode: unknown provider {provider!r}. Use openai_compat."
             )
         try:
             from app.core.secrets import resolve_secret
@@ -154,7 +115,7 @@ class StructuredLlmNode(Node):
             raise RuntimeError(
                 "StructuredLlmNode: provider='openai_compat' requires secret/env "
                 "OPENAI_API_KEY. Store it with `graphyn secrets set OPENAI_API_KEY` "
-                "or export the env var. Use provider='mock' only for offline CI."
+                "or export the env var."
             )
         data = self._openai_extract(api_key, text, schema)
         return StructuredDocument(
@@ -170,7 +131,8 @@ class StructuredLlmNode(Node):
             import httpx
         except ImportError as exc:
             raise RuntimeError(
-                "StructuredLlmNode: openai_compat requires the 'httpx' package."
+                "StructuredLlmNode: openai_compat requires the 'httpx' package. "
+                "Install httpx (e.g. pip install httpx)."
             ) from exc
         base = (self.config.base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
         url = f"{base}/chat/completions"

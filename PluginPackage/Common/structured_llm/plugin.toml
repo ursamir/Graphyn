@@ -1,7 +1,7 @@
 [plugin]
 name             = "structured-llm"
 version          = "1.0.0"
-description      = "Extract JSON matching a schema from text via mock or OpenAI-compatible chat completions."
+description      = "Extract JSON matching a schema from text via OpenAI-compatible chat completions (requires OPENAI_API_KEY)."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
@@ -19,7 +19,7 @@ runtime = "inprocess"
 node_types = ["structured_llm"]
 
 [config_schema.structured_llm]
-provider = { type = "string", title = "Provider", default = "openai_compat", description = "LLM provider backend.", enum = ["openai_compat", "mock"] }
+provider = { type = "string", title = "Provider", default = "openai_compat", description = "LLM provider backend. Only openai_compat is supported (requires OPENAI_API_KEY).", enum = ["openai_compat"] }
 json_schema = { type = "object", title = "Json Schema", default = {  }, description = "Json Schema." }
 schema_name = { type = "string", title = "Schema Name", default = "extracted", description = "Schema Name." }
 model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Model id for the configured provider." }

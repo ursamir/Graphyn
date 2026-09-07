@@ -89,8 +89,7 @@ class HttpWebhookNode(Node):
         hmac_secret: str = Field(default='', title="HMAC Secret", description="HMAC Secret.")
         hmac_env: str = Field(default='', title="HMAC Env", description="HMAC Env.")
         hmac_header: str = Field(default='X-Graphyn-Signature', title="HMAC Header", description="HMAC Header.")
-        provider: Literal["http", "mock"] = Field(default='http', title="Provider", description="Remote or local service provider. One of: http, mock.")
-        mock_response: dict = Field(default={}, title="Mock Response", description="Mock Response.")
+        provider: Literal["http"] = Field(default='http', title="Provider", description="HTTP provider. Only http (real network) is supported.")
 
     def process(self, payload):
         url = (self.config.url or "").strip()
@@ -110,24 +109,11 @@ class HttpWebhookNode(Node):
             digest = hmac.new(secret, raw, hashlib.sha256).hexdigest()
             headers[self.config.hmac_header or "X-Graphyn-Signature"] = f"sha256={digest}"
         provider = (self.config.provider or "http").strip().lower()
-        mock = dict(self.config.mock_response or {})
-        timeout = min(max(float(self.config.timeout_s or 10.0), 0.05), 30.0)
-        if provider == "mock":
-            status = int(mock.get("status_code", mock.get("status", 200)))
-            mock_body = mock.get("body", mock.get("text", "{\"ok\":true,\"mock\":true}"))
-            text = mock_body if isinstance(mock_body, str) else json.dumps(mock_body, default=str)
-            ok = 200 <= int(status) < 300
-            if not ok:
-                raise RuntimeError(
-                    "HttpWebhookNode: POST %s failed with HTTP %s: %s" % (url or "mock://webhook", status, text[:200])
-                )
-            return WebhookReceipt(
-                url=url or "mock://webhook",
-                status_code=int(status),
-                ok=ok,
-                body=text[:4096],
-                metadata={"bytes": len(raw), "provider": "mock"},
+        if provider != "http":
+            raise RuntimeError(
+                f"HttpWebhookNode: unknown provider {provider!r}. Use provider='http'."
             )
+        timeout = min(max(float(self.config.timeout_s or 10.0), 0.05), 30.0)
         if not url:
             raise RuntimeError(
                 "HttpWebhookNode: config.url is required (completion callback URL)."

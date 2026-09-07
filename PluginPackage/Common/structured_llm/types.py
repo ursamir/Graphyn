@@ -12,6 +12,6 @@ from app.core.nodes.ports import PortDataType
 class StructuredDocument(PortDataType):
     data: dict[str, Any] = Field(default_factory=dict)
     schema_name: str = ""
-    provider: str = "mock"
+    provider: str = "openai_compat"
     raw_text: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)

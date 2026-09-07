@@ -3,7 +3,7 @@
   "metadata": {
     "name": "github_triage",
     "seed": 42,
-    "description": "GitHub triage: mock HTTP issues → ASR/PII/LLM extract → IF → mock comment HTTP.",
+    "description": "GitHub triage: http_request issues \u2192 openai_compat ASR/LLM extract \u2192 IF \u2192 comment http_request. Requires GITHUB_TOKEN (auth_env) and OPENAI_API_KEY. Edit repo URLs before running.",
     "created_at": null,
     "tags": [
       "example",
@@ -17,18 +17,10 @@
       "id": "gh_list",
       "node_type": "http_request",
       "config": {
-        "provider": "mock",
+        "provider": "http",
         "method": "GET",
         "url": "https://api.github.com/repos/example/app/issues",
-        "auth_env": "GITHUB_TOKEN",
-        "mock_response": {
-          "status_code": 200,
-          "body": {
-            "text": "Issue: login fails for user 555-123-4567 contact foo@example.com",
-            "title": "login fails",
-            "number": 42
-          }
-        }
+        "auth_env": "GITHUB_TOKEN"
       },
       "label": null,
       "capability_metadata": null,
@@ -38,7 +30,7 @@
       "id": "asr",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "mock",
+        "provider": "openai_compat",
         "language": "en"
       },
       "label": null,
@@ -72,7 +64,7 @@
       "id": "llm",
       "node_type": "structured_llm",
       "config": {
-        "provider": "mock",
+        "provider": "openai_compat",
         "schema_name": "triage",
         "json_schema": {
           "type": "object",
@@ -114,17 +106,10 @@
       "id": "gh_comment",
       "node_type": "http_request",
       "config": {
-        "provider": "mock",
+        "provider": "http",
         "method": "POST",
         "url": "https://api.github.com/repos/example/app/issues/42/comments",
-        "auth_env": "GITHUB_TOKEN",
-        "mock_response": {
-          "status_code": 201,
-          "body": {
-            "id": 1,
-            "ok": true
-          }
-        }
+        "auth_env": "GITHUB_TOKEN"
       },
       "label": null,
       "capability_metadata": null,

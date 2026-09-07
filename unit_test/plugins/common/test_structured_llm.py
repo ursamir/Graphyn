@@ -1,10 +1,11 @@
 
-"""Tests for the structured_llm plugin (mock provider, no API keys)."""
+"""Tests for the structured_llm plugin (real openai_compat only)."""
 from __future__ import annotations
 
 import os
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.plugins.manager import PluginManager
 
@@ -47,19 +48,9 @@ def test_metadata(installed_cls):
     assert meta.label and meta.category and meta.version
 
 
-def test_mock_fills_schema(installed_cls):
-    node = installed_cls(config={"provider": "mock", "json_schema": SCHEMA}, seed=0)
-    out = node.process({"input": {"text": "the customer is unhappy"}})["output"]
-    assert out.data["pain"] == "mock_pain"
-    assert out.data["objections"] == ["mock_objections"]
-    assert out.data["score"] == 0
-    assert out.provider == "mock"
-
-
-def test_empty_input_still_fills(installed_cls):
-    node = installed_cls(config={"provider": "mock", "json_schema": SCHEMA}, seed=0)
-    out = node.process({"input": None})["output"]
-    assert "pain" in out.data
+def test_mock_provider_rejected(installed_cls):
+    with pytest.raises((ValidationError, ValueError, RuntimeError)):
+        installed_cls(config={"provider": "mock", "json_schema": SCHEMA}, seed=0)
 
 
 def test_http_missing_key(installed_cls):
@@ -75,3 +66,27 @@ def test_default_provider_is_not_mock(installed_cls, monkeypatch):
     assert node.config.provider == "openai_compat"
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         node.process({"input": "hello"})
+
+
+def test_openai_extract_httpx_mocked(installed_cls, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    import json as _json
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    node = installed_cls(config={"provider": "openai_compat", "json_schema": SCHEMA}, seed=0)
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": _json.dumps({
+            "pain": "latency",
+            "objections": ["price"],
+            "next_step": "demo",
+            "owner": "sam",
+            "score": 3,
+        })}}],
+    }
+    with patch("httpx.post", return_value=mock_resp) as mocked:
+        out = node.process({"input": "the customer is unhappy"})["output"]
+    assert out.data["pain"] == "latency"
+    assert out.provider == "openai_compat"
+    mocked.assert_called_once()

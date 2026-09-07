@@ -3,7 +3,7 @@
   "metadata": {
     "name": "call_analytics_live",
     "seed": 42,
-    "description": "Live call analytics: Deepgram ASR + OpenAI structured extract. Requires DEEPGRAM_API_KEY and OPENAI_API_KEY (secrets store or env). Edit http_webhook url to your callback. CI uses pipeline.graph.json (mock).",
+    "description": "Live call analytics: Deepgram ASR + OpenAI structured extract. Requires DEEPGRAM_API_KEY and OPENAI_API_KEY (secrets store or env). Edit http_webhook url to your callback.",
     "created_at": null,
     "tags": [
       "example",

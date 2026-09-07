@@ -4,7 +4,6 @@ Providers:
     openai_compat  — HTTP POST {base}/audio/transcriptions (OPENAI_API_KEY) [default]
     assemblyai     — upload + create + POLL until completed (ASSEMBLYAI_API_KEY)
     deepgram       — Deepgram listen REST (DEEPGRAM_API_KEY)
-    mock           — deterministic offline transcript; only if provider=mock
 """
 from __future__ import annotations
 
@@ -21,7 +20,6 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
-from app.models.audio_sample import AudioSample
 
 try:
     _pkg = __name__.rsplit(".", 1)[0] if "." in __name__ else __name__
@@ -52,23 +50,6 @@ def _resolve_key(env_key: str) -> str:
         return os.environ.get(env_key, "").strip()
 
 
-def _duration_s(sample: AudioSample) -> float:
-    meta = sample.metadata or {}
-    if "duration_s" in meta:
-        try:
-            return float(meta["duration_s"])
-        except (TypeError, ValueError):
-            pass
-    data = getattr(sample, "data", None)
-    sr = int(getattr(sample, "sample_rate", 0) or 0)
-    if data is None or sr <= 0:
-        return 0.0
-    try:
-        n = int(np.asarray(data).reshape(-1).shape[0])
-    except Exception:
-        return 0.0
-    return n / float(sr)
-
 
 def _coerce_samples(audio: Any) -> list:
     if audio is None:
@@ -79,7 +60,7 @@ def _coerce_samples(audio: Any) -> list:
 
 
 class AsrTranscribeNode(Node):
-    """Transcribe audio to a typed Transcript via mock or HTTP ASR providers."""
+    """Transcribe audio to a typed Transcript via HTTP ASR providers."""
 
     node_type: ClassVar[str] = "asr_transcribe"
 
@@ -88,7 +69,7 @@ class AsrTranscribeNode(Node):
         label="ASR Transcribe",
         description=(
             "Transcribe audio to text with optional word timestamps. "
-            "Default provider is openai_compat (OPENAI_API_KEY). Use provider=mock only for offline CI."
+            "Default provider is openai_compat (requires OPENAI_API_KEY)."
         ),
         category="Processing",
         version="1.0.0",
@@ -121,7 +102,7 @@ class AsrTranscribeNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: Literal["openai_compat", "assemblyai", "deepgram", "mock"] = Field(default='openai_compat', title="Provider", description="Remote or local service provider. One of: openai_compat, assemblyai, deepgram, mock.")
+        provider: Literal["openai_compat", "assemblyai", "deepgram"] = Field(default='openai_compat', title="Provider", description="Remote ASR provider. One of: openai_compat, assemblyai, deepgram.")
         language: str = Field(default='en', title="Language", description="BCP-47 / ISO language code (e.g. en).")
         model: str = Field(default='', title="Model", description="Model.")
         base_url: str = Field(default='', title="Base URL", description="Base URL.")
@@ -133,12 +114,10 @@ class AsrTranscribeNode(Node):
             return Transcript(text="", language=self.config.language, words=[], metadata={"empty": True})
 
         provider = (self.config.provider or "openai_compat").strip().lower()
-        if provider == "mock":
-            return self._mock(samples)
         if provider not in _PROVIDER_ENV:
             raise RuntimeError(
                 f"AsrTranscribeNode: unknown provider {provider!r}. "
-                "Use mock, openai_compat, assemblyai, or deepgram."
+                "Use openai_compat, assemblyai, or deepgram."
             )
         env_key = _PROVIDER_ENV[provider]
         api_key = _resolve_key(env_key)
@@ -146,49 +125,11 @@ class AsrTranscribeNode(Node):
             raise RuntimeError(
                 f"AsrTranscribeNode: provider={provider!r} requires secret/env "
                 f"{env_key}. Store it with `graphyn secrets set {env_key}` or export "
-                f"the env var. Use provider='mock' only for offline CI."
+                f"the env var."
             )
         return self._http_transcribe(provider, api_key, samples)
 
-    def _mock(self, samples: list) -> Transcript:
-        parts: list[str] = []
-        words: list = []
-        offset = 0.0
-        for sample in samples:
-            meta = getattr(sample, "metadata", None) or {}
-            dur = _duration_s(sample)
-            canned = meta.get("transcript") or meta.get("text")
-            if isinstance(canned, str) and canned.strip():
-                text = canned.strip()
-                tokens = text.split()
-            else:
-                n_words = max(1, int(round(dur * 2.5))) if dur > 0 else 3
-                tokens = [f"word{i:02d}" for i in range(n_words)]
-                text = " ".join(tokens)
-            if dur <= 0:
-                dur = max(0.05 * len(tokens), 0.05)
-            step = dur / max(len(tokens), 1)
-            for i, tok in enumerate(tokens):
-                words.append(
-                    WordTiming(
-                        word=tok,
-                        start=round(offset + i * step, 4),
-                        end=round(offset + (i + 1) * step, 4),
-                        speaker=str(meta.get("speaker") or ""),
-                    )
-                )
-            parts.append(text)
-            offset += dur
-        return Transcript(
-            text=" ".join(parts).strip(),
-            language=self.config.language,
-            words=words,
-            metadata={"provider": "mock", "n_samples": len(samples)},
-        )
-
     def _http_transcribe(self, provider: str, api_key: str, samples: list) -> Transcript:
-        # Concatenate mock-equivalent request per sample; keep implementation
-        # small: send the first sample path if present.
         sample = samples[0]
         path = getattr(sample, "path", "") or ""
         if provider == "openai_compat":
@@ -203,7 +144,7 @@ class AsrTranscribeNode(Node):
         except ImportError as exc:
             raise RuntimeError(
                 "AsrTranscribeNode: HTTP providers require the 'httpx' package. "
-                "Install httpx or use provider='mock'."
+                "Install httpx (e.g. pip install httpx)."
             ) from exc
         resp = httpx.post(
             url,
@@ -222,7 +163,7 @@ class AsrTranscribeNode(Node):
         except ImportError as exc:
             raise RuntimeError(
                 "AsrTranscribeNode: HTTP providers require the 'httpx' package. "
-                "Install httpx or use provider='mock'."
+                "Install httpx (e.g. pip install httpx)."
             ) from exc
         resp = httpx.get(url, headers=headers, timeout=timeout)
         resp.raise_for_status()
@@ -333,7 +274,8 @@ class AsrTranscribeNode(Node):
             import httpx
         except ImportError as exc:
             raise RuntimeError(
-                "AsrTranscribeNode: HTTP providers require the 'httpx' package."
+                "AsrTranscribeNode: HTTP providers require the 'httpx' package. "
+                "Install httpx (e.g. pip install httpx)."
             ) from exc
         model = self.config.model or "nova-2"
         url = f"https://api.deepgram.com/v1/listen?model={model}&punctuate=true"

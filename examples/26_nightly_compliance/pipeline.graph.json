@@ -3,7 +3,7 @@
   "metadata": {
     "name": "nightly_compliance",
     "seed": 42,
-    "description": "Nightly compliance: schedule tick + ingest/ASR/PII/eval, then IF to Slack mock or CSV.",
+    "description": "Nightly compliance: schedule tick + ingest/openai_compat ASR/PII/eval, then IF to Slack http_request or CSV. Requires OPENAI_API_KEY; Slack branch needs SLACK_BOT_TOKEN via auth_env.",
     "created_at": null,
     "tags": [
       "example",
@@ -47,7 +47,7 @@
       "id": "asr",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "mock",
+        "provider": "openai_compat",
         "language": "en"
       },
       "label": null,
@@ -90,16 +90,10 @@
       "id": "slack",
       "node_type": "http_request",
       "config": {
-        "provider": "mock",
+        "provider": "http",
         "method": "POST",
-        "url": "https://hooks.slack.com/services/mock",
-        "mock_response": {
-          "status_code": 200,
-          "body": {
-            "ok": true,
-            "channel": "compliance"
-          }
-        }
+        "url": "https://slack.com/api/chat.postMessage",
+        "auth_env": "SLACK_BOT_TOKEN"
       },
       "label": null,
       "capability_metadata": null,

@@ -520,7 +520,7 @@ output_dim: int = 512
 **Category:** Processing | **Version:** v1.0.0
 
 ```python
-provider: str = "mock"       # "mock" | "openai_compat" | "assemblyai" | "deepgram"
+provider: str = "openai_compat"  # "openai_compat" | "assemblyai" | "deepgram"
 language: str = "en"
 model: str = ""
 base_url: str = ""           # OpenAI-compatible base; else OPENAI_BASE_URL
@@ -528,7 +528,7 @@ timeout_s: float = 30.0
 ```
 
 **Ports:** `input: list[AudioSample]` → `output: Transcript`
-**Env:** `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, `DEEPGRAM_API_KEY` (HTTP providers only; missing key raises). Mock is offline.
+**Env:** `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, or `DEEPGRAM_API_KEY` (required for the chosen provider; missing key raises). Real HTTP only — no mock provider.
 
 ---
 
@@ -549,7 +549,7 @@ Presidio is optional; import never fails if it is absent (regex: email, phone, c
 **Category:** Processing | **Version:** v1.0.0
 
 ```python
-provider: str = "mock"       # "mock" | "openai_compat"
+provider: str = "openai_compat"  # only "openai_compat"
 json_schema: dict = {}
 schema_name: str = "extracted"
 model: str = "gpt-4o-mini"
@@ -558,7 +558,7 @@ timeout_s: float = 30.0
 ```
 
 **Ports:** `input` (transcript/text) → `output: StructuredDocument`
-**Env:** `OPENAI_API_KEY` for `openai_compat`.
+**Env:** `OPENAI_API_KEY` required (missing key raises). Real HTTP only — no mock provider.
 
 ---
 
@@ -650,8 +650,7 @@ query: dict = {}
 json_body: dict | None = None
 timeout_s: float = 30.0
 retry: int = 0
-provider: str = "http"  # "http" | "mock"
-mock_response: dict = {}
+provider: str = "http"  # only "http" (real network)
 auth_env: str = ""      # env var NAME, e.g. GITHUB_TOKEN
 ```
 

@@ -1,4 +1,4 @@
-"""HttpRequestNode — generic HTTP call with mock provider and env-name auth."""
+"""HttpRequestNode — generic HTTP call with env-name auth."""
 from __future__ import annotations
 
 import importlib
@@ -45,7 +45,7 @@ def _jsonable(obj: Any) -> Any:
 
 
 class HttpRequestNode(Node):
-    """Issue an HTTP request. Mock mode needs no network."""
+    """Issue a real HTTP request (httpx)."""
 
     node_type: ClassVar[str] = "http_request"
 
@@ -95,8 +95,7 @@ class HttpRequestNode(Node):
         body: str = Field(default='', title="Body", description="Body.")
         timeout_s: float = Field(default=30.0, title="Timeout S", description="Timeout in seconds.")
         retry: int = Field(default=0, title="Retry", description="Retry.")
-        provider: Literal["http", "mock"] = Field(default='http', title="Provider", description="Remote or local service provider. One of: http, mock.")
-        mock_response: dict = Field(default={}, title="Mock Response", description="Mock Response.")
+        provider: Literal["http"] = Field(default='http', title="Provider", description="HTTP provider. Only http (real network) is supported.")
         auth_env: str = Field(default='', title="Auth Env", description="Auth Env.")
         auth_header: str = Field(default='Authorization', title="Auth Header", description="Auth Header.")
         auth_prefix: str = Field(default='Bearer ', title="Auth Prefix", description="Auth Prefix.")
@@ -108,51 +107,31 @@ class HttpRequestNode(Node):
         headers = {str(k): str(v) for k, v in dict(self.config.headers or {}).items()}
         auth_env = (self.config.auth_env or "").strip()
         provider = (self.config.provider or "http").strip().lower()
+        if provider != "http":
+            raise RuntimeError(
+                f"HttpRequestNode: unknown provider {provider!r}. Use provider='http'."
+            )
         if auth_env:
             try:
                 from app.core.secrets import resolve_secret
                 token = resolve_secret(auth_env)
             except Exception:
                 token = os.environ.get(auth_env, "").strip()
-            if not token and provider != "mock":
+            if not token:
                 raise RuntimeError(
                     f"HttpRequestNode: auth_env={auth_env!r} is set but secret/env "
                     f"{auth_env} is empty. Store it with `graphyn secrets set {auth_env}` "
                     "or export the env var. Do not put API keys in Graph IR."
                 )
-            if token:
-                prefix = self.config.auth_prefix if self.config.auth_prefix is not None else "Bearer "
-                headers[self.config.auth_header or "Authorization"] = f"{prefix}{token}"
+            prefix = self.config.auth_prefix if self.config.auth_prefix is not None else "Bearer "
+            headers[self.config.auth_header or "Authorization"] = f"{prefix}{token}"
         query = dict(self.config.query or {})
         json_body = self.config.json_body
         if json_body is None and payload is not None and method in {"POST", "PUT", "PATCH"}:
             json_body = _jsonable(payload) if not isinstance(payload, str) else None
         body = self.config.body or ""
-        if provider == "mock":
-            mock = dict(self.config.mock_response or {})
-            status = int(mock.get("status_code", mock.get("status", 200)))
-            mock_body = mock.get("body", mock.get("json", {"ok": True, "mock": True}))
-            text = mock.get("text")
-            if text is None:
-                text = mock_body if isinstance(mock_body, str) else json.dumps(_jsonable(mock_body))
-            parsed = mock_body
-            if isinstance(mock_body, str):
-                try:
-                    parsed = json.loads(mock_body)
-                except Exception:
-                    parsed = mock_body
-            return {"output": HttpResponse(
-                url=url or "mock://http_request",
-                method=method,
-                status_code=status,
-                ok=200 <= status < 300,
-                headers=dict(mock.get("headers") or {}),
-                body=parsed,
-                text=str(text)[:65536],
-                metadata={"provider": "mock", "query": query},
-            )}
         if not url:
-            raise RuntimeError("HttpRequestNode: config.url is required unless provider='mock'.")
+            raise RuntimeError("HttpRequestNode: config.url is required.")
         if query:
             sep = "&" if "?" in url else "?"
             url = f"{url}{sep}{urlencode({str(k): str(v) for k, v in query.items()})}"
@@ -198,7 +177,7 @@ class HttpRequestNode(Node):
         except ImportError as exc:
             raise RuntimeError(
                 "HttpRequestNode: httpx is required for provider='http'. "
-                "Install httpx or use provider='mock'."
+                "Install httpx (e.g. pip install httpx)."
             ) from exc
         kwargs = {"headers": headers or None, "timeout": timeout}
         if json_body is not None:

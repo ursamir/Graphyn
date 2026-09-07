@@ -2,7 +2,10 @@
 """Tests for the http_request plugin."""
 from __future__ import annotations
 
+import os
+
 import pytest
+from pydantic import ValidationError
 
 from app.core.plugins.manager import PluginManager
 
@@ -32,34 +35,54 @@ def test_metadata(installed_cls):
     meta = installed_cls.metadata
     assert meta.label and meta.category and meta.version
 
-import os
+
+def test_mock_provider_rejected(installed_cls):
+    with pytest.raises((ValidationError, ValueError, RuntimeError)):
+        installed_cls(config={
+            "provider": "mock",
+            "url": "https://example.invalid/x",
+            "method": "GET",
+        }, seed=0)
 
 
-def test_mock_response(installed_cls):
-    node = installed_cls(config={
-        "provider": "mock",
-        "url": "https://example.invalid/x",
-        "method": "GET",
-        "mock_response": {"status_code": 200, "body": {"hello": "world"}},
-    }, seed=0)
-    out = node.process({"input": None})["output"]
-    assert out.ok is True
-    assert out.status_code == 200
-    assert out.body["hello"] == "world"
+def test_missing_url(installed_cls):
+    node = installed_cls(config={"provider": "http", "url": ""}, seed=0)
+    with pytest.raises(RuntimeError, match="url"):
+        node.process({"input": None})
 
 
 def test_auth_env_not_secret_in_config(installed_cls, monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "s3cret-token")
     node = installed_cls(config={
-        "provider": "mock",
+        "provider": "http",
+        "url": "https://example.com/api",
+        "method": "GET",
         "auth_env": "GITHUB_TOKEN",
-        "mock_response": {"status_code": 201, "body": {"ok": True}},
     }, seed=0)
     dumped = node.config.model_dump()
     assert "s3cret-token" not in str(dumped)
     assert dumped["auth_env"] == "GITHUB_TOKEN"
-    out = node.process({"input": {}})["output"]
+    from unittest.mock import MagicMock, patch
+    mock_resp = MagicMock()
+    mock_resp.status_code = 201
+    mock_resp.text = '{"ok":true}'
+    mock_resp.headers = {}
+    with patch("httpx.request", return_value=mock_resp) as mocked:
+        out = node.process({"input": {}})["output"]
     assert out.status_code == 201
+    headers = mocked.call_args.kwargs.get("headers") or {}
+    assert "s3cret-token" in headers.get("Authorization", "")
+
+
+def test_auth_env_missing_raises(installed_cls, monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    node = installed_cls(config={
+        "provider": "http",
+        "url": "https://example.com/api",
+        "auth_env": "GITHUB_TOKEN",
+    }, seed=0)
+    with pytest.raises(RuntimeError, match="GITHUB_TOKEN"):
+        node.process({"input": {}})
 
 
 def test_http_mocked(installed_cls):
