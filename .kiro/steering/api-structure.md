@@ -38,6 +38,12 @@ Allowed headers: `Authorization`, `Content-Type`, `X-Request-ID`, `Accept`
 | `ingest_router` | `/api/v1` | `routers/ingest.py` |
 | `artifacts_router` | `/api/v1` | `routers/artifacts.py` |
 | `plugins_router` | `/api/v1` | `routers/plugins.py` |
+| `workers_router` | `/api/v1` | `routers/workers.py` |
+| `trace_router` | `/api/v1` | `routers/trace.py` |
+| `experiments_router` | `/api/v1` | `routers/experiments.py` |
+| `proposals_router` | `/api/v1` | `routers/proposals.py` |
+| `secrets_router` | `/api/v1` | `routers/secrets.py` |
+| `outputs_router` | `/api/v1` | `routers/outputs.py` |
 
 ## Static Mounts
 

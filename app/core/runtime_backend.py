@@ -8,7 +8,8 @@ Responsibility:   Pluggable execution backend abstraction. Defines the interface
                   than importing run_pipeline_ir directly.
 Owns:             RuntimeBackend (ABC), LocalPythonBackend, backend registry
                   (_BACKEND_REGISTRY, _BACKEND_INSTANCES), register_backend(),
-                  get_backend(), list_backends().
+                  get_backend(), list_backends(). DistributedBackend lives in
+                  app.core.distributed and registers when GRAPHYN_BACKEND=distributed.
 Public Surface:   RuntimeBackend, LocalPythonBackend, get_backend(),
                   register_backend(), list_backends(), _reset_backend_registry()
 Must NOT:         Import from app.domain or app.api at module level.

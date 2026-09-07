@@ -24,6 +24,8 @@ venv/bin/pytest unit_test/
 |---|---|
 | [docs/README.md](docs/README.md) | Doc index + key concepts |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layers, data flows, phase history |
+| [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md) | North-star product vision |
+| [docs/DISTRIBUTED_EXECUTION.md](docs/DISTRIBUTED_EXECUTION.md) | Multi-machine workers & placement |
 | [AGENTS.md](AGENTS.md) | Agent/contributor orientation |
 | [.kiro/steering/](.kiro/steering/) | Area-specific steering for AI agents |
 
@@ -45,5 +47,7 @@ Install plugins from source:
 venv/bin/python -c "from pathlib import Path; from app.core.plugins.manager import PluginManager; m=PluginManager();
 [m.install(str(p), upgrade=True) for d in ('Audio','Common') for p in Path('PluginPackage',d).iterdir() if (p/'plugin.toml').exists()]"
 ```
+
+Distributed workers: set `GRAPHYN_BACKEND=distributed` and run `graphyn worker start` (see [docs/DISTRIBUTED_EXECUTION.md](docs/DISTRIBUTED_EXECUTION.md)).
 
 Open defects: [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).

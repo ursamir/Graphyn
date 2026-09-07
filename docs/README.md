@@ -19,7 +19,7 @@ This index is the entry point for all documentation. Start here, then follow the
 | [DOMAIN_SERVICES.md](./DOMAIN_SERVICES.md) | IngestionService, ProjectManager, QualityChecker, AudioSampleHandler |
 | [API_REFERENCE.md](./API_REFERENCE.md) | All `/api/v1/` REST endpoints, request/response shapes, streaming protocol |
 | [SDK_AND_CLI.md](./SDK_AND_CLI.md) | Python SDK (Pipeline, PipelineNode) and CLI reference |
-| [MCP_SERVER.md](./MCP_SERVER.md) | MCP server: all 15 tools, auth, tool registry, error contract |
+| [MCP_SERVER.md](./MCP_SERVER.md) | MCP server: all 23 tools (incl. propose_graph), auth, error contract |
 | [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md) | Writing and deploying plugins, manifest schema, lifecycle, quality checklist |
 | [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port data types, workspace layout, artifact format, streaming protocol |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Docker and docker-compose deployment baseline |
@@ -89,7 +89,7 @@ venv/bin/python -m app.cli.main validate --graph my-pipeline.graph.json
 
 **Graph IR** — the canonical pipeline representation (`app/core/ir/`). Versioned, validated, runtime-agnostic JSON. All interfaces produce and consume `GraphIR` objects.
 
-**RuntimeBackend** — the canonical execution entry point (`app/core/runtime_backend.py`). Interfaces call `get_backend().execute(graph)`. `LocalPythonBackend` (default) delegates to `orchestrator.run_pipeline_ir_async()`.
+**RuntimeBackend** — the canonical execution entry point (`app/core/runtime_backend.py`). Interfaces call `get_backend().execute(graph)`. `LocalPythonBackend` (default) delegates to `orchestrator.run_pipeline_ir_async()`. Set `GRAPHYN_BACKEND=distributed` for `DistributedBackend` (wave scheduler + workers; see [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md)).
 
 **Registry** — a singleton `NodeRegistry` populated at startup by `AutoDiscovery`. Maps node type strings to Python classes and metadata.
 
@@ -103,7 +103,7 @@ venv/bin/python -m app.cli.main validate --graph my-pipeline.graph.json
 
 **Domain Services** — `app/domain/` contains `IngestionService`, `ProjectManager`, and `QualityChecker`. Platform code never imports from `app/domain/`.
 
-**MCP Server** — exposes 15 tools via the Model Context Protocol (stdio transport), enabling AI agents to discover nodes, generate graphs, validate, execute pipelines, inspect artifacts, and control runs.
+**MCP Server** — exposes 23 tools via the Model Context Protocol (stdio transport), enabling AI agents to discover nodes, generate graphs, propose/accept workflow changes, validate, execute pipelines, inspect artifacts, manage plugins/secrets, and control runs.
 
 ---
 
@@ -115,21 +115,17 @@ CLI / SDK / API / MCP Agent
         ▼
 get_backend().execute(graph)          ← canonical entry point (runtime_backend.py)
         │
-        ▼
-LocalPythonBackend
-        └── orchestrator.run_pipeline_ir_async()
-                │
-                ├── planner.py         PipelineGraph — DAG build + topo sort + waves
-                ├── node_executor.py   NodeExecutor — per-node lifecycle + retry
-                ├── executor.py        ParallelExecutor — wave-based asyncio + ThreadPool
-                ├── run_journal.py     RunManager — run dir + meta.json + resume state
-                ├── run_control.py     Active run registry (pause/resume/cancel)
-                ├── checkpoint.py      Per-node checkpoint read/write
-                ├── pipeline_cache.py  SHA-256 keyed output cache
-                └── artifact_store.py  Content-addressed artifact storage
-                        │
-                        └── artifact_serializer.py  ArtifactSerializerRegistry
-                                └── audio_artifact_serializer.py  AudioSampleHandler (domain)
+        ├── LocalPythonBackend (default) → orchestrator.run_pipeline_ir_async()
+        │       ├── planner / node_executor / ParallelExecutor
+        │       ├── run_journal + run_control (pause/resume/cancel)
+        │       ├── checkpoint + pipeline_cache
+        │       └── artifact_store + ArtifactSerializerRegistry
+        │
+        └── DistributedBackend (GRAPHYN_BACKEND=distributed)
+                ├── wave scheduler: local NodeExecutor + remote job queue
+                ├── worker registry / durable store (disk|Redis|memory)
+                ├── artifact:// URIs + distributed_blobs HTTP transfer
+                └── see DISTRIBUTED_EXECUTION.md
 
 app/domain/                           ← domain services (never imported by platform)
 ├── ingestion.py                      URL + HuggingFace ingestion

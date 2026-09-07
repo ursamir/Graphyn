@@ -83,3 +83,21 @@ docker exec graphyn-api /data/graphyn-home/plugins/venvs/trainer/bin/pip install
 
 (Optionally the same for `edge-optimizer` if TFLite conversion fails with `ModuleNotFoundError`.)
 
+## Distributed workers (second host)
+
+Default Compose is single-machine `LocalPythonBackend`. For multi-machine placement:
+
+1. On the control / API host: `GRAPHYN_BACKEND=distributed` (and the usual auth vars).
+2. On a GPU / edge worker host: same Graphyn version + plugins, then:
+
+```bash
+export GRAPHYN_CONTROL_URL=http://<control-host>:8001/api/v1
+export GRAPHYN_API_TOKEN=change-me
+venv/bin/python -m app.cli.main worker start \
+  --control-url "$GRAPHYN_CONTROL_URL" \
+  --worker-id server99-gpu --labels gpu --pool gpu-lab
+```
+
+Full runbook, env vars, cancel/lease, and UI (**Deploy → Workers**): [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md).
+
+Helm / K8s backend remain future (P3) — not shipped.

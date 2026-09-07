@@ -29,7 +29,7 @@
 │                                                                     │
 │  app/api/          app/core/sdk.py    app/cli/      app/mcp/        │
 │  FastAPI REST       Pipeline class    argparse CLI  stdio JSON-RPC  │
-│  10 routers         PipelineNode      14 commands   15 tools        │
+│  16 routers         PipelineNode      CLI + worker  23 tools        │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │ intended: get_backend().execute()
                                │ (see docs/KNOWN_ISSUES for exceptions)
@@ -90,7 +90,7 @@
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  IR LAYER                                                           │
 │                                                                     │
-│  app/core/ir/models.py        GraphIR, IRNode, IREdge, IRMetadata, IRUIState │
+│  app/core/ir/models.py        GraphIR, IRNode (+IRPlacement 1.2), IREdge, … │
 │  app/core/ir/loader.py        load_ir(), dump_ir(), version check   │
 │  app/core/ir/yaml_shim.py     YAML → GraphIR (deprecated path)      │
 │  app/core/ir/migrate.py       YAML file → .graph.json file          │
@@ -102,6 +102,12 @@
 │  app/core/run_journal.py      RunManager: run dir + persistence     │
 │  app/core/run_control.py      Active run registry (in-proc/Redis)   │
 │  app/core/run_manager.py      Re-export shim (backward compat only) │
+│  app/core/distributed/        Workers, job queue, durable store,    │
+│                               placement, blob transfer (≠ run_control)│
+│  app/core/trace.py            Unified backtrack Trace payload       │
+│  app/core/audit.py            Append-only audit/events.jsonl        │
+│  app/core/agentic/            Graph proposals (propose/accept)      │
+│  app/core/experiments.py      Experiment list/compare aggregation   │
 │  app/core/logger.py           PipelineLogger: structured events     │
 │  app/core/pipeline_cache.py   PipelineCache: SHA-256 keyed          │
 │  app/core/artifact_store.py   ArtifactStore: content-addressed      │
@@ -156,7 +162,8 @@
 ```
 sdk.py
   └── runtime_backend.py (get_backend().execute())
-        └── orchestrator.py (run_pipeline_ir — LocalPythonBackend impl)
+        ├── LocalPythonBackend → orchestrator.run_pipeline_ir
+        └── DistributedBackend → wave scheduler + job queue (distributed/)
               ├── ir/loader.py (load_ir, dump_ir)
               │     └── ir/models.py (GraphIR, IRNode, IREdge)
               ├── registry_runtime.py (get_registry, resolve_capability)
@@ -225,11 +232,12 @@ User Input (IR JSON / SDK nodes)
          ▼
     get_backend().execute(graph)     ← canonical entry point (all interfaces)
          │
-         ▼
-    LocalPythonBackend.execute()
-         └── orchestrator.run_pipeline_ir_async(graph, ...)
-                  │
-                  ▼
+         ├── LocalPythonBackend.execute()
+         │    └── orchestrator.run_pipeline_ir_async(graph, ...)
+         └── DistributedBackend.execute()   ← GRAPHYN_BACKEND=distributed
+              └── waves: local NodeExecutor | remote jobs + artifact refs
+         │
+         ▼  (local path continues)
     _ir_to_pipeline_config(graph)    ← GraphIR → PipelineConfig (NodeSpec + EdgeSpec)
          │
          ▼
@@ -426,7 +434,11 @@ PluginManager.install(source)
 
 ```
 get_backend().execute(graph, ...)
-  └── LocalPythonBackend → orchestrator.run_pipeline_ir_async(graph, ...)
+  ├── DistributedBackend (GRAPHYN_BACKEND=distributed)
+  │     Wave scheduler: placement from IRNode.placement / capability;
+  │     local nodes via NodeExecutor; remote via job queue + artifact URIs.
+  │     See docs/DISTRIBUTED_EXECUTION.md.
+  └── LocalPythonBackend (default) → orchestrator.run_pipeline_ir_async(graph, ...)
          │
          ├── parallel=False (default)
          │   Sequential execution:
@@ -513,3 +525,5 @@ get_backend().execute(graph, ...)
 | Phase 5 | Plugin ecosystem: PluginManager, PluginInstaller, PluginLoader, PluginStore, PluginIndexClient, manifest-based packages, `plugin.toml` schema |
 | Phase 6–8 | 30 plugin nodes across `PluginPackage/Audio/` (18) and `PluginPackage/Common/` (12) — all phases complete |
 | Phase 9 | Post-review fix pass — architecture splits (`pipeline.py` / `run_manager.py` shims; domain → `app/domain/`; `ArtifactSerializerRegistry`; `RuntimeBackend`). Open defects after later audits: see `docs/KNOWN_ISSUES.md`. |
+| Phase 10 | Distributed execution P0–P2 + harden — IR 1.2 `placement`, `DistributedBackend`, workers API, `graphyn worker`, durable store, cancel/lease, wave scheduler (`docs/DISTRIBUTED_EXECUTION.md`) |
+| Phase 11 | Product pillars A–E — Trace+audit, Experiments, Proposals (MCP `propose_graph`), Edge wizard, Workers UI; console IA Build/Observe/Library/Deploy/Admin (`docs/PRODUCT_VISION.md`) |

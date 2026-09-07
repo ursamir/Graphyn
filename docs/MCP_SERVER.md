@@ -1,6 +1,6 @@
 # MCP Server
 
-The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 20 tools over stdio transport.
+The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 23 tools over stdio transport.
 
 **File:** `app/mcp/`  
 **Transport:** stdio (JSON-RPC on stdin/stdout, logs to stderr)  
@@ -24,7 +24,7 @@ python -m app.mcp.server
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — 20 tools
+├── tool_registry.py   # register_all_tools() — 23 tools
 ├── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
@@ -35,7 +35,8 @@ app/mcp/
     ├── provenance.py  # list_artifacts, get_artifact_lineage, replay_run
     ├── optimization.py # optimize_execution
     ├── plugins.py      # install_plugin, list_plugins, manage_plugin
-    └── secrets.py      # secrets_list, secrets_set
+    ├── secrets.py      # secrets_list, secrets_set
+    └── proposals.py    # propose_graph, list_proposals, get_proposal
 ```
 
 ---
@@ -46,7 +47,7 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 
 ---
 
-## All 20 Tools
+## All 23 Tools
 
 | Tool | Handler | Delegates to |
 |---|---|---|
@@ -70,6 +71,9 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 | `manage_plugin` | `plugins.py` | `enable` / `disable` / `uninstall` |
 | `secrets_list` | `secrets.py` | names only under GRAPHYN_HOME/secrets |
 | `secrets_set` | `secrets.py` | stores value; result does not echo it |
+| `propose_graph` | `proposals.py` | `create_proposal` (agentic store) |
+| `list_proposals` | `proposals.py` | `list_proposals` |
+| `get_proposal` | `proposals.py` | `get_proposal` |
 
 ---
 
@@ -261,6 +265,20 @@ Returns `{"names": ["OPENAI_API_KEY", ...]}`. Never returns values.
 **Arguments:** `name` (required), `value` (required; accepted for local MCP).
 
 **Returns:** `{"ok": true, "name": "..."}` — value is not echoed.
+
+---
+
+### `propose_graph`
+
+Create a human-in-the-loop GraphIR proposal (does **not** mutate the live Builder canvas).
+
+**Arguments:** `summary` (required), `graph` (required GraphIR object), optional `actor`, `base_graph`, `base_graph_hash`.
+
+**Returns:** proposal id + status `pending`. Accept/reject via REST UI (`POST /api/v1/proposals/{id}/accept|reject`).
+
+### `list_proposals` / `get_proposal`
+
+List (optional `status` filter) or fetch one proposal by id.
 
 ---
 

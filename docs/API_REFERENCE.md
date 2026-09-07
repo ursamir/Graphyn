@@ -3,7 +3,7 @@
 All endpoints are under `/api/v1/`. The old root-path endpoints (`/schemas`, `/runs`, `/validate`, `/run-stream`, etc.) no longer exist and return 404.
 
 **Base URL:** `http://localhost:8001` (default)  
-**Auth:** Optional Bearer token. Set `GRAPHYN_API_TOKEN` env var to enable. When set, include `Authorization: Bearer <token>` on all requests.
+**Auth:** Bearer token via `GRAPHYN_API_TOKEN`. When set, include `Authorization: Bearer <token>`. Fail-closed when `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production|staging` (empty token rejected). Local development may leave the token unset.
 
 ---
 
@@ -248,7 +248,7 @@ Get template content. IR-native templates return `graph`. Legacy node types (`in
 
 **Response:**
 ```json
-{"name": "basic-wakeword", "graph": {"schema_version": "1.1", "nodes": [], "edges": []}}
+{"name": "basic-wakeword", "graph": {"schema_version": "1.2", "nodes": [], "edges": []}}
 ```
 
 **Errors:** `400` if name contains invalid characters. `404` if not found. `422` if IR cannot be migrated/validated.
@@ -263,7 +263,7 @@ Save a new pipeline template.
 ```json
 {
   "name": "my-template",
-  "yaml": "{\"schema_version\":\"1.1\",\"metadata\":{...},\"nodes\":[...],\"edges\":[...],\"parameters\":{}}",
+  "yaml": "{\"schema_version\":\"1.2\",\"metadata\":{...},\"nodes\":[...],\"edges\":[...],\"parameters\":{}}",
   "version": "v1",
   "description": "Initial baseline"
 }
@@ -954,6 +954,45 @@ One experiment block (`404` if no runs under that name).
 **Query:** `run_ids` — comma-separated run ids.
 
 **Response:** `run_ids`, `missing_run_ids`, `param_keys`, `metric_keys` (preferred metrics first), `runs` (aligned rows for a comparison table).
+
+
+## Distributed Workers — `/api/v1/workers`, `/api/v1/jobs`, `/api/v1/artifacts/blob`
+
+Control-plane surfaces for `GRAPHYN_BACKEND=distributed`. See [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md).
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/v1/workers/register` | Register / refresh a worker |
+| POST | `/api/v1/workers/{id}/heartbeat` | Heartbeat + resource snapshot |
+| GET | `/api/v1/workers` | List workers |
+| DELETE | `/api/v1/workers/{id}` | Deregister |
+| POST | `/api/v1/jobs/claim` | Claim next eligible job |
+| POST | `/api/v1/jobs/{id}/complete` | Report job result (lease-fenced) |
+| POST | `/api/v1/jobs/{id}/events` | Append job log events |
+| POST | `/api/v1/jobs/{id}/cancel` | Cancel a job |
+| GET | `/api/v1/jobs/{id}` | Get job status |
+| POST | `/api/v1/artifacts/blob` | Upload artifact blob |
+| GET | `/api/v1/artifacts/blob/{key}` | Download artifact blob |
+
+Durable registry/queue: `workspace/distributed/*.json` (or Redis when `GRAPHYN_REDIS_URL` is set). Orthogonal to `run_control` active-run registry.
+
+---
+
+## Proposals — `/api/v1/proposals`
+
+Agentic Builder proposals (Pillar C). Store under `{project}/proposals/`.
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/api/v1/proposals` | Create proposal (`summary`, `graph`, optional `actor` / `base_graph`) |
+| GET | `/api/v1/proposals` | List proposals (`?status=pending\|accepted\|rejected`) |
+| GET | `/api/v1/proposals/{id}` | Get one proposal |
+| POST | `/api/v1/proposals/{id}/accept` | Accept → audit; UI loads graph into Builder |
+| POST | `/api/v1/proposals/{id}/reject` | Reject (optional reason) |
+
+MCP equivalents: `propose_graph`, `list_proposals`, `get_proposal`.
+
+---
 
 ## Static File Serving
 

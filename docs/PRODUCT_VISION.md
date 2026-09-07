@@ -40,15 +40,14 @@ These are **one product**, not five products glued together. GraphIR is the shar
 ### Thin or missing (must build for the vision)
 | Gap | Why it matters |
 |---|---|
-| **Unified experiment board** | MLflow-class compare runs/metrics/params across projects (UI + API), not only per-run artifacts |
 | **Promotion / environments** | Dev → staging → prod graph+model versions with approval |
-| **Full audit log** | Actor + action + resource for API/MCP/UI (governance) |
-| **RBAC / tenants** | Multi-user accountability |
-| **Edge deploy loop** | Collect ↔ train ↔ optimize ↔ flash/package ↔ device feedback as a first-class product path (packager exists; product loop does not) |
-| **Agentic Builder** | Agent proposes/edits GraphIR with guardrails; human approves; diff + provenance of *who changed the graph* |
-| **Backtrack UX** | One click: artifact → producing node → run → graph version → inputs → worker — end-to-end story |
+| **RBAC / tenants** | Multi-user accountability (Bearer-only today) |
+| **Full Edge device loop** | Wizard + packager exist; flash/device feedback still thin |
+| **Agentic diffs depth** | Proposals MCP/UI shipped; richer diff UX / auto-apply guardrails next |
 | **Triggers at scale** | Schedules/webhooks/events as productized “always-on” workflows (nodes exist; ops surface thin) |
-| **Observability** | OTel traces per node/job across distributed workers |
+| **Observability (OTel)** | Trace UX + audit seeds shipped; OTel spans per node/job across workers are P3 |
+
+**Shipped foundations (see Progress):** experiment board, thin audit log, Trace backtrack UX, Agentic proposals, Edge wizard, Workers UI, console IA.
 
 ---
 

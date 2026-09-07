@@ -49,6 +49,10 @@ General-purpose AI/workflow execution platform. Four interfaces share `app/core/
 | Audio artifact serializer (domain) | `app/models/audio_artifact_serializer.py` |
 | Provenance store | `app/core/provenance.py` |
 | Runtime backend ABC | `app/core/runtime_backend.py` |
+| Distributed workers | `app/core/distributed/` |
+| Trace / audit | `app/core/trace.py`, `app/core/audit.py` |
+| Agentic proposals | `app/core/agentic/` |
+| Experiments API | `app/api/routers/experiments.py` |
 | SDK | `app/core/sdk.py` |
 | Domain services | `app/domain/ingestion.py`, `project_manager.py`, `quality_checker.py` |
 | Data models | `app/models/` |
@@ -76,6 +80,8 @@ General-purpose AI/workflow execution platform. Four interfaces share `app/core/
 | `GRAPHYN_TF_DEVICE` | unset (GPU allowed) | `cpu` hides CUDA from TensorFlow; unset/`gpu`/`auto` may use GPU with memory growth. Keras skips GPUs with compute capability ≥12 unless `GRAPHYN_TF_FORCE_GPU=1` |
 | `GRAPHYN_TF_FORCE_GPU` | unset | Force Keras onto GPU even when TF lacks kernels for that GPU (expect failures on Blackwell) |
 | `GRAPHYN_REDIS_URL` | `""` | Redis connection URL; empty = use in-process store (SCALE-1/SCALE-2) |
+| `GRAPHYN_BACKEND` | unset → `local` | `distributed` selects `DistributedBackend` |
+| `GRAPHYN_DISTRIBUTED_STORE` | `memory` | `disk` / `redis` for multi-process workers |
 
 ## Run Commands
 
@@ -104,3 +110,8 @@ venv/bin/pytest unit_test/                                 # Tests
 | `python-venv.md` | `**/*.py`, `requirements.txt`, `setup.py`, `pyproject.toml` | Always use `venv/bin/python` |
 | `context7.md` | (always) | Fetch library docs before implementing with any dependency |
 | `update-protocol.md` | (always) | Which steering file and docs file to update after each change |
+
+## Console (`graphyn-ui/`)
+
+IR-native React console. Nav IA: **Build** (Builder, Templates, Proposals, Runs) · **Observe** (Trace, Experiments, Artifacts) · **Library** (Plugins, Data) · **Deploy** (Edge, Workers) · **Admin** (Projects, Secrets, System).
+Vision: `docs/PRODUCT_VISION.md`. Distributed: `docs/DISTRIBUTED_EXECUTION.md`.

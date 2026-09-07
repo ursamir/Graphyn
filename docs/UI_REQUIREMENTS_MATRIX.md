@@ -2,7 +2,7 @@
 
 > Source of truth for enterprise console completeness.  
 > Status: `DONE` | `PARTIAL` | `MISSING` | `N/A`  
-> Updated: 2026-07-29 (hardening pass complete for P0/P1)
+> Updated: 2026-09-07 (vision console IA + pillars A–E surfaces)
 
 ## Legend
 
@@ -20,7 +20,7 @@
 | Req | Requirement | FE | BE | Notes |
 |---|---|---|---|---|
 | A1 | Graphyn brand / domain-agnostic product shell | DONE | N/A | |
-| A2 | Navigation: Builder, Runs, Artifacts, Plugins, Templates, Data, Projects, System | DONE | N/A | |
+| A2 | Navigation: Build / Observe / Library / Deploy / Admin groups (Builder, Templates, Proposals, Runs, Trace, Experiments, Artifacts, Plugins, Data, Edge, Workers, Projects, Secrets, System) | DONE | N/A | Vision IA commit ab14dc7 |
 | A3 | API base URL configurable (`VITE_API_BASE_URL`) | DONE | N/A | |
 | A4 | Bearer token auth on all API calls | DONE | DONE | Client injection |
 | A5 | Token settings UI (persist locally) | DONE | N/A | Settings modal |
@@ -166,3 +166,16 @@
 - Curation queue UX  
 
 These remain optional domain modules; APIs already exist under `/projects/*`.
+
+---
+
+## J. Trace / Experiments / Proposals / Edge / Workers (2026-09)
+
+| Req | Requirement | FE | BE | Notes |
+|---|---|---|---|---|
+| J1 | Observe → Trace backtrack UI | DONE | DONE | `GET /trace`, `#/trace` |
+| J2 | Admin → System audit panel | DONE | DONE | `GET /audit` |
+| J3 | Observe → Experiments compare | DONE | DONE | `GET /experiments`, `/compare` |
+| J4 | Build → Proposals accept/reject | DONE | DONE | `/proposals` + MCP tools |
+| J5 | Deploy → Edge wizard | DONE | DONE | template + run-async |
+| J6 | Deploy → Workers list / stale | DONE | DONE | `GET /workers`; needs `GRAPHYN_BACKEND=distributed` |

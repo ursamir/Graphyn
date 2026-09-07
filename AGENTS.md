@@ -38,16 +38,17 @@ Build, run, and manage typed DAG pipelines — domain-agnostic via plugins (audi
 ```
 app/api/          FastAPI routers
 app/cli/          argparse CLI
-app/mcp/          MCP stdio server (15 tools)
-app/core/         IR, nodes framework, orchestrator, plugins, artifacts
+app/mcp/          MCP stdio server (23 tools)
+app/core/         IR, nodes framework, orchestrator, plugins, artifacts,
+                  distributed/, agentic/, trace, audit, experiments
 app/domain/       Ingestion, ProjectManager, QualityChecker
 app/models/       PortDataType implementations
 PluginPackage/    Source plugins (Audio + Common; WakeWord/Video are experimental/non-manifest)
 plugins/          Optional local override via GRAPHYN_PLUGINS_DIR (default install: ~/.graphyn/plugins/installed/)
-graphyn-ui/       React + Vite platform console (IR-native Builder + Runs/Artifacts/Plugins/…)
+graphyn-ui/       React + Vite console — Build/Observe/Library/Deploy/Admin IA
 unit_test/        Pytest suite
 examples/         End-to-end demos
-docs/             Human docs (source of truth alongside code)
+docs/             Human docs (source of truth alongside code); PRODUCT_VISION.md
 .kiro/steering/   Detailed agent steering by area
 ```
 

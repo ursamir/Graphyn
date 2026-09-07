@@ -36,7 +36,21 @@ docker compose up --build
 # UI http://localhost:5173  API http://localhost:8001/api/v1/
 ```
 
-No Helm chart is provided. MCP exposes 20 tools (`secrets_list`, `secrets_set` included). Never put API keys in Graph IR.
+No Helm chart is provided. MCP exposes 23 tools (`secrets_list`, `secrets_set` included). Never put API keys in Graph IR.
+
+## Progress vs this roadmap (2026-09)
+
+| Area | Status |
+|---|---|
+| Docker Compose deploy + fail-closed auth | Done (no Helm) |
+| IR-native console + vision-aligned nav | Done |
+| Distributed workers P0–P2 + harden | Done (OTel / K8s still open) |
+| Trace + thin audit + Experiments + Proposals + Edge wizard | Done (pillars A–D) |
+| RBAC / OIDC / multi-tenant | **Not done** |
+| Full OTel per node/job | **Not done** |
+| Full Edge device feedback loop | **Partial** (wizard + packager) |
+
+Do not mark RBAC or OTel complete in customer materials until code lands. See `docs/KNOWN_ISSUES.md`, `docs/PRODUCT_VISION.md`.
 
 ## Who Uses It
 
@@ -61,7 +75,7 @@ Acceptance:
 
 ## 2) Product UX
 
-- IR-native Graphyn console (`graphyn-ui/`) — Builder + Runs + Artifacts + Plugins + Templates + Data + Projects + System.
+- IR-native Graphyn console (`graphyn-ui/`) — **Build** (Builder, Templates, Proposals, Runs) · **Observe** (Trace, Experiments, Artifacts) · **Library** (Plugins, Data) · **Deploy** (Edge, Workers) · **Admin** (Projects, Secrets, System).
 - Template version lifecycle (create/promote/rollback).
 - Unified run-debug UX (status + debug-report + lineage/replay).
 

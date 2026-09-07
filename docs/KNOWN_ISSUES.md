@@ -5,29 +5,7 @@
 
 ---
 
-## Open — Fix Immediately (before next deployment)
-
-### (resolved 2026-07-29) EDGE-DROP-1 / EDGE-DROP-2 / AUTH-MOUNT-1
-
-Fixed in code:
-- `app/api/routers/pipelines.py` now executes GraphIR directly through `get_backend().execute(graph)`.
-- `app/api/routers/artifacts.py` replay now executes loaded GraphIR directly through `get_backend().execute(graph)`.
-- `app/api/main.py` now enforces bearer auth on `/files`, `/input-files`, and `/run-files` via middleware when token auth is enabled.
-
----
-
 ## Open — Fix This Sprint
-
-### (resolved 2026-07-29) FE-YAML-1 — audiobuilder was YAML-primary
-
-**Was:** `audiobuilder/` canvas run/save emitted YAML and rejected non-linear graphs.  
-**Status:** `audiobuilder/` removed. Replaced by `graphyn-ui/` — IR-native Builder with platform surfaces (Runs, Artifacts, Plugins, Templates, Data, Projects, System).
-
-### (resolved 2026-07-29) BACKEND-PATH-1 — CLI/API paths bypass `get_backend()`
-
-**Files:** `app/cli/main.py` (`cmd_artifacts_replay`), parts of `artifacts.py`  
-**Detail:** Docs claim all interfaces use `get_backend().execute()`; CLI replay calls `orchestrator.run_pipeline_ir` directly.  
-**Status:** Fixed for CLI artifact replay (`app/cli/main.py`) and artifact replay API path.
 
 ### DEPS-1 — Dependency manifest skew
 
@@ -54,6 +32,27 @@ Fixed in code:
 
 ---
 
+## Open — Distributed / cancel limits
+
+### DIST-CANCEL-1 — In-process `node.process()` cannot be forcibly interrupted mid-call
+
+**Files:** `app/core/node_executor.py`, `app/core/distributed/backend.py`, worker CLI  
+**Detail:** Isolated plugin subprocesses honour cancel via process-group terminate; cooperative cancel runs between retries / before `process`. Non-isolated in-process `process()` is observed only before/after the call, between retries, or when it returns.  
+**Workaround:** Prefer `runtime=isolated` for long GPU/training nodes; use job cancel + worker cancel-watch for remote jobs.
+
+### DIST-CANCEL-2 — Streaming `execute_stream` does not honour `request_cancel`
+
+**Files:** `app/core/node_executor.py`  
+**Detail:** Streaming path does not yet thread cancel checks through `execute_stream`.  
+**Status:** Deferred with DIST-CANCEL-1; tracked in `docs/DISTRIBUTED_EXECUTION.md` §15.
+
+### DIST-RECLAIM-1 — Preferred-worker pin after lease reclaim (mitigated)
+
+**Was:** Reclaimed jobs could stay pinned to a dead preferred worker.  
+**Now:** `reclaim_expired_leases` calls `widen_placement_after_reclaim` (`mode=worker` → `mode=auto`, clears pin; keeps tags/GPU/VRAM/pool). Remaining edge cases: very short lease windows under network partition — widen further if reclaim storms appear in ops.
+
+---
+
 ## Open — Deferred (Architectural Work Required)
 
 ### SCALE-3 — `run-async` status tracking uses `meta.json` polling
@@ -63,10 +62,34 @@ Fixed in code:
 **Detail:** Correct for single-worker; under high concurrency prefer an in-memory status cache coordinated with `run_control.py`.  
 **Workaround:** Poll status at ≥500ms.
 
-### (resolved) AUTH-DEFAULT-1 — Auth off when token unset
+### RBAC-1 — Role-based access control not shipped
 
-**Was:** Empty `GRAPHYN_API_TOKEN` meant allow-all even in deploy.  
-**Now:** `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production|staging` rejects empty tokens on API and MCP. Compose sets both. Local `GRAPHYN_ENV=development` stays optional-auth.
+**Detail:** Auth is shared Bearer / optional local unlock. No per-user roles, tenants, or OIDC.  
+**Do not claim done** in market/vision docs until implemented.
+
+### OTEL-1 — OpenTelemetry traces not shipped
+
+**Detail:** Structured logs + NDJSON + Trace UX (artifact→run→worker) exist. Per-node/job OTel spans across distributed workers are P3 (`docs/DISTRIBUTED_EXECUTION.md`).
+
+### EDGE-LOOP-1 — Full Edge Impulse-style device feedback loop not shipped
+
+**Detail:** Edge deploy wizard + `deployment_packager` / `edge_optimizer` exist. Device flash/feedback loop remains product gap (`docs/PRODUCT_VISION.md`).
+
+---
+
+## Resolved (kept for history)
+
+### (resolved 2026-07-29) EDGE-DROP-1 / EDGE-DROP-2 / AUTH-MOUNT-1 / FE-YAML-1 / BACKEND-PATH-1 / AUTH-DEFAULT-1
+
+- Pipelines/artifacts replay execute GraphIR via `get_backend().execute(graph)`.
+- Bearer auth on `/files`, `/input-files`, `/run-files` when token auth enabled.
+- `audiobuilder/` removed; `graphyn-ui/` is IR-native.
+- CLI/API replay paths use `get_backend()`.
+- `GRAPHYN_AUTH_REQUIRED=1` / `GRAPHYN_ENV=production|staging` fail-closed on empty tokens.
+
+### (resolved 2026-09) Distributed P0–P2 + harden; pillars A–E console IA
+
+See `docs/DISTRIBUTED_EXECUTION.md`, `docs/PRODUCT_VISION.md`. Mid-flight in-process cancel + stream cancel remain open above.
 
 ---
 

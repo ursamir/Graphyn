@@ -136,6 +136,16 @@ In single-worker mode (default), the in-process dict is used — identical behav
 
 ---
 
+
+### Distinction: run_control vs distributed store
+
+| Concern | Module | Persistence |
+|---|---|---|
+| Active run pause / resume / cancel | `run_control.py` | In-process dict, or Redis when `GRAPHYN_REDIS_URL` set |
+| Worker registry + job queue | `app/core/distributed/` | `workspace/distributed/*.json` (disk default), Redis, or memory |
+
+These are **orthogonal**. Distributed cancel marks jobs cancelled in the job store; workers poll and stop. API `POST /runs/{id}/cancel` still uses `run_control` for in-process orchestrator runs. See [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md).
+
 ## 3. PipelineLogger
 
 **File:** `app/core/logger.py`

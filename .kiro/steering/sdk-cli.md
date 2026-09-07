@@ -149,3 +149,8 @@ GRAPHYN_API_TOKEN=secret graphyn mcp
 | `--event-driven` | False | Event-driven mode (runs until cancelled) |
 
 `pause`, `resume`, `cancel` via `graphyn runs` only work on in-process runs (same process). Exit codes: `0` = success, `1` = failure.
+
+## Distributed worker CLI
+
+`graphyn worker start --api-url … --labels …` registers with the control plane and polls jobs.
+Requires `GRAPHYN_BACKEND=distributed` on the API host. Details: `docs/DISTRIBUTED_EXECUTION.md`, `docs/SDK_AND_CLI.md`.

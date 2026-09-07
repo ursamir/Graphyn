@@ -19,19 +19,20 @@ fileMatchPattern: "app/core/orchestrator.py,app/core/planner.py,app/core/node_ex
 ```python
 from app.core.ir import GraphIR, IRNode, IREdge, IRMetadata, IRCapabilityMetadata
 from app.core.ir import load_ir, dump_ir, load_ir_from_file, dump_ir_to_file
-from app.core.ir import CURRENT_IR_VERSION  # "1.1"
+from app.core.ir import CURRENT_IR_VERSION  # "1.2"
 ```
 
-**Schema versions:** `"1.0"` and `"1.1"` both accepted. `"1.0"` docs load as `"1.1"` with Phase 3 fields defaulting to `None`.
+**Schema versions:** `"1.0"`, `"1.1"`, and `"1.2"` accepted. Older docs migrate forward; `CURRENT_IR_VERSION` is `"1.2"`.
 
 | Version | Changes |
 |---|---|
 | `"1.0"` | Initial schema (Phase 1/2) |
 | `"1.1"` | `IREdge.condition` (optional str), `IRNode.event_trigger` (optional dict) |
+| `"1.2"` | Optional `IRNode.placement` (`IRPlacement`) for distributed workers |
 
 **Key models:**
 ```python
-IRNode(id, node_type, config={}, label=None, capability_metadata=None, event_trigger=None)
+IRNode(id, node_type, config={}, label=None, capability_metadata=None, event_trigger=None, placement=None)
 IREdge(src_id, src_port, dst_id, dst_port, condition=None)
 IRCapabilityMetadata(requires_gpu=False, supports_cpu=True, supports_edge=False,
     deterministic=True, cacheable=True, streaming_support=False, realtime_support=False,
@@ -59,7 +60,7 @@ result = run_pipeline_ir(graph, ...)
 result = await run_pipeline_ir_async(graph, ...)
 ```
 
-**`RuntimeBackend` is the canonical execution entry point.** Interfaces (SDK, API, MCP, CLI) should call `get_backend().execute()`. Known bypasses (e.g. CLI artifact replay) are tracked in `docs/KNOWN_ISSUES.md`. `run_pipeline_ir` is an implementation detail of `LocalPythonBackend` — new code must not import it directly. Custom backends can be registered via `register_backend(id, BackendClass)`.
+**`RuntimeBackend` is the canonical execution entry point.** Interfaces (SDK, API, MCP, CLI) should call `get_backend().execute()`. Default is `LocalPythonBackend`. Set `GRAPHYN_BACKEND=distributed` for wave scheduling + remote workers (`DistributedBackend`; see `docs/DISTRIBUTED_EXECUTION.md`). Known bypasses (e.g. CLI artifact replay) are tracked in `docs/KNOWN_ISSUES.md`. `run_pipeline_ir` is an implementation detail of `LocalPythonBackend` — new code must not import it directly. Custom backends can be registered via `register_backend(id, BackendClass)`.
 
 All new parameters default to `False`/`None` — existing call sites unchanged.
 

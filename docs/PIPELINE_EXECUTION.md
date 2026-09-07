@@ -13,14 +13,14 @@ IR JSON file  (or YAML — deprecated)
 load_ir() / yaml_shim          → GraphIR object
     │
     ▼
-get_backend().execute(graph)   → canonical entry point (intended for all interfaces)
-                                 execution path used by SDK/API/CLI/MCP
+get_backend().execute(graph)   → canonical entry point (SDK/API/CLI/MCP)
     │
-    ▼
-LocalPythonBackend.execute()
-    └── orchestrator.run_pipeline_ir_async(graph, ...)
+    ├── LocalPythonBackend (default)
+    │     └── orchestrator.run_pipeline_ir_async(graph, ...)
+    └── DistributedBackend (GRAPHYN_BACKEND=distributed)
+          └── wave scheduler + workers (see DISTRIBUTED_EXECUTION.md)
               │
-              ▼
+              ▼  (local path)
     _ir_to_pipeline_config()   → PipelineConfig (nodes + edges)
               │
               ▼
@@ -44,7 +44,7 @@ The canonical pipeline representation. All interfaces produce and consume `Graph
 ```python
 from app.core.ir import GraphIR, IRNode, IREdge, IRMetadata, IRCapabilityMetadata
 from app.core.ir import load_ir, dump_ir, load_ir_from_file, dump_ir_to_file
-from app.core.ir import CURRENT_IR_VERSION  # "1.1"
+from app.core.ir import CURRENT_IR_VERSION  # "1.2"
 
 # Load from dict (e.g. from API request body)
 graph = load_ir(graph_dict)
@@ -76,11 +76,31 @@ class IRCapabilityMetadata(BaseModel):  # frozen=True
 1. If `IRNode.capability_metadata` is non-null → use those values
 2. Otherwise → use the corresponding fields from `NodeMetadata` in the registry
 
+### `IRPlacement` (IR 1.2)
+
+Optional per-node placement on `IRNode.placement` for distributed execution:
+
+```python
+class IRPlacement(BaseModel):  # frozen=True
+    mode: str = "auto"          # auto | local | worker
+    worker: str | None = None   # pin to worker id when mode=worker
+    tags: list[str] = []        # e.g. ["gpu"]
+    require_gpu: bool = False
+    min_vram_mib: int | None = None
+    pool: str | None = None
+```
+
+Omitted / `None` → auto from capability. Loader accepts `1.0`/`1.1` graphs (`placement=None`). See [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md).
+
+### Artifact refs (distributed)
+
+Remote nodes exchange ports as `artifact://` URIs / `input_refs` / `output_refs` rather than rematerializing the full graph locally. Blob bytes live under `workspace/artifacts/distributed_blobs/` (HTTP put/get via control API).
+
 ### IR JSON format
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "metadata": {"name": "my-pipeline", "seed": 42, "description": ""},
   "nodes": [
     {"id": "cond_0",    "node_type": "audio_conditioner", "config": {"sample_rate": 16000}},
@@ -140,7 +160,7 @@ from app.core.orchestrator import run_pipeline_ir
 result = run_pipeline_ir(graph, ...)
 ```
 
-`RuntimeBackend` is the canonical execution entry point. `LocalPythonBackend` (the default) delegates to `orchestrator.run_pipeline_ir_async`. Custom backends can be registered via `register_backend(id, BackendClass)`.
+`RuntimeBackend` is the canonical execution entry point. `LocalPythonBackend` (the default) delegates to `orchestrator.run_pipeline_ir_async`. `DistributedBackend` (`GRAPHYN_BACKEND=distributed`) runs a wave scheduler with local `NodeExecutor` and remote jobs. Custom backends can be registered via `register_backend(id, BackendClass)`.
 
 `run_pipeline()` is a **deprecated shim** — it reads raw YAML, emits `DeprecationWarning`, then calls `run_pipeline_ir`. Use `get_backend().execute()` for all new code.
 

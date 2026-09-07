@@ -1,3 +1,5 @@
+> **HISTORICAL (2026-07-29).** Findings below reflect that review date. Many items (audiobuilder YAML-primary, backend path bypasses, missing Docker) are **fixed**. Current open issues: `docs/KNOWN_ISSUES.md`. Current architecture: `docs/ARCHITECTURE.md` / `docs/PRODUCT_VISION.md`.
+
 # Source-Truth Code Review (2026-07-29)
 
 This report documents the project-wide code review performed with source code as the authority (not docs). It aggregates direct inspection across backend, plugins, frontend, and tests.

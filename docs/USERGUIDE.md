@@ -1,6 +1,6 @@
 # User Guide — Pipeline Engine
 
-A general-purpose AI/workflow execution platform. Build, run, and manage processing pipelines through the Python SDK, CLI, REST API, or MCP (for AI agents). No frontend required.
+A general-purpose AI/workflow execution platform. Build, run, and manage processing pipelines through the Python SDK, CLI, REST API, or MCP (for AI agents). Frontend optional — IR-native console in `graphyn-ui/`.
 
 ---
 
@@ -8,6 +8,7 @@ A general-purpose AI/workflow execution platform. Build, run, and manage process
 
 1. [Quick Start](#1-quick-start)
 2. [Core Concepts](#2-core-concepts)
+2a. [Console map (UI)](#2a-console-map-ui)
 3. [Python SDK](#3-python-sdk)
 4. [CLI Reference](#4-cli-reference)
 5. [REST API](#5-rest-api)
@@ -91,15 +92,38 @@ A directed acyclic graph (DAG) of nodes. Defined via:
 
 ### Graph IR
 
-The canonical pipeline representation. Versioned, validated, runtime-agnostic JSON. All interfaces produce and consume `GraphIR` objects. Current version: `"1.1"`.
+The canonical pipeline representation. Versioned, validated, runtime-agnostic JSON. All interfaces produce and consume `GraphIR` objects. Current version: `"1.2"` (adds optional `IRNode.placement` for distributed workers; `1.0`/`1.1` still load).
 
 ### Registry
 
-A singleton `NodeRegistry` populated at startup by `AutoDiscovery`. Scans `app/models/` and `plugins/` (or `GRAPHYN_PLUGINS_DIR`) automatically. All 29 production nodes are loaded from `PluginPackage/` via the plugin system.
+A singleton `NodeRegistry` populated at startup by `AutoDiscovery`. Scans `app/models/` and `plugins/` (or `GRAPHYN_PLUGINS_DIR`) automatically. All 30 production nodes are loaded from `PluginPackage/` via the plugin system.
 
 ### Workspace
 
 Runtime data root at `workspace/` (configurable via `GRAPHYN_PROJECT_DIR`). Contains datasets, run artifacts, cache, and project data.
+
+---
+
+## 2a. Console map (UI)
+
+The React console (`graphyn-ui/`, typically `http://localhost:5173`) is IR-native. Sidebar groups:
+
+| Group | Views | Routes |
+|---|---|---|
+| **Build** | Builder, Templates, Proposals, Runs | `#/`, `#/templates`, `#/proposals`, `#/runs` |
+| **Observe** | Trace, Experiments, Artifacts | `#/trace`, `#/experiments`, `#/artifacts` |
+| **Library** | Plugins, Data | `#/plugins`, `#/data` |
+| **Deploy** | Edge, Workers | `#/edge`, `#/workers` |
+| **Admin** | Projects, Secrets, System | `#/projects`, `#/secrets`, `#/system` |
+
+Useful flows:
+- **Trace** — open an artifact or run and jump to Observe → Trace for artifact → node → run → graph → worker backtrack (`GET /api/v1/trace`).
+- **Experiments** — compare params/metrics across runs (`GET /api/v1/experiments/compare`).
+- **Proposals** — review agent GraphIR proposals (MCP `propose_graph`); Accept loads into Builder.
+- **Edge** — train → optimize → package wizard (`examples/templates/edge-deploy.graph.json`).
+- **Workers** — distributed placement when `GRAPHYN_BACKEND=distributed` (see `docs/DISTRIBUTED_EXECUTION.md`).
+
+Full product map: [PRODUCT_VISION.md](./PRODUCT_VISION.md).
 
 ---
 
@@ -321,7 +345,7 @@ POST /api/v1/pipelines/run-async  Execute async → {"run_id": "..."}
 
 **Request body (IR JSON):**
 ```json
-{"schema_version": "1.1", "metadata": {"name": "...", "seed": 42},
+{"schema_version": "1.2", "metadata": {"name": "...", "seed": 42},
  "nodes": [...], "edges": [...]}
 ```
 
@@ -368,7 +392,7 @@ POST /api/v1/system/cleanup                 Delete all runs + cache ⚠️
 
 ## 6. MCP — AI Agent Interface
 
-The MCP server exposes 11 tools via the Model Context Protocol (stdio transport). AI agents can discover nodes, generate graphs, validate, execute pipelines, and inspect artifacts without any frontend.
+The MCP server exposes 23 tools via the Model Context Protocol (stdio transport). AI agents can discover nodes, generate/propose graphs, validate, execute pipelines, manage plugins/secrets, and inspect artifacts (23 tools including propose_graph / list_proposals / get_proposal).
 
 ### Start
 

@@ -11,10 +11,10 @@ User (CLI / SDK / API / MCP)
     ▼
 get_backend().execute(graph, ...)   ← canonical entry point
     │
-    ▼
-LocalPythonBackend → orchestrator.run_pipeline_ir_async(graph, ...)
+    ├── LocalPythonBackend → orchestrator.run_pipeline_ir_async(graph, ...)
+    └── DistributedBackend → waves + job queue + artifact:// refs
     │
-    ├─ load_ir(data) → GraphIR
+    ├─ load_ir(data) → GraphIR (CURRENT_IR_VERSION 1.2; placement optional)
     │
     ├─ _ir_to_pipeline_config() → PipelineConfig
     │
@@ -136,11 +136,12 @@ workspace/
 │               │   └── manifest.json
 │               └── manifest.json
 ├── artifacts/
-│   └── {artifact_id}/
-│       ├── record.json
-│       └── data/
-│           ├── manifest.json
-│           └── *.wav
+│   ├── {artifact_id}/
+│   │   ├── record.json
+│   │   └── data/
+│   │       ├── manifest.json
+│   │       └── *.wav
+│   └── distributed_blobs/     # cross-host transfer (artifact:// URIs)
 ├── provenance/
 │   ├── {artifact_id}.json
 │   └── by_run/{run_id}.json
@@ -153,8 +154,15 @@ workspace/
 ├── configs/
 │   └── templates/             # local runtime copies (gitignored with workspace/)
 │       └── *.graph.json       # canonical tracked copies: examples/templates/
+├── distributed/               # durable worker registry + job queue (disk store)
+│   └── *.json
+├── proposals/                 # agentic GraphIR proposals ({id}.json)
+├── audit/
+│   └── events.jsonl           # append-only accountability events
 └── webhooks.json              # {url, events}
 ```
+
+> Note: `run_control` (active pause/resume/cancel registry) is **orthogonal** to `workspace/distributed/` (worker/job durability). Redis may back either when `GRAPHYN_REDIS_URL` is set.
 
 ---
 
@@ -187,7 +195,7 @@ The canonical format is IR JSON (`.graph.json`). YAML is deprecated — use `gra
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "metadata": {"name": "my-pipeline", "seed": 42},
   "nodes": [
     {"id": "ingest_0", "node_type": "dataset_ingest",    "config": {"path": "workspace/datasets/input/speech"}},

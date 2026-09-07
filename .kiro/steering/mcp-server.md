@@ -18,7 +18,7 @@ Thin delegation shell — all business logic stays in SDK/core. No handler shoul
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — 18 tools
+├── tool_registry.py   # register_all_tools() — 23 tools
 └── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
@@ -28,7 +28,9 @@ app/mcp/
     ├── run_control.py # pause_run, resume_run, cancel_run
     ├── provenance.py  # list_artifacts, get_artifact_lineage, replay_run
     ├── optimization.py # optimize_execution
-    └── plugins.py      # install_plugin, list_plugins, manage_plugin
+    ├── plugins.py      # install_plugin, list_plugins, manage_plugin
+    ├── secrets.py      # secrets_list, secrets_set
+    └── proposals.py    # propose_graph, list_proposals, get_proposal
 ```
 
 ## Start
@@ -45,7 +47,7 @@ Transport: **stdio** — JSON-RPC on stdin/stdout. Logs to stderr only.
 
 Token from `GRAPHYN_API_TOKEN` env var. Expected at `arguments._meta.auth_token`. Empty token = no auth. Wrong/absent = `{"error_type": "unauthorized"}`.
 
-## All 18 Tools
+## All 23 Tools
 
 | Tool | Handler | Delegates to |
 |---|---|---|

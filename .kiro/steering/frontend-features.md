@@ -16,11 +16,18 @@ fileMatchPattern: "graphyn-ui/src/features/**"
 | Templates | `features/templates/` | `/pipelines/templates` (+ versions); **Import all examples** → `POST .../sync-examples`. Verify with `scripts/verify_templates.py`. |
 | Data | `features/data/` | inputs/outputs/stats, upload, merge, `/ingest/*` SSE (auth-aware) |
 | Projects | `features/projects/` | CRUD lifecycle, taxonomy/contract/spec, versions/stats/samples/restore, snapshots, diff/lineage |
-| System | `features/system/` | health/readiness/metrics/webhooks/cleanup toggles/projects-registry |
+| System | `features/system/` | health/readiness/metrics/webhooks/cleanup toggles/projects-registry; audit panel |
+| Trace | `features/trace/` | `/trace`, `/audit` |
+| Experiments | `features/experiments/` | `/experiments`, `/compare` |
+| Proposals | `features/proposals/` | `/proposals` (+ accept/reject) |
+| Edge | `features/edge/` | edge-deploy wizard → run-async |
+| Workers | `features/workers/` | `/workers` list + stale badge |
+| Secrets | `features/secrets/` | secrets CRUD |
 
 ## Shell (`App.tsx`)
 
-- Hash routes: `#/builder`, `#/runs/:id`, …
+- Nav IA: **Build** (Builder, Templates, Proposals, Runs) · **Observe** (Trace, Experiments, Artifacts) · **Library** (Plugins, Data) · **Deploy** (Edge, Workers) · **Admin** (Projects, Secrets, System)
+- Hash routes: `#/`, `#/templates`, `#/proposals`, `#/runs/:id`, `#/trace`, `#/experiments`, `#/edge`, `#/workers`, …
 - Settings: Bearer token → `localStorage` `graphyn_api_token` (auto-opens on catalog 401)
 - Global `ToastHost` + `ErrorBoundary`; catalog refresh after plugin mutations and after saving the token
 

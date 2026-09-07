@@ -631,7 +631,35 @@ GRAPHYN_API_TOKEN=secret graphyn mcp   # with auth
 python -m app.mcp.server               # equivalent direct invocation
 ```
 
-The server starts in-process, sharing the already-populated `NodeRegistry` singleton. All 8 MCP tools are registered at startup. See [MCP_SERVER.md](./MCP_SERVER.md) for the full tool reference.
+The server starts in-process, sharing the already-populated `NodeRegistry` singleton. All 23 MCP tools are registered at startup. See [MCP_SERVER.md](./MCP_SERVER.md) for the full tool reference.
+
+---
+
+
+### `graphyn worker start`
+
+Register as a distributed execution worker against a control plane (see [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md)).
+
+```
+usage: graphyn worker start [--control-url URL] [--worker-id ID]
+                            [--labels LIST] [--pool NAME] [--heartbeat SEC]
+                            [--once] [--in-process] [--plugins LIST]
+```
+
+**Example:**
+
+```bash
+export GRAPHYN_BACKEND=distributed   # on the control / API host
+venv/bin/uvicorn app.api.main:app --host 0.0.0.0 --port 8001
+
+# on the GPU box (or same host loopback)
+GRAPHYN_CONTROL_URL=http://127.0.0.1:8001/api/v1 \
+  venv/bin/python -m app.cli.main worker start \
+  --control-url http://127.0.0.1:8001/api/v1 \
+  --worker-id local-gpu --labels gpu --pool gpu-lab
+```
+
+Without `--control-url` / `GRAPHYN_CONTROL_URL`, use `--in-process` for the in-memory registry (tests/dev).
 
 ---
 
