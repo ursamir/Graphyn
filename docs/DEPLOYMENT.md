@@ -34,6 +34,15 @@ Stop:
 docker compose down
 ```
 
+## Python dependency install (image)
+
+The API image installs via **one path** (see `Dockerfile`):
+
+1. `pip install -r requirements.txt` — deploy pins for the default runtime set
+2. `pip install -e . --no-deps` — package metadata; deps already satisfied by step 1
+
+**Source of truth for package *names*:** `setup.py` `install_requires`. Optional Redis / MCP / TF / HF / webrtcvad are extras (`pip install -e ".[redis,mcp,...]"`) and are **not** baked into the default image. Validate sync with `python scripts/check_deps.py`.
+
 ## Secrets for live providers
 
 Do **not** put API keys in Graph IR. Store names only in graphs (`auth_env`, provider defaults).
@@ -71,7 +80,7 @@ Trainer/evaluator still retry on GPU OOM by rebuilding on CPU. Do not run `nvidi
 
 ## Runtime extras (speech_enhancer)
 
-The default **spectral** backend for podcast-leveling uses `scipy` and `noisereduce` (3.x). Those packages are in `requirements.txt` / `setup.py` `install_requires`, so the Compose image already installs them via `pip install -r requirements.txt`. **Do not** add `torch` or `deepfilternet` to the base image; they remain optional for the DeepFilterNet backend.
+The default **spectral** backend for podcast-leveling uses `scipy` and `noisereduce` (3.x). Those packages are in `setup.py` `install_requires` and mirrored in `requirements.txt`, so the Compose image installs them via the Dockerfile install path above. **Do not** add `torch` or `deepfilternet` to the base image; they remain optional for the DeepFilterNet backend.
 
 ## Isolated plugin venvs (trainer / edge-optimizer)
 

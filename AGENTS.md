@@ -76,6 +76,17 @@ docs/             Public docs (GETTING_STARTED, PRODUCT_VISION, architecture, re
 | BC5 | Execution Runtime | `orchestrator`, `node_executor`, `executor`, `conditions`, `events` |
 | BC6 | Observability & Storage | `checkpoint`, `artifact_*`, `run_*`, `provenance`, `pipeline_cache`, `logger` |
 
+
+## Dependencies (authoritative model)
+
+- **Source of truth:** `setup.py` (`install_requires` + `extras_require`).
+- **Deploy pins:** `requirements.txt` (must cover every `install_requires` name).
+- **Validate:** `venv/bin/python scripts/check_deps.py` (optional `--inventory`).
+- **Clean install:** `venv/bin/pip install -e ".[dev]"` then import `app` / `pytest`.
+- **Extras:** `mcp`, `redis`, `events` (watchfiles), `vad` (webrtcvad), `hf`, `tf`, `dev`, `all`.
+- **Do not** add a runtime import under `app/` without declaring it in `setup.py`.
+- **CI:** `.github/workflows/ci.yml` → `scripts/ci_smoke.sh` + UI build.
+
 ## Quick Commands
 
 Mode A: start API without GRAPHYN_BACKEND; run UI; run graphs via CLI (see docs/GETTING_STARTED.md).

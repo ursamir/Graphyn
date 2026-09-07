@@ -1,27 +1,36 @@
-# Core
-numpy==1.26.4
-scipy==1.14.1
+# Deployment pins for the default Graphyn runtime.
+#
+# AUTHORITATIVE PACKAGE *SET*: setup.py install_requires (+ extras_require).
+# This file mirrors that default set with pins suitable for Docker /
+# `pip install -r requirements.txt`. Do not add packages here without
+# updating setup.py. Validate with:  python scripts/check_deps.py
+#
+# Clean install (preferred for local/dev):
+#   python3 -m venv venv && venv/bin/pip install -U pip && venv/bin/pip install -e ".[dev]"
+# Docker / locked runtime:
+#   pip install -r requirements.txt && pip install -e . --no-deps
+
+# Core numeric / audio (host plugins + domain)
+numpy>=1.26.4,<3
+scipy>=1.14.1,<2
 librosa==0.10.2.post1
 noisereduce==3.0.3
 pyloudnorm==0.1.1
-webrtcvad==2.0.10
 soundfile==0.12.1
 PyYAML==6.0.2
 
 # API
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
-
-# Upload support
 python-multipart==0.0.20
-
-# Pydantic v2 (explicit pin — FastAPI transitive dep)
 pydantic==2.10.6
 
-# TOML parsing (tomllib is stdlib on 3.11+; tomli is the backport for 3.10)
-tomli==2.2.1
-tomli_w==1.1.0
+# Direct platform imports (were historically missing / drifted)
+httpx>=0.27.0,<1
+packaging>=23.0
 
-# Testing
-hypothesis==6.131.15
-pytest==8.3.5
+# TOML backport for Python 3.10 only (3.11+ uses stdlib tomllib)
+tomli==2.2.1; python_version < "3.11"
+
+# Optional extras are NOT listed here — install via setup.py extras:
+#   pip install -e ".[mcp,redis,events,vad,hf,tf,dev]"

@@ -28,9 +28,15 @@ In mode B you can run a **full-capability** worker (all plugins) or **specialize
 git clone https://github.com/ursamir/Graphyn.git
 cd Graphyn
 python3 -m venv venv
-venv/bin/pip install -e .
+venv/bin/pip install -U pip
+# setup.py is the dependency source of truth; [dev] adds pytest/hypothesis
+venv/bin/pip install -e ".[dev]"
+# Optional extras: mcp | redis | events | vad | hf | tf | all
+# Docker / locked pins: pip install -r requirements.txt && pip install -e . --no-deps
 venv/bin/python -c "from pathlib import Path; from app.core.plugins.manager import PluginManager as M; m=M(); [m.install(str(p), upgrade=True) for d in ('Audio','Common') for p in Path('PluginPackage', d).iterdir() if (p / 'plugin.toml').exists()]"
 ```
+
+Dependency model: see root README / AGENTS.md. Validate sync with `venv/bin/python scripts/check_deps.py`.
 
 ---
 

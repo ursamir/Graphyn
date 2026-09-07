@@ -28,3 +28,6 @@ PluginPackage/*/output/*
 review_agent_work/
 .kiro/specs/
 Requirement/
+.venv-test/
+.graphyn-e2e/
+*.egg-info/

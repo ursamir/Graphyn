@@ -54,6 +54,22 @@ Follow **[Getting Started](docs/GETTING_STARTED.md)** — install once, then Mod
 | [Plugin guide](docs/PLUGIN_GUIDE.md) | Author nodes |
 | [Doc index](docs/README.md) | Full map |
 
+## Dependencies & install model
+
+**Source of truth:** `setup.py` `install_requires` / `extras_require`.
+`requirements.txt` mirrors the default runtime set with deploy pins (Docker).
+
+```bash
+python3 -m venv venv
+venv/bin/pip install -U pip
+venv/bin/pip install -e ".[dev]"          # local / tests
+# optional: .[mcp] .[redis] .[events] .[vad] .[hf] .[tf]
+venv/bin/python scripts/check_deps.py     # sync gate
+bash scripts/ci_smoke.sh                  # empty-venv install + targeted pytest
+```
+
+Docker uses `pip install -r requirements.txt && pip install -e . --no-deps` (see `Dockerfile`).
+
 ## Development
 
 Contributor / agent guide: [AGENTS.md](AGENTS.md). Limitations: [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md). Trust / auth boundaries: [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md).

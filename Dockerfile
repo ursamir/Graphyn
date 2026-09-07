@@ -19,10 +19,14 @@ COPY examples /app/examples
 COPY docs /app/docs
 COPY unit_test /app/unit_test
 COPY pytest.ini /app/pytest.ini
+COPY scripts /app/scripts
 
+# Single install path: pinned runtime from requirements.txt, then editable
+# package metadata with --no-deps so pins win (setup.py is source of truth
+# for *which* packages; requirements.txt for deploy versions).
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt \
-    && pip install -e .
+    && pip install -e . --no-deps
 
 EXPOSE 8001
 

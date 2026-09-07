@@ -6,12 +6,6 @@
 
 ## Open — Fix This Sprint
 
-### DEPS-1 — Dependency manifest skew
-
-**Files:** `requirements.txt`, `setup.py`  
-**Detail:** Runtime uses `httpx`, `packaging`, optional `redis`; pins are incomplete/out of sync between files.  
-**Fix:** Single source of deps; declare optional extras for redis/hf/tf.
-
 ### PLUGIN-LOAD-1 — Plugin startup can fail with stale installed bytecode
 
 **Detail:** After loader module-naming changes, old `__pycache__` entries under `~/.graphyn/plugins/installed/` can cause startup warnings such as: `Plugin 'feature-frontend' declared 1 entry point(s) but no node types were registered`. Runtime install/upgrade still succeeds.  
@@ -78,6 +72,10 @@
 ---
 
 ## Resolved (kept for history)
+
+### (resolved 2026-09-07) DEPS-1 dependency manifest skew
+
+`setup.py` `install_requires` / `extras_require` is authoritative. `requirements.txt` mirrors the default runtime set. Declared direct imports: `httpx`, `packaging`; extras for `mcp`, `redis`, `events` (watchfiles), `vad` (webrtcvad), `hf`, `tf`, `dev`. Gate: `scripts/check_deps.py`. CI smoke: `scripts/ci_smoke.sh` (+ `scripts/ui_build.sh` for the console).
 
 ### (resolved 2026-09-07) PLUGIN-001 plugin installation lock is instance-local
 
