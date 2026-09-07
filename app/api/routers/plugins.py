@@ -46,6 +46,11 @@ router = APIRouter(prefix="/plugins", tags=["plugins"])
 _install_jobs: dict[str, dict[str, Any]] = {}
 _install_jobs_lock = threading.Lock()
 
+# Background dependency installs (pip/torch can take minutes).
+# Maps plugin name → {"status", "error", "include_optional"}
+_dep_install_jobs: dict[str, dict[str, Any]] = {}
+_dep_install_jobs_lock = threading.Lock()
+
 # ── Remote-source detection ───────────────────────────────────────────────────
 
 _REMOTE_PREFIXES = ("git+", "http://", "https://")
@@ -365,14 +370,29 @@ def get_plugin(name: str) -> dict[str, Any]:
 
 @router.get("/{name}/dependencies", summary="Plugin dependency status")
 def get_plugin_dependencies(name: str) -> dict[str, Any]:
-    """Return required/optional dependency satisfaction for an installed plugin."""
+    """Return required/optional dependency satisfaction for an installed plugin.
+
+    When a background dependency install is in flight (or recently finished),
+    also includes ``install_status`` / ``install_error`` / ``include_optional``.
+    """
     from app.core.plugins.manager import PluginManager
 
     manager = PluginManager()
     try:
-        return manager.dependency_status(name)
+        result = manager.dependency_status(name)
     except PluginNotFoundError as exc:
         raise _plugin_http_error(exc) from exc
+
+    with _dep_install_jobs_lock:
+        job = _dep_install_jobs.get(name)
+    if job is not None:
+        result["install_status"] = job.get("status")
+        result["install_error"] = job.get("error")
+        result["include_optional"] = job.get("include_optional")
+    else:
+        result["install_status"] = None
+        result["install_error"] = None
+    return result
 
 
 class InstallDepsBody(BaseModel):
@@ -381,16 +401,68 @@ class InstallDepsBody(BaseModel):
 
 @router.post("/{name}/dependencies/install", summary="Install plugin dependencies")
 def install_plugin_dependencies(
-    name: str, body: InstallDepsBody | None = None
+    name: str,
+    background_tasks: BackgroundTasks,
+    body: InstallDepsBody | None = None,
 ) -> dict[str, Any]:
-    """Install missing required (and optionally optional) deps for *name*."""
+    """Install missing required (and optionally optional) deps for *name*.
+
+    Returns immediately with ``{"status": "installing", "name": ...}`` and runs
+    pip in a background task — heavy extras (torch/pyannote) can take minutes.
+    Poll ``GET /plugins/{name}/dependencies`` for ``install_status``.
+    """
     from app.core.plugins.manager import PluginManager
 
     include_optional = bool(body.include_optional) if body else False
     manager = PluginManager()
     try:
-        return manager.install_dependencies(name, include_optional=include_optional)
+        manager.get(name)
     except PluginNotFoundError as exc:
         raise _plugin_http_error(exc) from exc
-    except Exception as exc:
-        raise _plugin_http_error(exc) from exc
+
+    with _dep_install_jobs_lock:
+        existing = _dep_install_jobs.get(name)
+        if existing is not None and existing.get("status") == "installing":
+            return {
+                "status": "installing",
+                "name": name,
+                "include_optional": existing.get("include_optional", include_optional),
+            }
+        _dep_install_jobs[name] = {
+            "status": "installing",
+            "error": None,
+            "include_optional": include_optional,
+        }
+
+    def _bg_install_deps() -> None:
+        try:
+            mgr = PluginManager()
+            mgr.install_dependencies(name, include_optional=include_optional)
+            log.info(
+                "Background dependency install for '%s' completed (optional=%s).",
+                name,
+                include_optional,
+            )
+            with _dep_install_jobs_lock:
+                _dep_install_jobs[name] = {
+                    "status": "installed",
+                    "error": None,
+                    "include_optional": include_optional,
+                }
+        except Exception as exc:
+            log.exception(
+                "Background dependency install for '%s' failed: %s", name, exc
+            )
+            with _dep_install_jobs_lock:
+                _dep_install_jobs[name] = {
+                    "status": "failed",
+                    "error": str(exc),
+                    "include_optional": include_optional,
+                }
+
+    background_tasks.add_task(_bg_install_deps)
+    return {
+        "status": "installing",
+        "name": name,
+        "include_optional": include_optional,
+    }

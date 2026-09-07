@@ -42,6 +42,18 @@ interface DepStatus {
   dependencies: DepRow[]
   missing_required: string[]
   missing_optional: string[]
+  install_status?: string | null
+  install_error?: string | null
+  include_optional?: boolean | null
+}
+
+const DEPS_INSTALL_TIMEOUT_MS = 900_000
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(totalSec / 60)
+  const s = totalSec % 60
+  return m > 0 ? `${m}m ${s.toString().padStart(2, '0')}s` : `${s}s`
 }
 
 export default function PluginsView() {
@@ -58,8 +70,21 @@ export default function PluginsView() {
   const [expanded, setExpanded] = React.useState<string | null>(null)
   const [menuFor, setMenuFor] = React.useState<string | null>(null)
   const [depStatus, setDepStatus] = React.useState<DepStatus | null>(null)
+  const [installingName, setInstallingName] = React.useState<string | null>(null)
+  const [installingOptional, setInstallingOptional] = React.useState(false)
+  const [installStartedAt, setInstallStartedAt] = React.useState<number | null>(null)
+  const [installError, setInstallError] = React.useState<string | null>(null)
+  const [elapsedTick, setElapsedTick] = React.useState(0)
   const pollRef = React.useRef<number | null>(null)
+  const depPollRef = React.useRef<number | null>(null)
   const sourceRef = React.useRef<HTMLInputElement | null>(null)
+
+  const clearDepPoll = React.useCallback(() => {
+    if (depPollRef.current) {
+      window.clearInterval(depPollRef.current)
+      depPollRef.current = null
+    }
+  }, [])
 
   const load = React.useCallback(async () => {
     setError(null)
@@ -75,8 +100,15 @@ export default function PluginsView() {
     void load()
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current)
+      if (depPollRef.current) window.clearInterval(depPollRef.current)
     }
   }, [load])
+
+  React.useEffect(() => {
+    if (!installingName || !installStartedAt) return
+    const id = window.setInterval(() => setElapsedTick((t) => t + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [installingName, installStartedAt])
 
   const afterMutation = async () => {
     await load()
@@ -102,6 +134,54 @@ export default function PluginsView() {
         .catch(() => undefined)
     }, 1500)
   }
+
+  const finishDepsInstall = React.useCallback(
+    async (name: string, includeOptional: boolean, failed?: string | null) => {
+      clearDepPoll()
+      setInstallingName(null)
+      setInstallStartedAt(null)
+      if (failed) {
+        setInstallError(failed)
+        pushToast(failed, 'error')
+      } else {
+        setInstallError(null)
+        pushToast(
+          includeOptional ? `Installed extras for ${name}` : `Installed required deps for ${name}`,
+          'success',
+        )
+      }
+      await afterMutation()
+      if (expanded === name) {
+        try {
+          setDepStatus(await apiJson<DepStatus>(`/plugins/${encodeURIComponent(name)}/dependencies`))
+        } catch {
+          /* keep prior */
+        }
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [clearDepPoll, expanded, pushToast, refreshCatalog],
+  )
+
+  const pollDepsInstall = React.useCallback(
+    (name: string, includeOptional: boolean) => {
+      clearDepPoll()
+      depPollRef.current = window.setInterval(() => {
+        void apiJson<DepStatus>(`/plugins/${encodeURIComponent(name)}/dependencies`)
+          .then(async (status) => {
+            if (expanded === name) setDepStatus(status)
+            const job = status.install_status
+            if (job === 'installed') {
+              await finishDepsInstall(name, includeOptional)
+            } else if (job === 'failed') {
+              await finishDepsInstall(name, includeOptional, status.install_error || `Dependency install failed for ${name}`)
+            }
+          })
+          .catch(() => undefined)
+      }, 2000)
+    },
+    [clearDepPoll, expanded, finishDepsInstall],
+  )
 
   const install = async () => {
     try {
@@ -157,19 +237,50 @@ export default function PluginsView() {
   }
 
   const installDeps = async (name: string, includeOptional: boolean) => {
+    if (installingName) return
+    setInstallError(null)
+    setInstallingName(name)
+    setInstallingOptional(includeOptional)
+    setInstallStartedAt(Date.now())
     try {
-      const status = await apiJson<DepStatus>(`/plugins/${encodeURIComponent(name)}/dependencies/install`, {
-        method: 'POST',
-        body: JSON.stringify({ include_optional: includeOptional }),
-      })
-      setDepStatus(status)
-      pushToast(
-        includeOptional ? `Installed extras for ${name}` : `Installed required deps for ${name}`,
-        'success',
+      const res = await apiJson<DepStatus & { status?: string }>(
+        `/plugins/${encodeURIComponent(name)}/dependencies/install`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ include_optional: includeOptional }),
+          timeoutMs: DEPS_INSTALL_TIMEOUT_MS,
+        },
       )
-      await afterMutation()
+      if (res.status === 'installing' || res.install_status === 'installing') {
+        pushToast(
+          includeOptional
+            ? `Installing optional extras for ${name}… this can take several minutes`
+            : `Installing required deps for ${name}…`,
+          'info',
+        )
+        if (expanded !== name) {
+          setExpanded(name)
+        }
+        try {
+          setDepStatus(await apiJson<DepStatus>(`/plugins/${encodeURIComponent(name)}/dependencies`))
+        } catch {
+          /* ignore */
+        }
+        pollDepsInstall(name, includeOptional)
+        return
+      }
+      // Sync / already-complete response (has dependency rows)
+      if (Array.isArray(res.dependencies)) {
+        setDepStatus(res)
+      }
+      await finishDepsInstall(name, includeOptional)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      const msg = err instanceof Error ? err.message : String(err)
+      clearDepPoll()
+      setInstallingName(null)
+      setInstallStartedAt(null)
+      setInstallError(msg)
+      pushToast(msg, 'error')
     }
   }
 
@@ -183,6 +294,10 @@ export default function PluginsView() {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
   }
+
+  const liveElapsed =
+    installingName && installStartedAt ? Date.now() - installStartedAt : 0
+  void elapsedTick
 
   return (
     <div className="h-full overflow-y-auto p-8 space-y-6">
@@ -282,12 +397,16 @@ export default function PluginsView() {
                 (p.manifest?.optional_dependencies?.length ?? 0) > 0 || showMissingOptCount > 0
               const runtime = p.runtime ?? p.dependency_summary?.runtime ?? p.manifest?.runtime ?? 'inprocess'
               const isolated = isIsolatedRuntime(runtime, p.name)
+              const isExpanded = expanded === p.name
               const panelMissingOpt = depStatus?.missing_optional?.length ?? showMissingOptCount
+              const panelMissingReq = depStatus?.missing_required?.length ?? missingReq
               const panelHasOptional =
                 (depStatus?.dependencies.some((d) => d.optional) ?? false) ||
                 optionalDeclared ||
                 panelMissingOpt > 0 ||
                 (p.manifest?.optional_dependencies?.length ?? 0) > 0
+              const busy = installingName === p.name
+              const anyBusy = installingName != null
               return (
                 <li key={p.name} className="rounded-2xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -310,38 +429,63 @@ export default function PluginsView() {
                           <span className="text-ink-500">optional extras available</span>
                         ) : null}
                       </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {missingReq > 0 && (
+                      {/* Collapsed: at most one install CTA OR Manage dependencies */}
+                      {!isExpanded && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {missingReq > 0 ? (
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              disabled={anyBusy}
+                              onClick={() => void installDeps(p.name, false)}
+                            >
+                              <PackagePlus className="h-3.5 w-3.5" /> Install required deps
+                            </button>
+                          ) : showMissingOptCount > 0 ? (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              disabled={anyBusy}
+                              onClick={() => void installDeps(p.name, true)}
+                              title={
+                                isolated
+                                  ? 'Install optional extras into this plugin’s isolated venv'
+                                  : 'Install optional extras'
+                              }
+                            >
+                              <PackagePlus className="h-3.5 w-3.5" /> Install optional extras
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn-quiet"
+                              onClick={() => void toggleDeps(p.name)}
+                            >
+                              Manage dependencies
+                            </button>
+                          )}
+                          {(missingReq > 0 || showMissingOptCount > 0) && (
+                            <button
+                              type="button"
+                              className="btn-quiet"
+                              onClick={() => void toggleDeps(p.name)}
+                            >
+                              Manage dependencies
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {isExpanded && (
+                        <div className="mt-2">
                           <button
                             type="button"
-                            className="btn-primary"
-                            onClick={() => void installDeps(p.name, false)}
+                            className="btn-quiet"
+                            onClick={() => void toggleDeps(p.name)}
                           >
-                            <PackagePlus className="h-3.5 w-3.5" /> Install required deps
+                            Hide dependencies
                           </button>
-                        )}
-                        {(showMissingOptCount > 0 || optionalDeclared || isolated) && (
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => void installDeps(p.name, true)}
-                            title={
-                              isolated
-                                ? 'Install optional extras into this plugin’s isolated venv'
-                                : 'Install optional extras'
-                            }
-                          >
-                            <PackagePlus className="h-3.5 w-3.5" /> Install optional extras
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          className="btn-quiet"
-                          onClick={() => void toggleDeps(p.name)}
-                        >
-                          {expanded === p.name ? 'Hide dependencies' : 'Show dependencies'}
-                        </button>
-                      </div>
+                        </div>
+                      )}
                     </div>
                     <div className="relative">
                       <button
@@ -386,17 +530,35 @@ export default function PluginsView() {
                       )}
                     </div>
                   </div>
-                  {isolated && (
+                  {isolated && !isExpanded && (
                     <p className="mt-2 text-type-meta text-ink-500">
                       Optional extras (TensorFlow, …) install into this plugin’s isolated venv — they are not added to
                       the API image.
                     </p>
                   )}
-                  {expanded === p.name && depStatus && (
+                  {busy && (
+                    <div className="mt-3 flex items-start gap-2 rounded-xl border border-accent-200 bg-accent-50/60 px-3 py-2 text-sm text-ink-700">
+                      <span className="mt-0.5 inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
+                      <div>
+                        <div className="font-medium">
+                          Installing{installingOptional ? ' optional extras' : ' required deps'}… this can take several
+                          minutes for PyTorch
+                        </div>
+                        <div className="text-type-meta text-ink-500">Elapsed {formatElapsed(liveElapsed)}</div>
+                      </div>
+                    </div>
+                  )}
+                  {installError && installingName == null && (
+                    <div className="mt-3">
+                      <ErrorBanner message={installError} onDismiss={() => setInstallError(null)} />
+                    </div>
+                  )}
+                  {isExpanded && depStatus && (
                     <div className="mt-3 space-y-2 border-t border-ink-100 pt-3 text-sm">
                       <div className="text-type-meta text-ink-500">
                         runtime={depStatus.runtime}
                         {depStatus.python ? ` · ${depStatus.python}` : ''}
+                        {depStatus.install_status ? ` · install=${depStatus.install_status}` : ''}
                       </div>
                       <ul className="space-y-1 font-mono text-type-mono">
                         {depStatus.dependencies.map((d) => (
@@ -415,14 +577,25 @@ export default function PluginsView() {
                           </li>
                         ))}
                       </ul>
+                      {/* Expanded: install CTAs only inside the panel */}
                       <div className="flex flex-wrap gap-2">
-                        {(depStatus.missing_required?.length ?? 0) > 0 && (
-                          <button type="button" className="btn-primary" onClick={() => void installDeps(p.name, false)}>
+                        {panelMissingReq > 0 && (
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            disabled={anyBusy}
+                            onClick={() => void installDeps(p.name, false)}
+                          >
                             <PackagePlus className="h-3.5 w-3.5" /> Install required deps
                           </button>
                         )}
                         {panelHasOptional && (
-                          <button type="button" className="btn-secondary" onClick={() => void installDeps(p.name, true)}>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            disabled={anyBusy}
+                            onClick={() => void installDeps(p.name, true)}
+                          >
                             <PackagePlus className="h-3.5 w-3.5" /> Install optional extras
                           </button>
                         )}
