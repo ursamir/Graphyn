@@ -88,3 +88,12 @@ def test_mock_provider_rejected(installed_cls):
             "url": "https://example.com/hook",
             "provider": "mock",
         }, seed=0)
+
+
+def test_restricted_egress_blocks_metadata(installed_cls, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_HTTP_EGRESS_MODE", "restricted")
+    node = installed_cls(config={"url": "http://169.254.169.254/latest/meta-data/"}, seed=0)
+    with patch("httpx.post") as mocked:
+        with pytest.raises(RuntimeError, match="egress|blocked|private|link-local"):
+            node.process({"input": {"x": 1}})
+    mocked.assert_not_called()

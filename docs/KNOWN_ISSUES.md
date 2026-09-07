@@ -86,6 +86,14 @@
 
 `PluginStore` RMW uses a process-wide RLock (shared across instances) plus exclusive flock on `registry.lock` for the full load→mutate→atomic replace (same spirit as `DiskStateStore.mutate_queue`). Regression: multiprocess save/update stress in `unit_test/core/plugins/test_store.py`.
 
+### (resolved 2026-09-07) SEC-002 python_code is not a real sandbox
+
+Chose **Option A — trusted workflows only**. UI/docs/metadata no longer call AST-filtered `exec()` a sandbox; filters remain defense-in-depth (`allow_network` default off; `allowed_paths` explicit). Untrusted multi-tenant exposure needs future container isolation (Option B). Trust write-up: `docs/TRUST_MODEL.md`.
+
+### (resolved 2026-09-07) SEC-003 HTTP egress policy
+
+`http_request` / `http_webhook` share `app/core/egress.py`. Default `GRAPHYN_HTTP_EGRESS_MODE=trusted` (no behaviour change). `restricted` blocks private/link-local/loopback/metadata ranges and optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST`. ASR/LLM keep provider clients (documented; not wired). See `docs/TRUST_MODEL.md`.
+
 ### (resolved 2026-09-07) SEC-001 plugin source allowlist prefix matching
 
 `plugin_source_is_allowed` now parses URLs structurally and requires host + path-segment boundaries (exact repo or subpath under `/owner/repo/`). Similarly prefixed repos (`repo` vs `repo-evil`/`repo2`), malicious hosts, and `..` / encoded traversal are rejected. Redirect hops continue to be re-checked fail-closed in installer/index download paths.

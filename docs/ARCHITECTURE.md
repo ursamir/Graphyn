@@ -511,6 +511,8 @@ get_backend().execute(graph, ...)
 | Plugin isolation | `runtime` in `plugin.toml` (`inprocess`\|`isolated`); isolated venvs under `GRAPHYN_PLUGIN_VENVS_DIR`; deps API under `/api/v1/plugins/{name}/dependencies` |
 | Checkpoint node IDs | Null byte rejection + path traversal guard via `os.path.abspath` prefix check |
 | Webhook DNS | Resolves once, connects to IP directly with `Host` header (DNS rebinding fix) |
+| `python_code` | Trusted-operator `exec` with AST filters (defense-in-depth, **not** a sandbox); see `docs/TRUST_MODEL.md` |
+| Workflow HTTP egress | `GRAPHYN_HTTP_EGRESS_MODE=trusted\|restricted` + optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST` on `http_request` / `http_webhook` (`app/core/egress.py`) |
 
 ---
 

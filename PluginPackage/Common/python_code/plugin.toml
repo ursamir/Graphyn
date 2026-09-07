@@ -1,7 +1,7 @@
 [plugin]
 name             = "python-code"
 version          = "1.0.0"
-description      = "Restricted Python snippet node. Sets output or defines process(inputs, config)."
+description      = "Trusted-operator Python snippet (AST filters are defense-in-depth, not a sandbox). Sets output or defines process(inputs, config)."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
@@ -15,6 +15,6 @@ runtime = "inprocess"
 node_types = ["python_code"]
 
 [config_schema.python_code]
-source = { type = "string", title = "Source code", default = "", description = "Python defining process(inputs, config) or assigning result.", widget = "code" }
-allowed_paths = { type = "array", title = "Allowed paths", default = [], description = "Workspace-relative paths the snippet may read/write." }
-allow_network = { type = "boolean", title = "Allow network", default = false, description = "Permit outbound network calls from the snippet (off by default)." }
+source = { type = "string", title = "Source code", default = "", description = "Trusted-operator Python defining process(inputs, config) or assigning result. Not a sandbox.", widget = "code" }
+allowed_paths = { type = "array", title = "Allowed paths", default = [], description = "Explicit read allowlist for open(); empty denies filesystem access." }
+allow_network = { type = "boolean", title = "Allow network", default = false, description = "Permit network-related imports (off by default; defense-in-depth only)." }

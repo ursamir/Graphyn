@@ -588,6 +588,7 @@ hmac_header: str = "X-Graphyn-Signature"
 ```
 
 **Ports:** `input` (JSON payload) → `output: WebhookReceipt`
+Egress: same `GRAPHYN_HTTP_EGRESS_*` policy as `http_request` (`docs/TRUST_MODEL.md`).
 
 ---
 
@@ -655,6 +656,7 @@ auth_env: str = ""      # env var NAME, e.g. GITHUB_TOKEN
 ```
 
 **Ports:** optional `input` → `output: HttpResponse`
+Egress: `GRAPHYN_HTTP_EGRESS_MODE=trusted` (default) or `restricted` + optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST` — see `docs/TRUST_MODEL.md`.
 
 ---
 
@@ -710,16 +712,16 @@ interval_s: float = 0.0
 
 ---
 
-### `python_code` — Restricted snippet
+### `python_code` — Trusted-operator snippet
 **Category:** Transform | **Version:** v1.0.0
 
 ```python
 source: str = ""
-allowed_paths: list = []
-allow_network: bool = False
+allowed_paths: list = []   # explicit read allowlist; empty denies open()
+allow_network: bool = False  # network imports off by default
 ```
 
-Signature `process(inputs, config)` or assign `output`. Blocks `os.system`, `subprocess`, `open` unless `allowed_paths`.
+Signature `process(inputs, config)` or assign `output`. AST filters block `os.system`, `subprocess`, and `open` unless `allowed_paths` — **defense-in-depth only, not a sandbox**. Trusted operators only; do not expose to untrusted multi-tenant graphs without isolation (see `docs/TRUST_MODEL.md`).
 
 ---
 

@@ -59,7 +59,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `set_map` | Transform | stdlib |
 | `json_transform` | Transform | stdlib |
 | `schedule_trigger` | Input | stdlib |
-| `python_code` | Transform | stdlib (restricted exec) |
+| `python_code` | Transform | stdlib (trusted-operator exec; not a sandbox) |
 | `error_catch` | Logic | stdlib |
 | `merge` | Transform | stdlib |
 | `wait_delay` | Logic | stdlib |

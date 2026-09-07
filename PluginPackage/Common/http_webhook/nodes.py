@@ -10,6 +10,8 @@ import os
 from typing import Any, ClassVar, Literal
 from pydantic import Field
 
+from app.core.egress import validate_http_egress_url
+
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
@@ -118,6 +120,7 @@ class HttpWebhookNode(Node):
             raise RuntimeError(
                 "HttpWebhookNode: config.url is required (completion callback URL)."
             )
+        validate_http_egress_url(url)
         status, text = self._post(url, raw, headers, timeout)
         ok = 200 <= int(status) < 300
         if not ok:

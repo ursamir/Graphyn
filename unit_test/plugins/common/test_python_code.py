@@ -61,3 +61,37 @@ def test_open_requires_allowed_paths(installed_cls):
     node = installed_cls(config={"source": "output = open('/etc/passwd').read()"}, seed=0)
     with pytest.raises(RuntimeError):
         node.process({"input": {}})
+
+
+def test_metadata_does_not_claim_sandbox(installed_cls):
+    """SEC-002: UI/metadata must not market AST filters as a sandbox."""
+    meta = installed_cls.metadata
+    blob = " ".join(
+        str(x).lower()
+        for x in (meta.description, meta.label, getattr(meta, "long_description", "") or "")
+    )
+    assert "sandbox" not in blob or "not a sandbox" in blob
+    assert "trusted" in blob or "defense" in blob or "not a sandbox" in blob
+
+
+def test_blocks_eval_exec_compile(installed_cls):
+    for src in ("output = eval('1')", "exec('x=1')", "compile('1', '<x>', 'eval')"):
+        node = installed_cls(config={"source": src}, seed=0)
+        with pytest.raises(RuntimeError, match="not allowed"):
+            node.process({"input": {}})
+
+
+def test_blocks_dunder_attr(installed_cls):
+    node = installed_cls(config={"source": "output = ().__class__"}, seed=0)
+    with pytest.raises(RuntimeError, match="[Dd]under|not allowed"):
+        node.process({"input": {}})
+
+
+def test_trust_model_docstring():
+    """SEC-002: module documents trusted-operator / not-a-sandbox posture."""
+    from pathlib import Path
+    # Source of truth after install is the package tree we ship.
+    src = Path("PluginPackage/Common/python_code/nodes.py").read_text(encoding="utf-8")
+    assert "not a security sandbox" in src.lower() or "not a sandbox" in src.lower()
+    assert "trusted-operator" in src.lower() or "trusted operator" in src.lower()
+    assert "AST-validated sandbox" not in src

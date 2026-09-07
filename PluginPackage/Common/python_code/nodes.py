@@ -1,4 +1,11 @@
-"""PythonCodeNode — restricted exec of config.source (no os.system/subprocess/network by default)."""
+"""PythonCodeNode — trusted-operator Python snippet execution.
+
+AST import/call filters and an allowlisted ``open()`` are **defense-in-depth**,
+not a security sandbox. Do not expose ``python_code`` to untrusted multi-tenant
+graph authors without process/container isolation (Option B — future).
+Network stays off by default (``allow_network=False``); filesystem access
+requires an explicit ``allowed_paths`` allowlist.
+"""
 from __future__ import annotations
 
 import ast
@@ -114,7 +121,7 @@ class PythonCodeNode(Node):
     metadata: ClassVar[NodeMetadata] = NodeMetadata(
         node_type="python_code",
         label="Python Code",
-        description="Restricted exec of a source string. Define process(inputs, config) or set output.",
+        description="Trusted-operator Python snippet (AST filters are defense-in-depth, not a sandbox). Define process(inputs, config) or set output.",
         category="Transform",
         version="1.0.0",
         tags=["python", "code", "workflow", "common"],
@@ -132,9 +139,9 @@ class PythonCodeNode(Node):
     }
 
     class Config(NodeConfig):
-        source: str = Field(default='', title="Source", description="Source.")
-        allowed_paths: list = Field(default=[], title="Allowed Paths", description="Allowed Paths.")
-        allow_network: bool = Field(default=False, title="Allow Network", description="Enable allow network.")
+        source: str = Field(default='', title="Source", description="Python source for trusted operators. Not a sandbox.")
+        allowed_paths: list = Field(default=[], title="Allowed Paths", description="Explicit filesystem read allowlist (empty = open() denied).")
+        allow_network: bool = Field(default=False, title="Allow Network", description="Permit network-related imports (default off; still not a sandbox).")
 
     def process(self, inputs):
         source = self.config.source or ""
@@ -175,7 +182,7 @@ class PythonCodeNode(Node):
             "math": math,
         }
         compiled = compile(tree, "<python_code>", "exec")
-        exec(compiled, ns, ns)  # noqa: S102 — AST-validated sandbox
+        exec(compiled, ns, ns)  # noqa: S102 — trusted-operator exec; AST filters are defense-in-depth only
         result: Any
         proc = ns.get("process")
         if callable(proc):

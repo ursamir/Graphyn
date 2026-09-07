@@ -10,6 +10,8 @@ from typing import Any, ClassVar, Literal
 from pydantic import Field
 from urllib.parse import urlencode
 
+from app.core.egress import validate_http_egress_url
+
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
@@ -135,6 +137,8 @@ class HttpRequestNode(Node):
         if query:
             sep = "&" if "?" in url else "?"
             url = f"{url}{sep}{urlencode({str(k): str(v) for k, v in query.items()})}"
+        # SEC-003: egress policy (trusted default; restricted blocks SSRF ranges)
+        validate_http_egress_url(url)
         attempts = max(1, int(self.config.retry or 0) + 1)
         last_exc = None
         timeout = float(self.config.timeout_s or 30.0)

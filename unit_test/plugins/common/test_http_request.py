@@ -109,3 +109,35 @@ def test_default_provider_is_http(installed_cls):
     node = installed_cls(config={"url": "https://example.com"}, seed=0)
     assert node.config.provider == "http"
     assert node.config.provider != "mock"
+
+
+def test_restricted_egress_blocks_private_before_httpx(installed_cls, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_HTTP_EGRESS_MODE", "restricted")
+    node = installed_cls(config={
+        "provider": "http",
+        "url": "http://127.0.0.1:9/secret",
+        "method": "GET",
+    }, seed=0)
+    from unittest.mock import patch
+    with patch("httpx.request") as mocked:
+        with pytest.raises(RuntimeError, match="egress|blocked|private|loopback"):
+            node.process({"input": None})
+    mocked.assert_not_called()
+
+
+def test_trusted_egress_allows_private_literal(installed_cls, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_HTTP_EGRESS_MODE", "trusted")
+    node = installed_cls(config={
+        "provider": "http",
+        "url": "http://127.0.0.1:9/x",
+        "method": "GET",
+    }, seed=0)
+    from unittest.mock import MagicMock, patch
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = "ok"
+    mock_resp.headers = {}
+    with patch("httpx.request", return_value=mock_resp) as mocked:
+        out = node.process({"input": None})["output"]
+    assert out.ok is True
+    mocked.assert_called_once()

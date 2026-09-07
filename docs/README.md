@@ -26,6 +26,7 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 | [MCP_SERVER.md](./MCP_SERVER.md) | MCP tools (23) and auth |
 | [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port types, workspace layout, artifacts |
 | [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Current limitations |
+| [TRUST_MODEL.md](./TRUST_MODEL.md) | python_code + HTTP egress trust / SSRF policy |
 
 ## Concepts
 

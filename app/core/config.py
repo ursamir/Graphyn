@@ -34,6 +34,8 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_PLUGIN_VENVS_DIR        Default: {GRAPHYN_HOME}/plugins/venvs/
   GRAPHYN_PLUGIN_ISOLATED_TIMEOUT Default: 3600 (seconds; isolated worker subprocess)
   GRAPHYN_REDIS_URL               Default: "" (use in-process store)
+  GRAPHYN_HTTP_EGRESS_MODE        Default: trusted (workflow HTTP nodes; use restricted for SSRF hardening)
+  GRAPHYN_HTTP_EGRESS_ALLOWLIST   Default: "" (comma-separated hosts/domains; used in restricted mode)
 
 ## Three-tier directory model
 
@@ -481,3 +483,52 @@ def redis_url() -> str:
     compatible default for single-worker deployments.
     """
     return _env("GRAPHYN_REDIS_URL")
+
+
+# ---------------------------------------------------------------------------
+# HTTP egress (workflow http_request / http_webhook)
+# ---------------------------------------------------------------------------
+
+def http_egress_mode() -> str:
+    """Return HTTP egress policy mode for workflow HTTP nodes.
+
+    Override: ``GRAPHYN_HTTP_EGRESS_MODE`` — ``trusted`` (default) or
+    ``restricted``.
+
+    * ``trusted`` — current behaviour; any http(s) URL is permitted (operators
+      are assumed trusted). Suitable for single-tenant / shared-bearer setups.
+    * ``restricted`` — block private/link-local/loopback/metadata destinations
+      and optionally require hosts on ``GRAPHYN_HTTP_EGRESS_ALLOWLIST``.
+
+    Unknown values raise ``ValueError`` (fail-closed).
+    """
+    raw = _env("GRAPHYN_HTTP_EGRESS_MODE", default="trusted").lower()
+    if raw in ("trusted", "unrestricted", "off", "allow"):
+        # Aliases map to trusted for ops convenience; canonical name is trusted.
+        return "trusted"
+    if raw in ("restricted", "deny_private", "ssrf"):
+        return "restricted"
+    raise ValueError(
+        f"GRAPHYN_HTTP_EGRESS_MODE={raw!r} is invalid; "
+        "use 'trusted' (default) or 'restricted'."
+    )
+
+
+def http_egress_allowlist() -> list[str]:
+    """Return host/domain allowlist for restricted HTTP egress.
+
+    Override: ``GRAPHYN_HTTP_EGRESS_ALLOWLIST`` — comma-separated hostnames or
+    domains (e.g. ``api.example.com,hooks.example.com``). Empty = no host
+    allowlist (in restricted mode, public hosts are still allowed unless they
+    resolve to blocked addresses).
+    """
+    raw = _env("GRAPHYN_HTTP_EGRESS_ALLOWLIST")
+    if not raw:
+        return []
+    result = [entry.strip().lower().rstrip(".") for entry in raw.split(",") if entry.strip()]
+    if not result:
+        raise ValueError(
+            f"GRAPHYN_HTTP_EGRESS_ALLOWLIST={raw!r} parsed to an empty list; "
+            "check for stray commas."
+        )
+    return result
