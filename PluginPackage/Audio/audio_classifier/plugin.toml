@@ -30,7 +30,8 @@ optional_dependencies = [
 ]
 
 [config_schema.audio_classifier]
-model_path = { type = "string", title = "Model path", default = "", description = "Model file under workspace/artifacts (or empty for built-in)." }
-backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: yamnet, tflite, pytorch, auto.", enum = ["yamnet", "tflite", "pytorch", "auto"]  }
-top_k = { type = "integer", title = "Top-K", default = 1, description = "Return the K highest-scoring class labels." }
-sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz." }
+model_path = { type = "string", title = "Model path", default = "", description = "Model file under workspace/artifacts (or empty for built-in).", ui = { group = "Basic" } }
+backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: yamnet, tflite, pytorch, auto.", enum = ["yamnet", "tflite", "pytorch", "auto"], ui = { group = "Basic" } }
+top_k = { type = "integer", title = "Top-K", default = 1, description = "Return the K highest-scoring class labels.", ui = { group = "Basic" } }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz.", ui = { group = "Basic" } }
+confidence_threshold = { type = "number", title = "Confidence threshold", default = 0.0, minimum = 0.0, maximum = 1.0, description = "Optional minimum confidence (0–1). 0 or unset disables filtering; when >0, drops samples whose top-1 score is below the threshold and prunes lower class scores from probabilities.", ui = { group = "Advanced" } }

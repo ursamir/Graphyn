@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, Optional
 from pydantic import Field
 
 import numpy as np
@@ -41,6 +41,7 @@ class AudioClassifierNode(Node):
         backend (str): "yamnet" | "tflite" | "pytorch" | "auto"
         top_k (int): number of top predictions to return (default 1)
         sample_rate (int): expected sample rate for AudioSample inputs (default 16000)
+        confidence_threshold (float|None): drop predictions below this score; None/0 = off
     """
 
     node_type: ClassVar[str] = "audio_classifier"
@@ -88,6 +89,16 @@ class AudioClassifierNode(Node):
         backend: Literal["yamnet", "tflite", "pytorch", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: yamnet, tflite, pytorch, auto.")
         top_k: int = Field(default=1, title="Top-K", description="Return the K highest-scoring class labels.")
         sample_rate: int = Field(default=16000, title="Sample rate", description="Audio sample rate in Hz.")
+        confidence_threshold: Optional[float] = Field(
+            default=None,
+            title="Confidence threshold",
+            description=(
+                "Optional minimum confidence (0–1) for keeping a prediction. "
+                "None or 0 disables filtering. When set, drops samples whose "
+                "top-1 score is below the threshold and prunes lower scores "
+                "from probabilities."
+            ),
+        )
 
         from pydantic import field_validator
 
@@ -112,6 +123,18 @@ class AudioClassifierNode(Node):
             if v not in allowed:
                 raise ValueError(f"backend must be one of {sorted(allowed)}, got {v!r}")
             return v
+
+        @field_validator("confidence_threshold")
+        @classmethod
+        def _confidence_threshold_range(cls, v: Optional[float]) -> Optional[float]:
+            if v is None:
+                return None
+            if not (0.0 <= float(v) <= 1.0):
+                raise ValueError("confidence_threshold must be between 0 and 1 (inclusive), or None to disable")
+            # 0 means off (same as None)
+            if float(v) == 0.0:
+                return None
+            return float(v)
 
     # ── setup ─────────────────────────────────────────────────────────────────
 
@@ -187,11 +210,37 @@ class AudioClassifierNode(Node):
             # Only include top-k entries in probabilities dict to avoid 521-entry dicts
             probabilities = {labels[i]: float(probs[i]) for i in top_indices if i < len(labels)} if labels else {}
 
+            threshold = self.config.confidence_threshold
+            top_score = float(probs[top_indices[0]]) if len(top_indices) else 0.0
+            if threshold is not None:
+                # Prune low-confidence class scores from the reported dict.
+                probabilities = {
+                    lab: score for lab, score in probabilities.items() if score >= threshold
+                }
+                # Drop the whole prediction when top-1 is below the gate.
+                if top_score < threshold:
+                    log.debug(
+                        "AudioClassifierNode: dropping %s (top_score=%.4f < threshold=%.4f)",
+                        source_path,
+                        top_score,
+                        threshold,
+                    )
+                    continue
+                if probabilities:
+                    # Keep predicted_label aligned with remaining highest score.
+                    predicted_label = max(probabilities.items(), key=lambda kv: kv[1])[0]
+
             results.append(PredictionResult(
                 source_path=source_path,
                 predicted_label=predicted_label,
                 probabilities=probabilities,
-                metadata={**meta, "top_k": top_k, "backend": backend},
+                metadata={
+                    **meta,
+                    "top_k": top_k,
+                    "backend": backend,
+                    "top_score": top_score,
+                    **({"confidence_threshold": threshold} if threshold is not None else {}),
+                },
             ))
 
         return results

@@ -119,3 +119,51 @@ def test_process_output_has_predicted_label(installed_cls, make_audio_sample):
     for pred in result["output"]:
         assert hasattr(pred, "predicted_label")
         assert pred.predicted_label  # non-empty string
+
+
+def test_confidence_threshold_field_default_off(installed_cls):
+    """confidence_threshold None/0 disables filtering."""
+    node = installed_cls(config={}, seed=0)
+    assert node.config.confidence_threshold is None
+    node0 = installed_cls(config={"confidence_threshold": 0.0}, seed=0)
+    assert node0.config.confidence_threshold is None
+
+
+def test_confidence_threshold_rejects_out_of_range(installed_cls):
+    import pytest
+    with pytest.raises(Exception):
+        installed_cls(config={"confidence_threshold": 1.5}, seed=0)
+
+
+def test_confidence_threshold_filters_predictions(installed_cls, make_audio_sample, monkeypatch):
+    """When threshold is set, low top-1 scores are dropped from output."""
+    import numpy as np
+
+    node = installed_cls(config={"confidence_threshold": 0.9, "top_k": 3, "backend": "pytorch"}, seed=0)
+    calls = {"n": 0}
+    scores = [
+        (np.array([0.01, 0.02, 0.97], dtype=np.float32), ["a", "b", "c"]),  # keep
+        (np.array([0.4, 0.35, 0.25], dtype=np.float32), ["a", "b", "c"]),   # drop (top 0.4 < 0.9)
+    ]
+
+    def side_effect(sample, backend):
+        i = calls["n"]
+        calls["n"] += 1
+        return scores[i]
+
+    node._resolved_backend = "pytorch"
+    node._labels = ["a", "b", "c"]
+    node._model_obj = object()
+    monkeypatch.setattr(node, "_classify_audio", side_effect)
+
+    s1 = make_audio_sample()
+    s2 = make_audio_sample()
+    try:
+        s2.path = str(s2.path) + "_low"
+    except Exception:
+        pass
+    out = node.process([s1, s2])
+    assert len(out) == 1
+    assert out[0].predicted_label == "c"
+    assert out[0].metadata.get("confidence_threshold") == 0.9
+    assert all(v >= 0.9 for v in out[0].probabilities.values())
