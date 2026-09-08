@@ -6,7 +6,7 @@ and file-based streaming (librosa) for testing without hardware.
 from __future__ import annotations
 
 import logging
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, Optional
 from pydantic import Field
 
 import numpy as np
@@ -33,7 +33,7 @@ class StreamIngestNode(Node):
 
     Config:
         source (str): ingestion backend (default "microphone")
-        device_id (int): microphone device index (default 0)
+        device_id (int|None): microphone device index; None = OS default input
         websocket_url (str): WebSocket URL for source="websocket"
         file_path (str): local audio file path for source="file_stream"
         chunk_ms (int): chunk size in milliseconds (default 100)
@@ -71,8 +71,21 @@ class StreamIngestNode(Node):
     }
 
     class Config(NodeConfig):
-        source: Literal["microphone", "websocket", "file_stream"] = Field(default='microphone', title="Source", description="Python source for trusted operators. Not a sandbox.")
-        device_id: int = Field(default=0, title="Device ID", description="sounddevice input device index (default device when unset).")
+        source: Literal["microphone", "websocket", "file_stream"] = Field(
+            default="microphone",
+            title="Source",
+            description="Ingestion backend. One of: microphone, websocket, file_stream.",
+        )
+        device_id: Optional[int] = Field(
+            default=None,
+            title="Device ID",
+            description=(
+                "Microphone device for source=microphone. "
+                "None / empty / omit = OS default input device (sounddevice device=None). "
+                "Integer >=0 = sounddevice device index from query_devices(). "
+                "Required only when you must pin a non-default mic; fails clearly if that index is missing."
+            ),
+        )
         websocket_url: str = Field(default='', title="WebSocket URL", description="ws:// or wss:// URL when source is a websocket stream.")
         file_path: str = Field(default='', title="File Path", description="Path under workspace/datasets/input (or another workspace path).")
         chunk_ms: int = Field(default=100, title="Chunk (ms)", description="Capture/emit chunk duration in milliseconds.")
@@ -122,17 +135,51 @@ class StreamIngestNode(Node):
         sr = self.config.sample_rate
         duration = self.config.duration_s
         channels = self.config.channels
-        device = self.config.device_id
+        device = self.config.device_id  # None => OS default input device
 
-        log.info("StreamIngestNode: recording %.1fs from device %d...", duration, device)
-        recording = sd.rec(
-            int(duration * sr),
-            samplerate=sr,
-            channels=channels,
-            device=device,
-            dtype="float32",
+        if device is not None:
+            try:
+                devices = sd.query_devices()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"StreamIngestNode: could not query audio devices while validating "
+                    f"device_id={device}: {exc}"
+                ) from exc
+            if device < 0 or device >= len(devices):
+                raise ValueError(
+                    f"StreamIngestNode: device_id={device} is not available. "
+                    f"Found {len(devices)} sounddevice device(s). "
+                    "Use device_id=None (or omit) for the OS default input device, "
+                    "or pick a valid index from sounddevice.query_devices()."
+                )
+            info = devices[device]
+            max_in = int(info.get("max_input_channels", 0) or 0) if isinstance(info, dict) else int(getattr(info, "max_input_channels", 0) or 0)
+            if max_in <= 0:
+                raise ValueError(
+                    f"StreamIngestNode: device_id={device} ({info.get('name', info) if isinstance(info, dict) else info}) "
+                    "has no input channels. Choose an input-capable device or leave device_id empty for the OS default."
+                )
+
+        log.info(
+            "StreamIngestNode: recording %.1fs from device %s...",
+            duration,
+            "default" if device is None else device,
         )
-        sd.wait(timeout=duration + 5.0)
+        try:
+            recording = sd.rec(
+                int(duration * sr),
+                samplerate=sr,
+                channels=channels,
+                device=device,  # None selects the OS default input
+                dtype="float32",
+            )
+            sd.wait(timeout=duration + 5.0)
+        except Exception as exc:
+            raise RuntimeError(
+                f"StreamIngestNode: microphone capture failed for device_id="
+                f"{'default' if device is None else device}. "
+                f"Ensure a microphone is connected and the index is valid. Original error: {exc}"
+            ) from exc
 
         # Convert to mono if needed
         if channels > 1:

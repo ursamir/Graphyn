@@ -20,13 +20,13 @@ optional_dependencies = [
 ]
 
 [config_schema.stream_ingest]
-source = {  type = "string", title = "Source", default = "microphone", description = "Python source for trusted operators. Not a sandbox. One of: microphone, websocket, file_stream.", enum = ["microphone", "websocket", "file_stream"]  }
-device_id = { type = "integer", title = "Device ID", default = 0, description = "sounddevice input device index (default device when unset)." }
-websocket_url = { type = "string", title = "WebSocket URL", default = "", description = "ws:// or wss:// URL when source is a websocket stream." }
-file_path = { type = "string", title = "File Path", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
-chunk_ms = { type = "integer", title = "Chunk (ms)", default = 100, description = "Capture/emit chunk duration in milliseconds." }
-sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz." }
-channels = { type = "integer", title = "Channels", default = 1, description = "Number of input audio channels (1 = mono)." }
-buffer_size = { type = "integer", title = "Buffer size", default = 10, description = "Internal ring-buffer size in frames/chunks." }
-duration_s = { type = "number", title = "Duration (s)", default = 5.0, description = "Capture or synthesize this many seconds (0 = until stopped/EOS)." }
-label = { type = "string", title = "Label", default = "", description = "Optional label attached to emitted samples." }
+source = { type = "string", title = "Source", default = "microphone", description = "Ingestion backend. One of: microphone, websocket, file_stream.", enum = ["microphone", "websocket", "file_stream"], ui = { group = "Basic" } }
+device_id = { type = "integer", title = "Device ID", description = "Microphone device index for source=microphone. Empty/null/omit = OS default input (sounddevice device=None). Integer >=0 = sounddevice.query_devices() index; fails clearly if missing or not an input device.", ui = { group = "Basic" } }
+websocket_url = { type = "string", title = "WebSocket URL", default = "", description = "ws:// or wss:// URL when source is a websocket stream.", ui = { group = "Basic" } }
+file_path = { type = "string", title = "File Path", default = "", description = "Path under workspace/datasets/input (or another workspace path).", ui = { group = "Basic" } }
+chunk_ms = { type = "integer", title = "Chunk (ms)", default = 100, description = "Capture/emit chunk duration in milliseconds.", ui = { group = "Basic" } }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz.", ui = { group = "Basic" } }
+channels = { type = "integer", title = "Channels", default = 1, description = "Number of input audio channels (1 = mono).", ui = { group = "Advanced" } }
+buffer_size = { type = "integer", title = "Buffer size", default = 10, description = "Internal ring-buffer size in frames/chunks.", ui = { group = "Advanced" } }
+duration_s = { type = "number", title = "Duration (s)", default = 5.0, description = "Capture or synthesize this many seconds (0 = until stopped/EOS).", ui = { group = "Basic" } }
+label = { type = "string", title = "Label", default = "", description = "Optional label attached to emitted samples.", ui = { group = "Advanced" } }

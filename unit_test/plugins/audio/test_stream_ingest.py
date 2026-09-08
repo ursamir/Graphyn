@@ -84,3 +84,27 @@ def test_process_smoke_file_stream(installed_cls, tmp_path):
     result = node.process({})
     assert "output" in result
     assert isinstance(result["output"], list)
+
+
+def test_device_id_default_is_none(installed_cls):
+    """None/empty means OS default input device (sounddevice device=None)."""
+    node = installed_cls(config={}, seed=0)
+    assert node.config.device_id is None
+
+
+def test_microphone_missing_device_raises(installed_cls, monkeypatch):
+    """Explicit device_id that is out of range fails with a clear error."""
+    import sys
+    import types
+    import pytest
+
+    node = installed_cls(config={"source": "microphone", "device_id": 999}, seed=0)
+
+    fake = types.ModuleType("sounddevice")
+    fake.query_devices = lambda: [{"name": "mic0", "max_input_channels": 1}]  # type: ignore[attr-defined]
+    fake.rec = lambda *a, **k: (_ for _ in ()).throw(AssertionError("rec should not run"))  # type: ignore[attr-defined]
+    fake.wait = lambda *a, **k: None  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sounddevice", fake)
+
+    with pytest.raises(ValueError, match="device_id=999"):
+        node.process({})
