@@ -26,7 +26,7 @@ def installed_cls(tmp_path_factory):
     tmp_dir = tmp_path_factory.mktemp("stream_processor_plugins")
     from app.core.nodes.registry import NodeRegistry
     reg = NodeRegistry()
-    mgr = PluginManager(registry=reg)
+    mgr = PluginManager(registry=reg, base_dir=str(tmp_dir))
     mgr._plugins_dir = str(tmp_dir)
     mgr.install(PLUGIN_SOURCE)
     return reg.get_class(NODE_TYPE)
@@ -36,7 +36,7 @@ def installed_cls(tmp_path_factory):
 
 def test_registers(tmp_plugin_dir, fresh_registry):
     """Req 7.18 — stream_processor registers in a fresh registry."""
-    mgr = PluginManager(registry=fresh_registry)
+    mgr = PluginManager(registry=fresh_registry, base_dir=str(tmp_plugin_dir))
     mgr._plugins_dir = str(tmp_plugin_dir)
     mgr.install(PLUGIN_SOURCE)
     assert NODE_TYPE in fresh_registry

@@ -41,7 +41,7 @@ def all_audio_registry(tmp_path_factory):
     """Install all 18 Audio plugins into a single shared tmp directory."""
     tmp_dir = tmp_path_factory.mktemp("all_audio_plugins")
     reg = NodeRegistry()
-    mgr = PluginManager(registry=reg)
+    mgr = PluginManager(registry=reg, base_dir=str(tmp_dir))
     mgr._plugins_dir = str(tmp_dir)
     for source, _ in ALL_AUDIO_PLUGINS:
         mgr.install(source)
