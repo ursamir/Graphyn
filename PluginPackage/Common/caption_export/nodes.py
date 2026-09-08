@@ -5,7 +5,7 @@ import importlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
@@ -168,8 +168,34 @@ class CaptionExportNode(Node):
     class Config(NodeConfig):
         output_dir: str = Field(default="workspace/artifacts/captions", title="Output dir", description="Directory under workspace/artifacts for written files.")
         basename: str = Field(default='captions', title="Basename", description="Output filename stem (without extension).")
-        formats: list = Field(default=['srt', 'vtt', 'json'], title="Formats", description="Formats to write: choose among srt, vtt, json.")
+        formats: list[Literal["srt", "vtt", "json"]] = Field(
+            default=["srt", "vtt", "json"],
+            title="Formats",
+            description="Caption formats to write. One or more of: srt, vtt, json (runtime-supported only; no txt).",
+        )
         max_words_per_cue: int = Field(default=12, title="Max words per cue", description="Soft wrap captions after this many words per cue.")
+
+        from pydantic import field_validator
+
+        @field_validator("formats")
+        @classmethod
+        def _formats_allowed(cls, v: list) -> list[str]:
+            allowed = {"srt", "vtt", "json"}
+            if not v:
+                raise ValueError("formats must include at least one of: srt, vtt, json")
+            out: list[str] = []
+            seen: set[str] = set()
+            for item in v:
+                f = str(item).lower().strip()
+                if f not in allowed:
+                    raise ValueError(
+                        f"Unsupported caption format {item!r}. "
+                        f"Supported formats: srt, vtt, json"
+                    )
+                if f not in seen:
+                    seen.add(f)
+                    out.append(f)
+            return out
 
     def process(self, transcript):
         if transcript is None:
@@ -184,6 +210,13 @@ class CaptionExportNode(Node):
         out_dir.mkdir(parents=True, exist_ok=True)
         base = self.config.basename or "captions"
         formats = [str(f).lower() for f in (self.config.formats or ["srt"])]
+        allowed = {"srt", "vtt", "json"}
+        bad = [f for f in formats if f not in allowed]
+        if bad:
+            raise ValueError(
+                f"CaptionExportNode: unsupported format(s) {bad}. "
+                "Supported: srt, vtt, json"
+            )
         paths = []
         payload = {
             "text": text,

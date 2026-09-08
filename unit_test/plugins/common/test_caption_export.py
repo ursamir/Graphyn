@@ -69,3 +69,22 @@ def test_writes_srt_vtt_json(installed_cls, tmp_path):
     assert "-->" in srt
     vtt = paths[".vtt"].read_text(encoding="utf-8")
     assert vtt.startswith("WEBVTT")
+
+
+def test_formats_reject_unsupported(installed_cls, tmp_path):
+    import pytest
+    with pytest.raises(Exception):
+        installed_cls(
+            config={"output_dir": str(tmp_path), "formats": ["srt", "txt"]},
+            seed=0,
+        )
+
+
+def test_formats_enum_only_supported(installed_cls, tmp_path):
+    node = installed_cls(
+        config={"output_dir": str(tmp_path / "c"), "basename": "x", "formats": ["srt"]},
+        seed=0,
+    )
+    out = node.process({"input": {"text": "hi", "words": [{"word": "hi", "start": 0, "end": 0.5, "speaker": ""}]}})["output"]
+    assert len(out.paths) == 1
+    assert out.paths[0].endswith(".srt")

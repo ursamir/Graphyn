@@ -69,9 +69,24 @@ function formatValue(def: Record<string, unknown>, value: unknown): string {
   return String(value)
 }
 
+function isNullableSchema(def: Record<string, unknown>): boolean {
+  const t = def.type
+  if (Array.isArray(t) && t.includes('null')) return true
+  const anyOf = def.anyOf as Record<string, unknown>[] | undefined
+  if (Array.isArray(anyOf) && anyOf.some((x) => x && x.type === 'null')) return true
+  if (def.default === null || def.default === undefined) {
+    // Optional ints/numbers often omit default in overlay; treat empty as null when title/desc imply optional device
+    return false
+  }
+  return false
+}
+
 function parseValue(def: Record<string, unknown>, raw: string): unknown {
   const type = schemaType(def)
-  if (type === 'number' || type === 'integer') return raw === '' ? 0 : Number(raw)
+  if (type === 'number' || type === 'integer') {
+    if (raw === '') return isNullableSchema(def) ? null : type === 'integer' ? 0 : 0
+    return Number(raw)
+  }
   if (type === 'boolean') return raw === 'true'
   if (type === 'object' || isObjectSchema(def)) {
     if (!raw.trim()) return type === 'array' ? [] : {}
@@ -162,6 +177,38 @@ function fieldEditor(
     )
   }
 
+  // Multi-select for array fields with items.enum (e.g. caption formats)
+  if (type === 'array') {
+    const items = (unwrapSchema(def).items ?? def.items) as Record<string, unknown> | undefined
+    const itemEnum = items && Array.isArray(items.enum) ? (items.enum as unknown[]) : null
+    if (itemEnum && itemEnum.length) {
+      const selected = Array.isArray(value) ? value.map(String) : []
+      return (
+        <div className="mt-1 flex flex-wrap gap-2" title={schemaFieldHint(def)}>
+          {itemEnum.map((opt) => {
+            const s = String(opt)
+            const checked = selected.includes(s)
+            return (
+              <label key={s} className="inline-flex items-center gap-1.5 rounded border border-ink-200 bg-ink-50 px-2 py-1 text-[11px] text-ink-700">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-ink-300"
+                  checked={checked}
+                  onChange={() => {
+                    const next = checked ? selected.filter((x) => x !== s) : [...selected, s]
+                    onChange(next)
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                />
+                {s}
+              </label>
+            )
+          })}
+        </div>
+      )
+    }
+  }
+
   const complex =
     type === 'object' ||
     isObjectSchema(def) ||
@@ -193,16 +240,23 @@ function fieldEditor(
   }
 
   if (type === 'number' || type === 'integer') {
+    const nullable =
+      isNullableSchema(def) ||
+      def.default === null ||
+      (Array.isArray(def.type) && (def.type as unknown[]).includes('null'))
     return (
       <input
         type="number"
         step={type === 'integer' ? 1 : 'any'}
         className="field-control overflow-x-auto font-mono"
         value={value == null || value === '' ? '' : Number(value)}
-        title={formatValue(def, value)}
+        title={schemaFieldHint(def) || formatValue(def, value)}
+        placeholder={nullable ? 'default / empty' : undefined}
         onChange={(e) => {
           try {
-            onChange(parseValue(def, e.target.value))
+            const raw = e.target.value
+            if (raw === '' && nullable) onChange(null)
+            else onChange(parseValue(def, raw))
           } catch {
             /* keep typing */
           }
