@@ -51,6 +51,11 @@ class TrainerNode(Node):
         mixed_precision  (bool):  Enable mixed precision training. Default: False
         min_val_accuracy (float): Warn if best val_accuracy falls below this. Default: 0.0
         checkpoint_path  (str):   Path for best checkpoint (auto-derived if empty). Default: ""
+        learning_rate    (float): Adam LR for (re)compile / PyTorch. Default: 0.001
+        reduce_lr_factor (float): ReduceLROnPlateau factor (Keras). Default: 0.5
+        reduce_lr_patience (int): ReduceLROnPlateau patience (Keras). Default: 3
+        shuffle          (bool):  Shuffle training batches. Default: True
+        early_stopping_min_delta (float): EarlyStopping min_delta. Default: 0.0
     """
 
     node_type: ClassVar[str] = "trainer"
@@ -111,6 +116,31 @@ class TrainerNode(Node):
         mixed_precision: bool = Field(default=False, title="Mixed precision", description="Enable mixed-precision training when the backend supports it (On/Off).")
         min_val_accuracy: float = Field(default=0.0, title="Min val accuracy", description="Warn if best validation accuracy is below this threshold (0 disables).")
         checkpoint_path: str = Field(default='', title="Checkpoint path", description="Optional checkpoint directory under workspace/artifacts.")
+        learning_rate: float = Field(
+            default=0.001,
+            title="Learning rate",
+            description="Adam learning rate used when (re)compiling for training.",
+        )
+        reduce_lr_factor: float = Field(
+            default=0.5,
+            title="Reduce LR factor",
+            description="Multiply learning rate by this factor on plateau (Keras ReduceLROnPlateau).",
+        )
+        reduce_lr_patience: int = Field(
+            default=3,
+            title="Reduce LR patience",
+            description="Epochs with no val_loss improvement before reducing LR (Keras).",
+        )
+        shuffle: bool = Field(
+            default=True,
+            title="Shuffle",
+            description="Shuffle training batches each epoch (On/Off).",
+        )
+        early_stopping_min_delta: float = Field(
+            default=0.0,
+            title="Early stopping min delta",
+            description="Minimum change in the monitored metric to qualify as an improvement.",
+        )
 
     # ── backend detection ─────────────────────────────────────────────────────
 
@@ -163,7 +193,7 @@ class TrainerNode(Node):
         return device
 
     @staticmethod
-    def _keras_model_on_device(model, device: str):
+    def _keras_model_on_device(model, device: str, learning_rate: float | None = None):
         """Clone+compile so weights and graph live on ``device``."""
         import keras
         import tensorflow as tf  # type: ignore
@@ -171,11 +201,14 @@ class TrainerNode(Node):
         with tf.device(device):
             cloned = keras.models.clone_model(model)
             cloned.set_weights(model.get_weights())
-            lr = 0.001
-            try:
-                lr = float(keras.backend.get_value(model.optimizer.learning_rate))
-            except Exception:
-                pass
+            if learning_rate is not None:
+                lr = float(learning_rate)
+            else:
+                lr = 0.001
+                try:
+                    lr = float(keras.backend.get_value(model.optimizer.learning_rate))
+                except Exception:
+                    pass
             cloned.compile(
                 optimizer=keras.optimizers.Adam(learning_rate=lr),
                 loss="sparse_categorical_crossentropy",
@@ -185,7 +218,7 @@ class TrainerNode(Node):
             return cloned
 
     @staticmethod
-    def _fit_keras(model, dataset, *, epochs: int, batch_size: int, callbacks, device: str):
+    def _fit_keras(model, dataset, *, epochs: int, batch_size: int, callbacks, device: str, shuffle: bool = True):
         """Run ``model.fit`` with correct device scoping.
 
         - CPU: entire fit under ``/CPU:0`` with soft placement off (required when
@@ -202,6 +235,7 @@ class TrainerNode(Node):
             batch_size=batch_size,
             callbacks=callbacks,
             verbose=1,
+            shuffle=bool(shuffle),
         )
         if device.startswith("/CPU"):
             try:
@@ -261,6 +295,7 @@ class TrainerNode(Node):
             "monitor": "val_accuracy",
             "mode": "max",
             "patience": self.config.patience,
+            "min_delta": float(self.config.early_stopping_min_delta),
             "restore_best_weights": True,
             "verbose": 1,
         }
@@ -287,15 +322,15 @@ class TrainerNode(Node):
             ),
             keras.callbacks.ReduceLROnPlateau(
                 monitor="val_loss",
-                factor=0.5,
-                patience=3,
+                factor=float(self.config.reduce_lr_factor),
+                patience=int(self.config.reduce_lr_patience),
                 verbose=1,
             ),
             keras.callbacks.TerminateOnNaN(),  # stop immediately on NaN loss
         ]
 
         device = self._configure_keras_device()
-        model = self._keras_model_on_device(model, device)
+        model = self._keras_model_on_device(model, device, learning_rate=float(self.config.learning_rate))
 
         log.info(
             "TrainerNode (keras): training for up to %d epochs (batch_size=%d, device=%s)...",
@@ -312,6 +347,7 @@ class TrainerNode(Node):
                 batch_size=self.config.batch_size,
                 callbacks=callbacks,
                 device=device,
+                shuffle=bool(self.config.shuffle),
             )
         except Exception as exc:
             msg = str(exc)
@@ -342,7 +378,7 @@ class TrainerNode(Node):
                     tf.config.set_soft_device_placement(False)
                 except Exception:
                     pass
-                model = self._keras_model_on_device(model, device)
+                model = self._keras_model_on_device(model, device, learning_rate=float(self.config.learning_rate))
                 history = self._fit_keras(
                     model,
                     dataset,
@@ -441,7 +477,7 @@ class TrainerNode(Node):
         train_loader = DataLoader(
             TensorDataset(X_train, y_train),
             batch_size=self.config.batch_size,
-            shuffle=True,
+            shuffle=bool(self.config.shuffle),
         )
         val_loader = DataLoader(
             TensorDataset(X_val, y_val),
@@ -449,7 +485,7 @@ class TrainerNode(Node):
             shuffle=False,
         )
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        optimizer = torch.optim.Adam(model.parameters(), lr=float(self.config.learning_rate))
         criterion = nn.CrossEntropyLoss()
 
         # Mixed precision scaler (only meaningful on CUDA)
@@ -581,7 +617,8 @@ class TrainerNode(Node):
                     best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
                     best_val_acc = avg_val_acc
                 continue
-            if avg_val_acc > best_val_acc:
+            min_delta = float(self.config.early_stopping_min_delta)
+            if avg_val_acc > best_val_acc + min_delta:
                 best_val_acc = avg_val_acc
                 patience_counter = 0
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}

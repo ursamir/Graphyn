@@ -23,7 +23,7 @@ def installed_cls(tmp_path_factory):
     tmp_dir = tmp_path_factory.mktemp("trainer_plugins")
     from app.core.nodes.registry import NodeRegistry
     reg = NodeRegistry()
-    mgr = PluginManager(registry=reg)
+    mgr = PluginManager(registry=reg, base_dir=str(tmp_dir))
     mgr._plugins_dir = str(tmp_dir)
     mgr.install(PLUGIN_SOURCE)
     return reg.get_class(NODE_TYPE)
@@ -33,7 +33,7 @@ def installed_cls(tmp_path_factory):
 
 def test_registers(tmp_plugin_dir, fresh_registry):
     """Req 8.2 — trainer registers in a fresh registry."""
-    mgr = PluginManager(registry=fresh_registry)
+    mgr = PluginManager(registry=fresh_registry, base_dir=str(tmp_plugin_dir))
     mgr._plugins_dir = str(tmp_plugin_dir)
     mgr.install(PLUGIN_SOURCE)
     assert NODE_TYPE in fresh_registry
@@ -191,3 +191,39 @@ def test_keras_model_from_input_passthrough_live_model():
 
     live = _Live()
     assert nodes.TrainerNode._keras_model_from_input(live) is live
+
+
+def test_hyperparam_defaults():
+    """Real TrainerNode Config defaults (isolated proxy schema may omit them)."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path("PluginPackage/Common/trainer/nodes.py")
+    spec = importlib.util.spec_from_file_location("graphyn_trainer_hyperparams_ut", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    props = mod.TrainerNode.Config.model_json_schema()["properties"]
+    assert props["learning_rate"]["default"] == 0.001
+    assert props["reduce_lr_factor"]["default"] == 0.5
+    assert props["reduce_lr_patience"]["default"] == 3
+    assert props["shuffle"]["default"] is True
+    assert props["early_stopping_min_delta"]["default"] == 0.0
+
+
+def test_hyperparam_overrides(installed_cls):
+    node = installed_cls(
+        config={
+            "learning_rate": 0.01,
+            "reduce_lr_factor": 0.2,
+            "reduce_lr_patience": 2,
+            "shuffle": False,
+            "early_stopping_min_delta": 0.01,
+        },
+        seed=0,
+    )
+    assert node.config.learning_rate == 0.01
+    assert node.config.reduce_lr_factor == 0.2
+    assert node.config.reduce_lr_patience == 2
+    assert node.config.shuffle is False
+    assert node.config.early_stopping_min_delta == 0.01

@@ -26,15 +26,20 @@ runtime = "isolated"
 node_types = ["trainer", "model_builder"]
 
 [config_schema.trainer]
-backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: keras, pytorch, auto.", enum = ["keras", "pytorch", "auto"]  }
-device = {  type = "string", title = "Device", default = "auto", description = "Compute device (auto uses GPU when available and allowed). One of: auto, cpu, gpu.", enum = ["auto", "cpu", "gpu"]  }
-epochs = { type = "integer", title = "Epochs", default = 30, description = "Maximum training epochs (early stopping may halt sooner)." }
-batch_size = { type = "integer", title = "Batch size", default = 32, description = "Process in batches of N (0 = all at once)." }
-output_path = { type = "string", title = "Output path", default = "workspace/artifacts/models", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
-patience = { type = "integer", title = "Patience", default = 5, description = "EarlyStopping patience (monitors validation metric)." }
-mixed_precision = { type = "boolean", title = "Mixed precision", default = false, description = "Enable mixed-precision training when the backend supports it (On/Off)." }
-min_val_accuracy = { type = "number", title = "Min val accuracy", default = 0.0, description = "Warn if best validation accuracy is below this threshold (0 disables)." }
-checkpoint_path = { type = "string", title = "Checkpoint path", default = "", description = "Optional checkpoint directory under workspace/artifacts." }
+backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: keras, pytorch, auto.", enum = ["keras", "pytorch", "auto"], ui = { group = "Basic" } }
+device = { type = "string", title = "Device", default = "auto", description = "Compute device (auto uses GPU when available and allowed). One of: auto, cpu, gpu.", enum = ["auto", "cpu", "gpu"], ui = { group = "Basic" } }
+epochs = { type = "integer", title = "Epochs", default = 30, description = "Maximum training epochs (early stopping may halt sooner).", ui = { group = "Basic" } }
+batch_size = { type = "integer", title = "Batch size", default = 32, description = "Process in batches of N (0 = all at once).", ui = { group = "Basic" } }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/models", description = "Write under workspace/artifacts (relative to the Graphyn workspace).", ui = { group = "Basic" } }
+patience = { type = "integer", title = "Patience", default = 5, description = "EarlyStopping patience (monitors validation metric).", ui = { group = "Advanced" } }
+mixed_precision = { type = "boolean", title = "Mixed precision", default = false, description = "Enable mixed-precision training when the backend supports it (On/Off).", ui = { group = "Advanced" } }
+min_val_accuracy = { type = "number", title = "Min val accuracy", default = 0.0, description = "Warn if best validation accuracy is below this threshold (0 disables).", ui = { group = "Advanced" } }
+checkpoint_path = { type = "string", title = "Checkpoint path", default = "", description = "Optional checkpoint directory under workspace/artifacts.", ui = { group = "Advanced" } }
+learning_rate = { type = "number", title = "Learning rate", default = 0.001, description = "Adam learning rate used when (re)compiling for training.", ui = { group = "Advanced" } }
+reduce_lr_factor = { type = "number", title = "Reduce LR factor", default = 0.5, description = "Multiply learning rate by this factor on plateau (Keras ReduceLROnPlateau).", ui = { group = "Advanced" } }
+reduce_lr_patience = { type = "integer", title = "Reduce LR patience", default = 3, description = "Epochs with no val_loss improvement before reducing LR (Keras).", ui = { group = "Advanced" } }
+shuffle = { type = "boolean", title = "Shuffle", default = true, description = "Shuffle training batches each epoch (On/Off).", ui = { group = "Advanced" } }
+early_stopping_min_delta = { type = "number", title = "Early stopping min delta", default = 0.0, description = "Minimum change in the monitored metric to qualify as an improvement.", ui = { group = "Advanced" } }
 
 [config_schema.model_builder]
 architecture = { type = "string", title = "Architecture", default = "ds_cnn", description = "Model architecture. One of: ds_cnn, mobilenet, simple_cnn.", enum = ["ds_cnn", "mobilenet", "simple_cnn"] }
