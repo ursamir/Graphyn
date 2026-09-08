@@ -81,3 +81,28 @@ def test_missing_config_raises():
         raise AssertionError("expected missing")
     except NodeNotFoundError:
         pass
+
+
+def test_toml_group_and_items():
+    """ui.group and items.enum pass through for Builder progressive disclosure / multi-select."""
+    schema = json_schema_from_toml_fields(
+        {
+            "timeout_s": {
+                "type": "number",
+                "title": "Timeout",
+                "default": 30.0,
+                "ui": {"group": "Advanced"},
+            },
+            "formats": {
+                "type": "array",
+                "title": "Formats",
+                "default": ["srt"],
+                "items": {"type": "string", "enum": ["srt", "vtt", "json"]},
+                "ui": {"group": "Basic"},
+            },
+        }
+    )
+    props = schema["properties"]
+    assert props["timeout_s"]["group"] == "Advanced"
+    assert props["formats"]["group"] == "Basic"
+    assert props["formats"]["items"]["enum"] == ["srt", "vtt", "json"]

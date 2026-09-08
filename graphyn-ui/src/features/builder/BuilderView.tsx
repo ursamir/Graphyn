@@ -156,6 +156,11 @@ function BuilderInner() {
   const [logCollapsed, setLogCollapsed] = React.useState(true)
   const [runHadErrors, setRunHadErrors] = React.useState(false)
   const [inspectorId, setInspectorId] = React.useState<string | null>(null)
+  const [advancedOpen, setAdvancedOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    setAdvancedOpen(false)
+  }, [inspectorId])
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null)
   const [actionError, setActionError] = React.useState<{ title: string; message: string; detail?: string } | null>(null)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
@@ -1240,9 +1245,19 @@ function BuilderInner() {
                           </div>
                         )}
                         {(() => {
-                          const entries = Object.entries(node.data.schemaProps ?? {})
+                          const entries = Object.entries(node.data.schemaProps ?? {}) as [string, Record<string, unknown>][]
                           if (entries.length === 0) return <div className="text-sm text-ink-400">No config fields</div>
-                          return entries.map(([key, def]) => (
+                          const normalizeGroup = (def: Record<string, unknown>) => {
+                            const g = String(def.group ?? '').trim()
+                            if (!g) return 'Basic'
+                            const low = g.toLowerCase()
+                            if (low === 'advanced' || low === 'adv') return 'Advanced'
+                            if (low === 'basic') return 'Basic'
+                            return g
+                          }
+                          const basic = entries.filter(([, def]) => normalizeGroup(def) !== 'Advanced')
+                          const advanced = entries.filter(([, def]) => normalizeGroup(def) === 'Advanced')
+                          const renderField = ([key, def]: [string, Record<string, unknown>]) => (
                             <label key={key} className="block text-[12px] text-ink-700" title={schemaFieldHint(def)}>
                               <span className="font-medium">{schemaFieldLabel(key, def)}</span>
                               {schemaFieldHint(def) ? (
@@ -1257,7 +1272,30 @@ function BuilderInner() {
                                 onChange={(v) => node.data.onChangeConfig?.(key, v)}
                               />
                             </label>
-                          ))
+                          )
+                          return (
+                            <>
+                              {basic.map(renderField)}
+                              {advanced.length > 0 ? (
+                                <div className="mt-2 rounded-lg border border-ink-200 bg-ink-50/60">
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-500 hover:text-ink-800"
+                                    onClick={() => setAdvancedOpen((v) => !v)}
+                                    aria-expanded={advancedOpen}
+                                  >
+                                    <span>Advanced ({advanced.length})</span>
+                                    {advancedOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                                  </button>
+                                  {advancedOpen ? (
+                                    <div className="space-y-2 border-t border-ink-200 px-2.5 py-2">
+                                      {advanced.map(renderField)}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </>
+                          )
                         })()}
                       </>
                     )}

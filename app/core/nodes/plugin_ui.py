@@ -7,11 +7,11 @@ Owns:             json_schema_from_toml_fields, overlay_plugin_ui
 Public Surface:   json_schema_from_toml_fields, overlay_plugin_ui
 Must NOT:         Import plugins, execute plugin code, or talk to the API.
 Dependencies:     copy
-Reason To Change: Plugin UI hint keys (widget, enum, title) evolve.
+Reason To Change: Plugin UI hint keys (widget, enum, title, group) evolve.
 
 Plugin authors declare fields in plugin.toml. The host is a generic form
 renderer. plugin.toml wins over in-code Pydantic for title, description,
-enum, default, type, and widget when the plugin sets them.
+enum, default, type, widget, group, and items when the plugin sets them.
 """
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ _PROP_KEYS = (
     "minimum",
     "maximum",
     "format",
+    "items",
+    "group",
 )
 
 
@@ -44,8 +46,14 @@ def json_schema_from_toml_fields(fields: dict[str, Any] | None) -> dict[str, Any
             if name in spec:
                 prop[name] = spec[name]
         ui = spec.get("ui")
-        if ui and "widget" not in prop:
+        if isinstance(ui, str) and "widget" not in prop:
+            # Legacy: ui = "secret" meant widget
             prop["widget"] = ui
+        elif isinstance(ui, dict):
+            if "widget" in ui and "widget" not in prop:
+                prop["widget"] = ui["widget"]
+            if "group" in ui and "group" not in prop:
+                prop["group"] = ui["group"]
         if prop:
             props[key] = prop
     return {"type": "object", "properties": props}
@@ -56,7 +64,7 @@ def overlay_plugin_ui(base: dict[str, Any] | None, fields: dict[str, Any] | None
 
     Plugin-declared keys keep their relative order first, then leftover
     Pydantic-only keys. Declared plugin properties overwrite matching JSON
-    Schema keys (enum, title, description, widget, default, type).
+    Schema keys (enum, title, description, widget, default, type, group, items).
     """
     overlay = json_schema_from_toml_fields(fields)
     plugin_props = overlay.get("properties") or {}

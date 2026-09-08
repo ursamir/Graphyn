@@ -31,13 +31,13 @@ Stakeholder scores (1–5) use heuristics + spot checks:
 | `alignment-node` | 6 | 0 | 0 | — | False | 5 | 5 | 5 |  |
 | `asr-transcribe` | 5 | 0 | 0 | — | True | 5 | 5 | 5 | Real providers only (openai_compat/assemblyai/deepgram). |
 | `audio-annotator` | 6 | 0 | 0 | — | True | 5 | 5 | 5 |  |
-| `audio-classifier` | 4 | 0 | 0 | — | True | 5 | 5 | 5 | Backends enumerated; top_k clarified. P2: confidence_threshold filter. |
+| `audio-classifier` | 5 | 0 | 0 | — | True | 5 | 5 | 5 | Backends enumerated; top_k clarified; confidence_threshold filter (None/0=off). |
 | `audio-conditioner` | 17 | 0 | 0 | — | True | 5 | 5 | 5 | Production knobs complete (LUFS/compress/limiter). Descriptions enriched. |
 | `audio-event-detector` | 7 | 0 | 0 | — | True | 5 | 5 | 5 |  |
 | `audio-exporter` | 6 | 0 | 0 | — | False | 5 | 5 | 5 | Added format=wav enum; split ratios / append clarified. |
 | `audio-generator` | 8 | 0 | 0 | — | False | 5 | 5 | 5 |  |
 | `augmentation-pipeline` | 2 | 0 | 0 | — | True | 5 | 5 | 5 |  |
-| `caption-export` | 4 | 0 | 0 | — | True | 5 | 5 | 5 |  |
+| `caption-export` | 4 | 0 | 0 | — | True | 5 | 5 | 5 | formats constrained to srt|vtt|json (runtime-supported). |
 | `csv-table` | 3 | 0 | 0 | — | True | 5 | 5 | 5 |  |
 | `dataset-balancer` | 6 | 0 | 0 | — | False | 5 | 5 | 5 |  |
 | `dataset-builder` | 6 | 0 | 0 | — | False | 5 | 5 | 5 |  |
@@ -66,9 +66,9 @@ Stakeholder scores (1–5) use heuristics + spot checks:
 | `set-map` | 4 | 0 | 0 | — | True | 5 | 5 | 5 |  |
 | `speaker-separator` | 8 | 0 | 0 | — | False | 5 | 5 | 4 | P0: auth_token_env added; inline auth_token deprecated+exclude. |
 | `speech-synthesizer` | 7 | 0 | 0 | — | False | 5 | 5 | 5 |  |
-| `stream-ingest` | 10 | 0 | 0 | — | True | 5 | 5 | 5 |  |
+| `stream-ingest` | 10 | 0 | 0 | — | True | 5 | 5 | 5 | device_id None=OS default; clear error if index missing. |
 | `structured-llm` | 7 | 0 | 0 | — | True | 5 | 5 | 5 | openai_compat only; schema widget=json. |
-| `trainer` | 16 | 0 | 0 | — | False | 5 | 5 | 5 |  |
+| `trainer` | 14 | 0 | 0 | — | False | 5 | 5 | 5 | Exposed LR / ReduceLR / shuffle / ES min_delta (runtime-honored). |
 | `voice-converter` | 4 | 0 | 0 | — | False | 5 | 5 | 5 |  |
 | `wait-delay` | 2 | 0 | 0 | — | True | 5 | 5 | 5 |  |
 
@@ -88,15 +88,19 @@ Stakeholder scores (1–5) use heuristics + spot checks:
 - Workflow nodes (`http_request`, `http_webhook`, `if_switch`, `set_map`, `structured_llm`, `asr_transcribe`): auth/timeout/retry/schema copy aligned for Builder + MCP.
 - Restored lost empty-object `default = {}` entries in several `plugin.toml` overlays after enrichment.
 
+### P2 (done this pass)
+
+- **audio-classifier**: optional `confidence_threshold` (float 0–1; None/0 = off). Filters/drops low-confidence predictions in `process()`; Field + plugin.toml + unit tests.
+- **caption-export `formats`**: constrained to runtime-supported `srt|vtt|json` (no txt). Builder multi-select via `items.enum`.
+- **stream-ingest device_id**: `None`/empty = OS default input (`sounddevice device=None`); explicit index validated with clear error if missing / non-input.
+- **Progressive disclosure**: `ui.group` (`Basic` / `Advanced`) in plugin.toml overlays; `plugin_ui` passes `group` + `items`; Builder inspector collapses Advanced by default. Applied to noisiest Common+Audio configs (http_request, asr_transcribe, structured_llm, stream_ingest, audio_conditioner, audio_quality_gate, audio_classifier, caption_export, trainer).
+- **trainer**: light hyperparam pass — `learning_rate`, `reduce_lr_factor`, `reduce_lr_patience`, `shuffle`, `early_stopping_min_delta` (wired into Keras/PyTorch paths; no trainer rewrite).
+
 ### P2 (remaining)
 
-- **audio-classifier**: optional `confidence_threshold` filter (runtime change) — not added this pass.
 - **audio-exporter**: FLAC/Opus export formats — not supported yet; schema correctly admits `wav` only.
-- **caption-export `formats`**: still a free-form list; could become a multi-select enum of `srt|vtt|json`.
-- **trainer**: deeper Keras/PyTorch hyperparams (optimizer/scheduler/loss) remain intentionally limited (out of scope: full trainer rewrite).
-- **Progressive disclosure**: no `ui.group` / advanced-section metadata yet in `plugin.toml` (Builder shows flat forms).
+- **trainer**: deeper Keras/PyTorch hyperparams (optimizer choice / schedulers / loss) remain intentionally limited (out of scope: full trainer rewrite).
 - **WakeWord package**: separate layout (not all nodes use per-node `plugin.toml` Config overlays like Common/Audio).
-- **stream-ingest device_id**: clarify sentinel for "default device" across OSes.
 - A few boolean titles still terse; On/Off chrome is in `ConfigFieldEditor` regardless.
 
 ## Worst nodes before this pass (by weak Field descriptions)
@@ -105,6 +109,7 @@ http-request, segmenter, feature-frontend, audio-quality-gate, stream-ingest, en
 
 ## Verification
 
-- Prefer plugin-owned schema: `plugin.toml` `[config_schema.<node>]` overlays Pydantic via `app.core.nodes.plugin_ui.overlay_plugin_ui`.
-- Targeted unit tests: `unit_test/plugins/audio/*`, `unit_test/plugins/common/test_{http_request,asr_transcribe,structured_llm,if_switch,set_map}.py`.
+- Prefer plugin-owned schema: `plugin.toml` `[config_schema.<node>]` overlays Pydantic via `app.core.nodes.plugin_ui.overlay_plugin_ui` (passes `group`, `items`, `widget`).
+- Builder inspector: `ConfigFieldEditor` + grouped Basic/Advanced (Advanced collapsed by default); array `items.enum` → multi-select.
+- Targeted unit tests: `unit_test/plugins/audio/test_{audio_classifier,stream_ingest}.py`, `unit_test/plugins/common/test_{caption_export,trainer}.py`, `unit_test/core/test_plugin_ui.py`.
 
