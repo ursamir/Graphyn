@@ -140,8 +140,8 @@ class PythonCodeNode(Node):
 
     class Config(NodeConfig):
         source: str = Field(default='', title="Source", description="Python source for trusted operators. Not a sandbox.")
-        allowed_paths: list = Field(default=[], title="Allowed Paths", description="Explicit filesystem read allowlist (empty = open() denied).")
-        allow_network: bool = Field(default=False, title="Allow Network", description="Permit network-related imports (default off; still not a sandbox).")
+        allowed_paths: list = Field(default=[], title="Allowed paths", description="Explicit filesystem read allowlist (empty = open() denied).")
+        allow_network: bool = Field(default=False, title="Allow network", description="Permit network-related imports (default Off; still not a sandbox).")
 
     def process(self, inputs):
         source = self.config.source or ""

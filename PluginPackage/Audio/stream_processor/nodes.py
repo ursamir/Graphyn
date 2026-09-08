@@ -78,12 +78,12 @@ class StreamProcessorNode(Node):
     }
 
     class Config(NodeConfig):
-        window_ms: int = Field(default=1000, title="Window MS", description="Window MS.")
-        hop_ms: int = Field(default=500, title="Hop MS", description="Hop MS.")
-        target_latency_ms: int = Field(default=200, title="Target Latency MS", description="Target Latency MS.")
-        max_buffer_size: int = Field(default=100, title="Max Buffer Size", description="Max Buffer Size.")
-        sample_rate: int = Field(default=16000, title="Sample Rate", description="Audio sample rate in Hz.")
-        overlap_add: bool = Field(default=False, title="Overlap Add", description="Enable overlap add.")
+        window_ms: int = Field(default=1000, title="Window (ms)", description="Segment/window length in milliseconds.")
+        hop_ms: int = Field(default=500, title="Hop (ms)", description="Hop between processing windows in milliseconds.")
+        target_latency_ms: int = Field(default=200, title="Target latency (ms)", description="Soft latency budget for the streaming processor.")
+        max_buffer_size: int = Field(default=100, title="Max buffer size", description="Maximum buffered frames/chunks before dropping oldest.")
+        sample_rate: int = Field(default=16000, title="Sample rate", description="Audio sample rate in Hz.")
+        overlap_add: bool = Field(default=False, title="Overlap-add", description="Reconstruct streaming windows with overlap-add (On/Off).")
 
     def __init__(self, config=None, seed: int = 0, observer=None):
         super().__init__(config=config, seed=seed, observer=observer)

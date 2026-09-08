@@ -86,19 +86,19 @@ class DatasetIngestNode(Node):
     }
 
     class Config(NodeConfig):
-        source_type: Literal["filesystem", "huggingface", "s3", "zip", "tar", "manifest"] = Field(default='filesystem', title="Source Type", description="Where to load the dataset from. One of: filesystem, huggingface, s3, zip, tar, manifest.")
-        path: str = Field(default='', title="Path", description="Path under workspace/datasets/input (or another workspace path).")
-        manifest_path: str = Field(default='', title="Manifest Path", description="Path under workspace/datasets/input (or another workspace path).")
-        recursive: bool = Field(default=True, title="Recursive", description="Walk subdirectories.")
+        source_type: Literal["filesystem", "huggingface", "s3", "zip", "tar", "manifest"] = Field(default='filesystem', title="Source type", description="Where to load the dataset from. One of: filesystem, huggingface, s3, zip, tar, manifest.")
+        path: str = Field(default='', title="Path", description="Dataset path under workspace/ (relative path preferred).")
+        manifest_path: str = Field(default='', title="Manifest path", description="Path to a manifest JSON/CSV under workspace/.")
+        recursive: bool = Field(default=True, title="Recursive", description="Walk subdirectories when scanning the filesystem (On/Off).")
         limit: int = Field(default=0, title="Limit", description="Maximum items to load (0 = no limit).")
-        label_override: str = Field(default='', title="Label Override", description="Label Override.")
-        hf_split: str = Field(default='train', title="Hf Split", description="Hf Split.")
-        hf_audio_column: str = Field(default='audio', title="Hf Audio Column", description="Hf Audio Column.")
-        hf_label_column: str = Field(default='label', title="Hf Label Column", description="Hf Label Column.")
-        lazy: bool = Field(default=False, title="Lazy", description="Enable lazy.")
-        resume_from: str = Field(default='', title="Resume From", description="Path under workspace/datasets/input (or another workspace path).")
-        validate_integrity: bool = Field(default=False, title="Validate Integrity", description="Enable validate integrity.")
-        deduplicate: bool = Field(default=False, title="Deduplicate", description="Enable deduplicate.")
+        label_override: str = Field(default='', title="Label override", description="Force every sample to this label (empty = infer from folders/manifest).")
+        hf_split: str = Field(default='train', title="HF split", description="HuggingFace split name (train / validation / test).")
+        hf_audio_column: str = Field(default='audio', title="HF audio column", description="Column containing audio in the HuggingFace dataset.")
+        hf_label_column: str = Field(default='label', title="HF label column", description="Column containing labels in the HuggingFace dataset.")
+        lazy: bool = Field(default=False, title="Lazy load", description="Defer waveform decode until a downstream node reads samples (On/Off).")
+        resume_from: str = Field(default='', title="Resume from", description="Optional checkpoint/manifest path to resume ingestion.")
+        validate_integrity: bool = Field(default=False, title="Validate integrity", description="Verify .sha256 sidecars when present (On/Off).")
+        deduplicate: bool = Field(default=False, title="Deduplicate", description="Skip duplicate waveforms by content hash (On/Off).")
 
     # ── process (multi-port / source node signature) ──────────────────────────
 

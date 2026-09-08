@@ -236,7 +236,7 @@ class PiiRedactNode(Node):
     }
 
     class Config(NodeConfig):
-        placeholder: str = Field(default='', title="Placeholder", description="Placeholder.")
+        placeholder: str = Field(default='', title="Placeholder", description="Replacement text inserted for redacted PII spans.")
         engine: Literal["auto", "regex", "presidio"] = Field(default='auto', title="Engine", description="Engine. One of: auto, regex, presidio.")
 
     def process(self, inputs: dict) -> dict:

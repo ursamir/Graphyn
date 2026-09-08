@@ -80,11 +80,11 @@ class DatasetBalancerNode(Node):
 
     class Config(NodeConfig):
         strategy: Literal["oversample", "undersample", "weighted", "synthetic"] = Field(default='oversample', title="Strategy", description="Resampling / balancing strategy. One of: oversample, undersample, weighted, synthetic.")
-        target_count: int = Field(default=0, title="Target Count", description="Target Count.")
+        target_count: int = Field(default=0, title="Target count", description="Desired count per class/speaker after balancing.")
         balance_by: Literal["class", "speaker", "duration"] = Field(default='class', title="Balance By", description="Balance By. One of: class, speaker, duration.")
-        speaker_key: str = Field(default='speaker_id', title="Speaker Key", description="Speaker Key.")
-        jitter_std: float = Field(default=0.0, title="Jitter Std", description="Jitter Std.")
-        random_seed: int = Field(default=42, title="Random Seed", description="RNG seed for reproducible splits and sampling.")
+        speaker_key: str = Field(default='speaker_id', title="Speaker key", description="Metadata key used to identify speakers when balancing.")
+        jitter_std: float = Field(default=0.0, title="Jitter std", description="Gaussian jitter std-dev applied during oversampling.")
+        random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible splits and sampling.")
 
     # ── SISO process ──────────────────────────────────────────────────────────
 

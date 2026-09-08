@@ -90,12 +90,12 @@ class EmbeddingGeneratorNode(Node):
     }
 
     class Config(NodeConfig):
-        model: Literal["wav2vec2", "hubert", "clap", "yamnet", "xvector", "openl3"] = Field(default='wav2vec2', title="Model", description="Model. One of: wav2vec2, hubert, clap, yamnet, xvector, openl3.")
-        model_name_or_path: str = Field(default='', title="Model Name Or Path", description="Model Name Or Path.")
+        model: Literal["wav2vec2", "hubert", "clap", "yamnet", "xvector", "openl3"] = Field(default='wav2vec2', title="Model", description="Provider model id (e.g. gpt-4o-mini, whisper-1). Empty = provider default.")
+        model_name_or_path: str = Field(default='', title="Model name or path", description="HF model id or local path under workspace/artifacts.")
         backend: Literal["pytorch", "tensorflow", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: pytorch, tensorflow, auto.")
         pooling: Literal["mean", "cls", "last", "none"] = Field(default='mean', title="Pooling", description="Pooling. One of: mean, cls, last, none.")
-        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude.")
-        layer: int = Field(default=-1, title="Layer", description="Layer.")
+        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude (On/Off).")
+        layer: int = Field(default=-1, title="Layer", description="Hidden layer index to pool embeddings from (-1 = last).")
 
     # ── setup ─────────────────────────────────────────────────────────────────
 

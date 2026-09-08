@@ -100,12 +100,12 @@ class DatasetBuilderNode(Node):
     }
 
     class Config(NodeConfig):
-        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split Ratios", description="Split Ratios.")
+        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Train/val/test ratios as a JSON object that should sum to ~1.0.")
         shuffle: bool = Field(default=True, title="Shuffle", description="Shuffle samples before splitting.")
         stratify: bool = Field(default=True, title="Stratify", description="Stratify train/val/test splits by label.")
         output_format: Literal["numpy", "tensorflow", "pytorch"] = Field(default='numpy', title="Output Format", description="Output Format. One of: numpy, tensorflow, pytorch.")
-        fixed_length: int = Field(default=0, title="Fixed Length", description="Fixed Length.")
-        random_seed: int = Field(default=42, title="Random Seed", description="RNG seed for reproducible splits and sampling.")
+        fixed_length: int = Field(default=0, title="Fixed length", description="Pad/truncate examples to this length (0 = keep native).")
+        random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible splits and sampling.")
 
     # ── helpers ──────────────────────────────────────────────────────────────
 

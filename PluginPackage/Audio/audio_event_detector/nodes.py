@@ -97,13 +97,13 @@ class AudioEventDetectorNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str = Field(default='', title="Model Path", description="Model file under workspace/artifacts, or empty for a built-in model.")
+        model_path: str = Field(default='', title="Model path", description="Model file under workspace/artifacts (or empty for built-in).")
         backend: Literal["yamnet", "tflite", "pytorch", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: yamnet, tflite, pytorch, auto.")
-        threshold: float = Field(default=0.5, title="Threshold", description="Threshold.")
-        event_types: list = Field(default=[], title="Event Types", description="Event Types.")
-        min_event_duration_ms: float = Field(default=100.0, title="Min Event Duration MS", description="Min Event Duration MS.")
-        frame_hop_ms: float = Field(default=480.0, title="Frame Hop MS", description="Frame Hop MS.")
-        merge_tolerance_ms: float = Field(default=10.0, title="Merge Tolerance MS", description="Merge Tolerance MS.")
+        threshold: float = Field(default=0.5, title="Threshold", description="Detection confidence/energy threshold in [0, 1] or dB as documented by the backend.")
+        event_types: list = Field(default=[], title="Event types", description="Optional allowlist of event class names to keep (empty = all).")
+        min_event_duration_ms: float = Field(default=100.0, title="Min event duration (ms)", description="Ignore events shorter than this (milliseconds).")
+        frame_hop_ms: float = Field(default=480.0, title="Frame hop (ms)", description="Analysis hop between frames in milliseconds.")
+        merge_tolerance_ms: float = Field(default=10.0, title="Merge tolerance (ms)", description="Merge adjacent same-class events closer than this (ms).")
 
     # ── multi-port process ────────────────────────────────────────────────────
 

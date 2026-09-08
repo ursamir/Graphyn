@@ -87,10 +87,10 @@ class ExperimentTrackerNode(Node):
 
     class Config(NodeConfig):
         backend: Literal["json", "mlflow"] = Field(default='json', title="Backend", description="Implementation backend. One of: json, mlflow.")
-        experiment_name: str = Field(default='default', title="Experiment Name", description="Experiment Name.")
+        experiment_name: str = Field(default='default', title="Experiment name", description="Name recorded in the experiment tracker / run metadata.")
         tracking_uri: str = Field(default='', title="Tracking Uri", description="Path under workspace/datasets/input (or another workspace path).")
         log_artifacts: bool = Field(default=True, title="Log Artifacts", description="Enable log artifacts.")
-        output_dir: str = Field(default='workspace/runs', title="Output Dir", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        output_dir: str = Field(default='workspace/runs', title="Output dir", description="Directory under workspace/artifacts for written files.")
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 

@@ -166,10 +166,10 @@ class CaptionExportNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = Field(default="workspace/artifacts/captions", title="Output Dir", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        basename: str = Field(default='captions', title="Basename", description="Basename.")
-        formats: list = Field(default=['srt', 'vtt', 'json'], title="Formats", description="Formats.")
-        max_words_per_cue: int = Field(default=12, title="Max Words Per Cue", description="Max Words Per Cue.")
+        output_dir: str = Field(default="workspace/artifacts/captions", title="Output dir", description="Directory under workspace/artifacts for written files.")
+        basename: str = Field(default='captions', title="Basename", description="Output filename stem (without extension).")
+        formats: list = Field(default=['srt', 'vtt', 'json'], title="Formats", description="Formats to write: choose among srt, vtt, json.")
+        max_words_per_cue: int = Field(default=12, title="Max words per cue", description="Soft wrap captions after this many words per cue.")
 
     def process(self, transcript):
         if transcript is None:

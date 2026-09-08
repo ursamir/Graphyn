@@ -18,7 +18,7 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 from pydantic import Field
 
 import numpy as np
@@ -86,11 +86,12 @@ class AudioExporterNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = Field(default="workspace/artifacts/audio_export", title="Output Dir", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split Ratios", description="Split Ratios.")
-        version_tag: str = Field(default='v1', title="Version Tag", description="Version Tag.")
-        random_seed: int = Field(default=42, title="Random Seed", description="RNG seed for reproducible splits and sampling.")
-        append: bool = Field(default=False, title="Append", description="Enable append.")
+        output_dir: str = Field(default="workspace/artifacts/audio_export", title="Output dir", description="Directory under workspace/artifacts for written files.")
+        format: Literal["wav"] = Field(default='wav', title="Format", description="Output audio format. Currently wav only (soundfile PCM). One of: wav.")
+        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Train/val/test ratios as JSON; should sum to ~1.0.")
+        version_tag: str = Field(default='v1', title="Version tag", description="Dataset/export version label (e.g. v1, 2026-09-08).")
+        random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible splits and sampling.")
+        append: bool = Field(default=False, title="Append", description="Append files into an existing export tree instead of replacing it (On/Off).")
 
     # ── SISO process ──────────────────────────────────────────────────────────
 

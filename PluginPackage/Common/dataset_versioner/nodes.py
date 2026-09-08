@@ -82,9 +82,9 @@ class DatasetVersionerNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = Field(default='workspace/datasets/versioned', title="Output Dir", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        version_tag: str = Field(default='', title="Version Tag", description="Version Tag.")
-        include_metadata: bool = Field(default=True, title="Include Metadata", description="Enable include metadata.")
+        output_dir: str = Field(default='workspace/datasets/versioned', title="Output dir", description="Directory under workspace/artifacts for written files.")
+        version_tag: str = Field(default='', title="Version tag", description="Dataset/export version label (e.g. v1, 2026-09-08).")
+        include_metadata: bool = Field(default=True, title="Include metadata", description="Bundle model metadata / labels JSON with the package (On/Off).")
         create_snapshot: bool = Field(default=False, title="Create Snapshot", description="Enable create snapshot.")
 
     # ── SISO process ──────────────────────────────────────────────────────────

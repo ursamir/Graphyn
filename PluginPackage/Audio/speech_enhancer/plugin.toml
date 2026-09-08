@@ -29,10 +29,10 @@ optional_dependencies = [
 ]
 
 [config_schema.speech_enhancer]
-backend = { type = "string", title = "Backend", default = "spectral", description = "Implementation backend. One of: spectral, deepfilter, auto.", enum = ["spectral", "deepfilter", "auto"] }
-denoise = { type = "boolean", title = "Denoise", default = true, description = "Enable denoise." }
-dereverb = { type = "boolean", title = "Dereverb", default = false, description = "Enable dereverb." }
+backend = {  type = "string", title = "Backend", default = "spectral", description = "Implementation backend. One of: spectral, deepfilter, auto.", enum = ["spectral", "deepfilter", "auto"]  }
+denoise = {  type = "boolean", title = "Denoise", default = true, description = "Apply noise reduction / spectral gating (On/Off)."  }
+dereverb = {  type = "boolean", title = "Dereverb", default = false, description = "Apply dereverberation when the backend supports it (On/Off)."  }
 vocal_isolation = { type = "boolean", title = "Vocal Isolation", default = false, description = "Enable vocal isolation." }
 telephony_mode = { type = "boolean", title = "Telephony Mode", default = false, description = "Enable telephony mode." }
 stationary_noise = { type = "boolean", title = "Stationary Noise", default = true, description = "Enable stationary noise." }
-prop_decrease = { type = "number", title = "Prop Decrease", default = 0.75, description = "Prop Decrease." }
+prop_decrease = { type = "number", title = "Prop decrease", default = 0.75, description = "Noise reduction strength for spectral gating (0–1)." }

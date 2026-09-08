@@ -16,6 +16,6 @@ node_types = ["eval_gate"]
 
 [config_schema.eval_gate]
 check_empty_transcript = { type = "boolean", title = "Check empty transcript", default = true, description = "Fail the run when transcript text is empty." }
-required_keys = { type = "array", title = "Required keys", default = [], description = "JSON keys that must exist on the payload." }
-pii_regex = { type = "string", title = "PII regex", default = "", description = "Optional regex; fail if matches remain after redaction." }
+required_keys = { type = "array", title = "Required keys", default = [], description = "Keys that must exist (and be truthy if configured) for the gate to pass." }
+pii_regex = { type = "string", title = "PII regex", default = "", description = "Optional extra regex for PII detection (empty = built-in patterns only)." }
 fail_if_empty_list = { type = "boolean", title = "Fail if empty list", default = true, description = "Fail when the primary list input is empty." }

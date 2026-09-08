@@ -109,9 +109,9 @@ class ObjectStoreNode(Node):
         backend: Literal["local", "s3"] = Field(default='local', title="Backend", description="Implementation backend. One of: local, s3.")
         operation: Literal["get", "put", "list"] = Field(default='put', title="Operation", description="Operation to perform. One of: get, put, list.")
         root: str = Field(default="workspace/artifacts/object_store", title="Root", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        key: str = Field(default='', title="Key", description="Key.")
-        prefix: str = Field(default='', title="Prefix", description="Prefix.")
-        bucket: str = Field(default='', title="Bucket", description="Bucket.")
+        key: str = Field(default='', title="Object key", description="Object key within the bucket (path-like).")
+        prefix: str = Field(default='', title="Prefix", description="Key prefix within the bucket / namespace.")
+        bucket: str = Field(default='', title="Bucket", description="Object-store bucket name.")
         dest: str = Field(default='', title="Dest", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
 
     def process(self, value):

@@ -104,9 +104,9 @@ class AsrTranscribeNode(Node):
     class Config(NodeConfig):
         provider: Literal["openai_compat", "assemblyai", "deepgram"] = Field(default='openai_compat', title="Provider", description="Remote ASR provider. One of: openai_compat, assemblyai, deepgram.")
         language: str = Field(default='en', title="Language", description="BCP-47 / ISO language code (e.g. en).")
-        model: str = Field(default='', title="Model", description="Model.")
-        base_url: str = Field(default='', title="Base URL", description="Base URL.")
-        timeout_s: float = Field(default=30.0, title="Timeout S", description="Timeout in seconds.")
+        model: str = Field(default='', title="Model", description="Provider model id (e.g. whisper-1). Empty = provider default.")
+        base_url: str = Field(default='', title="Base URL", description="OpenAI-compatible base URL override (openai_compat only).")
+        timeout_s: float = Field(default=30.0, title="Timeout (s)", description="Request/operation timeout in seconds.")
 
     def process(self, audio):
         samples = _coerce_samples(audio)

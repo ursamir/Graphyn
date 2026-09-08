@@ -82,12 +82,12 @@ class SpeechSynthesizerNode(Node):
 
     class Config(NodeConfig):
         backend: Literal["coqui", "espeak", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: coqui, espeak, auto.")
-        model_name: str = Field(default='tts_models/en/ljspeech/tacotron2-DDC', title="Model Name", description="Model Name.")
+        model_name: str = Field(default='tts_models/en/ljspeech/tacotron2-DDC', title="Model name", description="TTS / model identifier known to the backend.")
         language: str = Field(default='en', title="Language", description="BCP-47 / ISO language code (e.g. en).")
-        speaker: str = Field(default='', title="Speaker", description="Speaker.")
+        speaker: str = Field(default='', title="Speaker", description="Speaker id or voice name for multi-speaker models.")
         reference_audio: str = Field(default='', title="Reference Audio", description="Path under workspace/datasets/input (or another workspace path).")
-        sample_rate: int = Field(default=22050, title="Sample Rate", description="Audio sample rate in Hz.")
-        speed: float = Field(default=1.0, title="Speed", description="Speed.")
+        sample_rate: int = Field(default=22050, title="Sample rate", description="Audio sample rate in Hz.")
+        speed: float = Field(default=1.0, title="Speed", description="Speaking rate multiplier (1.0 = normal).")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

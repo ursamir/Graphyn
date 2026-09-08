@@ -22,5 +22,5 @@ runtime = "inprocess"
 node_types = ["pii_redact"]
 
 [config_schema.pii_redact]
-placeholder = { type = "string", title = "Placeholder", default = "", description = "Replacement text for redacted spans (empty = engine default)." }
-engine = { type = "string", title = "Engine", default = "auto", description = "auto picks Presidio when installed, else regex.", enum = ["auto", "regex", "presidio"] }
+placeholder = { type = "string", title = "Placeholder", default = "", description = "Replacement text inserted for redacted PII spans." }
+engine = {  type = "string", title = "Engine", default = "auto", description = "auto picks Presidio when installed, else regex. One of: auto, regex, presidio.", enum = ["auto", "regex", "presidio"]  }

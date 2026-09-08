@@ -28,10 +28,11 @@ optional_dependencies = [
 ]
 
 [config_schema.speaker_separator]
-backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: pyannote, speechbrain, auto.", enum = ["pyannote", "speechbrain", "auto"] }
-num_speakers = { type = "integer", title = "Num Speakers", default = 0, description = "Num Speakers." }
-min_speakers = { type = "integer", title = "Min Speakers", default = 1, description = "Min Speakers." }
-max_speakers = { type = "integer", title = "Max Speakers", default = 10, description = "Max Speakers." }
-output_mode = { type = "string", title = "Output Mode", default = "per_speaker", description = "Output Mode. One of: per_speaker, diarization_only.", enum = ["per_speaker", "diarization_only"] }
-auth_token = { type = "string", title = "Auth Token", default = "", description = "Auth Token." }
-min_segment_s = { type = "number", title = "Min Segment S", default = 0.5, description = "Min Segment S." }
+backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: pyannote, speechbrain, auto.", enum = ["pyannote", "speechbrain", "auto"]  }
+num_speakers = { type = "integer", title = "Num speakers", default = 0, description = "Exact speaker count when known (0 = auto / use min–max range)." }
+min_speakers = { type = "integer", title = "Min speakers", default = 1, description = "Lower bound on speaker count for diarization." }
+max_speakers = { type = "integer", title = "Max speakers", default = 10, description = "Upper bound on speaker count for diarization." }
+output_mode = { type = "string", title = "Output mode", default = "per_speaker", description = "Emit per-speaker audio or diarization labels only.", enum = ["per_speaker", "diarization_only"] }
+auth_token_env = { type = "string", title = "Auth token env", default = "HUGGINGFACE_TOKEN", description = "Env var or Graphyn secret NAME for HuggingFace token (preferred)." }
+auth_token = { type = "string", title = "Auth token (deprecated)", default = "", description = "Prefer auth_token_env or HUGGINGFACE_TOKEN env. Do not store tokens in pipeline IR.", widget = "secret" }
+min_segment_s = { type = "number", title = "Min segment (s)", default = 0.5, description = "Drop diarization segments shorter than this many seconds." }

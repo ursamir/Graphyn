@@ -15,6 +15,6 @@ runtime = "inprocess"
 node_types = ["json_transform"]
 
 [config_schema.json_transform]
-mappings = { type = "array", title = "Mappings", default = [], description = "List of {from, to} JSONPath/dotted remaps.", widget = "json" }
-pick = { type = "array", title = "Pick", default = [], description = "Optional list of paths to keep (whitelist)." }
-path = { type = "string", title = "Root path", default = "", description = "Optional dotted path into the payload before mapping." }
+mappings = { type = "array", title = "Mappings", default = [], description = "List of {from, to} or transform mappings.", widget = "json" }
+pick = { type = "array", title = "Pick", default = [], description = "Field names to keep (JSONPath/key list).", widget = "json" }
+path = { type = "string", title = "Path", default = "", description = "Dataset path under workspace/ (relative path preferred)." }

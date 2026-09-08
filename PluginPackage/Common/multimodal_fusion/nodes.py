@@ -104,13 +104,13 @@ class MultimodalFusionNode(Node):
 
     class Config(NodeConfig):
         fusion_type: Literal["concat", "attention", "late", "cross_attention"] = Field(default='concat', title="Fusion Type", description="Fusion Type. One of: concat, attention, late, cross_attention.")
-        audio_dim: int = Field(default=768, title="Audio Dim", description="Audio Dim.")
-        text_dim: int = Field(default=768, title="Text Dim", description="Text Dim.")
-        output_dim: int = Field(default=512, title="Output Dim", description="Output Dim.")
+        audio_dim: int = Field(default=768, title="Audio dim", description="Expected audio embedding dimensionality.")
+        text_dim: int = Field(default=768, title="Text dim", description="Expected text embedding dimensionality.")
+        output_dim: int = Field(default=512, title="Output dim", description="Fused output embedding dimensionality.")
         backend: Literal["numpy", "pytorch"] = Field(default='numpy', title="Backend", description="Implementation backend. One of: numpy, pytorch.")
         # NOTE: backend="pytorch" is reserved for future implementation.
         # All fusion strategies currently use pure numpy regardless of this setting.
-        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude.")
+        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude (On/Off).")
 
     # ── multi-port process ────────────────────────────────────────────────────
 

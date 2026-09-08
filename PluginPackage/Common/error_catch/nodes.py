@@ -54,7 +54,7 @@ class ErrorCatchNode(Node):
 
     class Config(NodeConfig):
         on_error: Literal["continue_error_output", "continue", "fail", "raise"] = Field(default='continue_error_output', title="On Error", description="How the executor handles process() failures. One of: continue_error_output, continue, fail, raise.")
-        on_error_port: str = Field(default='error', title="On Error Port", description="On Error Port.")
+        on_error_port: str = Field(default='error', title="On-error port", description="Output port name that receives the error payload when catching.")
         fail_on_error_input: bool = Field(default=False, title="Fail On Error Input", description="Enable fail on error input.")
 
     def process(self, inputs):

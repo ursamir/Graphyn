@@ -22,8 +22,8 @@ dependencies = [
 
 [config_schema.audio_annotator]
 annotation_mode = { type = "string", title = "Annotation Mode", default = "passthrough", description = "Annotation Mode. One of: passthrough, auto, taxonomy, weak.", enum = ["passthrough", "auto", "taxonomy", "weak"] }
-taxonomy = { type = "object", title = "Taxonomy", default = {  }, description = "Taxonomy." }
-confidence_threshold = { type = "number", title = "Confidence Threshold", default = 0.5, description = "Confidence Threshold." }
-auto_rules = { type = "array", title = "Auto Rules", default = [], description = "Auto Rules." }
-weak_labels = { type = "array", title = "Weak Labels", default = [], description = "Weak Labels." }
+taxonomy = {  type = "object", title = "Taxonomy", default = { }, description = "Label taxonomy map or hierarchy used for annotation.", widget = "json"  }
+confidence_threshold = { type = "number", title = "Confidence threshold", default = 0.5, description = "Minimum confidence to accept an auto-label (0–1)." }
+auto_rules = { type = "array", title = "Auto rules", default = [], description = "Rule list for automatic weak labeling.", widget = "json" }
+weak_labels = { type = "array", title = "Weak labels", default = [], description = "Seed weak labels applied before model suggestions.", widget = "json" }
 propagate_metadata = { type = "boolean", title = "Propagate Metadata", default = true, description = "Enable propagate metadata." }

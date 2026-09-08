@@ -19,10 +19,10 @@ runtime = "inprocess"
 node_types = ["object_store"]
 
 [config_schema.object_store]
-backend = { type = "string", title = "Backend", default = "local", description = "Implementation backend. One of: local, s3.", enum = ["local", "s3"] }
+backend = {  type = "string", title = "Backend", default = "local", description = "Implementation backend. One of: local, s3.", enum = ["local", "s3"]  }
 operation = { type = "string", title = "Operation", default = "put", description = "Operation to perform. One of: get, put, list.", enum = ["get", "put", "list"] }
 root = { type = "string", title = "Root", default = "workspace/artifacts/object_store", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
-key = { type = "string", title = "Key", default = "", description = "Key." }
-prefix = { type = "string", title = "Prefix", default = "", description = "Prefix." }
-bucket = { type = "string", title = "Bucket", default = "", description = "Bucket." }
+key = { type = "string", title = "Object key", default = "", description = "Object key within the bucket (path-like)." }
+prefix = { type = "string", title = "Prefix", default = "", description = "Key prefix within the bucket / namespace." }
+bucket = { type = "string", title = "Bucket", default = "", description = "Object-store bucket name." }
 dest = { type = "string", title = "Dest", default = "", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }

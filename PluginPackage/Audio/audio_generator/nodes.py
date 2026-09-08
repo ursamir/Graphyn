@@ -83,12 +83,12 @@ class AudioGeneratorNode(Node):
     class Config(NodeConfig):
         backend: Literal["musicgen", "audiogen", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: musicgen, audiogen, auto.")
         model_size: Literal["small", "medium", "large"] = Field(default='small', title="Model Size", description="Model Size. One of: small, medium, large.")
-        duration_s: float = Field(default=5.0, title="Duration S", description="Duration S.")
-        prompt: str = Field(default='', title="Prompt", description="Prompt.")
+        duration_s: float = Field(default=5.0, title="Duration (s)", description="Length of generated audio in seconds.")
+        prompt: str = Field(default='', title="Prompt", description="Text prompt guiding generation.")
         conditioning_audio: str = Field(default='', title="Conditioning Audio", description="Path under workspace/datasets/input (or another workspace path).")
-        temperature: float = Field(default=1.0, title="Temperature", description="Temperature.")
-        top_k: int = Field(default=250, title="Top K", description="Top K.")
-        guidance_scale: float = Field(default=3.0, title="Guidance Scale", description="Guidance Scale.")
+        temperature: float = Field(default=1.0, title="Temperature", description="Sampling temperature (higher = more random).")
+        top_k: int = Field(default=250, title="Top-K", description="Token/sample top-K for generative decoding.")
+        guidance_scale: float = Field(default=3.0, title="Guidance scale", description="Classifier-free guidance scale for generative models.")
 
         @field_validator("model_size")
         @classmethod

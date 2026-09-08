@@ -90,17 +90,17 @@ class HttpRequestNode(Node):
 
     class Config(NodeConfig):
         method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = Field(default='GET', title="Method", description="HTTP method. One of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.")
-        url: str = Field(default='', title="URL", description="HTTP URL.")
-        headers: dict = Field(default={}, title="Headers", description="Headers.")
-        query: dict = Field(default={}, title="Query", description="Query.")
-        json_body: dict | list | None = Field(default=None, title="Json Body", description="Json Body.")
-        body: str = Field(default='', title="Body", description="Body.")
-        timeout_s: float = Field(default=30.0, title="Timeout S", description="Timeout in seconds.")
-        retry: int = Field(default=0, title="Retry", description="Retry.")
+        url: str = Field(default='', title="URL", description="Full request URL (https recommended).")
+        headers: dict = Field(default={}, title="Headers", description="HTTP headers as a JSON object of string keys to string values.")
+        query: dict = Field(default={}, title="Query", description="URL query parameters as a JSON object.")
+        json_body: dict | list | None = Field(default=None, title="JSON body", description="JSON request body (object or array). Prefer this over raw body for JSON APIs.")
+        body: str = Field(default='', title="Body", description="Raw request body string used when json_body is empty.")
+        timeout_s: float = Field(default=30.0, title="Timeout (s)", description="Request/operation timeout in seconds.")
+        retry: int = Field(default=0, title="Retries", description="Number of retries after a failed attempt (0 = no retry).")
         provider: Literal["http"] = Field(default='http', title="Provider", description="HTTP provider. Only http (real network) is supported.")
-        auth_env: str = Field(default='', title="Auth Env", description="Auth Env.")
-        auth_header: str = Field(default='Authorization', title="Auth Header", description="Auth Header.")
-        auth_prefix: str = Field(default='Bearer ', title="Auth Prefix", description="Auth Prefix.")
+        auth_env: str = Field(default='', title="Auth env / secret name", description="Environment variable or Graphyn secret NAME for the bearer/token (never paste the secret into IR).")
+        auth_header: str = Field(default='Authorization', title="Auth header", description="HTTP header that receives the auth value (default Authorization).")
+        auth_prefix: str = Field(default='Bearer ', title="Auth prefix", description="Prefix prepended to the secret (e.g. 'Bearer '). Use empty for raw tokens.")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

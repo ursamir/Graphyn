@@ -94,14 +94,14 @@ class RealtimeInferenceNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str = Field(..., title="Model Path", description="Model file under workspace/artifacts, or empty for a built-in model.")
+        model_path: str = Field(..., title="Model path", description="Model file under workspace/artifacts (or empty for built-in).")
         backend: Literal["tflite", "pytorch", "onnx", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: tflite, pytorch, onnx, auto.")
         mode: Literal["classification", "wake_word", "streaming_asr"] = Field(default='classification', title="Mode", description="Operating mode. One of: classification, wake_word, streaming_asr.")
-        wake_word_threshold: float = Field(default=0.8, title="Wake Word Threshold", description="Wake Word Threshold.")
-        batch_size: int = Field(default=1, title="Batch Size", description="Mini-batch size.")
-        adaptive: bool = Field(default=False, title="Adaptive", description="Enable adaptive.")
-        adaptive_skip_ratio: float = Field(default=0.5, title="Adaptive Skip Ratio", description="Adaptive Skip Ratio.")
-        streaming_buffer_size: int = Field(default=10, title="Streaming Buffer Size", description="Streaming Buffer Size.")
+        wake_word_threshold: float = Field(default=0.8, title="Wake-word threshold", description="Detection threshold in [0, 1]; higher = fewer false accepts.")
+        batch_size: int = Field(default=1, title="Batch size", description="Process in batches of N (0 = all at once).")
+        adaptive: bool = Field(default=False, title="Adaptive", description="Adaptively skip frames under load using adaptive_skip_ratio (On/Off).")
+        adaptive_skip_ratio: float = Field(default=0.5, title="Adaptive skip ratio", description="Fraction of frames eligible to skip under load (0–1).")
+        streaming_buffer_size: int = Field(default=10, title="Streaming buffer size", description="Frames kept in the realtime inference buffer.")
 
     # ── backend detection ─────────────────────────────────────────────────────
 

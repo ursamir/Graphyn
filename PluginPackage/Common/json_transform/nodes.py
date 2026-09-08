@@ -90,9 +90,9 @@ class JsonTransformNode(Node):
     }
 
     class Config(NodeConfig):
-        mappings: list = Field(default=[], title="Mappings", description="Mappings.")
-        pick: list = Field(default=[], title="Pick", description="Pick.")
-        path: str = Field(default='', title="Path", description="Path under workspace/datasets/input (or another workspace path).")
+        mappings: list = Field(default=[], title="Mappings", description="List of {from, to} or transform mappings.")
+        pick: list = Field(default=[], title="Pick", description="Field names to keep (JSONPath/key list).")
+        path: str = Field(default='', title="Path", description="Dataset path under workspace/ (relative path preferred).")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

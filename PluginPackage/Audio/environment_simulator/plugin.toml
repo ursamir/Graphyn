@@ -26,11 +26,11 @@ optional_dependencies = [
 
 [config_schema.environment_simulator]
 preset = { type = "string", title = "Preset", default = "room", description = "Preset. One of: room, car, office, outdoor, custom.", enum = ["room", "car", "office", "outdoor", "custom"] }
-room_dimensions = { type = "array", title = "Room Dimensions", default = [5.0, 4.0, 3.0], description = "Room Dimensions." }
-rt60 = { type = "number", title = "Rt60", default = 0.4, description = "Rt60." }
-mic_position = { type = "array", title = "Mic Position", default = [2.5, 2.0, 1.5], description = "Mic Position." }
-source_position = { type = "array", title = "Source Position", default = [1.0, 1.0, 1.5], description = "Source Position." }
-snr_db = { type = "number", title = "SNR DB", default = 0.0, description = "SNR DB." }
-copies_per_sample = { type = "integer", title = "Copies Per Sample", default = 1, description = "Copies Per Sample." }
-max_rir_length_ms = { type = "number", title = "Max Rir Length MS", default = 500.0, description = "Max Rir Length MS." }
+room_dimensions = { type = "array", title = "Room dimensions", default = ["5.0", "4.0", "3.0"], description = "Room size as [length, width, height] in meters.", widget = "json" }
+rt60 = { type = "number", title = "RT60 (s)", default = 0.4, description = "Target reverberation time in seconds." }
+mic_position = { type = "array", title = "Mic position", default = ["2.5", "2.0", "1.5"], description = "Microphone XYZ position in meters inside the room.", widget = "json" }
+source_position = { type = "array", title = "Source position", default = ["1.0", "1.0", "1.5"], description = "Source XYZ position in meters inside the room.", widget = "json" }
+snr_db = { type = "number", title = "SNR (dB)", default = 0.0, description = "Signal-to-noise ratio target when mixing noise/reverb." }
+copies_per_sample = { type = "integer", title = "Copies per sample", default = 1, description = "How many simulated room/noise variants to emit per input." }
+max_rir_length_ms = { type = "number", title = "Max RIR length (ms)", default = 500.0, description = "Truncate room impulse response to this length (ms)." }
 preserve_length = { type = "boolean", title = "Preserve Length", default = false, description = "Enable preserve length." }

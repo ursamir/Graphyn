@@ -82,8 +82,8 @@ class CsvTableNode(Node):
 
     class Config(NodeConfig):
         operation: Literal["read", "write"] = Field(default='read', title="Operation", description="Operation to perform. One of: read, write.")
-        path: str = Field(default='', title="Path", description="Path under workspace/datasets/input (or another workspace path).")
-        encoding: str = Field(default='utf-8', title="Encoding", description="Encoding.")
+        path: str = Field(default='', title="Path", description="Dataset path under workspace/ (relative path preferred).")
+        encoding: str = Field(default='utf-8', title="Encoding", description="Text file encoding (e.g. utf-8).")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

@@ -116,16 +116,16 @@ class EnvironmentSimulatorNode(Node):
 
     class Config(NodeConfig):
         preset: Literal["room", "car", "office", "outdoor", "custom"] = Field(default='room', title="Preset", description="Preset. One of: room, car, office, outdoor, custom.")
-        room_dimensions: list = Field(default=[5.0, 4.0, 3.0], title="Room Dimensions", description="Room Dimensions.")
-        rt60: float = Field(default=0.4, title="Rt60", description="Rt60.")
-        mic_position: list = Field(default=[2.5, 2.0, 1.5], title="Mic Position", description="Mic Position.")
-        source_position: list = Field(default=[1.0, 1.0, 1.5], title="Source Position", description="Source Position.")
-        snr_db: float = Field(default=0.0, title="SNR DB", description="SNR DB.")
-        copies_per_sample: int = Field(default=1, title="Copies Per Sample", description="Copies Per Sample.")
+        room_dimensions: list = Field(default=[5.0, 4.0, 3.0], title="Room dimensions", description="Room size as [length, width, height] in meters.")
+        rt60: float = Field(default=0.4, title="RT60 (s)", description="Target reverberation time in seconds.")
+        mic_position: list = Field(default=[2.5, 2.0, 1.5], title="Mic position", description="Microphone XYZ position in meters inside the room.")
+        source_position: list = Field(default=[1.0, 1.0, 1.5], title="Source position", description="Source XYZ position in meters inside the room.")
+        snr_db: float = Field(default=0.0, title="SNR (dB)", description="Signal-to-noise ratio target when mixing noise/reverb.")
+        copies_per_sample: int = Field(default=1, title="Copies per sample", description="How many simulated room/noise variants to emit per input.")
         # NOTE: copies_per_sample > 1 only produces diverse augmentations when
         # snr_db > 0 (noise is randomised per copy). With snr_db=0 all copies
         # are acoustically identical (same deterministic RIR convolution).
-        max_rir_length_ms: float = Field(default=500.0, title="Max Rir Length MS", description="Max Rir Length MS.")
+        max_rir_length_ms: float = Field(default=500.0, title="Max RIR length (ms)", description="Truncate room impulse response to this length (ms).")
         preserve_length: bool = Field(default=False, title="Preserve Length", description="Enable preserve length.")
 
         @pydantic.field_validator("room_dimensions", "mic_position", "source_position")

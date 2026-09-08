@@ -15,5 +15,5 @@ runtime = "inprocess"
 node_types = ["wait_delay"]
 
 [config_schema.wait_delay]
-seconds = { type = "number", title = "Seconds", default = 0.0, description = "Seconds to wait before passing the input through." }
-max_seconds = { type = "number", title = "Max Seconds", default = 300.0, description = "Max Seconds." }
+seconds = { type = "number", title = "Seconds", default = 0.0, description = "How long to wait before forwarding the payload." }
+max_seconds = { type = "number", title = "Max seconds", default = 300.0, description = "Hard cap on delay (safety)." }

@@ -121,9 +121,9 @@ class IfSwitchNode(Node):
     }
 
     class Config(NodeConfig):
-        expression: str = Field(default='', title="Expression", description="Expression.")
-        jsonpath: str = Field(default='', title="Jsonpath", description="Jsonpath.")
-        cases: list = Field(default=[], title="Cases", description="Cases.")
+        expression: str = Field(default='', title="Expression", description="Boolean expression over the input payload (used when JSONPath is empty).")
+        jsonpath: str = Field(default='', title="JSONPath", description="JSONPath selecting a value; its truthiness chooses the true/false branch when set.")
+        cases: list = Field(default=[], title="Cases", description="Optional named cases [{name, expression}] for multi-way branching (advanced).")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

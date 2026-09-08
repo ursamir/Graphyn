@@ -71,16 +71,16 @@ class StreamIngestNode(Node):
     }
 
     class Config(NodeConfig):
-        source: Literal["microphone", "websocket", "file_stream"] = Field(default='microphone', title="Source", description="Source. One of: microphone, websocket, file_stream.")
-        device_id: int = Field(default=0, title="Device ID", description="Device ID.")
-        websocket_url: str = Field(default='', title="Websocket URL", description="Websocket URL.")
+        source: Literal["microphone", "websocket", "file_stream"] = Field(default='microphone', title="Source", description="Python source for trusted operators. Not a sandbox.")
+        device_id: int = Field(default=0, title="Device ID", description="sounddevice input device index (default device when unset).")
+        websocket_url: str = Field(default='', title="WebSocket URL", description="ws:// or wss:// URL when source is a websocket stream.")
         file_path: str = Field(default='', title="File Path", description="Path under workspace/datasets/input (or another workspace path).")
-        chunk_ms: int = Field(default=100, title="Chunk MS", description="Chunk MS.")
-        sample_rate: int = Field(default=16000, title="Sample Rate", description="Audio sample rate in Hz.")
-        channels: int = Field(default=1, title="Channels", description="Channels.")
-        buffer_size: int = Field(default=10, title="Buffer Size", description="Buffer Size.")
-        duration_s: float = Field(default=5.0, title="Duration S", description="Duration S.")
-        label: str = Field(default='', title="Label", description="Label.")
+        chunk_ms: int = Field(default=100, title="Chunk (ms)", description="Capture/emit chunk duration in milliseconds.")
+        sample_rate: int = Field(default=16000, title="Sample rate", description="Audio sample rate in Hz.")
+        channels: int = Field(default=1, title="Channels", description="Number of input audio channels (1 = mono).")
+        buffer_size: int = Field(default=10, title="Buffer size", description="Internal ring-buffer size in frames/chunks.")
+        duration_s: float = Field(default=5.0, title="Duration (s)", description="Capture or synthesize this many seconds (0 = until stopped/EOS).")
+        label: str = Field(default='', title="Label", description="Optional label attached to emitted samples.")
 
     # ── process (multi-port / source node signature) ──────────────────────────
 

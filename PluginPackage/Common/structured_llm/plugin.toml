@@ -20,9 +20,9 @@ node_types = ["structured_llm"]
 
 [config_schema.structured_llm]
 provider = { type = "string", title = "Provider", default = "openai_compat", description = "LLM provider backend. Only openai_compat is supported (requires OPENAI_API_KEY).", enum = ["openai_compat"] }
-json_schema = { type = "object", title = "Json Schema", default = {  }, description = "Json Schema." }
-schema_name = { type = "string", title = "Schema Name", default = "extracted", description = "Schema Name." }
-model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Model id for the configured provider." }
-base_url = { type = "string", title = "Base URL", default = "", description = "Base URL." }
-timeout_s = { type = "number", title = "Timeout S", default = 30.0, description = "Timeout in seconds." }
-system_prompt = { type = "string", title = "System Prompt", default = "Extract JSON matching the provided schema. Reply with JSON only.", description = "System Prompt." }
+json_schema = {  type = "object", title = "JSON Schema", default = { }, description = "JSON Schema object the model must satisfy.", widget = "json"  }
+schema_name = { type = "string", title = "Schema name", default = "extracted", description = "Name attached to the structured-output schema for the provider." }
+model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Chat model id (default gpt-4o-mini). Requires OPENAI_API_KEY." }
+base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL override." }
+timeout_s = { type = "number", title = "Timeout (s)", default = 30.0, description = "Request/operation timeout in seconds." }
+system_prompt = { type = "string", title = "System prompt", default = "Extract JSON matching the provided schema. Reply with JSON only.", description = "System instruction for extraction; keep output JSON-only." }

@@ -84,10 +84,10 @@ class AudioClassifierNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str = Field(default='', title="Model Path", description="Model file under workspace/artifacts, or empty for a built-in model.")
+        model_path: str = Field(default='', title="Model path", description="Model file under workspace/artifacts (or empty for built-in).")
         backend: Literal["yamnet", "tflite", "pytorch", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: yamnet, tflite, pytorch, auto.")
-        top_k: int = Field(default=1, title="Top K", description="Top K.")
-        sample_rate: int = Field(default=16000, title="Sample Rate", description="Audio sample rate in Hz.")
+        top_k: int = Field(default=1, title="Top-K", description="Return the K highest-scoring class labels.")
+        sample_rate: int = Field(default=16000, title="Sample rate", description="Audio sample rate in Hz.")
 
         from pydantic import field_validator
 

@@ -103,14 +103,14 @@ class TrainerNode(Node):
 
     class Config(NodeConfig):
         backend: Literal["keras", "pytorch", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: keras, pytorch, auto.")
-        device: Literal["auto", "cpu", "gpu"] = Field(default='auto', title="Device", description="Compute device. GPU is used only when available and allowed. One of: auto, cpu, gpu.")
+        device: Literal["auto", "cpu", "gpu"] = Field(default='auto', title="Device", description="Compute device (auto uses GPU when available and allowed).")
         epochs: int = Field(default=30, title="Epochs", description="Maximum training epochs (early stopping may halt sooner).")
-        batch_size: int = Field(default=32, title="Batch Size", description="Mini-batch size.")
-        output_path: str = Field(default='workspace/artifacts/models', title="Output Path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        patience: int = Field(default=5, title="Patience", description="EarlyStopping patience (monitors val_accuracy).")
-        mixed_precision: bool = Field(default=False, title="Mixed Precision", description="Enable mixed-precision training when the backend supports it.")
-        min_val_accuracy: float = Field(default=0.0, title="Min Val Accuracy", description="Warn if best validation accuracy is below this threshold (0 disables).")
-        checkpoint_path: str = Field(default='', title="Checkpoint Path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        batch_size: int = Field(default=32, title="Batch size", description="Process in batches of N (0 = all at once).")
+        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        patience: int = Field(default=5, title="Patience", description="EarlyStopping patience (monitors validation metric).")
+        mixed_precision: bool = Field(default=False, title="Mixed precision", description="Enable mixed-precision training when the backend supports it (On/Off).")
+        min_val_accuracy: float = Field(default=0.0, title="Min val accuracy", description="Warn if best validation accuracy is below this threshold (0 disables).")
+        checkpoint_path: str = Field(default='', title="Checkpoint path", description="Optional checkpoint directory under workspace/artifacts.")
 
     # ── backend detection ─────────────────────────────────────────────────────
 
@@ -729,7 +729,7 @@ class ModelBuilderNode(Node):
         dropout_rate: float = Field(default=0.25, title="Dropout Rate", description="Dropout probability before the classifier head.")
         learning_rate: float = Field(default=0.001, title="Learning Rate", description="Optimizer learning rate.")
         backend: Literal["keras", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: keras, auto.")
-        output_path: str = Field(default='workspace/artifacts/models', title="Output Path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
 
     def _build_keras_model(self, input_shape: tuple, n_classes: int):
         """Build and compile a Keras model."""

@@ -95,12 +95,12 @@ class SpeechEnhancerNode(Node):
 
     class Config(NodeConfig):
         backend: Literal["spectral", "deepfilter", "auto"] = Field(default='spectral', title="Backend", description="Implementation backend. One of: spectral, deepfilter, auto.")
-        denoise: bool = Field(default=True, title="Denoise", description="Enable denoise.")
-        dereverb: bool = Field(default=False, title="Dereverb", description="Enable dereverb.")
+        denoise: bool = Field(default=True, title="Denoise", description="Apply noise reduction / spectral gating (On/Off).")
+        dereverb: bool = Field(default=False, title="Dereverb", description="Apply dereverberation when the backend supports it (On/Off).")
         vocal_isolation: bool = Field(default=False, title="Vocal Isolation", description="Enable vocal isolation.")
         telephony_mode: bool = Field(default=False, title="Telephony Mode", description="Enable telephony mode.")
         stationary_noise: bool = Field(default=True, title="Stationary Noise", description="Enable stationary noise.")
-        prop_decrease: float = Field(default=0.75, title="Prop Decrease", description="Prop Decrease.")
+        prop_decrease: float = Field(default=0.75, title="Prop decrease", description="Noise reduction strength for spectral gating (0–1).")
 
     # ── setup: resolve backend once ──────────────────────────────────────────
 

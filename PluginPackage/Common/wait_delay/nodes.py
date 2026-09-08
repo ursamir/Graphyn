@@ -49,8 +49,8 @@ class WaitDelayNode(Node):
     }
 
     class Config(NodeConfig):
-        seconds: float = Field(default=0.0, title="Seconds", description="Seconds.")
-        max_seconds: float = Field(default=300.0, title="Max Seconds", description="Max Seconds.")
+        seconds: float = Field(default=0.0, title="Seconds", description="How long to wait before forwarding the payload.")
+        max_seconds: float = Field(default=300.0, title="Max seconds", description="Hard cap on delay (safety).")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

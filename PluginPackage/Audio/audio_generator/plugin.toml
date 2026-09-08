@@ -27,11 +27,11 @@ optional_dependencies = [
 ]
 
 [config_schema.audio_generator]
-backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: musicgen, audiogen, auto.", enum = ["musicgen", "audiogen", "auto"] }
+backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: musicgen, audiogen, auto.", enum = ["musicgen", "audiogen", "auto"]  }
 model_size = { type = "string", title = "Model Size", default = "small", description = "Model Size. One of: small, medium, large.", enum = ["small", "medium", "large"] }
-duration_s = { type = "number", title = "Duration S", default = 5.0, description = "Duration S." }
-prompt = { type = "string", title = "Prompt", default = "", description = "Prompt." }
+duration_s = { type = "number", title = "Duration (s)", default = 5.0, description = "Length of generated audio in seconds." }
+prompt = { type = "string", title = "Prompt", default = "", description = "Text prompt guiding generation." }
 conditioning_audio = { type = "string", title = "Conditioning Audio", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
-temperature = { type = "number", title = "Temperature", default = 1.0, description = "Temperature." }
-top_k = { type = "integer", title = "Top K", default = 250, description = "Top K." }
-guidance_scale = { type = "number", title = "Guidance Scale", default = 3.0, description = "Guidance Scale." }
+temperature = { type = "number", title = "Temperature", default = 1.0, description = "Sampling temperature (higher = more random)." }
+top_k = { type = "integer", title = "Top-K", default = 250, description = "Token/sample top-K for generative decoding." }
+guidance_scale = { type = "number", title = "Guidance scale", default = 3.0, description = "Classifier-free guidance scale for generative models." }

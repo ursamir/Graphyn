@@ -15,8 +15,9 @@ dependencies = [
 ]
 
 [config_schema.audio_exporter]
-output_dir = { type = "string", title = "Output Dir", default = "workspace/artifacts/audio_export", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
-split_ratios = { type = "object", title = "Split Ratios", default = { train = 0.7, val = 0.15, test = 0.15 }, description = "Split Ratios." }
-version_tag = { type = "string", title = "Version Tag", default = "v1", description = "Version Tag." }
-random_seed = { type = "integer", title = "Random Seed", default = 42, description = "RNG seed for reproducible splits and sampling." }
-append = { type = "boolean", title = "Append", default = false, description = "Enable append." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/artifacts/audio_export", description = "Directory under workspace/artifacts for written files." }
+format = { type = "string", title = "Format", default = "wav", description = "Output audio format. Currently wav only (soundfile PCM). One of: wav.", enum = ["wav"] }
+split_ratios = {  type = "object", title = "Split ratios", default = { }, description = "Train/val/test ratios as JSON; should sum to ~1.0.", widget = "json", train = 0.7, val = 0.15, test = 0.15  }
+version_tag = { type = "string", title = "Version tag", default = "v1", description = "Dataset/export version label (e.g. v1, 2026-09-08)." }
+random_seed = { type = "integer", title = "Random seed", default = 42, description = "RNG seed for reproducible splits and sampling." }
+append = { type = "boolean", title = "Append", default = false, description = "Append files into an existing export tree instead of replacing it (On/Off)." }

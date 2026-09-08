@@ -66,10 +66,10 @@ class SetMapNode(Node):
     }
 
     class Config(NodeConfig):
-        copy_fields: dict = Field(default={}, title="Copy Fields", description="Copy Fields.")
-        rename: dict = Field(default={}, title="Rename", description="Rename.")
-        drop: list = Field(default=[], title="Drop", description="Drop.")
-        set: dict = Field(default={}, title="Set", description="Set.")
+        copy_fields: dict = Field(default={}, title="Copy fields", description="Map of source → destination field names to copy.")
+        rename: dict = Field(default={}, title="Rename", description="Map of old_name → new_name for payload keys.")
+        drop: list = Field(default=[], title="Drop", description="Field names to remove from the payload.")
+        set: dict = Field(default={}, title="Set", description="Constant fields to inject into the payload (JSON object).")
 
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs

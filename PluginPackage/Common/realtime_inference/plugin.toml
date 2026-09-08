@@ -23,11 +23,11 @@ runtime = "isolated"
 node_types = ["realtime_inference"]
 
 [config_schema.realtime_inference]
-model_path = { type = "string", title = "Model Path", description = "Model file under workspace/artifacts, or empty for a built-in model." }
-backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: tflite, pytorch, onnx, auto.", enum = ["tflite", "pytorch", "onnx", "auto"] }
-mode = { type = "string", title = "Mode", default = "classification", description = "Operating mode. One of: classification, wake_word, streaming_asr.", enum = ["classification", "wake_word", "streaming_asr"] }
-wake_word_threshold = { type = "number", title = "Wake Word Threshold", default = 0.8, description = "Wake Word Threshold." }
-batch_size = { type = "integer", title = "Batch Size", default = 1, description = "Mini-batch size." }
-adaptive = { type = "boolean", title = "Adaptive", default = false, description = "Enable adaptive." }
-adaptive_skip_ratio = { type = "number", title = "Adaptive Skip Ratio", default = 0.5, description = "Adaptive Skip Ratio." }
-streaming_buffer_size = { type = "integer", title = "Streaming Buffer Size", default = 10, description = "Streaming Buffer Size." }
+model_path = { type = "string", title = "Model path", description = "Model file under workspace/artifacts (or empty for built-in)." }
+backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: tflite, pytorch, onnx, auto.", enum = ["tflite", "pytorch", "onnx", "auto"]  }
+mode = {  type = "string", title = "Mode", default = "classification", description = "Operating mode. One of: classification, wake_word, streaming_asr.", enum = ["classification", "wake_word", "streaming_asr"]  }
+wake_word_threshold = { type = "number", title = "Wake-word threshold", default = 0.8, description = "Detection threshold in [0, 1]; higher = fewer false accepts." }
+batch_size = { type = "integer", title = "Batch size", default = 1, description = "Process in batches of N (0 = all at once)." }
+adaptive = {  type = "boolean", title = "Adaptive", default = false, description = "Adaptively skip frames under load using adaptive_skip_ratio (On/Off)."  }
+adaptive_skip_ratio = { type = "number", title = "Adaptive skip ratio", default = 0.5, description = "Fraction of frames eligible to skip under load (0–1)." }
+streaming_buffer_size = { type = "integer", title = "Streaming buffer size", default = 10, description = "Frames kept in the realtime inference buffer." }

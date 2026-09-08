@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [config_schema.dataset_versioner]
-output_dir = { type = "string", title = "Output Dir", default = "workspace/datasets/versioned", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
-version_tag = { type = "string", title = "Version Tag", default = "", description = "Version Tag." }
-include_metadata = { type = "boolean", title = "Include Metadata", default = true, description = "Enable include metadata." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/versioned", description = "Directory under workspace/artifacts for written files." }
+version_tag = { type = "string", title = "Version tag", default = "", description = "Dataset/export version label (e.g. v1, 2026-09-08)." }
+include_metadata = { type = "boolean", title = "Include metadata", default = true, description = "Bundle model metadata / labels JSON with the package (On/Off)." }
 create_snapshot = { type = "boolean", title = "Create Snapshot", default = false, description = "Enable create snapshot." }

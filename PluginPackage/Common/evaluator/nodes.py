@@ -218,12 +218,12 @@ class EvaluatorNode(Node):
     }
 
     class Config(NodeConfig):
-        output_path: str = Field(default='workspace/artifacts/evaluation', title="Output Path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        output_path: str = Field(default='workspace/artifacts/evaluation', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
         plot_confusion_matrix: bool = Field(default=True, title="Plot Confusion Matrix", description="Enable plot confusion matrix.")
         plot_training_curves: bool = Field(default=True, title="Plot Training Curves", description="Enable plot training curves.")
-        compute_roc: bool = Field(default=True, title="Compute Roc", description="Enable compute roc.")
+        compute_roc: bool = Field(default=True, title="Compute ROC", description="Compute ROC/AUC curves when binary labels are available (On/Off).")
         compute_fairness: bool = Field(default=False, title="Compute Fairness", description="Enable compute fairness.")
-        fairness_attribute_key: str = Field(default='speaker_id', title="Fairness Attribute Key", description="Fairness Attribute Key.")
+        fairness_attribute_key: str = Field(default='speaker_id', title="Fairness attribute key", description="Metadata key used to slice fairness metrics (e.g. gender).")
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 

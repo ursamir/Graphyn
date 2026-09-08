@@ -15,8 +15,8 @@ dependencies = [
 
 [config_schema.dataset_balancer]
 strategy = { type = "string", title = "Strategy", default = "oversample", description = "Resampling / balancing strategy. One of: oversample, undersample, weighted, synthetic.", enum = ["oversample", "undersample", "weighted", "synthetic"] }
-target_count = { type = "integer", title = "Target Count", default = 0, description = "Target Count." }
+target_count = { type = "integer", title = "Target count", default = 0, description = "Desired count per class/speaker after balancing." }
 balance_by = { type = "string", title = "Balance By", default = "class", description = "Balance By. One of: class, speaker, duration.", enum = ["class", "speaker", "duration"] }
-speaker_key = { type = "string", title = "Speaker Key", default = "speaker_id", description = "Speaker Key." }
-jitter_std = { type = "number", title = "Jitter Std", default = 0.0, description = "Jitter Std." }
-random_seed = { type = "integer", title = "Random Seed", default = 42, description = "RNG seed for reproducible splits and sampling." }
+speaker_key = { type = "string", title = "Speaker key", default = "speaker_id", description = "Metadata key used to identify speakers when balancing." }
+jitter_std = { type = "number", title = "Jitter std", default = 0.0, description = "Gaussian jitter std-dev applied during oversampling." }
+random_seed = { type = "integer", title = "Random seed", default = 42, description = "RNG seed for reproducible splits and sampling." }

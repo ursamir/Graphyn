@@ -16,5 +16,5 @@ node_types = ["csv_table"]
 
 [config_schema.csv_table]
 operation = { type = "string", title = "Operation", default = "read", description = "Operation to perform. One of: read, write.", enum = ["read", "write"] }
-path = { type = "string", title = "Path", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
-encoding = { type = "string", title = "Encoding", default = "utf-8", description = "Encoding." }
+path = { type = "string", title = "Path", default = "", description = "Dataset path under workspace/ (relative path preferred)." }
+encoding = { type = "string", title = "Encoding", default = "utf-8", description = "Text file encoding (e.g. utf-8)." }

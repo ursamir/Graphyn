@@ -19,15 +19,15 @@ runtime = "inprocess"
 node_types = ["http_request"]
 
 [config_schema.http_request]
-method = { type = "string", title = "Method", default = "GET", description = "HTTP method.", enum = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] }
-url = { type = "string", title = "URL", default = "", description = "Request URL (https recommended)." }
-headers = { type = "object", title = "Headers", default = {  }, description = "Headers." }
-query = { type = "object", title = "Query", default = {  }, description = "Query." }
-json_body = { type = "object", title = "Json Body", description = "Json Body." }
-body = { type = "string", title = "Body", default = "", description = "Request body (string or JSON)." }
-timeout_s = { type = "number", title = "Timeout S", default = 30.0, description = "Request timeout in seconds." }
-retry = { type = "integer", title = "Retry", default = 0, description = "Retry." }
+method = {  type = "string", title = "Method", default = "GET", description = "HTTP method. One of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.", enum = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]  }
+url = { type = "string", title = "URL", default = "", description = "Full request URL (https recommended)." }
+headers = {  type = "object", title = "Headers", default = { }, description = "HTTP headers as a JSON object of string keys to string values.", widget = "json"  }
+query = {  type = "object", title = "Query", default = { }, description = "URL query parameters as a JSON object.", widget = "json"  }
+json_body = {  type = "object", title = "JSON body", default = { }, description = "JSON request body (object or array). Prefer this over raw body for JSON APIs.", widget = "json"  }
+body = { type = "string", title = "Body", default = "", description = "Raw request body string used when json_body is empty." }
+timeout_s = { type = "number", title = "Timeout (s)", default = 30.0, description = "Request/operation timeout in seconds." }
+retry = { type = "integer", title = "Retries", default = 0, description = "Number of retries after a failed attempt (0 = no retry)." }
 provider = { type = "string", title = "Provider", default = "http", description = "HTTP provider. Only http (real network) is supported.", enum = ["http"] }
-auth_env = { type = "string", title = "Auth Env", default = "", description = "Auth Env." }
-auth_header = { type = "string", title = "Auth Header", default = "Authorization", description = "Auth Header." }
-auth_prefix = { type = "string", title = "Auth Prefix", default = "Bearer ", description = "Auth Prefix." }
+auth_env = { type = "string", title = "Auth env / secret name", default = "", description = "Environment variable or Graphyn secret NAME for the bearer/token (never paste the secret into IR)." }
+auth_header = { type = "string", title = "Auth header", default = "Authorization", description = "HTTP header that receives the auth value (default Authorization)." }
+auth_prefix = { type = "string", title = "Auth prefix", default = "Bearer ", description = "Prefix prepended to the secret (e.g. 'Bearer '). Use empty for raw tokens." }

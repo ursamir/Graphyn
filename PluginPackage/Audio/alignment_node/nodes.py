@@ -112,9 +112,9 @@ class AlignmentNode(Node):
         backend: Literal["ctc", "mfa", "auto"] = Field(default='ctc', title="Backend", description="Implementation backend. One of: ctc, mfa, auto.")
         language: str = Field(default='en', title="Language", description="BCP-47 / ISO language code (e.g. en).")
         level: Literal["word", "phoneme", "char"] = Field(default='word', title="Level", description="Level. One of: word, phoneme, char.")
-        model_path: str = Field(default='', title="Model Path", description="Model file under workspace/artifacts, or empty for a built-in model.")
-        device: Literal["cpu", "cuda"] = Field(default='cpu', title="Device", description="Compute device. GPU is used only when available and allowed. One of: cpu, cuda.")
-        mfa_timeout_s: int = Field(default=300, title="MFA Timeout S", description="MFA Timeout S.")
+        model_path: str = Field(default='', title="Model path", description="Model file under workspace/artifacts (or empty for built-in).")
+        device: Literal["cpu", "cuda"] = Field(default='cpu', title="Device", description="Compute device (auto uses GPU when available and allowed).")
+        mfa_timeout_s: int = Field(default=300, title="MFA timeout (s)", description="Montreal Forced Aligner subprocess timeout in seconds.")
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 

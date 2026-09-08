@@ -15,7 +15,7 @@ runtime = "inprocess"
 node_types = ["set_map"]
 
 [config_schema.set_map]
-copy_fields = { type = "object", title = "Copy Fields", default = {}, description = "Map of source to destination field names to copy.", widget = "json" }
-rename = { type = "object", title = "Rename", default = {}, description = "Map of old_name to new_name for payload keys.", widget = "json" }
+copy_fields = {  type = "object", title = "Copy fields", default = { }, description = "Map of source → destination field names to copy.", widget = "json"  }
+rename = {  type = "object", title = "Rename", default = { }, description = "Map of old_name → new_name for payload keys.", widget = "json"  }
 drop = { type = "array", title = "Drop", default = [], description = "Field names to remove from the payload." }
-set = { type = "object", title = "Set", default = {}, description = "Constant fields to inject (JSON object).", widget = "json" }
+set = {  type = "object", title = "Set", default = { }, description = "Constant fields to inject into the payload (JSON object).", widget = "json"  }

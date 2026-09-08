@@ -118,8 +118,8 @@ class EvalGateNode(Node):
 
     class Config(NodeConfig):
         check_empty_transcript: bool = Field(default=True, title="Check Empty Transcript", description="Enable check empty transcript.")
-        required_keys: list = Field(default=[], title="Required Keys", description="Required Keys.")
-        pii_regex: str = Field(default='', title="PII Regex", description="PII Regex.")
+        required_keys: list = Field(default=[], title="Required keys", description="Keys that must exist (and be truthy if configured) for the gate to pass.")
+        pii_regex: str = Field(default='', title="PII regex", description="Optional extra regex for PII detection (empty = built-in patterns only).")
         fail_if_empty_list: bool = Field(default=True, title="Fail If Empty List", description="Enable fail if empty list.")
 
     def process(self, inputs: dict) -> dict:

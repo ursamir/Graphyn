@@ -169,9 +169,9 @@ class DocParseChunkNode(Node):
     }
 
     class Config(NodeConfig):
-        path: str = Field(default='', title="Path", description="Path under workspace/datasets/input (or another workspace path).")
-        recursive: bool = Field(default=True, title="Recursive", description="Walk subdirectories.")
-        max_chars: int = Field(default=1200, title="Max Chars", description="Max Chars.")
+        path: str = Field(default='', title="Path", description="Dataset path under workspace/ (relative path preferred).")
+        recursive: bool = Field(default=True, title="Recursive", description="Walk subdirectories when scanning the filesystem (On/Off).")
+        max_chars: int = Field(default=1200, title="Max chars", description="Maximum characters per chunk when splitting documents.")
         use_unstructured: bool = Field(default=False, title="Use Unstructured", description="Enable use unstructured.")
 
     def process(self, value):

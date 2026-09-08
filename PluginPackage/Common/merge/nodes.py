@@ -65,7 +65,7 @@ class MergeNode(Node):
 
     class Config(NodeConfig):
         mode: Literal["append", "combine_by_key"] = Field(default='append', title="Mode", description="Operating mode. One of: append, combine_by_key.")
-        key: str = Field(default='id', title="Key", description="Key.")
+        key: str = Field(default='id', title="Merge key", description="Dict key used to correlate items when merging lists.")
 
     def process(self, inputs):
         a = inputs.get("a") if isinstance(inputs, dict) else None

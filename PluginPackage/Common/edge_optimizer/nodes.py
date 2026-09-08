@@ -91,10 +91,10 @@ class EdgeOptimizerNode(Node):
     class Config(NodeConfig):
         backend: Literal["tflite", "onnx", "auto"] = Field(default='tflite', title="Backend", description="Implementation backend. One of: tflite, onnx, auto.")
         quantization: Literal["float32", "float16", "int8"] = Field(default='int8', title="Quantization", description="Weight/activation quantization mode. One of: float32, float16, int8.")
-        output_path: str = Field(default='workspace/artifacts/optimized', title="Output Path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        representative_samples: int = Field(default=100, title="Representative Samples", description="Representative Samples.")
-        prune: bool = Field(default=False, title="Prune", description="Enable prune.")
-        operator_fusion: bool = Field(default=True, title="Operator Fusion", description="Enable operator fusion.")
+        output_path: str = Field(default='workspace/artifacts/optimized', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        representative_samples: int = Field(default=100, title="Representative samples", description="Number of calibration samples for int8 quantization.")
+        prune: bool = Field(default=False, title="Prune", description="Apply unstructured/magnitude pruning before export (On/Off).")
+        operator_fusion: bool = Field(default=True, title="Operator fusion", description="Enable backend operator fusion optimizations (On/Off).")
 
     def __init__(self, config=None, seed: int = 0, observer=None) -> None:
         super().__init__(config=config, seed=seed, observer=observer)

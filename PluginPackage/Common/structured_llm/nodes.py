@@ -91,12 +91,12 @@ class StructuredLlmNode(Node):
 
     class Config(NodeConfig):
         provider: Literal["openai_compat"] = Field(default='openai_compat', title="Provider", description="LLM provider backend. Only openai_compat is supported.")
-        json_schema: dict = Field(default={}, title="Json Schema", description="Json Schema.")
-        schema_name: str = Field(default='extracted', title="Schema Name", description="Schema Name.")
-        model: str = Field(default='gpt-4o-mini', title="Model", description="Model.")
-        base_url: str = Field(default='', title="Base URL", description="Base URL.")
-        timeout_s: float = Field(default=30.0, title="Timeout S", description="Timeout in seconds.")
-        system_prompt: str = Field(default='Extract JSON matching the provided schema. Reply with JSON only.', title="System Prompt", description="System Prompt.")
+        json_schema: dict = Field(default={}, title="JSON Schema", description="JSON Schema object the model must satisfy.")
+        schema_name: str = Field(default='extracted', title="Schema name", description="Name attached to the structured-output schema for the provider.")
+        model: str = Field(default='gpt-4o-mini', title="Model", description="Chat model id (default gpt-4o-mini). Requires OPENAI_API_KEY.")
+        base_url: str = Field(default='', title="Base URL", description="OpenAI-compatible base URL override.")
+        timeout_s: float = Field(default=30.0, title="Timeout (s)", description="Request/operation timeout in seconds.")
+        system_prompt: str = Field(default='Extract JSON matching the provided schema. Reply with JSON only.', title="System prompt", description="System instruction for extraction; keep output JSON-only.")
 
     def process(self, value):
         schema = self.config.json_schema or {"type": "object", "properties": {}}

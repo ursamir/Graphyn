@@ -14,9 +14,9 @@ dependencies = [
 ]
 
 [config_schema.stream_processor]
-window_ms = { type = "integer", title = "Window MS", default = 1000, description = "Window MS." }
-hop_ms = { type = "integer", title = "Hop MS", default = 500, description = "Hop MS." }
-target_latency_ms = { type = "integer", title = "Target Latency MS", default = 200, description = "Target Latency MS." }
-max_buffer_size = { type = "integer", title = "Max Buffer Size", default = 100, description = "Max Buffer Size." }
-sample_rate = { type = "integer", title = "Sample Rate", default = 16000, description = "Audio sample rate in Hz." }
-overlap_add = { type = "boolean", title = "Overlap Add", default = false, description = "Enable overlap add." }
+window_ms = { type = "integer", title = "Window (ms)", default = 1000, description = "Segment/window length in milliseconds." }
+hop_ms = { type = "integer", title = "Hop (ms)", default = 500, description = "Hop between processing windows in milliseconds." }
+target_latency_ms = { type = "integer", title = "Target latency (ms)", default = 200, description = "Soft latency budget for the streaming processor." }
+max_buffer_size = { type = "integer", title = "Max buffer size", default = 100, description = "Maximum buffered frames/chunks before dropping oldest." }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz." }
+overlap_add = {  type = "boolean", title = "Overlap-add", default = false, description = "Reconstruct streaming windows with overlap-add (On/Off)."  }

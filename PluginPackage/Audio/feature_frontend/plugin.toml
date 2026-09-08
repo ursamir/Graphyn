@@ -26,18 +26,18 @@ dependencies = [
 ]
 
 [config_schema.feature_frontend]
-feature_type = { type = "string", title = "Feature Type", default = "log_mel", description = "Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw.", enum = ["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"] }
-sample_rate = { type = "integer", title = "Sample Rate", default = 16000, description = "Audio sample rate in Hz." }
-fixed_length = { type = "integer", title = "Fixed Length", default = 0, description = "Fixed Length." }
-n_fft = { type = "integer", title = "N Fft", default = 512, description = "N Fft." }
-hop_length = { type = "integer", title = "Hop Length", default = 160, description = "Hop Length." }
-win_length = { type = "integer", title = "Win Length", default = 400, description = "Win Length." }
-n_mels = { type = "integer", title = "N Mels", default = 80, description = "N Mels." }
-n_mfcc = { type = "integer", title = "N Mfcc", default = 13, description = "N Mfcc." }
-fmin = { type = "number", title = "Fmin", default = 0.0, description = "Fmin." }
-fmax = { type = "number", title = "Fmax", description = "Fmax." }
-log_scale = { type = "boolean", title = "Log Scale", default = true, description = "Enable log scale." }
-normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize feature or audio amplitude." }
-center = { type = "boolean", title = "Center", default = true, description = "Enable center." }
-delta = { type = "boolean", title = "Delta", default = false, description = "Enable delta." }
-delta_delta = { type = "boolean", title = "Delta Delta", default = false, description = "Enable delta delta." }
+feature_type = {  type = "string", title = "Feature type", default = "log_mel", description = "Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw.", enum = ["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"]  }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz." }
+fixed_length = { type = "integer", title = "Fixed length (frames)", default = 0, description = "Pad/truncate the time axis to exactly N frames (0 = variable length)." }
+n_fft = { type = "integer", title = "FFT size", default = 512, description = "FFT window size in samples (power of two recommended)." }
+hop_length = { type = "integer", title = "Hop length", default = 160, description = "Hop between STFT frames in samples." }
+win_length = { type = "integer", title = "Window length", default = 400, description = "Analysis window length in samples (≤ n_fft)." }
+n_mels = { type = "integer", title = "Mel bins", default = 80, description = "Number of mel filterbank bins." }
+n_mfcc = { type = "integer", title = "MFCC coeffs", default = 13, description = "Number of MFCC coefficients to keep." }
+fmin = { type = "number", title = "Min frequency (Hz)", default = 0.0, description = "Lowest frequency included in the mel/spectrogram filterbank." }
+fmax = { type = "number", title = "Max frequency (Hz)", description = "Highest frequency included (null = Nyquist / sample_rate/2)." }
+log_scale = { type = "boolean", title = "Log scale", default = true, description = "Apply log compression to spectrogram/mel energies (On/Off)." }
+normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize feature or audio amplitude (On/Off)." }
+center = { type = "boolean", title = "Center frames", default = true, description = "Pad so frames are centered on the signal (librosa center=True)." }
+delta = { type = "boolean", title = "Delta features", default = false, description = "Append first-order delta (velocity) coefficients (On/Off)." }
+delta_delta = { type = "boolean", title = "Delta-delta features", default = false, description = "Append second-order delta (acceleration) coefficients (On/Off)." }

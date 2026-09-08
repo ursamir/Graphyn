@@ -93,7 +93,7 @@ class FeatureFrontendNode(Node):
     )
 
     class Config(NodeConfig):
-        feature_type: Literal["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"] = Field(default='log_mel', title="Feature Type", description="Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw.")
+        feature_type: Literal["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"] = Field(default='log_mel', title="Feature type", description="Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw.")
         # Supported: "log_mel" | "mfcc" | "spectrogram" | "chroma"
         #            | "zcr" | "spectral_centroid" | "spectral_rolloff" | "raw"
 
@@ -117,32 +117,32 @@ class FeatureFrontendNode(Node):
                 )
             return normalized
 
-        sample_rate: int = Field(default=16000, title="Sample Rate", description="Audio sample rate in Hz.")
+        sample_rate: int = Field(default=16000, title="Sample rate", description="Audio sample rate in Hz.")
 
-        fixed_length: int = Field(default=0, title="Fixed Length", description="Fixed Length.")
+        fixed_length: int = Field(default=0, title="Fixed length (frames)", description="Pad/truncate the time axis to exactly N frames (0 = variable length).")
         # 0 = variable length (default); N = pad/truncate time axis to exactly N frames.
         # Use this in inference pipelines to match the fixed input shape the model was
         # trained with (e.g. fixed_length=101 for a 1-second clip at 16kHz/hop=160).
 
-        n_fft: int = Field(default=512, title="N Fft", description="N Fft.")
-        hop_length: int = Field(default=160, title="Hop Length", description="Hop Length.")
-        win_length: int = Field(default=400, title="Win Length", description="Win Length.")
+        n_fft: int = Field(default=512, title="FFT size", description="FFT window size in samples (power of two recommended).")
+        hop_length: int = Field(default=160, title="Hop length", description="Hop between STFT frames in samples.")
+        win_length: int = Field(default=400, title="Window length", description="Analysis window length in samples (≤ n_fft).")
 
-        n_mels: int = Field(default=80, title="N Mels", description="N Mels.")
-        n_mfcc: int = Field(default=13, title="N Mfcc", description="N Mfcc.")
+        n_mels: int = Field(default=80, title="Mel bins", description="Number of mel filterbank bins.")
+        n_mfcc: int = Field(default=13, title="MFCC coeffs", description="Number of MFCC coefficients to keep.")
 
-        fmin: float = Field(default=0.0, title="Fmin", description="Fmin.")
-        fmax: float | None = Field(default=None, title="Fmax", description="Fmax.")
+        fmin: float = Field(default=0.0, title="Min frequency (Hz)", description="Lowest frequency included in the mel/spectrogram filterbank.")
+        fmax: float | None = Field(default=None, title="Max frequency (Hz)", description="Highest frequency included (null = Nyquist / sample_rate/2).")
 
-        log_scale: bool = Field(default=True, title="Log Scale", description="Enable log scale.")
+        log_scale: bool = Field(default=True, title="Log scale", description="Apply log compression to spectrogram/mel energies (On/Off).")
 
-        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude.")
+        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude (On/Off).")
 
-        center: bool = Field(default=True, title="Center", description="Enable center.")
+        center: bool = Field(default=True, title="Center frames", description="Pad so frames are centered on the signal (librosa center=True).")
 
         # Delta / delta-delta (applies to mfcc; also stacked onto log_mel if set)
-        delta: bool = Field(default=False, title="Delta", description="Enable delta.")
-        delta_delta: bool = Field(default=False, title="Delta Delta", description="Enable delta delta.")
+        delta: bool = Field(default=False, title="Delta features", description="Append first-order delta (velocity) coefficients (On/Off).")
+        delta_delta: bool = Field(default=False, title="Delta-delta features", description="Append second-order delta (acceleration) coefficients (On/Off).")
 
     # ── normalization ─────────────────────────────────────────────────────────
 

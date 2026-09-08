@@ -86,11 +86,11 @@ class HttpWebhookNode(Node):
     }
 
     class Config(NodeConfig):
-        url: str = Field(default='', title="URL", description="HTTP URL.")
-        timeout_s: float = Field(default=10.0, title="Timeout S", description="Timeout in seconds.")
-        hmac_secret: str = Field(default='', title="HMAC Secret", description="HMAC Secret.")
-        hmac_env: str = Field(default='', title="HMAC Env", description="HMAC Env.")
-        hmac_header: str = Field(default='X-Graphyn-Signature', title="HMAC Header", description="HMAC Header.")
+        url: str = Field(default='', title="Callback URL", description="HTTPS URL to POST completion JSON.")
+        timeout_s: float = Field(default=10.0, title="Timeout (s)", description="Request/operation timeout in seconds.")
+        hmac_secret: str = Field(default='', title="HMAC secret", description="Prefer hmac_env. Inline secret discouraged; use Secrets store.")
+        hmac_env: str = Field(default='', title="HMAC env / secret name", description="Env var or Graphyn secret name holding the HMAC key.")
+        hmac_header: str = Field(default='X-Graphyn-Signature', title="HMAC header", description="Header that carries the HMAC signature.")
         provider: Literal["http"] = Field(default='http', title="Provider", description="HTTP provider. Only http (real network) is supported.")
 
     def process(self, payload):

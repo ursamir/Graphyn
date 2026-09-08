@@ -29,7 +29,7 @@ optional_dependencies = [
 ]
 
 [config_schema.voice_converter]
-backend = { type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: speechbrain, knnvc, auto.", enum = ["speechbrain", "knnvc", "auto"] }
+backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: speechbrain, knnvc, auto.", enum = ["speechbrain", "knnvc", "auto"]  }
 conversion_type = { type = "string", title = "Conversion Type", default = "timbre", description = "Conversion Type. One of: timbre, accent, gender, style.", enum = ["timbre", "accent", "gender", "style"] }
-target_speaker = { type = "string", title = "Target Speaker", default = "", description = "Target Speaker." }
-pitch_shift_semitones = { type = "number", title = "Pitch Shift Semitones", default = 0.0, description = "Pitch Shift Semitones." }
+target_speaker = { type = "string", title = "Target speaker", default = "", description = "Target speaker id / voice for conversion." }
+pitch_shift_semitones = { type = "number", title = "Pitch shift (semitones)", default = 0.0, description = "Pitch shift applied in semitones (can be fractional)." }

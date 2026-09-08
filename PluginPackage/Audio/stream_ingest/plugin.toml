@@ -20,13 +20,13 @@ optional_dependencies = [
 ]
 
 [config_schema.stream_ingest]
-source = { type = "string", title = "Source", default = "microphone", description = "Source. One of: microphone, websocket, file_stream.", enum = ["microphone", "websocket", "file_stream"] }
-device_id = { type = "integer", title = "Device ID", default = 0, description = "Device ID." }
-websocket_url = { type = "string", title = "Websocket URL", default = "", description = "Websocket URL." }
+source = {  type = "string", title = "Source", default = "microphone", description = "Python source for trusted operators. Not a sandbox. One of: microphone, websocket, file_stream.", enum = ["microphone", "websocket", "file_stream"]  }
+device_id = { type = "integer", title = "Device ID", default = 0, description = "sounddevice input device index (default device when unset)." }
+websocket_url = { type = "string", title = "WebSocket URL", default = "", description = "ws:// or wss:// URL when source is a websocket stream." }
 file_path = { type = "string", title = "File Path", default = "", description = "Path under workspace/datasets/input (or another workspace path)." }
-chunk_ms = { type = "integer", title = "Chunk MS", default = 100, description = "Chunk MS." }
-sample_rate = { type = "integer", title = "Sample Rate", default = 16000, description = "Audio sample rate in Hz." }
-channels = { type = "integer", title = "Channels", default = 1, description = "Channels." }
-buffer_size = { type = "integer", title = "Buffer Size", default = 10, description = "Buffer Size." }
-duration_s = { type = "number", title = "Duration S", default = 5.0, description = "Duration S." }
-label = { type = "string", title = "Label", default = "", description = "Label." }
+chunk_ms = { type = "integer", title = "Chunk (ms)", default = 100, description = "Capture/emit chunk duration in milliseconds." }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz." }
+channels = { type = "integer", title = "Channels", default = 1, description = "Number of input audio channels (1 = mono)." }
+buffer_size = { type = "integer", title = "Buffer size", default = 10, description = "Internal ring-buffer size in frames/chunks." }
+duration_s = { type = "number", title = "Duration (s)", default = 5.0, description = "Capture or synthesize this many seconds (0 = until stopped/EOS)." }
+label = { type = "string", title = "Label", default = "", description = "Optional label attached to emitted samples." }

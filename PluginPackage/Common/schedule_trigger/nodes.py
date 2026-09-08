@@ -48,8 +48,8 @@ class ScheduleTriggerNode(Node):
     }
 
     class Config(NodeConfig):
-        cron: str = Field(default='', title="Cron", description="Cron.")
-        interval_s: float = Field(default=0.0, title="Interval S", description="Interval S.")
+        cron: str = Field(default='', title="Cron", description="Cron expression (min hour dom month dow). Empty = use interval_s.")
+        interval_s: float = Field(default=0.0, title="Interval (s)", description="Fixed interval in seconds when cron is empty.")
 
     def process(self, inputs):
         return {"output": TickEvent(

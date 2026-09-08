@@ -88,15 +88,33 @@ class SpeakerSeparatorNode(Node):
 
     class Config(NodeConfig):
         backend: Literal["pyannote", "speechbrain", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: pyannote, speechbrain, auto.")
-        num_speakers: int = Field(default=0, title="Num Speakers", description="Num Speakers.")
-        min_speakers: int = Field(default=1, title="Min Speakers", description="Min Speakers.")
-        max_speakers: int = Field(default=10, title="Max Speakers", description="Max Speakers.")
-        output_mode: Literal["per_speaker", "diarization_only"] = Field(default='per_speaker', title="Output Mode", description="Output Mode. One of: per_speaker, diarization_only.")
-        auth_token: str = Field(default='', title="Auth Token", description="Auth Token.", exclude=True)
+        num_speakers: int = Field(default=0, title="Num speakers", description="Exact speaker count when known (0 = auto / use min–max range).")
+        min_speakers: int = Field(default=1, title="Min speakers", description="Lower bound on speaker count for diarization.")
+        max_speakers: int = Field(default=10, title="Max speakers", description="Upper bound on speaker count for diarization.")
+        output_mode: Literal["per_speaker", "diarization_only"] = Field(default='per_speaker', title="Output mode", description="Output mode. One of: per_speaker, diarization_only.")
+        auth_token_env: str = Field(default='HUGGINGFACE_TOKEN', title="Auth token env", description="Env var or Graphyn secret NAME for HuggingFace token (preferred). Default HUGGINGFACE_TOKEN.")
+        auth_token: str = Field(default='', title="Auth token (deprecated)", description="Prefer auth_token_env or HUGGINGFACE_TOKEN env. Do not store tokens in pipeline IR.", exclude=True)
         # auth_token is excluded from serialisation to prevent secret leakage.
         # Use the HUGGINGFACE_TOKEN environment variable instead of embedding
         # the token in saved pipeline files.
-        min_segment_s: float = Field(default=0.5, title="Min Segment S", description="Min Segment S.")
+        min_segment_s: float = Field(default=0.5, title="Min segment (s)", description="Drop diarization segments shorter than this many seconds.")
+
+
+    def _resolve_hf_token(self) -> str:
+        """Resolve HF token from auth_token_env / secrets, falling back to deprecated auth_token."""
+        import os
+        env_name = (getattr(self.config, "auth_token_env", None) or "HUGGINGFACE_TOKEN").strip() or "HUGGINGFACE_TOKEN"
+        token = ""
+        try:
+            from app.core.secrets import resolve_secret
+            token = (resolve_secret(env_name) or "").strip()
+        except Exception:
+            token = ""
+        if not token:
+            token = os.environ.get(env_name, "").strip()
+        if not token:
+            token = (self.config.auth_token or "").strip()
+        return token
 
     # ── setup ─────────────────────────────────────────────────────────────────
 
@@ -108,8 +126,7 @@ class SpeakerSeparatorNode(Node):
         self._pyannote_pipeline = None
         self._sepformer_model = None
 
-        import os
-        token = self.config.auth_token or os.environ.get("HUGGINGFACE_TOKEN", "")
+        token = self._resolve_hf_token()
 
         if self._resolved_backend == "pyannote":
             # _resolve_backend() already verified the import succeeds; any
@@ -208,7 +225,7 @@ class SpeakerSeparatorNode(Node):
         if getattr(self, "_pyannote_pipeline", None) is not None:
             pipeline = self._pyannote_pipeline
         else:
-            token = self.config.auth_token or os.environ.get("HUGGINGFACE_TOKEN", "")
+            token = self._resolve_hf_token()
             pipeline = PyannotePipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
                 use_auth_token=token or None,

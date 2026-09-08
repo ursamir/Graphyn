@@ -15,7 +15,7 @@ runtime = "inprocess"
 node_types = ["caption_export"]
 
 [config_schema.caption_export]
-output_dir = { type = "string", title = "Output Dir", default = "workspace/artifacts/captions", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
-basename = { type = "string", title = "Basename", default = "captions", description = "Filename stem for exported caption files." }
-formats = { type = "array", title = "Formats", default = ["srt", "vtt", "json"], description = "Export formats: srt, vtt, and/or json." }
-max_words_per_cue = { type = "integer", title = "Max words per cue", default = 12, description = "Wrap captions when a cue exceeds this word count." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/artifacts/captions", description = "Directory under workspace/artifacts for written files." }
+basename = { type = "string", title = "Basename", default = "captions", description = "Output filename stem (without extension)." }
+formats = { type = "array", title = "Formats", default = ["srt", "vtt", "json"], description = "Formats to write: choose among srt, vtt, json." }
+max_words_per_cue = { type = "integer", title = "Max words per cue", default = 12, description = "Soft wrap captions after this many words per cue." }

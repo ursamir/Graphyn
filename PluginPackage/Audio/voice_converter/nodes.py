@@ -79,8 +79,8 @@ class VoiceConverterNode(Node):
         conversion_type: Literal["timbre", "accent", "gender", "style"] = Field(default='timbre', title="Conversion Type", description="Conversion Type. One of: timbre, accent, gender, style.")
         # NOTE: conversion_type is stored in metadata for lineage tracking.
         # Backend-specific conversion behaviour per type is reserved for future implementation.
-        target_speaker: str = Field(default='', title="Target Speaker", description="Target Speaker.")
-        pitch_shift_semitones: float = Field(default=0.0, title="Pitch Shift Semitones", description="Pitch Shift Semitones.")
+        target_speaker: str = Field(default='', title="Target speaker", description="Target speaker id / voice for conversion.")
+        pitch_shift_semitones: float = Field(default=0.0, title="Pitch shift (semitones)", description="Pitch shift applied in semitones (can be fractional).")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

@@ -81,34 +81,34 @@ class AudioConditionerNode(Node):
     }
 
     class Config(NodeConfig):
-        target_sample_rate: int = Field(default=16000, title="Target Sample Rate", description="Resample audio to this rate (Hz).")
+        target_sample_rate: int = Field(default=16000, title="Target sample rate", description="Resample audio to this rate (Hz).")
 
-        mono: bool = Field(default=True, title="Mono", description="Downmix to a single channel.")
+        mono: bool = Field(default=True, title="Mono", description="Downmix to a single channel (On/Off).")
 
-        trim_silence: bool = Field(default=True, title="Trim Silence", description="Enable trim silence.")
-        trim_threshold_db: float = Field(default=40.0, title="Trim Threshold DB", description="Trim Threshold DB.")
+        trim_silence: bool = Field(default=True, title="Trim silence", description="Trim leading/trailing silence using trim_threshold_db (On/Off).")
+        trim_threshold_db: float = Field(default=40.0, title="Trim threshold (dB)", description="Silence threshold in dB used when trim_silence is On.")
 
-        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude.")
-        normalize_method: Literal["peak", "rms", "lufs"] = Field(default='peak', title="Normalize Method", description="Loudness normalization method. One of: peak, rms, lufs.")
-        target_level_db: float = Field(default=-1.0, title="Target Level DB", description="Target Level DB.")
-        target_lufs: float = Field(default=-23.0, title="Target LUFS", description="Target LUFS.")
+        normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude (On/Off).")
+        normalize_method: Literal["peak", "rms", "lufs"] = Field(default='peak', title="Normalize method", description="Loudness normalization method. One of: peak, rms, lufs.")
+        target_level_db: float = Field(default=-1.0, title="Target level (dB)", description="Peak/RMS target level in dB when normalize_method is peak or rms.")
+        target_lufs: float = Field(default=-23.0, title="Target LUFS", description="EBU R128 integrated loudness target when normalize_method is lufs.")
 
-        remove_dc_offset: bool = Field(default=True, title="Remove Dc Offset", description="Enable remove dc offset.")
+        remove_dc_offset: bool = Field(default=True, title="Remove DC offset", description="Subtract DC bias before further processing (On/Off).")
 
-        preemphasis: bool = Field(default=False, title="Preemphasis", description="Enable preemphasis.")
-        preemphasis_coeff: float = Field(default=0.97, title="Preemphasis Coeff", description="Preemphasis Coeff.")
+        preemphasis: bool = Field(default=False, title="Preemphasis", description="Apply a high-frequency pre-emphasis filter (On/Off).")
+        preemphasis_coeff: float = Field(default=0.97, title="Preemphasis coeff", description="First-order pre-emphasis coefficient (typical 0.97).")
 
         # Dynamic range compression (absorbed from compress.py)
-        compress: bool = Field(default=False, title="Compress", description="Enable compress.")
-        compress_threshold_db: float = Field(default=-20.0, title="Compress Threshold DB", description="Compress Threshold DB.")
-        compress_ratio: float = Field(default=4.0, title="Compress Ratio", description="Compress Ratio.")
+        compress: bool = Field(default=False, title="Compress", description="Enable dynamic-range compression (On/Off).")
+        compress_threshold_db: float = Field(default=-20.0, title="Compress threshold (dB)", description="Compression threshold in dB below which gain is reduced.")
+        compress_ratio: float = Field(default=4.0, title="Compress ratio", description="Compression ratio (e.g. 4.0 means 4:1). Must be > 0.")
 
-        limiter: bool = Field(default=True, title="Limiter", description="Enable limiter.")
-        skip_clipped: bool = Field(default=False, title="Skip Clipped", description="Enable skip clipped.")
+        limiter: bool = Field(default=True, title="Limiter", description="Brick-wall limiter to prevent clipping after processing (On/Off).")
+        skip_clipped: bool = Field(default=False, title="Skip clipped", description="Skip samples that are already clipped instead of processing them (On/Off).")
 
         # 0 = process all at once; N = process in batches of N (chunked iteration,
         # not lazy/generator-based — both paths call _condition_one() per sample)
-        batch_size: int = Field(default=0, title="Batch Size", description="Mini-batch size.")
+        batch_size: int = Field(default=0, title="Batch size", description="Process in batches of N (0 = all at once).")
 
         @field_validator("compress_ratio")
         @classmethod
