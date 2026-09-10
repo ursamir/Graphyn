@@ -1,6 +1,7 @@
 import React from 'react'
 import {
   Check,
+  ExternalLink,
   RefreshCw,
   X,
 } from 'lucide-react'
@@ -16,6 +17,10 @@ import {
   StatusBadge,
 } from '../../components/ui'
 import { formatLocaleDateTime } from '../../lib/format'
+
+/** MCP propose_graph docs — console has no create-proposal form (POST needs full GraphIR). */
+const DOCS_MCP_PROPOSE =
+  'https://github.com/ursamir/Graphyn/blob/main/docs/MCP_SERVER.md#propose_graph'
 
 type DiffSummary = {
   nodes_added?: string[]
@@ -257,24 +262,35 @@ export default function ProposalsView() {
           ) : !items?.length ? (
             <div className="p-4">
               <EmptyState
-                title="No proposals"
+                title="No proposals yet"
                 description={
                   filter === 'pending'
-                    ? 'Agents can submit GraphIR via MCP propose_graph or POST /api/v1/proposals.'
+                    ? 'Proposals are submitted by agents (MCP propose_graph) or POST /api/v1/proposals with a full GraphIR — the console reviews and accepts them into Builder; it does not create proposals from this page.'
                     : 'Nothing matches this filter.'
                 }
                 action={
                   filter === 'pending' ? (
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => {
-                        setView('builder')
-                        window.history.replaceState(null, '', '#/builder')
-                      }}
-                    >
-                      Open Builder
-                    </button>
+                    <div className="flex flex-col items-center gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => {
+                          setView('builder')
+                          window.history.replaceState(null, '', '#/builder')
+                        }}
+                      >
+                        Open Builder
+                      </button>
+                      <a
+                        href={DOCS_MCP_PROPOSE}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-900"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        MCP propose_graph docs
+                      </a>
+                    </div>
                   ) : undefined
                 }
               />

@@ -1,15 +1,23 @@
 import React from 'react'
-import { RefreshCw, Server } from 'lucide-react'
+import { ExternalLink, RefreshCw, Server } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { formatLocaleDateTime, formatRelativeTime } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
 import {
+  CopyableMono,
   EmptyState,
   ErrorBanner,
   LoadingBlock,
   PageHeader,
   StatusBadge,
 } from '../../components/ui'
+
+/** Same-host smoke command from docs/GETTING_STARTED.md + docs/SDK_AND_CLI.md */
+const WORKER_START_CMD =
+  'venv/bin/python -m app.cli.main worker start --control-url http://127.0.0.1:8001/api/v1 --worker-id local-gpu --labels gpu --pool gpu-lab'
+
+const DOCS_GETTING_STARTED_MODE_B =
+  'https://github.com/ursamir/Graphyn/blob/main/docs/GETTING_STARTED.md#mode-b--multi-machine-control-plane--workers'
 
 type WorkerRow = {
   worker_id: string
@@ -94,31 +102,49 @@ export default function WorkersView() {
       ) : !workers || workers.length === 0 ? (
         <EmptyState
           title="No workers registered"
-          description="Mode B runs a control plane plus workers. Enable distributed backend, start a worker with graphyn worker start --control-url <url>, then refresh. See Getting Started (Mode B)."
+          description="Mode B needs a distributed control plane plus at least one worker. Set GRAPHYN_BACKEND=distributed on the API host, start a worker with the CLI, then refresh. Packaging models onto devices is Edge deploy — different from workers."
           action={
-            <div className="flex flex-col items-center gap-2">
-              <p className="max-w-md text-xs text-ink-400 font-mono">
-                GRAPHYN_BACKEND=distributed
-              </p>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => {
-                  useAppStore.getState().setView('system')
-                  window.history.replaceState(null, '', '#/system')
-                }}
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-full max-w-xl rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-left">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                  Control plane env
+                </div>
+                <CopyableMono value="GRAPHYN_BACKEND=distributed" />
+                <div className="mb-1 mt-2 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                  Worker start (same-host smoke)
+                </div>
+                <CopyableMono value={WORKER_START_CMD} />
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    useAppStore.getState().setView('system')
+                    window.history.replaceState(null, '', '#/system')
+                  }}
+                >
+                  Open System
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    useAppStore.getState().openEdge()
+                  }}
+                >
+                  Edge deploy instead
+                </button>
+              </div>
+              <a
+                href={DOCS_GETTING_STARTED_MODE_B}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-900"
               >
-                Open System
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  useAppStore.getState().openEdge()
-                }}
-              >
-                Edge deploy instead
-              </button>
+                <ExternalLink className="h-3 w-3" />
+                Getting Started · Mode B
+              </a>
             </div>
           }
         />
