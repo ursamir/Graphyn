@@ -12,7 +12,6 @@ import {
 } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
 import {
-  ConfirmButton,
   CollapsibleJson,
   EmptyState,
   ErrorBanner,
@@ -63,8 +62,10 @@ export default function SystemView() {
   const [webhookUrl, setWebhookUrl] = React.useState('')
   const [webhookEvents, setWebhookEvents] = React.useState<string[]>([])
   const [cleanupDays, setCleanupDays] = React.useState(7)
-  const [deleteCache, setDeleteCache] = React.useState(true)
+  const [deleteCache, setDeleteCache] = React.useState(false)
   const [deleteArtifacts, setDeleteArtifacts] = React.useState(false)
+  const [cleanupArmed, setCleanupArmed] = React.useState(false)
+  const [cleanupConfirmText, setCleanupConfirmText] = React.useState("")
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [auditEvents, setAuditEvents] = React.useState<
@@ -309,6 +310,10 @@ export default function SystemView() {
           clear all finished runs. The run that latest/ still points at is kept by default.
           examples/ and datasets/input are never deleted.
         </p>
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          Destructive options stay unchecked by default. Cleanup always requires typing{' '}
+          <span className="font-mono font-semibold">CLEANUP</span> to confirm.
+        </p>
         <label className="block text-sm text-ink-600">
           Older than days
           <input
@@ -318,40 +323,116 @@ export default function SystemView() {
             onChange={(e) => {
               const n = parseInt(e.target.value, 10)
               setCleanupDays(Number.isFinite(n) && n >= 0 ? n : 0)
+              setCleanupArmed(false)
+              setCleanupConfirmText('')
             }}
             className="ml-2 w-20 rounded border border-ink-200 px-2 py-1"
           />
         </label>
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={deleteCache} onChange={(e) => setDeleteCache(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={deleteCache}
+            onChange={(e) => {
+              setDeleteCache(e.target.checked)
+              setCleanupArmed(false)
+              setCleanupConfirmText('')
+            }}
+          />
           Delete cache
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={deleteArtifacts}
-            onChange={(e) => setDeleteArtifacts(e.target.checked)}
+            onChange={(e) => {
+              setDeleteArtifacts(e.target.checked)
+              setCleanupArmed(false)
+              setCleanupConfirmText('')
+            }}
           />
           Delete workspace artifacts
         </label>
-        <ConfirmButton
-          label="Run cleanup"
-          confirmLabel="Confirm cleanup"
-          danger
-          onConfirm={() => {
-            void apiJson('/system/cleanup', {
-              method: 'POST',
-              body: JSON.stringify({
-                older_than_days: cleanupDays,
-                delete_cache: deleteCache,
-                delete_artifacts: deleteArtifacts,
-                keep_latest: true,
-              }),
-            })
-              .then((res) => pushToast(formatCleanupToast(res), 'success'))
-              .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
-          }}
-        />
+        {!cleanupArmed ? (
+          <button
+            type="button"
+            className="btn-danger"
+            onClick={() => {
+              setCleanupArmed(true)
+              setCleanupConfirmText('')
+            }}
+          >
+            Run cleanup…
+          </button>
+        ) : (
+          <div className="rounded-xl border border-rose-200 bg-rose-50/70 p-3 space-y-3">
+            <div className="text-sm text-rose-950">
+              <div className="font-semibold">Confirm cleanup</div>
+              <ul className="mt-1 list-disc pl-5 text-xs text-rose-900/90 space-y-0.5">
+                <li>
+                  Delete finished run journals older than{' '}
+                  <span className="font-medium">{cleanupDays}</span> day
+                  {cleanupDays === 1 ? '' : 's'} (keep latest)
+                </li>
+                <li>{deleteCache ? 'Also delete pipeline cache' : 'Keep pipeline cache'}</li>
+                <li>
+                  {deleteArtifacts
+                    ? 'Also delete workspace artifacts for those runs'
+                    : 'Keep workspace artifacts'}
+                </li>
+              </ul>
+            </div>
+            <label className="block text-sm text-rose-950">
+              Type <span className="font-mono font-semibold">CLEANUP</span> to proceed
+              <input
+                value={cleanupConfirmText}
+                onChange={(e) => setCleanupConfirmText(e.target.value)}
+                placeholder="CLEANUP"
+                autoComplete="off"
+                spellCheck={false}
+                className="mt-1 w-full rounded-lg border border-rose-200 bg-white px-3 py-2 font-mono text-sm"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={cleanupConfirmText.trim() !== 'CLEANUP'}
+                onClick={() => {
+                  void apiJson('/system/cleanup', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      older_than_days: cleanupDays,
+                      delete_cache: deleteCache,
+                      delete_artifacts: deleteArtifacts,
+                      keep_latest: true,
+                    }),
+                  })
+                    .then((res) => {
+                      pushToast(formatCleanupToast(res), 'success')
+                      setCleanupArmed(false)
+                      setCleanupConfirmText('')
+                    })
+                    .catch((err) =>
+                      pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                    )
+                }}
+              >
+                Confirm cleanup
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setCleanupArmed(false)
+                  setCleanupConfirmText('')
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   )

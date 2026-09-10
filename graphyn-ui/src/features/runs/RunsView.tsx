@@ -49,6 +49,22 @@ function isPreviewPlot(file: OutputFile): boolean {
   )
 }
 
+/** Runs stuck in RUNNING with no process heartbeat — warn after this age. */
+const STALE_RUNNING_MS = 60 * 60 * 1000 // 1 hour
+
+function runningAgeMs(createdAt?: string | null): number | null {
+  if (!createdAt) return null
+  const t = Date.parse(createdAt)
+  if (!Number.isFinite(t)) return null
+  return Date.now() - t
+}
+
+function isStaleRunning(status?: string | null, createdAt?: string | null): boolean {
+  if (String(status || '').toLowerCase() !== 'running') return false
+  const age = runningAgeMs(createdAt)
+  return age != null && age >= STALE_RUNNING_MS
+}
+
 const PANEL_LABELS: Record<string, string> = {
   logs: 'Logs',
   debug: 'Debug',
@@ -368,7 +384,17 @@ export default function RunsView() {
                   <div className="truncate text-sm font-medium text-ink-900">
                     {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : 'Pipeline'}
                   </div>
-                  <StatusBadge status={String(r.status ?? 'unknown')} />
+                  <div className="flex items-center gap-1.5 justify-self-end">
+                    <StatusBadge status={String(r.status ?? 'unknown')} />
+                    {isStaleRunning(r.status, r.created_at) && (
+                      <span
+                        className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900"
+                        title={`Still RUNNING after ${formatRelativeTime(r.created_at)} — may be a zombie journal`}
+                      >
+                        Stale
+                      </span>
+                    )}
+                  </div>
                   <div className="hidden truncate text-[11px] text-ink-600 sm:block">
                     {metric ?? ''}
                   </div>
@@ -434,6 +460,11 @@ export default function RunsView() {
             <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm">
               <div className="flex flex-wrap items-center gap-3">
                 <StatusBadge status={runStatus} />
+                {isStaleRunning(runStatus, selectedSummary?.created_at ?? (detail?.meta as { created_at?: string } | undefined)?.created_at) && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-900">
+                    Stale RUNNING
+                  </span>
+                )}
                 {status?.progress_pct != null && (
                   <SlimProgress pct={Number(status.progress_pct)} />
                 )}
@@ -524,7 +555,15 @@ export default function RunsView() {
               )}
               {['running', 'paused'].includes(runStatus.toLowerCase()) && (
                 <ConfirmButton
-                  label="Cancel run"
+                  label={
+                    isStaleRunning(
+                      runStatus,
+                      selectedSummary?.created_at ??
+                        (detail?.meta as { created_at?: string } | undefined)?.created_at,
+                    )
+                      ? 'Cancel stale run'
+                      : 'Cancel run'
+                  }
                   confirmLabel="Confirm cancel"
                   danger
                   onConfirm={() => void control(selected, 'cancel')}
@@ -539,6 +578,22 @@ export default function RunsView() {
                 />
               )}
             </div>
+            {isStaleRunning(
+              runStatus,
+              selectedSummary?.created_at ??
+                (detail?.meta as { created_at?: string } | undefined)?.created_at,
+            ) && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+                <div className="font-medium">This run has been RUNNING for a long time</div>
+                <p className="mt-1 text-xs text-amber-900/90">
+                  Started {formatRelativeTime(selectedSummary?.created_at ?? (detail?.meta as { created_at?: string } | undefined)?.created_at)}
+                  {logs.length === 0 ? ' and has no logs' : ''}. The API still reports{' '}
+                  <span className="font-semibold">running</span> — often a zombie journal after a
+                  crashed worker. Use <span className="font-semibold">Cancel run</span> (click
+                  twice to confirm) to mark it terminal, or delete after it leaves RUNNING.
+                </p>
+              </div>
+            )}
             <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1">
               {(['logs', 'debug', 'checkpoints', 'artifacts'] as const).map((p) => (
                 <button

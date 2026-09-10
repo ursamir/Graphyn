@@ -82,6 +82,17 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
 
     out = dict(meta)
     run_id = str(out.get("run_id") or run_path.name)
+    # Many journals omit graph_name; recover from graph.json metadata.name.
+    if not (isinstance(out.get("graph_name"), str) and str(out.get("graph_name")).strip()):
+        try:
+            from app.core.run_outputs import _load_run_graph
+
+            graph = _load_run_graph(run_path)
+            gmeta = graph.get("metadata") if isinstance(graph, dict) else None
+            if isinstance(gmeta, dict) and gmeta.get("name"):
+                out["graph_name"] = str(gmeta["name"]).strip()
+        except Exception:
+            pass
     slug = None
     artifacts = out.get("artifacts_dir")
     if isinstance(artifacts, str) and artifacts.strip():

@@ -180,3 +180,43 @@ def test_get_experiment_and_compare(tmp_workspace: Path):
 
 def test_empty_runs_dir(tmp_workspace: Path):
     assert list_experiments(tmp_workspace / "runs") == []
+
+
+def test_fallback_graph_json_name_and_params(tmp_workspace: Path):
+    """When meta omits graph_name/params, hydrate from graph.json."""
+    runs = tmp_workspace / "runs"
+    run_dir = _write_run(
+        runs,
+        "run-graph-only",
+        meta={
+            "run_id": "run-graph-only",
+            "status": "completed",
+            "created_at": "2026-09-07T12:00:00+00:00",
+        },
+        metrics_json={"accuracy": 0.77},
+    )
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "metadata": {"name": "captions", "tags": ["asr"]},
+                "nodes": [],
+                "edges": [],
+                "parameters": {"beam": 4},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    blocks = list_experiments(runs)
+    assert len(blocks) == 1
+    run = blocks[0]["runs"][0]
+    assert run["graph_name"] == "captions"
+    assert run["parameters"]["beam"] == 4
+    assert run["metrics"]["accuracy"] == 0.77
+    assert "asr" in run["tags"]
+
+    cmp = compare_runs(["run-graph-only"], runs)
+    assert cmp["param_keys"] == ["beam"]
+    assert "accuracy" in cmp["metric_keys"]
+    assert cmp["runs"][0]["graph_name"] == "captions"

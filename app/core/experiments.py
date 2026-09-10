@@ -44,6 +44,19 @@ def _load_meta(run_path: Path) -> dict[str, Any]:
     return _safe_load_json(run_path / "meta.json") or {}
 
 
+def _load_graph(run_path: Path) -> dict[str, Any]:
+    return _safe_load_json(run_path / "graph.json") or {}
+
+
+def _graph_display_name(graph: dict[str, Any]) -> str | None:
+    meta = graph.get("metadata")
+    if isinstance(meta, dict):
+        name = meta.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return None
+
+
 def _hydrate_metrics(meta: dict[str, Any], run_path: Path) -> dict[str, Any]:
     """Prefer meta.metrics; else metrics.json under artifacts or the run dir."""
     existing = meta.get("metrics")
@@ -105,6 +118,11 @@ def _run_row_from_dir(run_path: Path) -> tuple[str, dict[str, Any]] | None:
         or run_path.name
     )
 
+    graph = _load_graph(run_path)
+    graph_name_fallback = _graph_display_name(graph)
+    graph_params = _as_dict(graph.get("parameters"))
+    graph_tags = _as_list((graph.get("metadata") or {}).get("tags") if isinstance(graph.get("metadata"), dict) else [])
+
     if exp:
         experiment_name = str(exp.get("experiment_name") or "default").strip() or "default"
         parameters = _as_dict(exp.get("parameters"))
@@ -125,11 +143,25 @@ def _run_row_from_dir(run_path: Path) -> tuple[str, dict[str, Any]] | None:
         tags = _as_list(meta.get("tags"))
         created_at = meta.get("created_at") or meta.get("started_at") or None
 
+    if not parameters and graph_params:
+        parameters = graph_params
+    if not tags and graph_tags:
+        tags = graph_tags
+
+    graph_name = (
+        meta.get("graph_name")
+        or (exp or {}).get("graph_name")
+        or graph_name_fallback
+        or None
+    )
+    if isinstance(graph_name, str):
+        graph_name = graph_name.strip() or None
+
     row = {
         "run_id": run_id,
         "status": str(meta.get("status") or (exp or {}).get("status") or "unknown"),
         "created_at": created_at,
-        "graph_name": meta.get("graph_name") or (exp or {}).get("graph_name") or None,
+        "graph_name": graph_name,
         "parameters": parameters,
         "metrics": metrics,
         "tags": tags,

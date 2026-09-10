@@ -9,7 +9,12 @@ import {
   PageHeader,
   StatusBadge,
 } from '../../components/ui'
-import { formatLocaleDateTime, prettyScalar, shortRunId } from '../../lib/format'
+import {
+  formatLocaleDateTime,
+  humanizeTemplateName,
+  prettyScalar,
+  shortRunId,
+} from '../../lib/format'
 
 type ExperimentRun = {
   run_id: string
@@ -103,6 +108,8 @@ export default function ExperimentsView() {
   const [selectedIds, setSelectedIds] = React.useState<string[]>(() => parseExperimentsHash().slice(0, 5))
   const [compare, setCompare] = React.useState<ComparePayload | null>(null)
   const [compareLoading, setCompareLoading] = React.useState(false)
+  const compareRef = React.useRef<HTMLDivElement | null>(null)
+  const autoComparedKey = React.useRef<string>('')
 
   const refresh = React.useCallback(async () => {
     setError(null)
@@ -177,8 +184,9 @@ export default function ExperimentsView() {
     })
   }
 
-  const runCompare = async () => {
-    if (selectedIds.length < 2) {
+  const runCompare = React.useCallback(async (ids?: string[]) => {
+    const target = ids ?? selectedIds
+    if (target.length < 2) {
       pushToast('Select 2–5 runs to compare', 'info')
       return
     }
@@ -186,9 +194,13 @@ export default function ExperimentsView() {
     setError(null)
     try {
       const data = await apiJson<ComparePayload>('/experiments/compare', {
-        query: { run_ids: selectedIds.join(',') },
+        query: { run_ids: target.join(',') },
       })
       setCompare(data)
+      // Ensure the panel is visible even when the runs table is long.
+      requestAnimationFrame(() => {
+        compareRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
@@ -196,12 +208,24 @@ export default function ExperimentsView() {
     } finally {
       setCompareLoading(false)
     }
-  }
+  }, [selectedIds, pushToast])
 
   const clearCompare = () => {
     setCompare(null)
     setSelectedIds([])
+    autoComparedKey.current = ''
   }
+
+  // Deep-link handoff: if the URL already has 2+ run ids, run compare once.
+  React.useEffect(() => {
+    if (loading || !blocks) return
+    const ids = parseExperimentsHash().slice(0, 5)
+    if (ids.length < 2) return
+    const key = ids.join(',')
+    if (autoComparedKey.current === key) return
+    autoComparedKey.current = key
+    void runCompare(ids)
+  }, [loading, blocks, runCompare])
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
@@ -343,8 +367,8 @@ export default function ExperimentsView() {
                           <td className="px-3 py-2">
                             <StatusBadge status={r.status || 'unknown'} />
                           </td>
-                          <td className="px-3 py-2 text-ink-600 truncate max-w-[10rem]">
-                            {r.graph_name || '—'}
+                          <td className="px-3 py-2 text-ink-600 truncate max-w-[10rem]" title={r.graph_name || undefined}>
+                            {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : '—'}
                           </td>
                           <td className="px-3 py-2 text-ink-500 whitespace-nowrap text-xs">
                             {formatLocaleDateTime(r.created_at)}
@@ -386,8 +410,11 @@ export default function ExperimentsView() {
             </div>
 
             {compare && (
-              <div className="rounded-2xl border border-ink-200/80 bg-white shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b border-ink-100 flex items-center justify-between">
+              <div
+                ref={compareRef}
+                className="rounded-2xl border border-ink-200/80 bg-white shadow-sm overflow-hidden"
+              >
+                <div className="px-4 py-3 border-b border-ink-100 flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium text-ink-900">Compare</div>
                     <div className="text-xs text-ink-500">
@@ -400,23 +427,76 @@ export default function ExperimentsView() {
                     </div>
                   )}
                 </div>
-                <div className="overflow-x-auto">
-                  <CompareTable
-                    title="Parameters"
-                    keys={compare.param_keys}
-                    runs={compare.runs}
-                    getter={(r, k) => r.parameters?.[k]}
-                    onOpenRun={openRun}
-                  />
-                  <CompareTable
-                    title="Metrics"
-                    keys={compare.metric_keys}
-                    runs={compare.runs}
-                    getter={(r, k) => r.metrics?.[k]}
-                    format={fmtMetric}
-                    onOpenRun={openRun}
-                  />
-                </div>
+                {(!compare.param_keys?.length && !compare.metric_keys?.length) || compare.runs.length === 0 ? (
+                  <div className="px-4 py-6 space-y-2">
+                    <div className="text-sm font-medium text-ink-800">
+                      No metrics recorded for these runs
+                    </div>
+                    <p className="text-xs text-ink-500 max-w-xl">
+                      Compare needs params/metrics from experiment.json, metrics.json, or graph
+                      parameters. Graph names still appear in the table above when available.
+                      {compare.runs.length > 0
+                        ? ` Loaded ${compare.runs.length} run${compare.runs.length === 1 ? '' : 's'} with empty params/metrics.`
+                        : ''}
+                    </p>
+                    <div className="overflow-x-auto pt-2">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-[11px] text-ink-500 border-b border-ink-100">
+                            <th className="px-2 py-1.5 font-medium">Run</th>
+                            <th className="px-2 py-1.5 font-medium">Status</th>
+                            <th className="px-2 py-1.5 font-medium">Graph</th>
+                            <th className="px-2 py-1.5 font-medium">Created</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {compare.runs.map((r) => (
+                            <tr key={r.run_id} className="border-b border-ink-50 last:border-0">
+                              <td className="px-2 py-1.5 font-mono text-xs">
+                                <button
+                                  type="button"
+                                  className="hover:underline"
+                                  onClick={() => openRun(r.run_id)}
+                                >
+                                  {shortRunId(r.run_id)}
+                                </button>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <StatusBadge status={r.status || 'unknown'} />
+                              </td>
+                              <td className="px-2 py-1.5 text-ink-600">
+                                {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : '—'}
+                              </td>
+                              <td className="px-2 py-1.5 text-xs text-ink-500 whitespace-nowrap">
+                                {formatLocaleDateTime(r.created_at)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <CompareTable
+                      title="Parameters"
+                      keys={compare.param_keys}
+                      runs={compare.runs}
+                      getter={(r, k) => r.parameters?.[k]}
+                      emptyLabel="No parameters recorded for these runs"
+                      onOpenRun={openRun}
+                    />
+                    <CompareTable
+                      title="Metrics"
+                      keys={compare.metric_keys}
+                      runs={compare.runs}
+                      getter={(r, k) => r.metrics?.[k]}
+                      format={fmtMetric}
+                      emptyLabel="No metrics recorded for these runs"
+                      onOpenRun={openRun}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -432,6 +512,7 @@ function CompareTable({
   runs,
   getter,
   format,
+  emptyLabel,
   onOpenRun,
 }: {
   title: string
@@ -439,13 +520,14 @@ function CompareTable({
   runs: Array<ExperimentRun & { experiment_name?: string }>
   getter: (r: ExperimentRun, key: string) => unknown
   format?: (v: unknown) => string
+  emptyLabel?: string
   onOpenRun?: (runId: string) => void
 }) {
   const fmt = format ?? ((v: unknown) => (v == null ? '—' : prettyScalar(v)))
   if (!keys.length) {
     return (
-      <div className="px-4 py-3 text-xs text-ink-400 border-b border-ink-50 last:border-0">
-        No {title.toLowerCase()} logged for selected runs.
+      <div className="px-4 py-3 text-xs text-ink-500 border-b border-ink-50 last:border-0">
+        {emptyLabel || `No ${title.toLowerCase()} recorded for these runs`}
       </div>
     )
   }
