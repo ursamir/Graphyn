@@ -23,6 +23,14 @@ interface InputLabel {
 
 type DataMode = 'outputs' | 'inputs' | 'ingest' | 'merge'
 
+function sanitizePathSeg(value: string | undefined | null): string | undefined {
+  const v = (value || '').trim()
+  if (!v) return undefined
+  // Reject path-like hash/state — never send nested segments to /data/outputs/{project}/{version}.
+  if (v.includes('/') || v.includes('\\')) return undefined
+  return v
+}
+
 function parseDataHash(): {
   mode?: DataMode
   project?: string
@@ -39,21 +47,27 @@ function parseDataHash(): {
     : undefined
   return {
     mode,
-    project: (params.get('project') || '').trim() || undefined,
-    version: (params.get('version') || '').trim() || undefined,
-    label: (params.get('label') || '').trim() || undefined,
+    project: sanitizePathSeg(params.get('project')),
+    version: sanitizePathSeg(params.get('version')),
+    label: sanitizePathSeg(params.get('label')),
   }
 }
 
-function humanizeDataError(err: unknown): { message: string; detail: string } {
+function isInvalidWorkspacePathError(detail: string): boolean {
+  return /path is outside workspace|invalid path segment/i.test(detail)
+}
+
+function humanizeDataError(err: unknown): { message: string; detail: string; invalidPath: boolean } {
   const detail = err instanceof Error ? err.message : String(err)
-  if (/path is outside workspace/i.test(detail)) {
+  if (isInvalidWorkspacePathError(detail)) {
     return {
-      message: "That dataset folder isn't inside the Graphyn workspace anymore — it may have been deleted.",
+      message:
+        'That dataset path is invalid or no longer inside the Graphyn workspace. Selection was cleared — pick a project/version again, or start fresh below.',
       detail,
+      invalidPath: true,
     }
   }
-  return { message: detail, detail }
+  return { message: detail, detail, invalidPath: false }
 }
 
 export default function DataView() {
@@ -71,6 +85,8 @@ export default function DataView() {
   const [stats, setStats] = React.useState<unknown>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [errorDetail, setErrorDetail] = React.useState<string | null>(null)
+  const [pathRecovery, setPathRecovery] = React.useState(false)
+  const skippedOutputKey = React.useRef<string | null>(null)
   const [loading, setLoading] = React.useState(true)
 
   // ingest
@@ -95,11 +111,36 @@ export default function DataView() {
       ])
       setOutputs(out)
       setInputs(inp)
-      if (out[0]) {
-        setProject((p) => p || out[0].project)
-        setVersion((v) => v || out[0].versions[0] || '')
-      }
-      if (inp[0]) setLabel((l) => l || inp[0].label)
+      setProject((prev) => {
+        const safe = sanitizePathSeg(prev) ?? ''
+        const skip = skippedOutputKey.current
+        const usable = out.flatMap((o) =>
+          o.versions
+            .filter((v) => `${o.project}/${v}` !== skip)
+            .map((v) => ({ project: o.project, version: v })),
+        )
+        if (skip) {
+          // After an invalid-path recovery, do not auto-pick the failing combo (or any).
+          // Leave empty so EmptyState CTAs / manual select drive next steps.
+          setVersion('')
+          skippedOutputKey.current = null
+          return ''
+        }
+        const proj =
+          safe && out.some((o) => o.project === safe) ? safe : (usable[0]?.project ?? '')
+        const vers = out.find((o) => o.project === proj)?.versions ?? []
+        setVersion((vPrev) => {
+          const vSafe = sanitizePathSeg(vPrev) ?? ''
+          if (vSafe && vers.includes(vSafe)) return vSafe
+          return vers[0] ?? ''
+        })
+        return proj
+      })
+      setLabel((prev) => {
+        const safe = sanitizePathSeg(prev) ?? ''
+        if (safe && inp.some((i) => i.label === safe)) return safe
+        return inp[0]?.label ?? ''
+      })
     } catch (err) {
       const h = humanizeDataError(err)
       setError(h.message)
@@ -160,6 +201,7 @@ export default function DataView() {
             ).catch(() => null),
           ])
           if (cancelled) return
+          setPathRecovery(false)
           setRows(data)
           setStats(st)
         } catch (err) {
@@ -169,6 +211,13 @@ export default function DataView() {
           setErrorDetail(h.detail)
           setRows([])
           setStats(null)
+          if (h.invalidPath) {
+            skippedOutputKey.current = `${project}/${version}`
+            setPathRecovery(true)
+            setProject('')
+            setVersion('')
+            void loadSources()
+          }
         }
         return
       }
@@ -202,7 +251,7 @@ export default function DataView() {
     return () => {
       cancelled = true
     }
-  }, [mode, project, version, label])
+  }, [mode, project, version, label, loadSources])
 
   const openFile = async (path: string, kind: 'files' | 'input-files') => {
     try {
@@ -390,7 +439,7 @@ export default function DataView() {
     <div className="h-full overflow-y-auto p-6 space-y-4">
       <PageHeader
         title="Data"
-        description="Data = filesystem inputs/outputs under workspace/datasets/{input,output}. Projects = workspace metadata over output/{project}; versions appear only after pipeline/export writes — a draft project alone will not list versions here either."
+        description="Inputs = files you upload. Projects = a named dataset workspace; versions show up here after you run a template or export. How to start: Upload → Templates → run → see Outputs / Projects."
         actions={
           <div className="flex gap-2">
             <button type="button" className="btn-secondary" onClick={upload}>
@@ -413,7 +462,7 @@ export default function DataView() {
             ['merge', 'Merge'],
           ] as const
         ).map(([m, label]) => (
-          <button key={m} type="button" className={mode === m ? 'btn-primary' : 'btn-secondary'} onClick={() => { setError(null); setErrorDetail(null); setMode(m) }}>
+          <button key={m} type="button" className={mode === m ? 'btn-primary' : 'btn-secondary'} onClick={() => { setError(null); setErrorDetail(null); setPathRecovery(false); setMode(m) }}>
             {label}
           </button>
         ))}
@@ -450,22 +499,69 @@ export default function DataView() {
       ) : (
         <>
           {mode === 'outputs' ? (
-            outputs.length === 0 ? (
+            outputs.length === 0 || pathRecovery ? (
               <EmptyState
-                title="No output datasets"
-                description="No version folders yet under workspace/datasets/output (v1 / v1.0.0 style). Creating a draft Project does not create versions — run Templates → Builder (audio-classification) or merge datasets first. Open Projects for snapshots/lineage once versions exist."
+                title={pathRecovery ? 'Dataset path reset' : 'No output datasets yet'}
+                description={
+                  pathRecovery
+                    ? 'The selected path was invalid or outside the workspace, so selection was cleared. Upload audio, create a project, or run a template to populate Outputs.'
+                    : 'Outputs list version folders (v1, v1.0.0, …) under your Graphyn workspace after a template or export runs. Inputs are files you upload; Projects are the named workspace — a draft project alone does not create versions here. Start with: Upload audio → Browse Templates → run → see results in Outputs / Projects.'
+                }
                 action={
                   <div className="flex flex-wrap justify-center gap-2">
-                    <button type="button" className="btn-primary" onClick={browseTemplatesForDataPrep}>
-                      Browse Templates
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        setPathRecovery(false)
+                        setError(null)
+                        setErrorDetail(null)
+                        setMode('inputs')
+                        upload()
+                      }}
+                    >
+                      Upload audio
                     </button>
                     <button
                       type="button"
                       className="btn-secondary"
-                      onClick={() => openProjects()}
+                      onClick={() => {
+                        setPathRecovery(false)
+                        openProjects()
+                      }}
+                    >
+                      Create project
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setPathRecovery(false)
+                        openProjects()
+                      }}
                     >
                       Open Projects
                     </button>
+                    <button type="button" className="btn-secondary" onClick={browseTemplatesForDataPrep}>
+                      Browse Templates
+                    </button>
+                    {pathRecovery && outputs.length > 0 ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          setPathRecovery(false)
+                          setError(null)
+                          setErrorDetail(null)
+                          skippedOutputKey.current = null
+                          const first = outputs.find((o) => o.versions.length > 0)
+                          setProject(first?.project ?? '')
+                          setVersion(first?.versions[0] ?? '')
+                        }}
+                      >
+                        Browse existing outputs
+                      </button>
+                    ) : null}
                   </div>
                 }
               />
@@ -524,8 +620,8 @@ export default function DataView() {
             </div>
             )
           )}
-          {mode === 'outputs' && outputs.length === 0 ? null : mode === 'inputs' && inputs.length === 0 ? null : stats != null && <KeyValue data={stats} />}
-          {mode === 'outputs' && outputs.length === 0 ? null : mode === 'inputs' && inputs.length === 0 ? null : rows.length === 0 ? (
+          {mode === 'outputs' && (outputs.length === 0 || pathRecovery) ? null : mode === 'inputs' && inputs.length === 0 ? null : stats != null && <KeyValue data={stats} />}
+          {mode === 'outputs' && (outputs.length === 0 || pathRecovery) ? null : mode === 'inputs' && inputs.length === 0 ? null : rows.length === 0 ? (
             <EmptyState
               title="No rows"
               description={

@@ -47,11 +47,19 @@ def _output_root() -> Path:
 
 
 def _safe_child(root: Path, *parts: str) -> Path:
+    """Join *parts under root with a lexical jail (do not follow leaf symlinks).
+
+    ``Path.resolve()`` follows symlinks. Under Docker, a version dir that
+    symlinks to a host path can resolve outside ``GRAPHYN_PROJECT_DIR`` even
+    though it was listed from ``listdir`` under the workspace mount — causing
+    false "Path is outside workspace" 400s. Validate segments, join under the
+    resolved root, and check ``is_relative_to`` on the *joined* path only.
+    """
     for part in parts:
         if part in {"", ".", ".."} or "/" in part or "\\" in part:
-            raise HTTPException(status_code=400, detail="Path is outside workspace")
+            raise HTTPException(status_code=400, detail="Invalid path segment")
     resolved_root = root.resolve()
-    path = resolved_root.joinpath(*parts).resolve()
+    path = resolved_root.joinpath(*parts)
     if not path.is_relative_to(resolved_root):
         raise HTTPException(status_code=400, detail="Path is outside workspace")
     return path

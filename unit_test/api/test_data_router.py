@@ -237,3 +237,82 @@ class TestListOutputVersionFilter:
         assert body[0]["project"] == "demo"
         assert body[0]["versions"] == ["v1", "v1.0.0"]
 
+
+
+class TestSafeChildLexicalJail:
+    """_safe_child must not follow leaf symlinks (Docker volume false positive)."""
+
+    def test_rejects_invalid_path_segment(self, tmp_path):
+        import pytest
+        from fastapi import HTTPException
+        from app.api.routers.data import _safe_child
+
+        root = tmp_path / 'datasets' / 'output'
+        root.mkdir(parents=True)
+        with pytest.raises(HTTPException) as ei:
+            _safe_child(root, 'bad/name', 'v1')
+        assert ei.value.status_code == 400
+        assert ei.value.detail == 'Invalid path segment'
+
+        with pytest.raises(HTTPException) as ei2:
+            _safe_child(root, '..', 'v1')
+        assert ei2.value.status_code == 400
+        assert ei2.value.detail == 'Invalid path segment'
+
+        with pytest.raises(HTTPException) as ei3:
+            _safe_child(root, 'proj', '')
+        assert ei3.value.status_code == 400
+        assert ei3.value.detail == 'Invalid path segment'
+
+    def test_rejects_dotdot_segment(self, api_client, tmp_path):
+        patcher, _ = _patch_input(tmp_path)
+        with patcher:
+            resp = api_client.delete('/api/v1/data/inputs/%2e%2e')
+        assert resp.status_code == 400
+        assert resp.json()['detail'] in ('Invalid path segment', 'Path is outside workspace')
+
+    def test_symlink_version_dir_outside_root_still_gettable(self, api_client, tmp_path):
+        """Symlink under datasets/output/proj/v1 pointing outside root must not 400.
+
+        Mirrors Docker: GRAPHYN_PROJECT_DIR volume with a version dir that
+        symlinks to a host path; listdir shows it, but resolve() escapes.
+        """
+        patcher, output_root = _patch_output(tmp_path)
+        outside = tmp_path / 'host-outside'
+        outside.mkdir()
+        (outside / 'labels.csv').write_text(
+            "id,path,label,split\n0,train/a/a.wav,a,train\n",
+            encoding='utf-8',
+        )
+        (outside / 'train' / 'a').mkdir(parents=True)
+        (outside / 'train' / 'a' / 'a.wav').write_bytes(b'RIFF')
+        proj = output_root / 'proj'
+        proj.mkdir(parents=True)
+        (proj / 'v1').symlink_to(outside)
+
+        with patcher:
+            listed = api_client.get('/api/v1/data/outputs')
+            assert listed.status_code == 200
+            assert any(
+                p['project'] == 'proj' and 'v1' in p['versions'] for p in listed.json()
+            )
+            resp = api_client.get('/api/v1/data/outputs/proj/v1')
+        assert resp.status_code == 200, resp.text
+        rows = resp.json()
+        assert isinstance(rows, list)
+        assert len(rows) >= 1
+
+    def test_safe_child_returns_logical_path_for_symlink(self, tmp_path):
+        from app.api.routers.data import _safe_child
+
+        output_root = tmp_path / 'datasets' / 'output'
+        output_root.mkdir(parents=True)
+        outside = tmp_path / 'elsewhere'
+        outside.mkdir()
+        (output_root / 'proj').mkdir()
+        (output_root / 'proj' / 'v1').symlink_to(outside)
+
+        path = _safe_child(output_root, 'proj', 'v1')
+        assert path == (output_root.resolve() / 'proj' / 'v1')
+        assert path.is_relative_to(output_root.resolve())
+        assert path.is_symlink()
