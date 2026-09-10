@@ -221,7 +221,8 @@ export default function ProposalsView() {
       <div className="shrink-0 border-b border-ink-100 px-4 py-4 sm:px-6">
         <PageHeader
           title="Proposals"
-          description="Agents propose GraphIR changes; you approve before they enter Builder. Secrets never belong in IR."
+          scope="global"
+          description="PR-like review — agents propose GraphIR; you approve before it enters the Editor. Secrets never belong in IR."
           actions={
             <>
               <div className="flex rounded-lg border border-ink-200 bg-white p-0.5 text-[12px]">

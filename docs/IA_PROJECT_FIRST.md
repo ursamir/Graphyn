@@ -133,3 +133,31 @@ Disk layout unchanged: projects live under `workspace/datasets/output/{project}/
 - charts / device flash
 - DB-backed `project_id` indexes (filesystem journals remain source of truth for now)
 - second Workspace type (Decision B still locks one Project type)
+
+---
+
+## 8. UX visibility (Web IDE analogy)
+
+Shipped after Phase 2 to make **global vs project** and **viewer vs editor** obvious — think **VS Code / Cursor**, not a flat SaaS nav.
+
+| Graphyn surface | IDE analogue |
+|---|---|
+| **Project (active)** | Opened folder / workspace |
+| **Overview** | Workspace home / welcome |
+| **Editor (Builder)** | Main editor (center stage) |
+| **Explorer (Linked data + Data Browse)** | File explorer (viewer) |
+| **Data Manage** | Explorer actions (upload / delete / ingest) — secondary |
+| **Run** | Run / Debug panel (project-scoped) |
+| **Experiments / Trace / Artifacts** | Side panels reached from a run (Problems / Output) — not equal top peers |
+| **Templates** | New from template wizard (creates/opens workspace first) |
+| **Proposals** | PR review (global) |
+| **Plugins / Secrets / System** | Settings / Extensions (Admin) |
+| **Edge / Workers** | Remote deploy targets |
+
+### Chrome rules
+
+1. **Project open:** left strip **In project** (accent tint) — Overview, Editor, Run, Experiments, Explorer; below **Global** — Templates, Proposals, Data library, Deploy, Admin.
+2. **Header:** `Project · {name}` with Switch / Close; page titles use short IDE-ish labels + **Project** / **Global** scope badge.
+3. **No project:** calm prompt on Editor / Run / Experiments — “Open or create a project to start work”; Data library / Templates / Proposals remain.
+4. **Data:** segmented **Browse** (default from “Browse”) vs **Manage**; deep links `mode=inputs|outputs` → Browse, `mode=ingest|merge` → Manage.
+5. **Project home:** four cards (Linked data, Pipelines, Runs, Experiments); Rename/Clone/Delete under **Project settings** disclosure.

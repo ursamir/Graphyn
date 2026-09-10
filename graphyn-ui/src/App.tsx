@@ -63,7 +63,7 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
   },
   {
     title: 'Library',
-    items: [{ id: 'data', label: 'Data', icon: Database }],
+    items: [{ id: 'data', label: 'Data library', icon: Database }],
   },
   {
     title: 'Deploy',
@@ -85,8 +85,8 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
 /** Project-local strip when activeProject is set. Trace/Artifacts demoted to detail + last-run. */
 const PROJECT_NAV_ITEMS: NavItem[] = [
   { id: 'projects', label: 'Overview', icon: FolderKanban },
-  { id: 'builder', label: 'Builder', icon: Workflow },
-  { id: 'runs', label: 'Runs', icon: History },
+  { id: 'builder', label: 'Editor', icon: Workflow },
+  { id: 'runs', label: 'Run', icon: History },
   { id: 'experiments', label: 'Experiments', icon: FlaskConical },
 ]
 
@@ -100,17 +100,17 @@ const ALL_NAV_ITEMS: NavItem[] = [
 const VIEW_IDS = new Set(ALL_NAV_ITEMS.map((n) => n.id))
 
 const VIEW_LABEL: Record<AppView, string> = {
-  builder: 'Builder',
+  builder: 'Editor',
   templates: 'Templates',
-  runs: 'Runs',
+  runs: 'Run',
   plugins: 'Plugins',
-  data: 'Data',
+  data: 'Explorer',
   artifacts: 'Artifacts',
   trace: 'Trace',
   edge: 'Edge deploy',
   experiments: 'Experiments',
   proposals: 'Proposals',
-  projects: 'Projects',
+  projects: 'Workspace',
   secrets: 'Secrets',
   system: 'System',
   workers: 'Workers',
@@ -118,20 +118,20 @@ const VIEW_LABEL: Record<AppView, string> = {
 
 
 const NAV_HINTS: Partial<Record<AppView, string>> = {
-  builder: 'Design Graph IR pipelines on the canvas',
-  templates: 'Open starter or saved graphs in Builder',
-  proposals: 'Review agent-proposed graphs before Builder',
-  runs: 'Execution history, logs, and ops controls',
-  trace: 'Provenance chain across artifact, run, graph, worker',
-  experiments: 'Compare params and metrics across runs',
-  artifacts: 'Browse pipeline outputs across runs',
-  plugins: 'Install node packs for the Builder catalog',
-  data: 'Files in / files out — upload, browse, merge',
-  edge: 'Package models for on-device runtimes',
-  workers: 'Distributed workers — labels, GPU, heartbeats',
-  projects: 'Full workspace — linked data, pipelines, runs, experiments',
-  secrets: 'Named credentials for runs (not Graph IR)',
-  system: 'Health, cleanup, webhooks, audit trail',
+  builder: 'Editor — design Graph IR pipelines on the canvas',
+  templates: 'New from template — opens or creates a workspace first',
+  proposals: 'PR-like review of agent-proposed graphs',
+  runs: 'Run panel — execution history and ops for this workspace',
+  trace: 'Lineage panel — provenance across artifact, run, graph, worker',
+  experiments: 'Compare panel — params and metrics across runs',
+  artifacts: 'Output panel — pipeline files across runs',
+  plugins: 'Extensions — install node packs for the Editor catalog',
+  data: 'Global library / Explorer — browse files; link into a project from Workspace home',
+  edge: 'Deploy target — package models for on-device runtimes',
+  workers: 'Deploy targets — distributed workers, GPU, heartbeats',
+  projects: 'Workspace home — linked data, pipelines, runs, experiments',
+  secrets: 'Settings — named credentials for runs',
+  system: 'Settings — health, cleanup, webhooks, audit trail',
 }
 
 const JUMP_KEYS: Record<string, AppView> = {
@@ -479,15 +479,34 @@ export default function App() {
               </span>
             )}
             {activeProject && (
-              <button
-                type="button"
-                className="hidden max-w-[12rem] items-center gap-1 truncate rounded-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400 sm:inline-flex"
-                title="Open project home — click × in sidebar Overview to clear"
-                onClick={() => openProject(activeProject)}
-              >
-                <FolderKanban className="h-3 w-3 shrink-0" />
-                <span className="truncate">{activeProject}</span>
-              </button>
+              <div className="hidden max-w-[16rem] items-center gap-0.5 sm:inline-flex">
+                <button
+                  type="button"
+                  className="inline-flex max-w-[14rem] items-center gap-1 truncate rounded-l-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400"
+                  title="Open workspace home"
+                  onClick={() => openProject(activeProject)}
+                >
+                  <FolderKanban className="h-3 w-3 shrink-0" />
+                  <span className="truncate">Project · {activeProject}</span>
+                </button>
+                <button
+                  type="button"
+                  className="rounded-r-full border border-l-0 border-accent-300 bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800 hover:bg-accent-100"
+                  title="Switch or clear workspace"
+                  onClick={() => go('projects')}
+                >
+                  Switch
+                </button>
+                <button
+                  type="button"
+                  className="ml-0.5 rounded-full border border-ink-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-500 hover:border-ink-300 hover:text-ink-800"
+                  title="Close workspace"
+                  aria-label="Close workspace"
+                  onClick={() => setActiveProject(null)}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
             )}
             {!activeProject && (
               <button
@@ -495,7 +514,7 @@ export default function App() {
                 className="hidden items-center rounded-full border border-dashed border-ink-300 bg-white/80 px-2.5 py-0.5 text-[11px] text-ink-500 hover:border-accent-300 hover:text-accent-800 sm:inline-flex"
                 onClick={() => go('projects')}
               >
-                Select project
+                Open workspace
               </button>
             )}
             {lastRunId && (
@@ -592,19 +611,21 @@ export default function App() {
             >
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
                 {activeProject && (
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between px-2.5 pb-1.5">
-                      <div className="text-[11px] font-medium text-ink-400">Project</div>
+                  <div className="mb-3 rounded-xl border border-accent-200/80 bg-accent-50/60 p-1.5 shadow-sm">
+                    <div className="flex items-center justify-between px-2 pb-1 pt-0.5">
+                      <div className="text-[10px] font-semibold uppercase tracking-wide text-accent-800">
+                        In project
+                      </div>
                       <button
                         type="button"
-                        className="text-[10px] font-medium text-ink-400 hover:text-ink-700"
-                        title="Clear active project"
+                        className="text-[10px] font-medium text-accent-700/80 hover:text-accent-950"
+                        title="Close workspace"
                         onClick={() => setActiveProject(null)}
                       >
-                        Clear
+                        Close
                       </button>
                     </div>
-                    <div className="mb-1.5 truncate px-2.5 text-[12px] font-semibold text-accent-900" title={activeProject}>
+                    <div className="mb-1 truncate px-2 text-[12px] font-semibold text-accent-950" title={activeProject}>
                       {activeProject}
                     </div>
                     <div className="space-y-0.5">
@@ -619,49 +640,50 @@ export default function App() {
                             className={clsx(
                               'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
                               active
-                                ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
-                                : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
+                                ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-accent-300/70'
+                                : 'text-ink-700 hover:bg-white/80 hover:text-ink-950',
                             )}
                             aria-current={active ? 'page' : undefined}
                           >
-                            <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
+                            <Icon className={clsx('h-4 w-4', active ? 'text-accent-800' : 'text-ink-400')} />
                             <span className="flex-1 truncate">{label}</span>
                           </button>
                         )
                       })}
                       <button
                         type="button"
-                        title="Versions and snapshots for this project"
+                        title="Explorer — linked data, versions, snapshots for this workspace"
                         onClick={goLinkedData}
-                        className={clsx(
-                          'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                          view === 'projects'
-                            ? 'text-ink-600 hover:bg-white/70 hover:text-ink-950'
-                            : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
-                        )}
+                        className="relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] text-ink-700 transition hover:bg-white/80 hover:text-ink-950"
                       >
                         <Database className="h-4 w-4 text-ink-400" />
-                        <span className="flex-1 truncate">Linked data</span>
+                        <span className="flex-1 truncate">Explorer</span>
                       </button>
                     </div>
                   </div>
                 )}
-                {(activeProject
-                  ? GLOBAL_NAV_GROUPS.filter((g) => g.title !== 'Projects')
-                  : GLOBAL_NAV_GROUPS
-                ).map((group) => (
-                  <div key={group.title} className="mb-4">
-                    <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
-                      {group.title}
+                {activeProject ? (
+                  <div className="mb-4">
+                    <div className="px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                      Global
                     </div>
                     <div className="space-y-0.5">
-                      {group.items
-                        .filter((item) => !(activeProject && (item.id === 'builder')))
-                        .map(({ id, label, icon: Icon }) => {
+                      {(
+                        [
+                          { id: 'templates' as AppView, label: 'Templates', icon: BookOpen },
+                          { id: 'proposals' as AppView, label: 'Proposals', icon: GitPullRequest },
+                          { id: 'data' as AppView, label: 'Data library', icon: Database },
+                          { id: 'edge' as AppView, label: 'Edge deploy', icon: Cpu },
+                          { id: 'workers' as AppView, label: 'Workers', icon: Server },
+                          { id: 'plugins' as AppView, label: 'Plugins', icon: Package },
+                          { id: 'secrets' as AppView, label: 'Secrets', icon: KeyRound },
+                          { id: 'system' as AppView, label: 'System', icon: Activity },
+                        ]
+                      ).map(({ id, label, icon: Icon }) => {
                         const active = view === id
                         return (
                           <button
-                            key={id}
+                            key={`global-${id}`}
                             type="button"
                             title={(() => {
                               const hint = NAV_HINTS[id]
@@ -690,7 +712,48 @@ export default function App() {
                       })}
                     </div>
                   </div>
-                ))}
+                ) : (
+                  GLOBAL_NAV_GROUPS.map((group) => (
+                    <div key={group.title} className="mb-4">
+                      <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
+                        {group.title}
+                      </div>
+                      <div className="space-y-0.5">
+                        {group.items.map(({ id, label, icon: Icon }) => {
+                          const active = view === id
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              title={(() => {
+                                const hint = NAV_HINTS[id]
+                                if (!hint) return undefined
+                                const jump = Object.entries(JUMP_KEYS).find(([, v]) => v === id)?.[0]
+                                return jump ? `${hint} · Press ${jump}` : hint
+                              })()}
+                              onClick={() => go(id)}
+                              className={clsx(
+                                'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                                active
+                                  ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
+                                  : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
+                              )}
+                              aria-current={active ? 'page' : undefined}
+                            >
+                              <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
+                              <span className="flex-1 truncate">{label}</span>
+                              {id === 'proposals' && pendingProposalCount > 0 && (
+                                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                                  {pendingProposalCount}
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))
+                )}
               </nav>
             </aside>
           )}

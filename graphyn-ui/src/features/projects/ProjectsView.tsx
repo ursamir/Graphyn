@@ -514,12 +514,17 @@ export default function ProjectsView() {
     <div className="flex h-full flex-col">
       <div className="shrink-0 border-b border-ink-200/70 bg-white/60 px-5 pt-5 pb-3">
         <PageHeader
-          title="Projects"
-          description="Project = full workspace (Decision B): linked data, pipelines, runs, and experiments. Versions/snapshots stay facets of the same project. Global Data is the file library; Observe lives primarily inside the open project."
+          title={selected ? 'Workspace' : 'Workspaces'}
+          scope={selected ? 'project' : 'global'}
+          description={
+            selected
+              ? `Scoped to ${selected} — linked data, pipelines, runs, and experiments (like an opened IDE folder).`
+              : 'Open a workspace to edit pipelines, run, and explore linked data. Global Data library stays available anytime.'
+          }
           actions={
             <div className="flex flex-wrap gap-2">
               <button type="button" className="btn-secondary" onClick={() => openData({ mode: 'outputs' })}>
-                Browse files
+                Browse library
               </button>
               <button type="button" className="btn-secondary" onClick={() => void load()}>
                 <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -528,7 +533,7 @@ export default function ProjectsView() {
           }
         />
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[320px_1fr]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_1fr]">
       <div className="overflow-y-auto border-r border-ink-200 p-3 space-y-2">
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         <div className="flex gap-2">
@@ -585,25 +590,24 @@ export default function ProjectsView() {
       <div className="overflow-y-auto p-4 space-y-4">
         {!selected ? (
           <div className="mx-auto max-w-md rounded-2xl border border-ink-200/80 bg-white px-6 py-8 shadow-sm">
-            <h3 className="text-lg font-semibold text-ink-950">Select or create a project</h3>
+            <h3 className="text-lg font-semibold text-ink-950">Open or create a project to start work</h3>
             <p className="mt-2 text-sm leading-relaxed text-ink-500">
-              A project is the full workspace — pipelines, runs, experiments, and linked data under{' '}
+              Like opening a folder in an IDE — a project is the workspace for pipelines (Editor), runs, experiments, and linked data under{' '}
               <code className="font-mono text-[12px] text-ink-700">{'workspace/datasets/output/{project}'}</code>.
-              Versions and snapshots remain facets of this same project (not a second type).
             </p>
             <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-ink-700">
-              <li>Create or open a project (sets the active project chip).</li>
-              <li>Open Templates or Builder to stamp pipelines into this workspace.</li>
-              <li>Link data, run, then inspect Runs / Experiments from the project strip.</li>
+              <li>Create or open a workspace (header shows Project · name).</li>
+              <li>Open Editor or New from template to stamp pipelines.</li>
+              <li>Link data from the library, run, then use the Run / Experiments panels.</li>
             </ol>
           </div>
         ) : (
           <>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="text-lg font-semibold">{selected}</h3>
+                <h3 className="text-lg font-semibold text-ink-950">{selected}</h3>
                 <p className="mt-1 text-xs text-ink-500">
-                  Active workspace · Data key <code className="font-mono">{selected}</code>
+                  Opened workspace · key <code className="font-mono">{selected}</code>
                   {versionFocus ? <> / <code className="font-mono">{versionFocus}</code></> : null}
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -623,46 +627,17 @@ export default function ProjectsView() {
                     </select>
                   </label>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => openData({ mode: 'outputs', project: selected, version: versionFocus || undefined })}
-                  >
-                    Link / browse data
-                  </button>
-                  <button type="button" className="btn-primary" onClick={() => void openInBuilder()}>
-                    Open Builder
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => {
-                      setView('templates')
-                      window.history.replaceState(null, '', '#/templates')
-                    }}
-                  >
-                    Open Templates
-                  </button>
-                  <button type="button" className="btn-secondary" onClick={() => openExperiments()}>
-                    Experiments
-                  </button>
-                  <button type="button" className="btn-secondary" onClick={useInEdge}>
-                    Use in Edge
-                  </button>
-                </div>
               </div>
-              <ConfirmButton label="Delete project" confirmLabel={`Delete ${selected}?`} danger onConfirm={() => void remove()} />
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm sm:col-span-2 xl:col-span-2">
+              <div className="rounded-xl border border-accent-200/70 bg-white p-3 shadow-sm sm:col-span-2 xl:col-span-2">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Linked data</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">
                   {links.inputs.length} input{links.inputs.length === 1 ? '' : 's'} · {versionOptions.length} version{versionOptions.length === 1 ? '' : 's'}
                 </div>
                 <p className="mt-1 text-xs text-ink-500">
-                  Link global Data input labels here. Browse files still opens Data with this project context.
+                  Explorer — link labels from the global library into this workspace.
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <select
@@ -678,15 +653,15 @@ export default function ProjectsView() {
                       </option>
                     ))}
                   </select>
-                  <button type="button" className="btn-secondary" onClick={() => void linkInput()} disabled={!linkPick}>
-                    Link from Data
+                  <button type="button" className="btn-primary" onClick={() => void linkInput()} disabled={!linkPick}>
+                    Link from library
                   </button>
                   <button
                     type="button"
                     className="btn-secondary"
                     onClick={() => openData({ mode: 'outputs', project: selected, version: versionFocus || undefined })}
                   >
-                    Browse files
+                    Browse
                   </button>
                 </div>
                 {links.inputs.length > 0 && (
@@ -704,19 +679,31 @@ export default function ProjectsView() {
               </div>
               <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Pipelines</div>
-                <div className="mt-1 text-sm font-semibold text-ink-900">Builder</div>
-                <p className="mt-1 text-xs text-ink-500">Stamp this project onto dataset nodes and run.</p>
-                <button type="button" className="btn-secondary mt-2" onClick={() => void openInBuilder()}>
-                  Open Builder
-                </button>
+                <div className="mt-1 text-sm font-semibold text-ink-900">Editor</div>
+                <p className="mt-1 text-xs text-ink-500">Primary canvas — stamp this workspace and run.</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button type="button" className="btn-primary" onClick={() => void openInBuilder()}>
+                    Open Editor
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setView('templates')
+                      window.history.replaceState(null, '', '#/templates')
+                    }}
+                  >
+                    From template
+                  </button>
+                </div>
               </div>
               <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Recent runs</div>
+                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Runs</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">
                   {recentRuns.length} matched
                 </div>
                 <p className="mt-1 text-xs text-ink-500">
-                  Via GET /runs?project= (meta.project / inferred graph stamp).
+                  Run panel for this workspace (GET /runs?project=).
                 </p>
                 {recentRuns.length === 0 ? (
                   <button
@@ -755,26 +742,35 @@ export default function ProjectsView() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2 rounded-xl border border-ink-200 bg-white p-3">
-              <input
-                value={renameTo}
-                onChange={(e) => setRenameTo(e.target.value)}
-                className="rounded-lg border border-ink-200 px-2 py-1 text-sm"
-                aria-label="Rename to"
-              />
-              <button type="button" className="btn-secondary" onClick={() => void rename()}>
-                <Pencil className="h-3.5 w-3.5" /> Rename
-              </button>
-              <input
-                value={cloneTo}
-                onChange={(e) => setCloneTo(e.target.value)}
-                className="rounded-lg border border-ink-200 px-2 py-1 text-sm"
-                aria-label="Clone as"
-              />
-              <button type="button" className="btn-secondary" onClick={() => void clone()}>
-                <Copy className="h-3.5 w-3.5" /> Clone
-              </button>
-            </div>
+            <details className="rounded-xl border border-ink-200 bg-white">
+              <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-ink-600 hover:text-ink-900">
+                Project settings
+              </summary>
+              <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 px-3 py-3">
+                <input
+                  value={renameTo}
+                  onChange={(e) => setRenameTo(e.target.value)}
+                  className="rounded-lg border border-ink-200 px-2 py-1 text-sm"
+                  aria-label="Rename to"
+                />
+                <button type="button" className="btn-secondary" onClick={() => void rename()}>
+                  <Pencil className="h-3.5 w-3.5" /> Rename
+                </button>
+                <input
+                  value={cloneTo}
+                  onChange={(e) => setCloneTo(e.target.value)}
+                  className="rounded-lg border border-ink-200 px-2 py-1 text-sm"
+                  aria-label="Clone as"
+                />
+                <button type="button" className="btn-secondary" onClick={() => void clone()}>
+                  <Copy className="h-3.5 w-3.5" /> Clone
+                </button>
+                <button type="button" className="btn-secondary" onClick={useInEdge}>
+                  Use in Edge
+                </button>
+                <ConfirmButton label="Delete project" confirmLabel={`Delete ${selected}?`} danger onConfirm={() => void remove()} />
+              </div>
+            </details>
 
             <div className="flex flex-wrap gap-1">
               {(

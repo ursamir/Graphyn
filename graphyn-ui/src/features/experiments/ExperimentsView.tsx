@@ -6,6 +6,7 @@ import {
   EmptyState,
   ErrorBanner,
   LoadingBlock,
+  NeedProjectPrompt,
   PageHeader,
   StatusBadge,
 } from '../../components/ui'
@@ -101,6 +102,8 @@ export default function ExperimentsView() {
   const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
   const activeProject = useAppStore((s) => s.activeProject)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const openProjects = useAppStore((s) => s.openProjects)
 
   const [blocks, setBlocks] = React.useState<ExperimentBlock[] | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -230,11 +233,22 @@ export default function ExperimentsView() {
     void runCompare(ids)
   }, [loading, blocks, runCompare])
 
+  if (!activeProject) {
+    return (
+      <NeedProjectPrompt
+        onOpenProjects={() => {
+          openProjects()
+        }}
+      />
+    )
+  }
+
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Experiments"
-        description="Compare params and metrics across runs."
+        scope="project"
+        description={`Scoped to ${activeProject} — compare params and metrics (IDE compare panel).`}
         actions={
           <div className="flex items-center gap-2">
             {selectedIds.length >= 2 && (
@@ -253,6 +267,22 @@ export default function ExperimentsView() {
           </div>
         }
       />
+      <div
+        role="status"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent-200 bg-accent-50/80 px-3 py-2 text-[12px] text-accent-950"
+      >
+        <span>
+          Showing experiments for project <strong>{activeProject}</strong>
+        </span>
+        <span className="flex gap-2">
+          <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => openProjects()}>
+            Switch
+          </button>
+          <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => setActiveProject(null)}>
+            Clear
+          </button>
+        </span>
+      </div>
 
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
 

@@ -254,19 +254,61 @@ export class ErrorBoundary extends React.Component<
 }
 
 
+export function ScopeBadge({ scope }: { scope: 'project' | 'global' }) {
+  const project = scope === 'project'
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+        project
+          ? 'border border-accent-300 bg-accent-50 text-accent-900'
+          : 'border border-ink-200 bg-ink-50 text-ink-600',
+      )}
+    >
+      {project ? 'Project' : 'Global'}
+    </span>
+  )
+}
+
+/** Calm gate when Builder / Runs / Experiments need an active project. */
+export function NeedProjectPrompt({
+  onOpenProjects,
+}: {
+  onOpenProjects: () => void
+}) {
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="mx-auto max-w-md rounded-2xl border border-ink-200/80 bg-white px-6 py-10 text-center shadow-sm">
+        <p className="text-base font-semibold text-ink-950">Open or create a project to start work</p>
+        <p className="mt-2 text-sm leading-relaxed text-ink-500">
+          Builder, Runs, and Experiments are scoped to a project. Global Data, Templates, and Proposals stay available from the sidebar.
+        </p>
+        <button type="button" className="btn-primary mt-5" onClick={onOpenProjects}>
+          Open Projects
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function PageHeader({
   title,
   description,
   actions,
+  scope,
 }: {
   title: string
   description?: string
   actions?: React.ReactNode
+  scope?: 'project' | 'global'
 }) {
   return (
     <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="text-type-page text-ink-950">{title}</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-type-page text-ink-950">{title}</h1>
+          {scope ? <ScopeBadge scope={scope} /> : null}
+        </div>
         {description && <p className="mt-0.5 max-w-2xl text-type-body text-ink-500">{description}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}

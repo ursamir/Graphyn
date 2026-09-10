@@ -35,7 +35,7 @@ import {
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
-import { ConfirmButton, EmptyState, ErrorBanner, StatusBadge } from '../../components/ui'
+import { ConfirmButton, EmptyState, ErrorBanner, NeedProjectPrompt, StatusBadge } from '../../components/ui'
 import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
 import {
   buildGraphFromCanvas,
@@ -817,6 +817,16 @@ function BuilderInner() {
     </>
   )
 
+  if (!activeProject) {
+    return (
+      <NeedProjectPrompt
+        onOpenProjects={() => {
+          openProjects()
+        }}
+      />
+    )
+  }
+
   return (
     <div className="flex h-full min-h-0">
       <aside className="flex w-[17.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-white">
@@ -945,6 +955,12 @@ function BuilderInner() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200/70 bg-white/90 px-3 py-2 backdrop-blur">
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950"
+            title="Editor scoped to open workspace"
+          >
+            Editor · {activeProject}
+          </span>
           {pendingProposalCount > 0 && (
             <button
               type="button"

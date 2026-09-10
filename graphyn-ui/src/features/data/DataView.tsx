@@ -9,6 +9,7 @@ import {
 } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
+import clsx from 'clsx'
 import { formatExecutionLine, formatMergeToast } from '../../lib/format'
 
 interface OutputProject {
@@ -438,16 +439,31 @@ export default function DataView() {
 
   const versions = outputs.find((o) => o.project === project)?.versions ?? []
 
+  const uxMode: 'browse' | 'manage' = mode === 'ingest' || mode === 'merge' ? 'manage' : 'browse'
+  const setUxMode = (next: 'browse' | 'manage') => {
+    setError(null)
+    setErrorDetail(null)
+    setPathRecovery(false)
+    if (next === 'browse') {
+      setMode(mode === 'inputs' ? 'inputs' : 'outputs')
+    } else {
+      setMode(mode === 'merge' ? 'merge' : 'ingest')
+    }
+  }
+
   return (
     <div className="h-full overflow-y-auto p-6 space-y-4">
       <PageHeader
-        title="Data"
-        description="Inputs = files you upload. Projects = a named dataset workspace; versions show up here after you run a template or export. How to start: Upload → Templates → run → see Outputs / Projects."
+        title="Explorer"
+        scope="global"
+        description="Shared library — link into a project from Project home. Browse files (viewer) or Manage uploads and transforms."
         actions={
           <div className="flex gap-2">
-            <button type="button" className="btn-secondary" onClick={upload}>
-              <Upload className="h-3.5 w-3.5" /> Upload
-            </button>
+            {uxMode === 'manage' && (
+              <button type="button" className="btn-secondary" onClick={upload}>
+                <Upload className="h-3.5 w-3.5" /> Upload
+              </button>
+            )}
             <button type="button" className="btn-secondary" onClick={() => void loadSources()}>
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </button>
@@ -455,7 +471,7 @@ export default function DataView() {
         }
       />
       <p className="rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
-        Mode B: workers need shared storage (or copied inputs) for these paths —{' '}
+        Global file library (like an IDE explorer). Link labels into a workspace from Project home — Mode B workers need shared storage —{' '}
         <a
           href={DOCS_GETTING_STARTED_MODE_B}
           target="_blank"
@@ -468,20 +484,120 @@ export default function DataView() {
       </p>
       {error && <ErrorBanner message={error} title={errorDetail ?? undefined} onRetry={() => void loadSources()} />}
 
-      <div className="flex flex-wrap gap-2">
+      <div
+        className="inline-flex rounded-xl border border-ink-200 bg-ink-50/80 p-0.5"
+        role="tablist"
+        aria-label="Data mode"
+      >
         {(
           [
-            ['outputs', 'Outputs'],
-            ['inputs', 'Inputs'],
-            ['ingest', 'Ingest'],
-            ['merge', 'Merge'],
+            ['browse', 'Browse'],
+            ['manage', 'Manage'],
           ] as const
         ).map(([m, label]) => (
-          <button key={m} type="button" className={mode === m ? 'btn-primary' : 'btn-secondary'} onClick={() => { setError(null); setErrorDetail(null); setPathRecovery(false); setMode(m) }}>
+          <button
+            key={m}
+            type="button"
+            role="tab"
+            aria-selected={uxMode === m}
+            className={clsx(
+              'rounded-[10px] px-3.5 py-1.5 text-[13px] font-medium transition',
+              uxMode === m
+                ? 'bg-white text-ink-950 shadow-sm ring-1 ring-ink-200/80'
+                : 'text-ink-500 hover:text-ink-800',
+            )}
+            onClick={() => setUxMode(m)}
+          >
             {label}
           </button>
         ))}
       </div>
+
+      {uxMode === 'browse' ? (
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ['outputs', 'Outputs'],
+              ['inputs', 'Inputs'],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              className={mode === m ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => {
+                setError(null)
+                setErrorDetail(null)
+                setPathRecovery(false)
+                setMode(m)
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <span className="self-center text-[11px] text-ink-400">Read-only viewer — open / play files</span>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={mode === 'ingest' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => {
+                setError(null)
+                setErrorDetail(null)
+                setPathRecovery(false)
+                setMode('ingest')
+              }}
+            >
+              Ingest
+            </button>
+            <button
+              type="button"
+              className={mode === 'merge' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => {
+                setError(null)
+                setErrorDetail(null)
+                setPathRecovery(false)
+                setMode('merge')
+              }}
+            >
+              Merge
+            </button>
+            <button
+              type="button"
+              className={mode === 'inputs' || mode === 'outputs' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => {
+                setError(null)
+                setErrorDetail(null)
+                setPathRecovery(false)
+                setMode(mode === 'outputs' ? 'outputs' : 'inputs')
+              }}
+            >
+              Upload / delete
+            </button>
+            <span className="self-center text-[11px] text-ink-400">Secondary · destructive actions</span>
+          </div>
+          {(mode === 'inputs' || mode === 'outputs') && (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={mode === 'inputs' ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setMode('inputs')}
+              >
+                Inputs
+              </button>
+              <button
+                type="button"
+                className={mode === 'outputs' ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setMode('outputs')}
+              >
+                Outputs
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <LoadingBlock />
@@ -598,13 +714,22 @@ export default function DataView() {
                   Open project
                 </button>
               ) : null}
-              {project && version ? (
+              {uxMode === 'manage' && project && version ? (
                 <ConfirmButton
                   label="Delete"
                   confirmLabel={`Delete ${project}/${version}?`}
                   danger
                   onConfirm={() => void deleteOutput()}
                 />
+              ) : null}
+              {uxMode === 'browse' && project ? (
+                <button
+                  type="button"
+                  className="btn-secondary text-[12px]"
+                  onClick={() => setUxMode('manage')}
+                >
+                  Manage…
+                </button>
               ) : null}
             </div>
             )
@@ -624,13 +749,18 @@ export default function DataView() {
             <select value={label} onChange={(e) => { setError(null); setErrorDetail(null); setLabel(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
               {inputs.map((i) => <option key={i.label} value={i.label}>{i.label} ({i.file_count})</option>)}
             </select>
-              {label ? (
+              {uxMode === 'manage' && label ? (
                 <ConfirmButton
                   label="Delete"
                   confirmLabel={`Delete input ${label}?`}
                   danger
                   onConfirm={() => void deleteInput()}
                 />
+              ) : null}
+              {uxMode === 'manage' ? (
+                <button type="button" className="btn-secondary" onClick={upload}>
+                  <Upload className="h-3.5 w-3.5" /> Upload
+                </button>
               ) : null}
             </div>
             )

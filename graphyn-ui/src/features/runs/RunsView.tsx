@@ -5,7 +5,7 @@ import type { GraphIR } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { runMatchesProject } from '../../lib/projectStamp'
-import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
+import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, NeedProjectPrompt, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
 import {
   formatExecutionLine,
   formatLocaleDateTime,
@@ -91,6 +91,7 @@ export default function RunsView() {
   const openProjects = useAppStore((s) => s.openProjects)
   const openData = useAppStore((s) => s.openData)
   const activeProject = useAppStore((s) => s.activeProject)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
 
   const [runs, setRuns] = React.useState<RunSummary[] | null>(null)
@@ -348,18 +349,45 @@ export default function RunsView() {
     })
   }, [runs, statusFilter, nameQuery, activeProject])
 
+  if (!activeProject) {
+    return (
+      <NeedProjectPrompt
+        onOpenProjects={() => {
+          openProjects()
+        }}
+      />
+    )
+  }
+
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
-          title="Runs"
-          description={activeProject ? `Runs for project "${activeProject}" (GET /runs?project= hard filter). Trace and Artifacts open from a run detail.` : "Execution history, logs, and ops controls. Open a project to scope this list."}
+          title="Run"
+          scope="project"
+          description={`Scoped to ${activeProject} — execution history and ops (like a Run/Debug panel). Trace and Artifacts open from a run.`}
           actions={
             <button type="button" onClick={() => void load()} className="btn-secondary">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </button>
           }
         />
+        <div
+          role="status"
+          className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent-200 bg-accent-50/80 px-3 py-2 text-[12px] text-accent-950"
+        >
+          <span>
+            Showing runs for project <strong>{activeProject}</strong>
+          </span>
+          <span className="flex gap-2">
+            <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => openProjects()}>
+              Switch
+            </button>
+            <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => setActiveProject(null)}>
+              Clear
+            </button>
+          </span>
+        </div>
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         {runs && runs.length > 0 ? (
           <div className="mb-3 flex flex-wrap items-end gap-2">

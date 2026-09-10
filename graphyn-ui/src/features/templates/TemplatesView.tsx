@@ -308,8 +308,9 @@ export default function TemplatesView() {
   return (
     <div className="h-full overflow-y-auto p-6 space-y-5">
       <PageHeader
-        title="Templates"
-        description="Starter graphs and saved pipelines. Open one in Builder to run it."
+        title="New from template"
+        scope="global"
+        description="Wizard — opens or creates a workspace first, then loads the graph in the Editor."
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => void load()}>
