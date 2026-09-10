@@ -4,6 +4,7 @@ import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } 
 import type { GraphIR } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
+import { runMatchesProject } from '../../lib/projectStamp'
 import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
 import {
   formatExecutionLine,
@@ -89,6 +90,7 @@ export default function RunsView() {
   const openExperiments = useAppStore((s) => s.openExperiments)
   const openProjects = useAppStore((s) => s.openProjects)
   const openData = useAppStore((s) => s.openData)
+  const activeProject = useAppStore((s) => s.activeProject)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
 
   const [runs, setRuns] = React.useState<RunSummary[] | null>(null)
@@ -110,12 +112,14 @@ export default function RunsView() {
   const load = React.useCallback(async () => {
     setError(null)
     try {
-      setRuns(await apiJson<RunSummary[]>('/runs', { query: { limit, offset } }))
+      const query: Record<string, string | number> = { limit, offset }
+      if (activeProject) query.project = activeProject
+      setRuns(await apiJson<RunSummary[]>('/runs', { query }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setRuns([])
     }
-  }, [offset])
+  }, [offset, activeProject])
 
   React.useEffect(() => {
     void load()
@@ -335,20 +339,21 @@ export default function RunsView() {
     const q = nameQuery.trim().toLowerCase()
     const statusNeedle = statusFilter === 'all' ? '' : statusFilter.toLowerCase()
     return runs.filter((r) => {
+      if (activeProject && !runMatchesProject(r, activeProject)) return false
       if (statusNeedle && String(r.status ?? '').toLowerCase() !== statusNeedle) return false
       if (!q) return true
       const rawName = String(r.graph_name ?? '')
       const hay = `${rawName} ${runDisplayName(r)} ${r.run_id}`.toLowerCase()
       return hay.includes(q)
     })
-  }, [runs, statusFilter, nameQuery])
+  }, [runs, statusFilter, nameQuery, activeProject])
 
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
           title="Runs"
-          description="Execution history, logs, and ops controls."
+          description={activeProject ? `Runs for project "${activeProject}" (Phase 1 client filter by graph_name / stamps). Trace and Artifacts open from a run detail.` : "Execution history, logs, and ops controls. Open a project to scope this list."}
           actions={
             <button type="button" onClick={() => void load()} className="btn-secondary">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -571,35 +576,14 @@ export default function RunsView() {
                 className="btn-secondary"
                 onClick={() => openTrace({ runId: selected })}
               >
-                <GitBranch className="h-3.5 w-3.5" /> View lineage
+                <GitBranch className="h-3.5 w-3.5" /> Trace
               </button>
               <button
                 type="button"
                 className="btn-secondary"
                 onClick={() => openArtifacts({ runId: selected })}
               >
-                <Archive className="h-3.5 w-3.5" /> Browse artifacts
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openExperiments({ runIds: [selected] })}
-              >
-                <FlaskConical className="h-3.5 w-3.5" /> Compare
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openProjects()}
-              >
-                <FolderKanban className="h-3.5 w-3.5" /> Projects
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openData({ mode: 'outputs' })}
-              >
-                <Database className="h-3.5 w-3.5" /> Data
+                <Archive className="h-3.5 w-3.5" /> Artifacts
               </button>
               {canOpenGraph && (
                 <button
@@ -609,6 +593,31 @@ export default function RunsView() {
                 >
                   <Workflow className="h-3.5 w-3.5" /> Open in Builder
                 </button>
+              )}
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openExperiments({ runIds: [selected] })}
+              >
+                <FlaskConical className="h-3.5 w-3.5" /> Compare
+              </button>
+              {!activeProject && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => openProjects()}
+                  >
+                    <FolderKanban className="h-3.5 w-3.5" /> Projects
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => openData({ mode: 'outputs' })}
+                  >
+                    <Database className="h-3.5 w-3.5" /> Data
+                  </button>
+                </>
               )}
               {['running'].includes(runStatus.toLowerCase()) && (
                 <button type="button" className="btn-secondary" onClick={() => void control(selected, 'pause')}>

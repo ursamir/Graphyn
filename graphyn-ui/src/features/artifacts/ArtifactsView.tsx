@@ -395,6 +395,9 @@ export default function ArtifactsView() {
               >
                 <GitBranch className="h-3.5 w-3.5" /> Trace lineage
               </button>
+              <button type="button" className="btn-primary" onClick={() => void replay(selected)}>
+                <Play className="h-3.5 w-3.5" /> Replay
+              </button>
               {(() => {
                 const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
                 const runId = String(rec.run_id ?? '').trim()
@@ -414,6 +417,7 @@ export default function ArtifactsView() {
                   <button
                     type="button"
                     className="btn-secondary"
+                    title="Optional — rebuild canvas from this artifact run"
                     onClick={() => {
                       void (async () => {
                         try {
@@ -430,13 +434,10 @@ export default function ArtifactsView() {
                       })()
                     }}
                   >
-                    <Workflow className="h-3.5 w-3.5" /> Open in Builder
+                    <Workflow className="h-3.5 w-3.5" /> Builder
                   </button>
                 )
               })()}
-              <button type="button" className="btn-primary" onClick={() => void replay(selected)}>
-                <Play className="h-3.5 w-3.5" /> Replay
-              </button>
             </div>
             {path && (
               <div className="space-y-2">

@@ -25,6 +25,27 @@ interface Toast {
   tone: ToastTone
 }
 
+const ACTIVE_PROJECT_KEY = 'graphyn.activeProject'
+
+function readStoredActiveProject(): string | null {
+  try {
+    const v = localStorage.getItem(ACTIVE_PROJECT_KEY)
+    const t = (v || '').trim()
+    return t || null
+  } catch {
+    return null
+  }
+}
+
+function persistActiveProject(name: string | null) {
+  try {
+    if (name && name.trim()) localStorage.setItem(ACTIVE_PROJECT_KEY, name.trim())
+    else localStorage.removeItem(ACTIVE_PROJECT_KEY)
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 interface AppState {
   view: AppView
   setView: (view: AppView) => void
@@ -43,6 +64,10 @@ interface AppState {
     label?: string
   }) => void
   openProjects: (opts?: { project?: string; tab?: string }) => void
+  /** Phase-1 project-first workspace context (Decision B — same Project type). */
+  activeProject: string | null
+  setActiveProject: (name: string | null) => void
+  openProject: (name: string, opts?: { tab?: string }) => void
   pendingProposalCount: number
   setPendingProposalCount: (n: number) => void
   catalog: NodeCatalogEntry[]
@@ -148,11 +173,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   openProjects: ({ project, tab } = {}) => {
     const params = new URLSearchParams()
-    if (project?.trim()) params.set('project', project.trim())
+    const name = project?.trim()
+    if (name) {
+      params.set('project', name)
+      persistActiveProject(name)
+      set({ activeProject: name })
+    }
     if (tab?.trim()) params.set('tab', tab.trim())
     const qs = params.toString()
     replaceHash(qs ? `#/projects?${qs}` : '#/projects')
     set({ view: 'projects' })
+  },
+  activeProject: readStoredActiveProject(),
+  setActiveProject: (name) => {
+    const next = name?.trim() || null
+    persistActiveProject(next)
+    set({ activeProject: next })
+  },
+  openProject: (name, opts) => {
+    const n = name.trim()
+    if (!n) return
+    persistActiveProject(n)
+    set({ activeProject: n })
+    get().openProjects({ project: n, tab: opts?.tab })
   },
   pendingProposalCount: 0,
   setPendingProposalCount: (pendingProposalCount) => set({ pendingProposalCount }),

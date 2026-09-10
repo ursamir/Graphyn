@@ -141,10 +141,15 @@ def _run_slug_and_artifacts(run_id: str, run_path: Path, meta: dict) -> tuple[st
 def list_runs(
     limit: int = Query(50, ge=1, le=500, description="Maximum number of runs to return"),
     offset: int = Query(0, ge=0, description="Number of runs to skip"),
+    project: str | None = Query(
+        None,
+        description="Optional soft filter: match graph_name / meta.project containing this string (Phase 1 — not authoritative project_id scoping)",
+    ),
 ):
     """Return a summary list of pipeline runs, newest first, with pagination.
 
     Use limit/offset for large run histories. Default: first 50 runs.
+    When ``project`` is set, soft-filter enriched metas (best-effort Phase 1).
     """
     runs_root = _get_runs_root()
     if not runs_root.exists():
@@ -162,7 +167,30 @@ def list_runs(
     except OSError:
         return []
 
-    page = entries[offset: offset + limit]
+    needle = (project or "").strip().lower()
+    if needle:
+        # Wider scan then filter — still best-effort, not true project_id scoping.
+        scan = entries[: max(offset + limit * 5, 200)]
+        matched = []
+        for entry in scan:
+            meta_path = entry / "meta.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text())
+            except Exception:
+                continue
+            if not isinstance(meta, dict):
+                continue
+            enriched = _enrich_run_summary(meta, entry)
+            blob = " ".join(
+                str(enriched.get(k) or "") for k in ("graph_name", "project")
+            ).lower()
+            if needle in blob:
+                matched.append(enriched)
+        return matched[offset : offset + limit]
+
+    page = entries[offset : offset + limit]
     runs = []
     for entry in page:
         meta_path = entry / "meta.json"

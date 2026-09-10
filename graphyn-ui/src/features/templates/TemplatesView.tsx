@@ -2,6 +2,7 @@ import React from 'react'
 import { RefreshCw, Download, MoreHorizontal, Upload } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
+import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
 import { humanizeTemplateName, humanNodeLabel } from '../../lib/format'
@@ -72,6 +73,9 @@ export default function TemplatesView() {
   const getCanvasGraph = useAppStore((s) => s.getCanvasGraph)
   const pushToast = useAppStore((s) => s.pushToast)
   const openData = useAppStore((s) => s.openData)
+  const activeProject = useAppStore((s) => s.activeProject)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
   const [items, setItems] = React.useState<TemplateSummary[] | null>(null)
   const [versionsMap, setVersionsMap] = React.useState<Record<string, string[]>>({})
   const [latestMap, setLatestMap] = React.useState<Record<string, string | null>>({})
@@ -87,6 +91,11 @@ export default function TemplatesView() {
   const [filter, setFilter] = React.useState<'all' | 'examples' | 'saved'>('all')
   const [menuFor, setMenuFor] = React.useState<string | null>(null)
   const menuRef = React.useRef<HTMLDivElement | null>(null)
+  const [projectGate, setProjectGate] = React.useState<{ template: string } | null>(null)
+  const [projectChoices, setProjectChoices] = React.useState<string[]>([])
+  const [projectPick, setProjectPick] = React.useState('')
+  const [projectCreate, setProjectCreate] = React.useState('')
+  const [projectGateBusy, setProjectGateBusy] = React.useState(false)
 
   const load = React.useCallback(async () => {
     setError(null)
@@ -157,20 +166,73 @@ export default function TemplatesView() {
     }
   }
 
-  const loadIntoBuilder = async (name: string) => {
+  const loadIntoBuilderWithProject = async (name: string, project: string) => {
+    const raw = selectedVersion[name] || latestMap[name] || undefined
+    const version = raw && raw !== 'unversioned' ? raw : undefined
+    const data = await apiJson<{ graph?: GraphIR }>(
+      `/pipelines/templates/${encodeURIComponent(name)}`,
+      { query: { version } },
+    )
+    if (!data.graph) throw new Error('Template has no graph payload')
+    const stamped = stampProjectOnGraph(data.graph, project)
+    setActiveProject(project)
+    setBuilderDataset({ project })
+    useAppStore.getState().loadGraphIntoBuilder(stamped)
+    pushToast(
+      `Loaded ${humanizeTemplateName(name)}${version ? ` @ ${version}` : ''} → project ${project}`,
+      'success',
+    )
+  }
+
+  const openProjectGate = async (name: string) => {
+    if (activeProject) {
+      try {
+        await loadIntoBuilderWithProject(name, activeProject)
+      } catch (err) {
+        pushToast(err instanceof Error ? err.message : String(err), 'error')
+      }
+      return
+    }
+    setProjectGate({ template: name })
+    setProjectPick('')
+    setProjectCreate('')
     try {
-      const raw = selectedVersion[name] || latestMap[name] || undefined
-      const version = raw && raw !== 'unversioned' ? raw : undefined
-      const data = await apiJson<{ graph?: GraphIR }>(
-        `/pipelines/templates/${encodeURIComponent(name)}`,
-        { query: { version } },
-      )
-      if (!data.graph) throw new Error('Template has no graph payload')
-      useAppStore.getState().loadGraphIntoBuilder(data.graph)
-      pushToast(`Loaded ${humanizeTemplateName(name)}${version ? ` @ ${version}` : ''}`, 'success')
+      const list = await apiJson<Array<{ name: string } | string>>('/projects')
+      const names = (Array.isArray(list) ? list : [])
+        .map((p) => (typeof p === 'string' ? p : p.name))
+        .filter(Boolean)
+      setProjectChoices(names)
+      if (names[0]) setProjectPick(names[0])
+    } catch {
+      setProjectChoices([])
+    }
+  }
+
+  const confirmProjectGate = async () => {
+    if (!projectGate) return
+    const created = projectCreate.trim()
+    const picked = projectPick.trim()
+    const project = created || picked
+    if (!project) {
+      pushToast('Create or select a project first', 'error')
+      return
+    }
+    setProjectGateBusy(true)
+    try {
+      if (created && !projectChoices.includes(created)) {
+        await apiJson('/projects', { method: 'POST', body: JSON.stringify({ name: created }) })
+      }
+      await loadIntoBuilderWithProject(projectGate.template, project)
+      setProjectGate(null)
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setProjectGateBusy(false)
     }
+  }
+
+  const loadIntoBuilder = async (name: string) => {
+    await openProjectGate(name)
   }
 
   const saveFromCanvas = async () => {
@@ -503,6 +565,74 @@ export default function TemplatesView() {
             )
           })}
         </ul>
+      )}
+
+      {projectGate && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-ink-950/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="project-gate-title"
+          onClick={() => !projectGateBusy && setProjectGate(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-ink-200 bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="project-gate-title" className="text-lg font-semibold text-ink-950">
+              Choose a project
+            </h2>
+            <p className="mt-2 text-sm text-ink-500">
+              Templates stamp and open Builder inside a project workspace. Create one or select an existing project.
+            </p>
+            <label className="mt-4 block text-sm text-ink-600">
+              Existing project
+              <select
+                className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+                value={projectPick}
+                onChange={(e) => setProjectPick(e.target.value)}
+                disabled={projectChoices.length === 0}
+              >
+                {projectChoices.length === 0 ? (
+                  <option value="">No projects yet</option>
+                ) : (
+                  projectChoices.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+            <label className="mt-3 block text-sm text-ink-600">
+              Or create new
+              <input
+                className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+                placeholder="my-project"
+                value={projectCreate}
+                onChange={(e) => setProjectCreate(e.target.value)}
+              />
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={projectGateBusy}
+                onClick={() => setProjectGate(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={projectGateBusy}
+                onClick={() => void confirmProjectGate()}
+              >
+                {projectGateBusy ? 'Opening…' : 'Open in Builder'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

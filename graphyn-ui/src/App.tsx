@@ -44,34 +44,26 @@ import EdgeWizardView from './features/edge/EdgeWizardView'
 import ExperimentsView from './features/experiments/ExperimentsView'
 import ProposalsView from './features/proposals/ProposalsView'
 
-const NAV_GROUPS: Array<{
-  title: string
-  items: Array<{ id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }>
-}> = [
+type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }
+type NavGroup = { title: string; items: NavItem[] }
+
+/** Global shell when no project is open (project-first IA Phase 1). */
+const GLOBAL_NAV_GROUPS: NavGroup[] = [
+  {
+    title: 'Projects',
+    items: [{ id: 'projects', label: 'Projects', icon: FolderKanban }],
+  },
   {
     title: 'Build',
     items: [
-      { id: 'builder', label: 'Builder', icon: Workflow },
       { id: 'templates', label: 'Templates', icon: BookOpen },
       { id: 'proposals', label: 'Proposals', icon: GitPullRequest },
-    ],
-  },
-  {
-    title: 'Observe',
-    items: [
-      { id: 'runs', label: 'Runs', icon: History },
-      { id: 'trace', label: 'Trace', icon: GitBranch },
-      { id: 'experiments', label: 'Experiments', icon: FlaskConical },
-      { id: 'artifacts', label: 'Artifacts', icon: Archive },
+      { id: 'builder', label: 'Builder', icon: Workflow },
     ],
   },
   {
     title: 'Library',
-    items: [
-      { id: 'plugins', label: 'Plugins', icon: Package },
-      { id: 'data', label: 'Data', icon: Database },
-      { id: 'projects', label: 'Projects', icon: FolderKanban },
-    ],
+    items: [{ id: 'data', label: 'Data', icon: Database }],
   },
   {
     title: 'Deploy',
@@ -83,13 +75,29 @@ const NAV_GROUPS: Array<{
   {
     title: 'Admin',
     items: [
+      { id: 'plugins', label: 'Plugins', icon: Package },
       { id: 'secrets', label: 'Secrets', icon: KeyRound },
       { id: 'system', label: 'System', icon: Activity },
     ],
   },
 ]
 
-const VIEW_IDS = new Set(NAV_GROUPS.flatMap((g) => g.items.map((n) => n.id)))
+/** Project-local strip when activeProject is set. Trace/Artifacts demoted to detail + last-run. */
+const PROJECT_NAV_ITEMS: NavItem[] = [
+  { id: 'projects', label: 'Overview', icon: FolderKanban },
+  { id: 'builder', label: 'Builder', icon: Workflow },
+  { id: 'runs', label: 'Runs', icon: History },
+  { id: 'experiments', label: 'Experiments', icon: FlaskConical },
+]
+
+const ALL_NAV_ITEMS: NavItem[] = [
+  ...GLOBAL_NAV_GROUPS.flatMap((g) => g.items),
+  ...PROJECT_NAV_ITEMS,
+  { id: 'trace', label: 'Trace', icon: GitBranch },
+  { id: 'artifacts', label: 'Artifacts', icon: Archive },
+]
+
+const VIEW_IDS = new Set(ALL_NAV_ITEMS.map((n) => n.id))
 
 const VIEW_LABEL: Record<AppView, string> = {
   builder: 'Builder',
@@ -121,7 +129,7 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   data: 'Files in / files out — upload, browse, merge',
   edge: 'Package models for on-device runtimes',
   workers: 'Distributed workers — labels, GPU, heartbeats',
-  projects: 'Dataset workspace — versions, snapshots, lineage',
+  projects: 'Full workspace — linked data, pipelines, runs, experiments',
   secrets: 'Named credentials for runs (not Graph IR)',
   system: 'Health, cleanup, webhooks, audit trail',
 }
@@ -163,6 +171,9 @@ export default function App() {
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openExperiments = useAppStore((s) => s.openExperiments)
   const openProjects = useAppStore((s) => s.openProjects)
+  const activeProject = useAppStore((s) => s.activeProject)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const openProject = useAppStore((s) => s.openProject)
   const statusMessage = useAppStore((s) => s.statusMessage)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const isRunning = useAppStore((s) => s.isRunning)
@@ -246,11 +257,22 @@ export default function App() {
       const { view: v, runId } = parseHash()
       if (runId) openRun(runId)
       else if (v) setView(v)
+      // Sync active project from #/projects?project= without breaking other deep links.
+      const raw = window.location.hash.replace(/^#\/?/, '')
+      const qIdx = raw.indexOf('?')
+      if (qIdx >= 0) {
+        const params = new URLSearchParams(raw.slice(qIdx + 1))
+        const proj = (params.get('project') || '').trim()
+        if (proj && (v === 'projects' || raw.startsWith('projects'))) {
+          const cur = useAppStore.getState().activeProject
+          if (cur !== proj) setActiveProject(proj)
+        }
+      }
     }
     apply()
     window.addEventListener('hashchange', apply)
     return () => window.removeEventListener('hashchange', apply)
-  }, [openRun, setView])
+  }, [openRun, setView, setActiveProject])
 
   React.useEffect(() => {
     // Preserve query strings for deep links (#/trace?run_id=, #/edge?…, etc.)
@@ -338,8 +360,25 @@ export default function App() {
     const query = qIdx >= 0 ? raw.slice(qIdx) : ''
     if (PRESERVE_QUERY.has(id) && PRESERVE_QUERY.has(view) && query) {
       window.history.replaceState(null, '', `#/${id}${query}`)
+    } else if (id === 'projects') {
+      const ap = useAppStore.getState().activeProject
+      if (ap) {
+        window.history.replaceState(null, '', `#/projects?project=${encodeURIComponent(ap)}`)
+      } else {
+        window.history.replaceState(null, '', `#/projects`)
+      }
     } else {
       window.history.replaceState(null, '', `#/${id}`)
+    }
+    if (narrow) setNavOpen(false)
+  }
+
+  const goLinkedData = () => {
+    const ap = useAppStore.getState().activeProject
+    if (ap) {
+      openProjects({ project: ap, tab: 'versions' })
+    } else {
+      go('projects')
     }
     if (narrow) setNavOpen(false)
   }
@@ -439,6 +478,26 @@ export default function App() {
                 {chipLabel}
               </span>
             )}
+            {activeProject && (
+              <button
+                type="button"
+                className="hidden max-w-[12rem] items-center gap-1 truncate rounded-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400 sm:inline-flex"
+                title="Open project home — click × in sidebar Overview to clear"
+                onClick={() => openProject(activeProject)}
+              >
+                <FolderKanban className="h-3 w-3 shrink-0" />
+                <span className="truncate">{activeProject}</span>
+              </button>
+            )}
+            {!activeProject && (
+              <button
+                type="button"
+                className="hidden items-center rounded-full border border-dashed border-ink-300 bg-white/80 px-2.5 py-0.5 text-[11px] text-ink-500 hover:border-accent-300 hover:text-accent-800 sm:inline-flex"
+                onClick={() => go('projects')}
+              >
+                Select project
+              </button>
+            )}
             {lastRunId && (
               <div className="hidden items-center gap-1 sm:flex" title={`Observe loop for ${lastRunId}`}>
                 <button
@@ -463,21 +522,25 @@ export default function App() {
                 >
                   Artifacts
                 </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
-                  title="Opens Experiments with this run preselected — pick a second run to Compare"
-                  onClick={() => openExperiments({ runIds: [lastRunId] })}
-                >
-                  Compare…
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
-                  onClick={() => openProjects()}
-                >
-                  Projects
-                </button>
+                {!activeProject && (
+                  <>
+                    <button
+                      type="button"
+                      className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+                      title="Opens Experiments with this run preselected — pick a second run to Compare"
+                      onClick={() => openExperiments({ runIds: [lastRunId] })}
+                    >
+                      Compare…
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+                      onClick={() => openProjects()}
+                    >
+                      Projects
+                    </button>
+                  </>
+                )}
               </div>
             )}
             <button
@@ -528,13 +591,73 @@ export default function App() {
               )}
             >
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
-                {NAV_GROUPS.map((group) => (
+                {activeProject && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between px-2.5 pb-1.5">
+                      <div className="text-[11px] font-medium text-ink-400">Project</div>
+                      <button
+                        type="button"
+                        className="text-[10px] font-medium text-ink-400 hover:text-ink-700"
+                        title="Clear active project"
+                        onClick={() => setActiveProject(null)}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="mb-1.5 truncate px-2.5 text-[12px] font-semibold text-accent-900" title={activeProject}>
+                      {activeProject}
+                    </div>
+                    <div className="space-y-0.5">
+                      {PROJECT_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
+                        const active = view === id
+                        return (
+                          <button
+                            key={`proj-${id}`}
+                            type="button"
+                            title={NAV_HINTS[id]}
+                            onClick={() => (id === 'projects' ? openProject(activeProject) : go(id))}
+                            className={clsx(
+                              'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                              active
+                                ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
+                                : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
+                            )}
+                            aria-current={active ? 'page' : undefined}
+                          >
+                            <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
+                            <span className="flex-1 truncate">{label}</span>
+                          </button>
+                        )
+                      })}
+                      <button
+                        type="button"
+                        title="Versions and snapshots for this project"
+                        onClick={goLinkedData}
+                        className={clsx(
+                          'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                          view === 'projects'
+                            ? 'text-ink-600 hover:bg-white/70 hover:text-ink-950'
+                            : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
+                        )}
+                      >
+                        <Database className="h-4 w-4 text-ink-400" />
+                        <span className="flex-1 truncate">Linked data</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {(activeProject
+                  ? GLOBAL_NAV_GROUPS.filter((g) => g.title !== 'Projects')
+                  : GLOBAL_NAV_GROUPS
+                ).map((group) => (
                   <div key={group.title} className="mb-4">
                     <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
                       {group.title}
                     </div>
                     <div className="space-y-0.5">
-                      {group.items.map(({ id, label, icon: Icon }) => {
+                      {group.items
+                        .filter((item) => !(activeProject && (item.id === 'builder')))
+                        .map(({ id, label, icon: Icon }) => {
                         const active = view === id
                         return (
                           <button

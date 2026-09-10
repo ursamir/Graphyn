@@ -3,6 +3,7 @@ import { RefreshCw, Copy, Pencil } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { useAppStore } from '../../store/appStore'
+import { stampProjectOnGraph, runMatchesProject } from '../../lib/projectStamp'
 import {
   ConfirmButton,
   CollapsibleJson,
@@ -56,56 +57,6 @@ function templatePriority(name: string, nodeTypes: string[] | undefined, descrip
   return score
 }
 
-function applyProjectToGraph(graph: GraphIR, project: string, version?: string): GraphIR {
-  const datasetNodes = new Set([
-    'dataset_versioner',
-    'dataset_builder',
-    'audio_exporter',
-    'export',
-  ])
-  const nodes = (graph.nodes ?? []).map((n) => {
-    const cfg = { ...(n.config ?? {}) } as Record<string, unknown>
-    let changed = false
-    // Stamp project(+version_tag) onto dataset/export nodes; leave ingest input paths alone.
-    if (datasetNodes.has(n.node_type) || 'project' in cfg) {
-      if (cfg.project === undefined || cfg.project === null || cfg.project === '') {
-        cfg.project = project
-        changed = true
-      }
-    }
-    // Library loop: exporters/versioners write under datasets/output/{project}/{version_tag}.
-    // Do NOT rewrite into workspace/artifacts/{project}/...
-    if (datasetNodes.has(n.node_type)) {
-      const next = `workspace/datasets/output/${project}`
-      if (cfg.output_dir !== next) {
-        cfg.output_dir = next
-        changed = true
-      }
-    } else if (typeof cfg.output_dir === 'string' && cfg.output_dir.includes('workspace/artifacts/')) {
-      const next = `workspace/artifacts/${project}/${n.node_type}`
-      if (cfg.output_dir !== next) {
-        cfg.output_dir = next
-        changed = true
-      }
-    }
-    if (version) {
-      // Stamp version_tag (not legacy `version`) for audio_exporter / dataset_versioner.
-      if (
-        datasetNodes.has(n.node_type) ||
-        'version_tag' in cfg
-      ) {
-        if (cfg.version_tag === undefined || cfg.version_tag === null || cfg.version_tag === '') {
-          cfg.version_tag = version
-          changed = true
-        }
-      }
-    }
-    return changed ? { ...n, config: cfg } : n
-  })
-  const meta = { ...(graph.metadata ?? {}), name: graph.metadata?.name || project }
-  return { ...graph, nodes, metadata: meta }
-}
-
 function lineageIds(lineage: unknown): { runId?: string; artifactId?: string } {
   if (!lineage || typeof lineage !== 'object') return {}
   const o = lineage as Record<string, unknown>
@@ -122,6 +73,7 @@ export default function ProjectsView() {
   const openEdge = useAppStore((s) => s.openEdge)
   const openExperiments = useAppStore((s) => s.openExperiments)
   const setView = useAppStore((s) => s.setView)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
   const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const initialHash = React.useMemo(() => parseProjectsHash(), [])
@@ -148,6 +100,7 @@ export default function ProjectsView() {
   const [diffB, setDiffB] = React.useState('')
   const [diffResult, setDiffResult] = React.useState<unknown>(null)
   const [lineage, setLineage] = React.useState<unknown>(null)
+  const [recentRuns, setRecentRuns] = React.useState<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string }>>([])
 
   const load = React.useCallback(async () => {
     setError(null)
@@ -168,6 +121,7 @@ export default function ProjectsView() {
 
   const open = async (name: string) => {
     setSelected(name)
+    setActiveProject(name)
     setRenameTo(name)
     setCloneTo(`${name}-copy`)
     setError(null)
@@ -197,6 +151,13 @@ export default function ProjectsView() {
       setContract(JSON.stringify(con, null, 2))
       setSnapshots(Array.isArray(snaps) ? snaps : [])
       setLineage(lin)
+      try {
+        const runs = await apiJson<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>('/runs', { query: { limit: 50, offset: 0 } })
+        const matched = (Array.isArray(runs) ? runs : []).filter((r) => runMatchesProject(r, name)).slice(0, 8)
+        setRecentRuns(matched)
+      } catch {
+        setRecentRuns([])
+      }
       const first =
         typeof vers[0] === 'string'
           ? vers[0]
@@ -276,7 +237,7 @@ export default function ProjectsView() {
           `/pipelines/templates/${encodeURIComponent(pick)}`,
         )
         if (data.graph) {
-          const graph = applyProjectToGraph(data.graph, selected, version)
+          const graph = stampProjectOnGraph(data.graph, selected, version)
           loadGraphIntoBuilder(graph)
           pushToast(`Opened ${pick} with dataset "${selected}"`, 'success')
           return
@@ -315,8 +276,10 @@ export default function ProjectsView() {
       return
     }
     try {
-      await apiJson('/projects', { method: 'POST', body: JSON.stringify({ name: newName.trim() }) })
-      pushToast(`Created ${newName}`, 'success')
+      const created = newName.trim()
+      await apiJson('/projects', { method: 'POST', body: JSON.stringify({ name: created }) })
+      pushToast(`Created ${created}`, 'success')
+      setActiveProject(created)
       setNewName('')
       await load()
     } catch (err) {
@@ -506,7 +469,7 @@ export default function ProjectsView() {
       <div className="shrink-0 border-b border-ink-200/70 bg-white/60 px-5 pt-5 pb-3">
         <PageHeader
           title="Projects"
-          description="Projects = workspace over workspace/datasets/output/{project}. Versions appear only after a pipeline/export writes them — a draft project alone has no versions. Data = filesystem inputs/outputs for the same folders."
+          description="Project = full workspace (Decision B): linked data, pipelines, runs, and experiments. Versions/snapshots stay facets of the same project. Global Data is the file library; Observe lives primarily inside the open project."
           actions={
             <div className="flex flex-wrap gap-2">
               <button type="button" className="btn-secondary" onClick={() => openData({ mode: 'outputs' })}>
@@ -539,8 +502,8 @@ export default function ProjectsView() {
           <LoadingBlock />
         ) : projects.length === 0 ? (
           <EmptyState
-            title="No dataset projects"
-            description="Create a named workspace above. Draft projects start with versions:[]. Run Templates → Builder (audio-classification) or merge under Data so versions appear under output/{project}."
+            title="No projects yet"
+            description="Create a workspace above, then open Templates (stamps the project) or link data under Data so versions appear under output/{project}."
             action={
               <button
                 type="button"
@@ -576,16 +539,16 @@ export default function ProjectsView() {
       <div className="overflow-y-auto p-4 space-y-4">
         {!selected ? (
           <div className="mx-auto max-w-md rounded-2xl border border-ink-200/80 bg-white px-6 py-8 shadow-sm">
-            <h3 className="text-lg font-semibold text-ink-950">Select a dataset project</h3>
+            <h3 className="text-lg font-semibold text-ink-950">Select or create a project</h3>
             <p className="mt-2 text-sm leading-relaxed text-ink-500">
-              A project is the dataset workspace UI over the same{' '}
-              <code className="font-mono text-[12px] text-ink-700">{'workspace/datasets/output/{project}'}</code>
-              {' '}folder Data browses as files. Versions, snapshots, and lineage live here — not a second file browser.
+              A project is the full workspace — pipelines, runs, experiments, and linked data under{' '}
+              <code className="font-mono text-[12px] text-ink-700">{'workspace/datasets/output/{project}'}</code>.
+              Versions and snapshots remain facets of this same project (not a second type).
             </p>
             <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-ink-700">
-              <li>Create a project with the name field on the left.</li>
-              <li>Run a pipeline or merge datasets into that folder.</li>
-              <li>Open the project to inspect versions, snapshots, and diffs.</li>
+              <li>Create or open a project (sets the active project chip).</li>
+              <li>Open Templates or Builder to stamp pipelines into this workspace.</li>
+              <li>Link data, run, then inspect Runs / Experiments from the project strip.</li>
             </ol>
           </div>
         ) : (
@@ -594,15 +557,25 @@ export default function ProjectsView() {
               <div>
                 <h3 className="text-lg font-semibold">{selected}</h3>
                 <p className="mt-1 text-xs text-ink-500">
-                  Shared key with Data outputs: <code className="font-mono">{selected}</code>
+                  Active workspace · Data key <code className="font-mono">{selected}</code>
                   {versionFocus ? <> / <code className="font-mono">{versionFocus}</code></> : null}
                 </p>
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {STATUSES.map((s) => (
-                    <button key={s} type="button" className="btn-secondary" onClick={() => void setStatus(s)}>
-                      {s}
-                    </button>
-                  ))}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-xs text-ink-500">
+                    Status
+                    <select
+                      className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm text-ink-800"
+                      value={String(projects?.find((p) => p.name === selected)?.status ?? 'draft')}
+                      onChange={(e) => void setStatus(e.target.value)}
+                      aria-label="Project status"
+                    >
+                      {STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
@@ -610,10 +583,20 @@ export default function ProjectsView() {
                     className="btn-secondary"
                     onClick={() => openData({ mode: 'outputs', project: selected, version: versionFocus || undefined })}
                   >
-                    Browse files
+                    Link / browse data
                   </button>
-                  <button type="button" className="btn-secondary" onClick={() => void openInBuilder()}>
-                    Open in Builder
+                  <button type="button" className="btn-primary" onClick={() => void openInBuilder()}>
+                    Open Builder
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setView('templates')
+                      window.history.replaceState(null, '', '#/templates')
+                    }}
+                  >
+                    Open Templates
                   </button>
                   <button type="button" className="btn-secondary" onClick={() => openExperiments()}>
                     Experiments
@@ -624,6 +607,78 @@ export default function ProjectsView() {
                 </div>
               </div>
               <ConfirmButton label="Delete project" confirmLabel={`Delete ${selected}?`} danger onConfirm={() => void remove()} />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Linked data</div>
+                <div className="mt-1 text-sm font-semibold text-ink-900">
+                  {versionOptions.length} version{versionOptions.length === 1 ? '' : 's'}
+                </div>
+                <p className="mt-1 text-xs text-ink-500">
+                  {versionOptions.length === 0
+                    ? 'Empty until a pipeline/export writes output/{project}.'
+                    : `Focus: ${versionFocus || versionOptions[0]}`}
+                </p>
+                <button
+                  type="button"
+                  className="btn-secondary mt-2"
+                  onClick={() => openData({ mode: 'inputs', project: selected })}
+                >
+                  Link data
+                </button>
+              </div>
+              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Pipelines</div>
+                <div className="mt-1 text-sm font-semibold text-ink-900">Builder</div>
+                <p className="mt-1 text-xs text-ink-500">Stamp this project onto dataset nodes and run.</p>
+                <button type="button" className="btn-secondary mt-2" onClick={() => void openInBuilder()}>
+                  Open Builder
+                </button>
+              </div>
+              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Recent runs</div>
+                <div className="mt-1 text-sm font-semibold text-ink-900">
+                  {recentRuns.length} matched
+                </div>
+                <p className="mt-1 text-xs text-ink-500">
+                  Phase 1 client filter by graph_name / stamps — not server project_id yet.
+                </p>
+                {recentRuns.length === 0 ? (
+                  <button
+                    type="button"
+                    className="btn-secondary mt-2"
+                    onClick={() => {
+                      setView('templates')
+                      window.history.replaceState(null, '', '#/templates')
+                    }}
+                  >
+                    Open Templates
+                  </button>
+                ) : (
+                  <ul className="mt-2 space-y-1">
+                    {recentRuns.slice(0, 4).map((r) => (
+                      <li key={r.run_id}>
+                        <button
+                          type="button"
+                          className="text-left text-xs text-accent-800 hover:underline"
+                          onClick={() => useAppStore.getState().openRun(r.run_id)}
+                        >
+                          {r.run_id.slice(0, 8)}… {r.status || ''} {r.graph_name ? `· ${r.graph_name}` : ''}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Experiments</div>
+                <div className="mt-1 text-sm font-semibold text-ink-900">Compare runs</div>
+                <p className="mt-1 text-xs text-ink-500">Params and metrics across runs in this workspace.</p>
+                <button type="button" className="btn-secondary mt-2" onClick={() => openExperiments()}>
+                  Open Experiments
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-2 rounded-xl border border-ink-200 bg-white p-3">
