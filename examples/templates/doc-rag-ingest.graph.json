@@ -17,7 +17,7 @@
       "id": "doc_parse_chunk_0",
       "node_type": "doc_parse_chunk",
       "config": {
-        "path": "data/docs",
+        "path": "workspace/datasets/input/doc-rag-ingest",
         "recursive": true,
         "max_chars": 800
       },

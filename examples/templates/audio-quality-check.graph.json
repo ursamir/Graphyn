@@ -39,9 +39,8 @@
       "id": "segmenter_vad_2",
       "node_type": "segmenter",
       "config": {
-        "mode": "vad",
-        "vad_aggressiveness": 2,
-        "window_ms": 300
+        "mode": "silence",
+        "silence_threshold_db": 40.0
       },
       "label": null,
       "capability_metadata": null,

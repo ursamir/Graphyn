@@ -281,11 +281,12 @@ class SegmenterNode(Node):
     def _segment_vad(self, s: AudioSample) -> list[AudioSample]:
         try:
             import webrtcvad  # type: ignore
-        except ImportError as exc:
-            raise ImportError(
-                "SegmenterNode: 'webrtcvad' package required for mode='vad'. "
+        except ImportError:
+            log.warning(
+                "SegmenterNode: webrtcvad not installed — falling back to silence mode. "
                 "Install with: pip install webrtcvad>=2.0"
-            ) from exc
+            )
+            return self._segment_silence(s)
 
         y = s.data
         sr = s.sample_rate
