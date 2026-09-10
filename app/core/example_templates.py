@@ -214,8 +214,9 @@ def rewrite_graph_paths(
 ) -> dict[str, Any]:
     """Rewrite repo-absolute paths, then retarget outputs and ingest into workspace.
 
-    Outputs go to ``workspace/artifacts/<slug>/...``. Sample ingest under
-    ``examples/**/data`` goes to ``workspace/datasets/input/<folder-slug>/...``.
+    Legacy ``examples/**/output`` paths go to ``workspace/artifacts/<slug>/...``.
+    ``workspace/datasets/output/...`` Library exports are preserved. Sample ingest
+    under ``examples/**/data`` goes to ``workspace/datasets/input/<folder-slug>/...``.
     """
     from app.core.workspace_paths import _graph_name, rewire_graph_outputs
 

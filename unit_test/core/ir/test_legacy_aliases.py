@@ -36,6 +36,7 @@ def test_input_clean_export_migrate():
     assert "audio_exporter" in types
     exporter = next(n for n in migrated["nodes"] if n["node_type"] == "audio_exporter")
     assert exporter["config"]["split_ratios"]["train"] == 0.8
+    assert exporter["config"].get("project") == "p"
     # Graph must validate
     load_ir(migrated)
 
@@ -61,3 +62,6 @@ def test_starter_audio_classification_loads():
         }
         for n in graph.nodes
     )
+    exporter = next(n for n in graph.nodes if n.node_type == "audio_exporter")
+    assert dict(exporter.config).get("project") == "audio-classification"
+    assert "datasets/output" in str(dict(exporter.config).get("output_dir", ""))

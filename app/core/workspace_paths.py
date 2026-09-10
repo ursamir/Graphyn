@@ -1,11 +1,12 @@
 # app/core/workspace_paths.py
 """
 Bounded Context:  Graph Language / Workspace
-Responsibility:   Rewrite pipeline output paths into workspace/artifacts/<slug>/
-                  and sample ingest paths into workspace/datasets/input/<slug>/.
+Responsibility:   Rewrite pipeline output paths into workspace/artifacts/<slug>/,
+                  sample ingest into workspace/datasets/input/<slug>/, and keep
+                  Library dataset exports under workspace/datasets/output/.
 Owns:             artifact_slug, rewire_graph_outputs, apply_output_rewire.
 Public Surface:   artifact_slug, rewire_graph_outputs, apply_output_rewire,
-                  ARTIFACTS_PREFIX, DATASETS_INPUT_PREFIX.
+                  ARTIFACTS_PREFIX, DATASETS_INPUT_PREFIX, DATASETS_OUTPUT_PREFIX.
 Must NOT:         Execute pipelines or write files.
 Dependencies:     copy, re, pathlib; GraphIR loader imported lazily.
 Reason To Change: Artifact layout or relocatable-output heuristics change.
@@ -34,6 +35,7 @@ from typing import Any
 
 ARTIFACTS_PREFIX = "workspace/artifacts"
 DATASETS_INPUT_PREFIX = "workspace/datasets/input"
+DATASETS_OUTPUT_PREFIX = "workspace/datasets/output"
 _MERITECH_PREFIXES = (
     "/home/meritech/Desktop/newAudio3/",
     "/home/meritech/Desktop/newAudio3",
@@ -138,6 +140,23 @@ def _normalize_datasets_input(posix: str) -> str:
     return posix
 
 
+def _is_datasets_output_path(posix: str) -> bool:
+    padded = f"/{posix}"
+    return (
+        posix == DATASETS_OUTPUT_PREFIX
+        or posix.startswith(f"{DATASETS_OUTPUT_PREFIX}/")
+        or "/workspace/datasets/output/" in padded
+        or padded.endswith("/workspace/datasets/output")
+    )
+
+
+def _normalize_datasets_output(posix: str) -> str:
+    idx = posix.find(DATASETS_OUTPUT_PREFIX)
+    if idx >= 0:
+        return posix[idx:]
+    return posix
+
+
 def _examples_data_parts(posix: str) -> tuple[str, str] | None:
     """Map examples/<folder>/data/<rest> → (artifact_slug(folder), rest)."""
     match = _EXAMPLES_DATA_RE.search(_posix(posix))
@@ -165,11 +184,14 @@ def _is_sample_data_path(posix: str) -> bool:
 
 
 def _relocatable_tail(posix: str) -> str | None:
-    """Tail to preserve under ``workspace/artifacts/<slug>/``, or None."""
+    """Tail to preserve under ``workspace/artifacts/<slug>/``, or None.
+
+    ``workspace/datasets/output/...`` is intentionally *not* relocatable — Library
+    exports stay under datasets/output (see AudioExporter / Projects loop).
+    """
+    if _is_datasets_output_path(_posix(posix)):
+        return None
     match = _EXAMPLES_OUTPUT_RE.search(posix)
-    if match:
-        return (match.group(1) or "").strip("/")
-    match = _DATASETS_OUTPUT_RE.search(posix)
     if match:
         return (match.group(1) or "").strip("/")
     if posix == "output" or posix.startswith("output/"):
@@ -365,6 +387,8 @@ def _rewrite_string(key: str, value: str, slug: str, node_type: str | None = Non
         return _join_datasets_input(src_slug, tail)
     if _is_datasets_input_path(posix):
         return _normalize_datasets_input(posix)
+    if _is_datasets_output_path(posix):
+        return _normalize_datasets_output(posix)
     if _is_dataset_directory_ingest(key, posix, node_type):
         stable = _stable_dataset_artifact(posix)
         if stable:
@@ -398,12 +422,14 @@ def rewire_graph_outputs(graph: dict[str, Any], *, slug: str) -> dict[str, Any]:
     Sample ingest under examples/**/data maps to
     workspace/datasets/input/<slug-from-example-folder>/<tail> (graphs never
     display examples/ after rewire). Outputs under examples/**/output map to
-    workspace/artifacts/<slug>/<tail>. Dataset directories for ingest under
-    examples/**/output or workspace/artifacts/*/dataset retarget to the
-    stable <slug>/dataset/<tail> (never latest/). Generic names
-    (pipeline, graph, untitled) never relocate artifact paths; the slug is
-    taken from example folders or existing artifact paths. Ingest slugs come
-    from the examples/ folder that owns the data, not the consuming graph.
+    workspace/artifacts/<slug>/<tail>. Paths already under
+    workspace/datasets/output/... are preserved (Library → Projects export
+    layout). Dataset directories for ingest under examples/**/output or
+    workspace/artifacts/*/dataset retarget to the stable <slug>/dataset/<tail>
+    (never latest/). Generic names (pipeline, graph, untitled) never relocate
+    artifact paths; the slug is taken from example folders or existing artifact
+    paths. Ingest slugs come from the examples/ folder that owns the data, not
+    the consuming graph.
     """
     if not isinstance(graph, dict):
         return graph

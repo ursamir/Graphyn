@@ -1,6 +1,6 @@
 [plugin]
 name             = "audio-exporter"
-version          = "1.0.0"
+version          = "1.1.0"
 description      = "Export AudioSample objects to WAV files organised by split (train/val/test) and label."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
@@ -15,9 +15,10 @@ dependencies = [
 ]
 
 [config_schema.audio_exporter]
-output_dir = { type = "string", title = "Output dir", default = "workspace/artifacts/audio_export", description = "Directory under workspace/artifacts for written files." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/output/audio_export", description = "Project root under workspace/datasets/output/{project}; version_tag is appended." }
+project = { type = "string", title = "Project", default = "", description = "Optional project name; when set, output_dir becomes workspace/datasets/output/{project}." }
 format = { type = "string", title = "Format", default = "wav", description = "Output audio format. Currently wav only (soundfile PCM). One of: wav.", enum = ["wav"] }
 split_ratios = {  type = "object", title = "Split ratios", default = { }, description = "Train/val/test ratios as JSON; should sum to ~1.0.", widget = "json", train = 0.7, val = 0.15, test = 0.15  }
-version_tag = { type = "string", title = "Version tag", default = "v1", description = "Dataset/export version label (e.g. v1, 2026-09-08)." }
+version_tag = { type = "string", title = "Version tag", default = "v1", description = "Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0)." }
 random_seed = { type = "integer", title = "Random seed", default = 42, description = "RNG seed for reproducible splits and sampling." }
 append = { type = "boolean", title = "Append", default = false, description = "Append files into an existing export tree instead of replacing it (On/Off)." }

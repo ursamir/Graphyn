@@ -147,13 +147,19 @@ def _remap_config(old_type: str, cfg: dict[str, Any]) -> dict[str, Any]:
         ratios = c.get("split_ratios")
         if not isinstance(ratios, dict):
             ratios = {"train": train, "val": val, "test": test}
-        return {
+        out = {
             "output_dir": str(output),
             "version_tag": str(c.get("version_tag", c.get("version", "v1"))),
             "split_ratios": ratios,
             "random_seed": int(c.get("random_seed", c.get("seed", 42))),
             "append": bool(c.get("append", False)),
         }
+        # Preserve stamped Library project field (AudioExporter / Projects loop).
+        if project:
+            out["project"] = str(project)
+        elif c.get("project") is not None and str(c.get("project")).strip():
+            out["project"] = str(c.get("project")).strip()
+        return out
 
     return c
 

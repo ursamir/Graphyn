@@ -460,6 +460,28 @@ class TestRewriteGraphPaths:
         assert "examples/" not in out["nodes"][1]["config"]["output_dir"]
 
 
+
+    def test_datasets_output_path_preserved_for_library_export(self):
+        graph = _graph(
+            [
+                {
+                    "id": "exp",
+                    "node_type": "audio_exporter",
+                    "config": {
+                        "output_dir": "workspace/datasets/output/audio-classification",
+                        "version_tag": "v1",
+                        "project": "audio-classification",
+                    },
+                }
+            ]
+        )
+        out = rewire_graph_outputs(graph, slug="audio-classification")
+        assert out["nodes"][0]["config"]["output_dir"] == (
+            "workspace/datasets/output/audio-classification"
+        )
+        assert out["nodes"][0]["config"]["project"] == "audio-classification"
+
+
 class TestSeedExampleInputDatasets:
     def test_symlinks_example_data_into_workspace_input(self, tmp_path, monkeypatch):
         examples = tmp_path / "examples"
