@@ -21,13 +21,39 @@ interface Project {
 
 type Tab = 'spec' | 'taxonomy' | 'contract' | 'versions' | 'snapshots' | 'diff'
 
+const TABS: Tab[] = ['spec', 'taxonomy', 'contract', 'versions', 'snapshots', 'diff']
+
 const STATUSES = ['active', 'archived', 'draft', 'ready'] as const
+
+function parseProjectsHash(): { project?: string; tab?: Tab } {
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const qIdx = raw.indexOf('?')
+  if (qIdx < 0) return {}
+  const params = new URLSearchParams(raw.slice(qIdx + 1))
+  const project = (params.get('project') || '').trim() || undefined
+  const tabRaw = (params.get('tab') || '').trim()
+  const tab = TABS.includes(tabRaw as Tab) ? (tabRaw as Tab) : undefined
+  return { project, tab }
+}
+
+function lineageIds(lineage: unknown): { runId?: string; artifactId?: string } {
+  if (!lineage || typeof lineage !== 'object') return {}
+  const o = lineage as Record<string, unknown>
+  const runId = String(o.run_id ?? o.runId ?? '').trim() || undefined
+  const artifactId = String(o.artifact_id ?? o.artifactId ?? '').trim() || undefined
+  return { runId, artifactId }
+}
 
 export default function ProjectsView() {
   const pushToast = useAppStore((s) => s.pushToast)
+  const openData = useAppStore((s) => s.openData)
+  const openTrace = useAppStore((s) => s.openTrace)
+  const openArtifacts = useAppStore((s) => s.openArtifacts)
+  const setView = useAppStore((s) => s.setView)
+  const initialHash = React.useMemo(() => parseProjectsHash(), [])
   const [projects, setProjects] = React.useState<Project[] | null>(null)
-  const [selected, setSelected] = React.useState<string | null>(null)
-  const [tab, setTab] = React.useState<Tab>('versions')
+  const [selected, setSelected] = React.useState<string | null>(initialHash.project ?? null)
+  const [tab, setTab] = React.useState<Tab>(initialHash.tab ?? 'versions')
   const [newName, setNewName] = React.useState('')
   const nameRef = React.useRef<HTMLInputElement | null>(null)
   const [renameTo, setRenameTo] = React.useState('')
@@ -71,6 +97,12 @@ export default function ProjectsView() {
     setRenameTo(name)
     setCloneTo(`${name}-copy`)
     setError(null)
+    {
+      const params = new URLSearchParams()
+      params.set('project', name)
+      if (tab && tab !== 'versions') params.set('tab', tab)
+      window.history.replaceState(null, '', `#/projects?${params.toString()}`)
+    }
     setVersionStats(null)
     setVersionSamples(null)
     setDiffResult(null)
@@ -101,6 +133,42 @@ export default function ProjectsView() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  React.useEffect(() => {
+    const apply = () => {
+      const h = parseProjectsHash()
+      if (h.tab) setTab(h.tab)
+      if (h.project && h.project !== selected) void open(h.project)
+    }
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected])
+
+  React.useEffect(() => {
+    if (initialHash.project) void open(initialHash.project)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const openInBuilder = () => {
+    setView('builder')
+    window.history.replaceState(null, '', '#/builder')
+    pushToast(
+      selected
+        ? `Builder ready — use project "${selected}" in dataset nodes or open a data-prep template`
+        : 'Open a data-prep template or wire dataset nodes on the canvas',
+      'info',
+    )
+  }
+
+  const useInEdge = () => {
+    const params = new URLSearchParams()
+    if (selected) params.set('project', selected)
+    if (versionFocus) params.set('version', versionFocus)
+    const qs = params.toString()
+    window.history.replaceState(null, '', qs ? `#/edge?${qs}` : '#/edge')
+    setView('edge')
   }
 
   const create = async () => {
@@ -301,11 +369,16 @@ export default function ProjectsView() {
       <div className="shrink-0 border-b border-ink-200/70 bg-white/60 px-5 pt-5 pb-3">
         <PageHeader
           title="Projects"
-          description="Dataset project workspaces — versions, snapshots, and lineage. For file upload and ingest, use Library → Data."
+          description="Workspace for Data outputs — versions, snapshots, lineage (not a second file browser). Browse files in Data."
           actions={
-            <button type="button" className="btn-secondary" onClick={() => void load()}>
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-secondary" onClick={() => openData({ mode: 'outputs' })}>
+                Browse files
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => void load()}>
+                <RefreshCw className="h-3.5 w-3.5" /> Refresh
+              </button>
+            </div>
           }
         />
       </div>
@@ -335,10 +408,7 @@ export default function ProjectsView() {
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => {
-                  useAppStore.getState().setView('data')
-                  window.history.replaceState(null, '', '#/data')
-                }}
+                onClick={() => openData({ mode: 'inputs' })}
               >
                 Open Data
               </button>
@@ -371,9 +441,9 @@ export default function ProjectsView() {
           <div className="mx-auto max-w-md rounded-2xl border border-ink-200/80 bg-white px-6 py-8 shadow-sm">
             <h3 className="text-lg font-semibold text-ink-950">Select a dataset project</h3>
             <p className="mt-2 text-sm leading-relaxed text-ink-500">
-              A project is a named workspace under{' '}
-              <code className="font-mono text-[12px] text-ink-700">workspace/datasets/output</code>
-              {' '}with versions, snapshots, and lineage. File upload and URL ingest live under Library → Data.
+              A project is the dataset workspace UI over the same{' '}
+              <code className="font-mono text-[12px] text-ink-700">{'workspace/datasets/output/{project}'}</code>
+              {' '}folder Data browses as files. Versions, snapshots, and lineage live here — not a second file browser.
             </p>
             <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-ink-700">
               <li>Create a project with the name field on the left.</li>
@@ -386,12 +456,31 @@ export default function ProjectsView() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold">{selected}</h3>
+                <p className="mt-1 text-xs text-ink-500">
+                  Shared key with Data outputs: <code className="font-mono">{selected}</code>
+                  {versionFocus ? <> / <code className="font-mono">{versionFocus}</code></> : null}
+                </p>
                 <div className="mt-2 flex flex-wrap gap-1">
                   {STATUSES.map((s) => (
                     <button key={s} type="button" className="btn-secondary" onClick={() => void setStatus(s)}>
                       {s}
                     </button>
                   ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => openData({ mode: 'outputs', project: selected, version: versionFocus || undefined })}
+                  >
+                    Browse files
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={openInBuilder}>
+                    Open in Builder
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={useInEdge}>
+                    Use in Edge
+                  </button>
                 </div>
               </div>
               <ConfirmButton label="Delete project" confirmLabel={`Delete ${selected}?`} danger onConfirm={() => void remove()} />
@@ -600,6 +689,37 @@ export default function ProjectsView() {
                 </div>
                 {diffResult != null && <KeyValue data={diffResult} />}
                 <h4 className="text-sm font-semibold">Lineage</h4>
+                {(() => {
+                  const ids = lineageIds(lineage)
+                  if (!ids.runId && !ids.artifactId) return null
+                  return (
+                    <div className="flex flex-wrap gap-2">
+                      {ids.runId ? (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => openTrace({ runId: ids.runId })}
+                        >
+                          Open Trace
+                        </button>
+                      ) : null}
+                      {ids.artifactId || ids.runId ? (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() =>
+                            openArtifacts({
+                              runId: ids.runId,
+                              artifactId: ids.artifactId,
+                            })
+                          }
+                        >
+                          Open Artifacts
+                        </button>
+                      ) : null}
+                    </div>
+                  )
+                })()}
                 <KeyValue data={lineage} empty="No lineage." />
               </section>
             )}

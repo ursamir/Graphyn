@@ -22,6 +22,19 @@ export type TemplateSummary = {
   node_types?: string[]
 }
 
+function isDatasetRelatedTemplate(tpl: TemplateSummary): boolean {
+  const blob = [
+    tpl.name,
+    tpl.description ?? '',
+    ...(tpl.tags ?? []),
+    ...(tpl.inputs ?? []),
+    ...(tpl.node_types ?? []),
+  ]
+    .join(' ')
+    .toLowerCase()
+  return /ingest|dataset|data-prep|data_prep|rag|audio|upload|workspace\/datasets/.test(blob)
+}
+
 function normalizeList(raw: unknown): TemplateSummary[] {
   if (!Array.isArray(raw)) return []
   return raw.map((item) => {
@@ -58,6 +71,7 @@ function chipList(items: string[] | undefined, empty: string, mapLabel?: (s: str
 export default function TemplatesView() {
   const getCanvasGraph = useAppStore((s) => s.getCanvasGraph)
   const pushToast = useAppStore((s) => s.pushToast)
+  const openData = useAppStore((s) => s.openData)
   const [items, setItems] = React.useState<TemplateSummary[] | null>(null)
   const [versionsMap, setVersionsMap] = React.useState<Record<string, string[]>>({})
   const [latestMap, setLatestMap] = React.useState<Record<string, string | null>>({})
@@ -472,6 +486,18 @@ export default function TemplatesView() {
                   >
                     Open in Builder
                   </button>
+                  {isDatasetRelatedTemplate(tpl) ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        openData({ mode: 'inputs' })
+                        pushToast('Data — upload or browse files for this template', 'info')
+                      }}
+                    >
+                      Open Data
+                    </button>
+                  ) : null}
                 </div>
               </li>
             )

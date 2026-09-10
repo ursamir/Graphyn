@@ -45,14 +45,31 @@ function cloneTemplate(): GraphIR {
   return structuredClone(EDGE_DEPLOY_TEMPLATE)
 }
 
+function parseEdgeHash(): { project?: string; version?: string } {
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const qIdx = raw.indexOf('?')
+  if (qIdx < 0) return {}
+  const params = new URLSearchParams(raw.slice(qIdx + 1))
+  return {
+    project: (params.get('project') || '').trim() || undefined,
+    version: (params.get('version') || '').trim() || undefined,
+  }
+}
+
 export default function EdgeWizardView() {
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const openRun = useAppStore((s) => s.openRun)
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
+  const openData = useAppStore((s) => s.openData)
+  const openProjects = useAppStore((s) => s.openProjects)
   const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
   const setLastRunId = useAppStore((s) => s.setLastRunId)
+
+  const initialEdge = React.useMemo(() => parseEdgeHash(), [])
+  const [linkedProject, setLinkedProject] = React.useState(initialEdge.project ?? '')
+  const [linkedVersion, setLinkedVersion] = React.useState(initialEdge.version ?? '')
 
   const [step, setStep] = React.useState<WizardStep>(1)
   const [graph, setGraph] = React.useState<GraphIR | null>(null)
@@ -61,7 +78,9 @@ export default function EdgeWizardView() {
   const [backend, setBackend] = React.useState<EdgeBackend>('tflite')
   const [quantization, setQuantization] = React.useState<EdgeQuantization>('float32')
   const [target, setTarget] = React.useState<EdgeTarget>('edge')
-  const [packageName, setPackageName] = React.useState('edge_model')
+  const [packageName, setPackageName] = React.useState(
+    initialEdge.project ? `${initialEdge.project}_edge` : 'edge_model',
+  )
 
   const [runId, setRunId] = React.useState<string | null>(null)
   const [runStatus, setRunStatus] = React.useState<string | null>(null)
@@ -69,6 +88,17 @@ export default function EdgeWizardView() {
   const [running, setRunning] = React.useState(false)
   const [downloadPath, setDownloadPath] = React.useState<string | null>(null)
   const [downloading, setDownloading] = React.useState(false)
+
+  React.useEffect(() => {
+    const apply = () => {
+      const h = parseEdgeHash()
+      if (h.project) setLinkedProject(h.project)
+      if (h.version) setLinkedVersion(h.version)
+      if (h.project) setPackageName((prev) => (prev === 'edge_model' ? `${h.project}_edge` : prev))
+    }
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+  }, [])
 
   const configuredGraph = React.useMemo(() => {
     const base = graph ?? EDGE_DEPLOY_TEMPLATE
@@ -188,6 +218,39 @@ export default function EdgeWizardView() {
         }
       />
 
+      {(linkedProject || linkedVersion) && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm">
+          <span className="text-ink-500">Dataset</span>
+          <span className="rounded-full bg-accent-50 px-2.5 py-0.5 font-mono text-[12px] text-accent-900">
+            {linkedProject || '—'}
+            {linkedVersion ? ` / ${linkedVersion}` : ''}
+          </span>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() =>
+              openData({
+                mode: 'outputs',
+                project: linkedProject || undefined,
+                version: linkedVersion || undefined,
+              })
+            }
+          >
+            Open Data
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => openProjects({ project: linkedProject || undefined })}
+          >
+            Open Projects
+          </button>
+          <span className="text-xs text-ink-400">
+            Edge packages models; dataset project is linked for context.
+          </span>
+        </div>
+      )}
+
       <ol className="flex flex-wrap gap-2">
         {([1, 2, 3, 4] as WizardStep[]).map((n) => {
           const active = step === n
@@ -270,22 +333,26 @@ export default function EdgeWizardView() {
                   <button
                     type="button"
                     className="btn-secondary"
+                    onClick={() => openData({ mode: 'outputs' })}
+                  >
+                    Open Data
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => openProjects()}
+                  >
+                    Open Projects
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
                     onClick={() => {
                       setView('templates')
                       window.history.replaceState(null, '', '#/templates')
                     }}
                   >
                     Browse Templates
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => {
-                      setView('runs')
-                      window.history.replaceState(null, '', '#/runs')
-                    }}
-                  >
-                    Open Runs
                   </button>
                 </div>
               }

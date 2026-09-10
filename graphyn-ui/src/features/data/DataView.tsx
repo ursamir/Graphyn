@@ -20,6 +20,31 @@ interface InputLabel {
   file_count: number
 }
 
+
+type DataMode = 'outputs' | 'inputs' | 'ingest' | 'merge'
+
+function parseDataHash(): {
+  mode?: DataMode
+  project?: string
+  version?: string
+  label?: string
+} {
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const qIdx = raw.indexOf('?')
+  if (qIdx < 0) return {}
+  const params = new URLSearchParams(raw.slice(qIdx + 1))
+  const modeRaw = (params.get('mode') || '').trim()
+  const mode = (['outputs', 'inputs', 'ingest', 'merge'] as const).includes(modeRaw as DataMode)
+    ? (modeRaw as DataMode)
+    : undefined
+  return {
+    mode,
+    project: (params.get('project') || '').trim() || undefined,
+    version: (params.get('version') || '').trim() || undefined,
+    label: (params.get('label') || '').trim() || undefined,
+  }
+}
+
 function humanizeDataError(err: unknown): { message: string; detail: string } {
   const detail = err instanceof Error ? err.message : String(err)
   if (/path is outside workspace/i.test(detail)) {
@@ -33,12 +58,15 @@ function humanizeDataError(err: unknown): { message: string; detail: string } {
 
 export default function DataView() {
   const pushToast = useAppStore((s) => s.pushToast)
+  const openProjects = useAppStore((s) => s.openProjects)
+  const setView = useAppStore((s) => s.setView)
+  const initialHash = React.useMemo(() => parseDataHash(), [])
   const [outputs, setOutputs] = React.useState<OutputProject[]>([])
   const [inputs, setInputs] = React.useState<InputLabel[]>([])
-  const [mode, setMode] = React.useState<'outputs' | 'inputs' | 'ingest' | 'merge'>('outputs')
-  const [project, setProject] = React.useState('')
-  const [version, setVersion] = React.useState('')
-  const [label, setLabel] = React.useState('')
+  const [mode, setMode] = React.useState<DataMode>(initialHash.mode ?? 'outputs')
+  const [project, setProject] = React.useState(initialHash.project ?? '')
+  const [version, setVersion] = React.useState(initialHash.version ?? '')
+  const [label, setLabel] = React.useState(initialHash.label ?? '')
   const [rows, setRows] = React.useState<Array<Record<string, unknown>>>([])
   const [stats, setStats] = React.useState<unknown>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -84,6 +112,18 @@ export default function DataView() {
   React.useEffect(() => {
     void loadSources()
   }, [loadSources])
+
+  React.useEffect(() => {
+    const apply = () => {
+      const h = parseDataHash()
+      if (h.mode) setMode(h.mode)
+      if (h.project) setProject(h.project)
+      if (h.version) setVersion(h.version)
+      if (h.label) setLabel(h.label)
+    }
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+  }, [])
 
   React.useEffect(() => {
     let cancelled = false
@@ -311,9 +351,18 @@ export default function DataView() {
       })
       pushToast(formatMergeToast(res), 'success')
       await loadSources()
+      if (mergeTargetProject.trim()) {
+        openProjects({ project: mergeTargetProject.trim() })
+      }
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
+  }
+
+  const openBuilderForDataPrep = () => {
+    setView('templates')
+    window.history.replaceState(null, '', '#/templates')
+    pushToast('Open a data-prep or ingest template in Builder', 'info')
   }
 
   const versions = outputs.find((o) => o.project === project)?.versions ?? []
@@ -322,7 +371,7 @@ export default function DataView() {
     <div className="h-full overflow-y-auto p-6 space-y-4">
       <PageHeader
         title="Data"
-        description="Files & ingest — upload inputs, browse outputs, and merge dataset files. Dataset project workspaces (versions, snapshots) live under Admin → Projects."
+        description="Files in / files out — upload inputs, browse outputs, ingest, and merge. Projects owns workspace metadata (versions, snapshots, lineage) for the same output folders."
         actions={
           <div className="flex gap-2">
             <button type="button" className="btn-secondary" onClick={upload}>
@@ -385,26 +434,16 @@ export default function DataView() {
             outputs.length === 0 ? (
               <EmptyState
                 title="No output datasets"
-                description="Pipeline dataset versions live under workspace/datasets/output. Run a pipeline from Builder, or open Projects for versioned workspaces."
+                description="Pipeline dataset versions live under workspace/datasets/output. Run a data-prep pipeline from Templates → Builder, or open Projects for versioned workspaces."
                 action={
                   <div className="flex flex-wrap justify-center gap-2">
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={() => {
-                        useAppStore.getState().setView('builder')
-                        window.history.replaceState(null, '', '#/builder')
-                      }}
-                    >
+                    <button type="button" className="btn-primary" onClick={openBuilderForDataPrep}>
                       Open Builder
                     </button>
                     <button
                       type="button"
                       className="btn-secondary"
-                      onClick={() => {
-                        useAppStore.getState().setView('projects')
-                        window.history.replaceState(null, '', '#/projects')
-                      }}
+                      onClick={() => openProjects()}
                     >
                       Open Projects
                     </button>
@@ -419,6 +458,16 @@ export default function DataView() {
               <select value={version} onChange={(e) => { setError(null); setErrorDetail(null); setVersion(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
                 {versions.map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
+              {project ? (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => openProjects({ project })}
+                  title="Open dataset workspace (versions, snapshots, lineage)"
+                >
+                  Open project
+                </button>
+              ) : null}
               {project && version ? (
                 <ConfirmButton
                   label="Delete"

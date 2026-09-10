@@ -35,6 +35,13 @@ interface AppState {
   openArtifacts: (opts?: { runId?: string; artifactId?: string }) => void
   openExperiments: (opts?: { runIds?: string[] }) => void
   openProposals: () => void
+  openData: (opts?: {
+    mode?: 'inputs' | 'outputs' | 'ingest' | 'merge'
+    project?: string
+    version?: string
+    label?: string
+  }) => void
+  openProjects: (opts?: { project?: string; tab?: string }) => void
   pendingProposalCount: number
   setPendingProposalCount: (n: number) => void
   catalog: NodeCatalogEntry[]
@@ -106,6 +113,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   openProposals: () => {
     window.history.replaceState(null, '', '#/proposals')
     set({ view: 'proposals' })
+  },
+  openData: ({ mode, project, version, label } = {}) => {
+    const params = new URLSearchParams()
+    if (mode) params.set('mode', mode)
+    if (project?.trim()) params.set('project', project.trim())
+    if (version?.trim()) params.set('version', version.trim())
+    if (label?.trim()) params.set('label', label.trim())
+    const qs = params.toString()
+    window.history.replaceState(null, '', qs ? `#/data?${qs}` : '#/data')
+    set({ view: 'data' })
+  },
+  openProjects: ({ project, tab } = {}) => {
+    const params = new URLSearchParams()
+    if (project?.trim()) params.set('project', project.trim())
+    if (tab?.trim()) params.set('tab', tab.trim())
+    const qs = params.toString()
+    window.history.replaceState(null, '', qs ? `#/projects?${qs}` : '#/projects')
+    set({ view: 'projects' })
   },
   pendingProposalCount: 0,
   setPendingProposalCount: (pendingProposalCount) => set({ pendingProposalCount }),

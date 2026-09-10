@@ -103,7 +103,8 @@ A user (or agent) can:
 | 2026-09-07 | **Edge deploy wizard (Pillar D)** | Template `examples/templates/edge-deploy.graph.json` + `examples/30_edge_deploy/`; Deploy → **Edge** (`#/edge`) wizard: template → configure model path/target → `run-async` → download package. Hydrate unwraps python_code CodeResult → ModelArtifact. |
 | 2026-09-07 | **Experiments board (Pillar B — ML lifecycle)** | `GET /api/v1/experiments` (+ `/{name}`, `/compare`) aggregates `experiment.json` / meta+metrics; Observe → **Experiments** UI (`#/experiments`) with multi-select compare (params/metrics diff). No mlflow package required. |
 | 2026-09-07 | **Agentic Builder proposals (Pillar C)** | `proposals/` store + `POST/GET /api/v1/proposals` (+ accept/reject); MCP `propose_graph` / `list_proposals` / `get_proposal`; Build → **Proposals** UI (`#/proposals`) with Accept → Builder via `loadGraphIntoBuilder`; audit on create/accept/reject. |
-| 2026-09-07 | **Console IA (vision-aligned nav)** | Restructured sidebar: **Build** (Builder, Templates, Proposals, Runs) · **Observe** (Trace, Experiments, Artifacts) · **Library** (Plugins, Data) · **Deploy** (Edge, Workers) · **Admin** (Projects, Secrets, System). Deep-link query preservation for Trace/Edge/Experiments/Proposals. |
+| 2026-09-07 | **Console IA (vision-aligned nav)** | Restructured sidebar: **Build** (Builder, Templates, Proposals, Runs) · **Observe** (Trace, Experiments, Artifacts) · **Library** (Plugins, Data, Projects) · **Deploy** (Edge, Workers) · **Admin** (Secrets, System). Deep-link query preservation for Trace/Edge/Experiments/Proposals/Data/Projects. |
+| 2026-09-10 | **Data vs Projects loop** | Data = filesystem (inputs/outputs); Projects = dataset workspace UI over the same `workspace/datasets/output/{project}` (spec, taxonomy, contract, versions, snapshots, lineage). Shared key: project name (+ version). Loop: Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge. |
 
 ### Console map
 
@@ -111,9 +112,17 @@ A user (or agent) can:
 |---|---|---|
 | **Build** | Builder, Templates, Proposals, Runs | Design graphs, review agent proposals, launch & inspect runs |
 | **Observe** | Trace, Experiments, Artifacts | Accountability backtrack, compare metrics, artifact library |
-| **Library** | Plugins, Data | Extension surface & datasets |
+| **Library** | Plugins, Data, Projects | Extension surface, files, dataset workspaces |
 | **Deploy** | Edge, Workers | Edge package loop & distributed placement |
-| **Admin** | Projects, Secrets, System | Tenancy seeds, secrets, health + audit |
+| **Admin** | Secrets, System | Secrets, health + audit |
+
+
+### Data vs Projects
+
+- **Data** = filesystem: upload inputs + browse/merge outputs under `workspace/datasets/`.
+- **Projects** = dataset workspace UI over the **same** `workspace/datasets/output/{project}` (spec, taxonomy, contract, versions, snapshots, lineage) — not a second file browser.
+- Shared key: **project name** (+ version).
+- Product loop: **Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge**.
 
 Still open from §3: full RBAC, promotion, OTel; deepen agentic diffs / promotion approvals.
 

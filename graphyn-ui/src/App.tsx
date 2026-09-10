@@ -70,6 +70,7 @@ const NAV_GROUPS: Array<{
     items: [
       { id: 'plugins', label: 'Plugins', icon: Package },
       { id: 'data', label: 'Data', icon: Database },
+      { id: 'projects', label: 'Projects', icon: FolderKanban },
     ],
   },
   {
@@ -82,7 +83,6 @@ const NAV_GROUPS: Array<{
   {
     title: 'Admin',
     items: [
-      { id: 'projects', label: 'Projects', icon: FolderKanban },
       { id: 'secrets', label: 'Secrets', icon: KeyRound },
       { id: 'system', label: 'System', icon: Activity },
     ],
@@ -118,10 +118,10 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   experiments: 'Compare params and metrics across runs',
   artifacts: 'Browse pipeline outputs across runs',
   plugins: 'Install node packs for the Builder catalog',
-  data: 'Upload, browse, and merge dataset files',
+  data: 'Files in / files out — upload, browse, merge',
   edge: 'Package models for on-device runtimes',
   workers: 'Distributed workers — labels, GPU, heartbeats',
-  projects: 'Dataset workspaces, versions, and snapshots',
+  projects: 'Dataset workspace — versions, snapshots, lineage',
   secrets: 'Named credentials for runs (not Graph IR)',
   system: 'Health, cleanup, webhooks, audit trail',
 }
@@ -251,7 +251,7 @@ export default function App() {
 
   React.useEffect(() => {
     // Preserve query strings for deep links (#/trace?run_id=, #/edge?…, etc.)
-    const PRESERVE_QUERY = new Set<AppView>(['trace', 'edge', 'experiments', 'proposals', 'artifacts'])
+    const PRESERVE_QUERY = new Set<AppView>(['trace', 'edge', 'experiments', 'proposals', 'artifacts', 'data', 'projects'])
     const focus = useAppStore.getState().focusRunId
     const raw = window.location.hash.replace(/^#\/?/, '')
     const pathOnly = raw.split('?')[0] || ''
