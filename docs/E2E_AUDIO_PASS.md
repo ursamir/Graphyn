@@ -28,12 +28,12 @@
 | podcast-leveling | **COMPLETED** | `808d7b8ee2a94ac88168e7e380bf5772` | artifacts=2; installed `speech-enhancer` plugin |
 | speech-recognition | **COMPLETED** | `eaf71f127abd4e9e9c821b4592995823` | artifacts=3 |
 | doc-rag-ingest | **COMPLETED** | `5b3fbe0d6fe2487cae2fb9790c9ce073` | artifacts=3; template path fixed `data/docs` → `workspace/datasets/input/doc-rag-ingest` |
-| edge-deploy | **SKIPPED_MODEL** | — | No `workspace/artifacts/models/saved_model`; API venv has neither tensorflow nor onnx |
+| edge-deploy | **COMPLETED** | `f51a66e3d4454061b8f89acddc23edce` | artifacts=3; tiny SavedModel at `workspace/artifacts/models/saved_model` (gitignored) trained via `scripts/train_tny_edge_model.py` using trainer plugin venv TF 2.21 (API host venv still has no TF; edge-optimizer isolated venv does) |
 | call-analytics | **SKIPPED_KEYS** | — | Deepgram + OpenAI |
 | captions | **SKIPPED_KEYS** | — | Deepgram |
 | meeting-crm | **SKIPPED_KEYS** | — | OpenAI-compat ASR/LLM |
 
-**Success bar:** ≥4 local audio templates COMPLETED with artifacts — **6 COMPLETED** (5 audio + doc-rag).
+**Success bar:** ≥4 local audio templates COMPLETED with artifacts — **7 COMPLETED** (5 audio + doc-rag + edge-deploy).
 
 ## Fixes shipped in this pass
 
@@ -43,6 +43,7 @@
 4. **doc-rag-ingest template** — ingest path points at real workspace docs.
 5. **speech-enhancer** installed via API for podcast-leveling.
 6. **UI polish** — softer shadows/borders, editorial project cards, calmer PageHeader/EmptyState, quieter Builder chrome (Inter retained).
+7. **edge-deploy model** — trained TNY speech-commands SavedModel into gitignored `workspace/artifacts/models/saved_model` (plugin trainer TF); E2E run completed TFLite float32 + edge package.
 
 ## Browser / UI spot-check
 
@@ -61,5 +62,7 @@ export GRAPHYN_HOME=/workspace/Graphyn/.graphyn-e2e
 export GRAPHYN_PROJECT_DIR=/workspace/Graphyn/workspace
 export GRAPHYN_API_TOKEN="$(cat /workspace/graphyn-api-token.txt)"
 # ensure speech-commands symlinks (see Data heal)
+# edge-deploy: train tiny SavedModel first (uses .graphyn-e2e/plugins/venvs/trainer TF)
+.graphyn-e2e/plugins/venvs/trainer/bin/python scripts/train_tny_edge_model.py
 python3 scripts/e2e_audio_pass_runner.py
 ```
