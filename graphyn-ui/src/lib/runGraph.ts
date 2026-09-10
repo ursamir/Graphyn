@@ -10,13 +10,19 @@ function looksLikeGraph(data: unknown): data is GraphIR {
   )
 }
 
-/** Load a run's Graph IR for Builder — journal graph.json, then named template. */
+/** Load a run's Graph IR for Builder — dedicated API, then journal file, then named template. */
 export async function fetchRunGraph(
   runId: string,
   graphName?: string | null,
 ): Promise<GraphIR | null> {
   const rid = runId.trim()
   if (rid) {
+    try {
+      const data = await apiJson<GraphIR>(`/runs/${encodeURIComponent(rid)}/graph`)
+      if (looksLikeGraph(data)) return data
+    } catch {
+      /* fall through to file / template */
+    }
     for (const path of [`workspace/runs/${rid}/graph.json`, `runs/${rid}/graph.json`]) {
       try {
         const res = await apiFetch('/outputs/file', { query: { path } })

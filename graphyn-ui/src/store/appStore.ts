@@ -29,9 +29,10 @@ interface AppState {
   view: AppView
   setView: (view: AppView) => void
   focusRunId: string | null
+  focusArtifactId: string | null
   openRun: (id: string) => void
   openTrace: (opts: { artifactId?: string; runId?: string }) => void
-  openArtifacts: (opts?: { runId?: string }) => void
+  openArtifacts: (opts?: { runId?: string; artifactId?: string }) => void
   openExperiments: (opts?: { runIds?: string[] }) => void
   openProposals: () => void
   pendingProposalCount: number
@@ -71,6 +72,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   view: 'builder',
   setView: (view) => set({ view }),
   focusRunId: null,
+  focusArtifactId: null,
   openRun: (id) => {
     window.history.replaceState(null, '', `#/runs/${id}`)
     set({ view: 'runs', focusRunId: id, lastRunId: id })
@@ -83,12 +85,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     window.history.replaceState(null, '', qs ? `#/trace?${qs}` : '#/trace')
     set({ view: 'trace' })
   },
-  openArtifacts: ({ runId } = {}) => {
+  openArtifacts: ({ runId, artifactId } = {}) => {
     const params = new URLSearchParams()
     if (runId?.trim()) params.set('run_id', runId.trim())
+    const aid = artifactId?.trim() || ''
+    if (aid) params.set('artifact_id', aid)
     const qs = params.toString()
     window.history.replaceState(null, '', qs ? `#/artifacts?${qs}` : '#/artifacts')
-    set({ view: 'artifacts' })
+    set({ view: 'artifacts', focusArtifactId: aid || null })
   },
   openExperiments: ({ runIds } = {}) => {
     const params = new URLSearchParams()

@@ -403,6 +403,16 @@ Get a run's config YAML and log entries.
 
 ---
 
+### `GET /api/v1/runs/{run_id}/graph`
+
+Return the Graph IR JSON stored in the run journal (`workspace/runs/{run_id}/graph.json`) — same path artifact replay uses. Powers UI “Open in Builder” from Runs / Trace / Artifacts.
+
+**Response:** Graph IR object (`nodes`, `edges`, `metadata`, …).
+
+**Errors:** `400` invalid run_id. `404` run or `graph.json` missing. `422` unreadable/invalid `graph.json`.
+
+---
+
 ### `GET /api/v1/runs/{run_id}/status`
 
 Get the current status of a run.

@@ -4,6 +4,7 @@ Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for run history, status, checkpoints,
                   artifacts, and provenance.
 Owns:             Route definitions for GET /runs, GET /runs/{run_id},
+                  GET /runs/{run_id}/graph,
                   GET /runs/{run_id}/status,
                   GET /runs/{run_id}/checkpoints/**,
                   GET /runs/{run_id}/artifacts,
@@ -223,6 +224,31 @@ def delete_run_endpoint(run_id: str):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Run not found")
     return result
+
+
+# ── Run graph IR ──────────────────────────────────────────────────────────────
+
+@router.get("/{run_id}/graph", summary="Get the Graph IR used for a run")
+def get_run_graph(run_id: str):
+    """Return the Graph IR JSON stored in the run journal (``graph.json``).
+
+    Same journal path used by artifact replay and run outputs. Returns the
+    raw Graph IR document for Builder / Open-in-Builder deep links.
+    """
+    run_path = _run_dir(run_id)
+    graph_path = run_path / "graph.json"
+    if not graph_path.is_file():
+        raise HTTPException(status_code=404, detail="graph.json not found for run")
+    try:
+        data = json.loads(graph_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to load graph.json: {exc}",
+        )
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=422, detail="Invalid graph.json")
+    return data
 
 
 # ── Run status ────────────────────────────────────────────────────────────────

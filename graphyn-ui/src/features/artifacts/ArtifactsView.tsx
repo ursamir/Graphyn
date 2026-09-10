@@ -97,17 +97,21 @@ function LineageList({
 }
 
 
-function parseArtifactsHash(): { runId: string } {
+function parseArtifactsHash(): { runId: string; artifactId: string } {
   const raw = window.location.hash.replace(/^#\/?/, '')
   const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return { runId: '' }
+  if (qIdx < 0) return { runId: '', artifactId: '' }
   const params = new URLSearchParams(raw.slice(qIdx + 1))
-  return { runId: (params.get('run_id') || '').trim() }
+  return {
+    runId: (params.get('run_id') || '').trim(),
+    artifactId: (params.get('artifact_id') || '').trim(),
+  }
 }
 
-function writeArtifactsHash(runId: string) {
+function writeArtifactsHash(runId: string, artifactId: string) {
   const params = new URLSearchParams()
   if (runId.trim()) params.set('run_id', runId.trim())
+  if (artifactId.trim()) params.set('artifact_id', artifactId.trim())
   const qs = params.toString()
   const next = qs ? `#/artifacts?${qs}` : '#/artifacts'
   if (window.location.hash !== next) {
@@ -120,11 +124,15 @@ export default function ArtifactsView() {
   const openTrace = useAppStore((s) => s.openTrace)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
+  const focusArtifactId = useAppStore((s) => s.focusArtifactId)
+  const initialHash = React.useMemo(() => parseArtifactsHash(), [])
   const [items, setItems] = React.useState<Artifact[] | null>(null)
-  const [selected, setSelected] = React.useState<string | null>(null)
+  const [selected, setSelected] = React.useState<string | null>(
+    () => initialHash.artifactId || null,
+  )
   const [detail, setDetail] = React.useState<unknown>(null)
   const [lineage, setLineage] = React.useState<unknown>(null)
-  const [runFilter, setRunFilter] = React.useState(() => parseArtifactsHash().runId)
+  const [runFilter, setRunFilter] = React.useState(() => initialHash.runId)
   const [nodeTypeFilter, setNodeTypeFilter] = React.useState('')
   const [artifactTypeFilter, setArtifactTypeFilter] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
@@ -154,33 +162,51 @@ export default function ArtifactsView() {
     void load()
   }, [load])
 
+  const open = React.useCallback(async (id: string) => {
+    const aid = id.trim()
+    if (!aid) return
+    setSelected(aid)
+    try {
+      const [d, l] = await Promise.all([
+        apiJson(`/artifacts/${aid}`),
+        apiJson(`/artifacts/${aid}/lineage`),
+      ])
+      setDetail(d)
+      setLineage(l)
+      // If deep-linked by artifact_id alone, adopt run_id from the record.
+      if (d && typeof d === 'object') {
+        const rid = String((d as Artifact).run_id ?? '').trim()
+        if (rid) {
+          setRunFilter((prev) => (prev ? prev : rid))
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }, [])
+
   React.useEffect(() => {
     const apply = () => {
-      const { runId } = parseArtifactsHash()
+      const { runId, artifactId } = parseArtifactsHash()
       setRunFilter((prev) => (prev === runId ? prev : runId))
+      if (artifactId) void open(artifactId)
     }
     apply()
     window.addEventListener('hashchange', apply)
     return () => window.removeEventListener('hashchange', apply)
-  }, [])
+  }, [open])
 
   React.useEffect(() => {
-    writeArtifactsHash(runFilter)
-  }, [runFilter])
+    writeArtifactsHash(runFilter, selected ?? '')
+  }, [runFilter, selected])
 
-  const open = async (id: string) => {
-    setSelected(id)
-    try {
-      const [d, l] = await Promise.all([
-        apiJson(`/artifacts/${id}`),
-        apiJson(`/artifacts/${id}/lineage`),
-      ])
-      setDetail(d)
-      setLineage(l)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }
+  React.useEffect(() => {
+    const aid = (focusArtifactId || '').trim()
+    if (!aid) return
+    void open(aid)
+    useAppStore.setState({ focusArtifactId: null })
+  }, [focusArtifactId, open])
+
 
   const replay = async (id: string) => {
     try {

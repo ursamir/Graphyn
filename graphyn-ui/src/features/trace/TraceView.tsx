@@ -154,10 +154,10 @@ export default function TraceView() {
 
   const browseArtifacts = (opts?: { artifactId?: string; runId?: string }) => {
     const linkedRun = (opts?.runId || trace?.run?.run_id || '').toString().trim() || runId.trim()
-    openArtifacts({ runId: linkedRun || undefined })
-    if (opts?.artifactId) {
-      pushToast(`Browse artifacts — select ${opts.artifactId}`, 'info')
-    }
+    openArtifacts({
+      runId: linkedRun || undefined,
+      artifactId: opts?.artifactId,
+    })
   }
 
   const openGraphHop = async (name?: string | null) => {

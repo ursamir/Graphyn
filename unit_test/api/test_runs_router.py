@@ -257,3 +257,45 @@ class TestDeleteRun:
         assert latest_run_id("demo") == "older"
         assert (tmp_workspace / "runs" / "older").exists()
         assert not (tmp_workspace / "runs" / "newer").exists()
+
+
+class TestGetRunGraph:
+    def test_returns_graph_json(self, api_client, tmp_path):
+        """GET /api/v1/runs/{run_id}/graph returns journal Graph IR."""
+        runs_dir = tmp_path / "runs"
+        run_dir = runs_dir / "graph-run-1"
+        run_dir.mkdir(parents=True)
+        graph = {
+            "schema_version": "1.2",
+            "metadata": {"name": "demo"},
+            "nodes": [{"id": "n1", "type": "PassthroughNode", "config": {}}],
+            "edges": [],
+        }
+        (run_dir / "meta.json").write_text(json.dumps({"run_id": "graph-run-1", "status": "completed"}))
+        (run_dir / "graph.json").write_text(json.dumps(graph))
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.get("/api/v1/runs/graph-run-1/graph")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["metadata"]["name"] == "demo"
+        assert isinstance(body["nodes"], list)
+        assert len(body["nodes"]) == 1
+        assert body["edges"] == []
+
+    def test_missing_graph_returns_404(self, api_client, tmp_path):
+        """GET /api/v1/runs/{run_id}/graph returns 404 when graph.json is absent."""
+        runs_dir = tmp_path / "runs"
+        run_dir = runs_dir / "no-graph"
+        run_dir.mkdir(parents=True)
+        (run_dir / "meta.json").write_text(json.dumps({"run_id": "no-graph", "status": "completed"}))
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.get("/api/v1/runs/no-graph/graph")
+        assert resp.status_code == 404
+
+    def test_missing_run_returns_404(self, api_client, tmp_path):
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.get("/api/v1/runs/missing/graph")
+        assert resp.status_code == 404
+
