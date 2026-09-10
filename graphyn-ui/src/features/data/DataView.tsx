@@ -125,6 +125,20 @@ export default function DataView() {
     return () => window.removeEventListener('hashchange', apply)
   }, [])
 
+  // Mirror Projects: write selection into the hash (no hashchange — avoid echo loops).
+  React.useEffect(() => {
+    const params = new URLSearchParams()
+    if (mode) params.set('mode', mode)
+    if (project.trim()) params.set('project', project.trim())
+    if (version.trim()) params.set('version', version.trim())
+    if (label.trim()) params.set('label', label.trim())
+    const qs = params.toString()
+    const next = qs ? `#/data?${qs}` : '#/data'
+    if (window.location.hash !== next) {
+      window.history.replaceState(null, '', next)
+    }
+  }, [mode, project, version, label])
+
   React.useEffect(() => {
     let cancelled = false
     const run = async () => {
@@ -359,7 +373,7 @@ export default function DataView() {
     }
   }
 
-  const openBuilderForDataPrep = () => {
+  const browseTemplatesForDataPrep = () => {
     setView('templates')
     window.history.replaceState(null, '', '#/templates')
     pushToast('Open a data-prep or ingest template in Builder', 'info')
@@ -437,8 +451,8 @@ export default function DataView() {
                 description="Pipeline dataset versions live under workspace/datasets/output. Run a data-prep pipeline from Templates → Builder, or open Projects for versioned workspaces."
                 action={
                   <div className="flex flex-wrap justify-center gap-2">
-                    <button type="button" className="btn-primary" onClick={openBuilderForDataPrep}>
-                      Open Builder
+                    <button type="button" className="btn-primary" onClick={browseTemplatesForDataPrep}>
+                      Browse Templates
                     </button>
                     <button
                       type="button"

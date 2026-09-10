@@ -1,5 +1,5 @@
 import React from 'react'
-import { Archive, FlaskConical, GitBranch, Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
+import { Archive, Database, FlaskConical, FolderKanban, GitBranch, Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
@@ -65,6 +65,8 @@ export default function RunsView() {
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openExperiments = useAppStore((s) => s.openExperiments)
+  const openProjects = useAppStore((s) => s.openProjects)
+  const openData = useAppStore((s) => s.openData)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
 
   const [runs, setRuns] = React.useState<RunSummary[] | null>(null)
@@ -75,7 +77,6 @@ export default function RunsView() {
   const [debug, setDebug] = React.useState<Record<string, unknown> | null>(null)
   const [checkpoints, setCheckpoints] = React.useState<string[]>([])
   const [samples, setSamples] = React.useState<unknown>(null)
-  const [artifacts, setArtifacts] = React.useState<unknown>(null)
   const [outputFiles, setOutputFiles] = React.useState<OutputFile[]>([])
   const [previewUrls, setPreviewUrls] = React.useState<Record<string, string>>({})
   const [panel, setPanel] = React.useState<'logs' | 'debug' | 'checkpoints' | 'artifacts'>('logs')
@@ -107,23 +108,20 @@ export default function RunsView() {
     setDetail(null)
     setDebug(null)
     setSamples(null)
-    setArtifacts(null)
     setOutputFiles([])
     setError(null)
     try {
-      const [d, st, dbg, cps, arts, outs] = await Promise.all([
+      const [d, st, dbg, cps, outs] = await Promise.all([
         apiJson<Record<string, unknown>>(`/runs/${id}`),
         apiJson<Record<string, unknown>>(`/runs/${id}/status`).catch(() => null),
         apiJson<Record<string, unknown>>(`/runs/${id}/debug-report`).catch(() => null),
         apiJson<string[]>(`/runs/${id}/checkpoints`).catch(() => []),
-        apiJson(`/runs/${id}/artifacts`).catch(() => []),
         apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
       ])
       setDetail(d)
       setStatus(st)
       setDebug(dbg)
       setCheckpoints(Array.isArray(cps) ? cps : [])
-      setArtifacts(arts)
       setOutputFiles(Array.isArray(outs) ? outs : [])
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -491,6 +489,20 @@ export default function RunsView() {
               >
                 <FlaskConical className="h-3.5 w-3.5" /> Compare
               </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openProjects()}
+              >
+                <FolderKanban className="h-3.5 w-3.5" /> Projects
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openData({ mode: 'outputs' })}
+              >
+                <Database className="h-3.5 w-3.5" /> Data
+              </button>
               {canOpenGraph && (
                 <button
                   type="button"
@@ -650,7 +662,22 @@ export default function RunsView() {
                     ))}
                   </ul>
                 )}
-                <KeyValue data={artifacts} empty="No artifact records for this run." />
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => openArtifacts({ runId: selected })}
+                  >
+                    <Archive className="h-3.5 w-3.5" /> Open in Artifacts
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => openTrace({ runId: selected })}
+                  >
+                    <GitBranch className="h-3.5 w-3.5" /> Trace lineage
+                  </button>
+                </div>
               </div>
             )}
           </>

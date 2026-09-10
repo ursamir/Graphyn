@@ -16,7 +16,6 @@ import {
   CopyableMono,
   EmptyState,
   ErrorBanner,
-  KeyValue,
   LoadingBlock,
   PageHeader,
   StatusBadge,
@@ -413,27 +412,63 @@ export default function TraceView() {
           {(() => {
             const hop = chain[selectedHop]
             if (!hop) return null
-            let data: Record<string, unknown> | null = null
-            if (hop.step === 'run' && trace.run) data = { ...trace.run }
-            else if (hop.step === 'graph' && trace.graph) data = { ...trace.graph }
-            else if (hop.step === 'node' && trace.node) {
-              data = {
-                ...trace.node,
-                node_type_label: trace.node.node_type
-                  ? humanNodeLabel(String(trace.node.node_type))
-                  : undefined,
+            const pick = (src: Record<string, unknown> | null | undefined, keys: string[]) => {
+              if (!src) return [] as Array<[string, string]>
+              const out: Array<[string, string]> = []
+              for (const k of keys) {
+                const v = src[k]
+                if (v == null || v === '') continue
+                if (typeof v === 'object') continue
+                out.push([k, String(v)])
               }
-            } else if (hop.step === 'artifact' && trace.artifact) data = { ...trace.artifact }
-            else if (hop.step === 'worker') {
-              data = { worker_id: hop.id || hop.label, ids: hop.ids }
+              return out
+            }
+            let fields: Array<[string, string]> = []
+            if (hop.step === 'run' && trace.run) {
+              fields = pick(trace.run as Record<string, unknown>, [
+                'run_id',
+                'status',
+                'graph_name',
+                'created_at',
+                'worker_id',
+              ])
+            } else if (hop.step === 'graph' && trace.graph) {
+              fields = pick(trace.graph as Record<string, unknown>, [
+                'name',
+                'graph_name',
+                'version',
+                'hash',
+                'node_count',
+              ])
+            } else if (hop.step === 'node' && trace.node) {
+              const node = trace.node as Record<string, unknown>
+              fields = pick(node, ['id', 'node_type', 'status', 'label'])
+              if (node.node_type) {
+                fields = [['node_type', humanNodeLabel(String(node.node_type))], ...fields.filter(([k]) => k !== 'node_type')]
+              }
+            } else if (hop.step === 'artifact' && trace.artifact) {
+              fields = pick(trace.artifact as Record<string, unknown>, [
+                'artifact_id',
+                'id',
+                'artifact_type',
+                'node_type',
+                'run_id',
+                'hash',
+              ])
+            } else if (hop.step === 'worker') {
+              if (hop.id || hop.label) fields.push(['worker_id', String(hop.id || hop.label)])
+              if (hop.ids && Array.isArray(hop.ids) && hop.ids.length) {
+                fields.push(['ids', hop.ids.map(String).join(', ')])
+              }
             } else {
-              data = {
-                step: hop.step,
-                label: hop.label,
-                id: hop.id,
-                status: hop.status,
-                node_type: hop.node_type,
-                hash: hop.hash,
+              for (const [k, v] of [
+                ['label', hop.label],
+                ['id', hop.id],
+                ['status', hop.status],
+                ['node_type', hop.node_type],
+                ['hash', hop.hash],
+              ] as Array<[string, unknown]>) {
+                if (v != null && v !== '') fields.push([k, String(v)])
               }
             }
             const runIdForOpen =
@@ -494,7 +529,20 @@ export default function TraceView() {
                   </div>
                 </div>
                 {hop.status ? <StatusBadge status={String(hop.status)} /> : null}
-                {data ? <KeyValue data={data} /> : <p className="text-sm text-ink-500">No details for this hop.</p>}
+                {fields.length > 0 ? (
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
+                    {fields.slice(0, 5).map(([k, v]) => (
+                      <React.Fragment key={k}>
+                        <dt className="text-ink-500">{k}</dt>
+                        <dd className="min-w-0 truncate font-mono text-[12px] text-ink-800" title={v}>
+                          {v}
+                        </dd>
+                      </React.Fragment>
+                    ))}
+                  </dl>
+                ) : (
+                  <p className="text-sm text-ink-500">No details for this hop.</p>
+                )}
               </div>
             )
           })()}

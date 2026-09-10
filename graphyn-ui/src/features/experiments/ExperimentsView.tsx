@@ -131,12 +131,29 @@ export default function ExperimentsView() {
   React.useEffect(() => {
     const apply = () => {
       const ids = parseExperimentsHash().slice(0, 5)
-      if (ids.length) setSelectedIds(ids)
+      setSelectedIds((prev) => {
+        if (ids.join(',') === prev.join(',')) return prev
+        // External deep-link / Compare handoff — adopt hash ids when present.
+        if (ids.length) return ids
+        return prev
+      })
     }
     apply()
     window.addEventListener('hashchange', apply)
     return () => window.removeEventListener('hashchange', apply)
   }, [])
+
+  // Write selection into the hash without dispatching hashchange (avoid echo loops).
+  React.useEffect(() => {
+    const params = new URLSearchParams()
+    if (selectedIds.length === 1) params.set('run_id', selectedIds[0])
+    else if (selectedIds.length > 1) params.set('run_id', selectedIds.join(','))
+    const qs = params.toString()
+    const next = qs ? `#/experiments?${qs}` : '#/experiments'
+    if (window.location.hash !== next) {
+      window.history.replaceState(null, '', next)
+    }
+  }, [selectedIds])
 
   const active =
     blocks?.find((b) => b.experiment_name === selectedExp) ??

@@ -70,6 +70,16 @@ function countLine(p: ProposalSummary): string {
   return parts.length ? parts.join(' · ') : 'No structural diff'
 }
 
+
+function parseProposalsHash(): { id?: string } {
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const qIdx = raw.indexOf('?')
+  if (qIdx < 0) return {}
+  const params = new URLSearchParams(raw.slice(qIdx + 1))
+  const id = (params.get('id') || '').trim()
+  return id ? { id } : {}
+}
+
 export default function ProposalsView() {
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const setView = useAppStore((s) => s.setView)
@@ -78,7 +88,7 @@ export default function ProposalsView() {
 
   const [items, setItems] = React.useState<ProposalSummary[] | null>(null)
   const [filter, setFilter] = React.useState<'pending' | 'all' | 'accepted' | 'rejected'>('pending')
-  const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  const [selectedId, setSelectedId] = React.useState<string | null>(() => parseProposalsHash().id ?? null)
   const [detail, setDetail] = React.useState<ProposalDetail | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -94,6 +104,8 @@ export default function ProposalsView() {
       const list = Array.isArray(data?.proposals) ? data.proposals : []
       setItems(list)
       setSelectedId((prev) => {
+        const fromHash = parseProposalsHash().id
+        if (fromHash && list.some((p) => p.id === fromHash)) return fromHash
         if (prev && list.some((p) => p.id === prev)) return prev
         return list[0]?.id ?? null
       })
@@ -112,6 +124,25 @@ export default function ProposalsView() {
   React.useEffect(() => {
     void refresh()
   }, [refresh])
+
+  React.useEffect(() => {
+    const apply = () => {
+      const id = parseProposalsHash().id
+      if (id) setSelectedId(id)
+    }
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+  }, [])
+
+  React.useEffect(() => {
+    const params = new URLSearchParams()
+    if (selectedId) params.set('id', selectedId)
+    const qs = params.toString()
+    const next = qs ? `#/proposals?${qs}` : '#/proposals'
+    if (window.location.hash !== next) {
+      window.history.replaceState(null, '', next)
+    }
+  }, [selectedId])
 
   React.useEffect(() => {
     if (!selectedId) {

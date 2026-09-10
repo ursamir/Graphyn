@@ -54,12 +54,12 @@ const NAV_GROUPS: Array<{
       { id: 'builder', label: 'Builder', icon: Workflow },
       { id: 'templates', label: 'Templates', icon: BookOpen },
       { id: 'proposals', label: 'Proposals', icon: GitPullRequest },
-      { id: 'runs', label: 'Runs', icon: History },
     ],
   },
   {
     title: 'Observe',
     items: [
+      { id: 'runs', label: 'Runs', icon: History },
       { id: 'trace', label: 'Trace', icon: GitBranch },
       { id: 'experiments', label: 'Experiments', icon: FlaskConical },
       { id: 'artifacts', label: 'Artifacts', icon: Archive },
@@ -161,6 +161,7 @@ export default function App() {
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openExperiments = useAppStore((s) => s.openExperiments)
+  const openProjects = useAppStore((s) => s.openProjects)
   const statusMessage = useAppStore((s) => s.statusMessage)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const isRunning = useAppStore((s) => s.isRunning)
@@ -451,6 +452,13 @@ export default function App() {
                   onClick={() => openExperiments({ runIds: [lastRunId] })}
                 >
                   Compare
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+                  onClick={() => openProjects()}
+                >
+                  Projects
                 </button>
               </div>
             )}

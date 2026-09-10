@@ -34,7 +34,8 @@ interface AppState {
   openTrace: (opts: { artifactId?: string; runId?: string }) => void
   openArtifacts: (opts?: { runId?: string; artifactId?: string }) => void
   openExperiments: (opts?: { runIds?: string[] }) => void
-  openProposals: () => void
+  openProposals: (opts?: { id?: string }) => void
+  openEdge: (opts?: { project?: string; version?: string }) => void
   openData: (opts?: {
     mode?: 'inputs' | 'outputs' | 'ingest' | 'merge'
     project?: string
@@ -78,13 +79,20 @@ interface AppState {
   setBuilderDataset: (ctx: { project: string; version?: string } | null) => void
 }
 
+
+/** replaceState does not fire hashchange — notify mounted views to re-parse query. */
+function replaceHash(hash: string) {
+  window.history.replaceState(null, '', hash)
+  window.dispatchEvent(new HashChangeEvent('hashchange'))
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   view: 'builder',
   setView: (view) => set({ view }),
   focusRunId: null,
   focusArtifactId: null,
   openRun: (id) => {
-    window.history.replaceState(null, '', `#/runs/${id}`)
+    replaceHash(`#/runs/${id}`)
     set({ view: 'runs', focusRunId: id, lastRunId: id })
   },
   openTrace: ({ artifactId, runId }) => {
@@ -92,7 +100,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (artifactId?.trim()) params.set('artifact_id', artifactId.trim())
     if (runId?.trim()) params.set('run_id', runId.trim())
     const qs = params.toString()
-    window.history.replaceState(null, '', qs ? `#/trace?${qs}` : '#/trace')
+    replaceHash(qs ? `#/trace?${qs}` : '#/trace')
     set({ view: 'trace' })
   },
   openArtifacts: ({ runId, artifactId } = {}) => {
@@ -101,7 +109,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const aid = artifactId?.trim() || ''
     if (aid) params.set('artifact_id', aid)
     const qs = params.toString()
-    window.history.replaceState(null, '', qs ? `#/artifacts?${qs}` : '#/artifacts')
+    replaceHash(qs ? `#/artifacts?${qs}` : '#/artifacts')
     set({ view: 'artifacts', focusArtifactId: aid || null })
   },
   openExperiments: ({ runIds } = {}) => {
@@ -110,12 +118,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (ids.length === 1) params.set('run_id', ids[0])
     else if (ids.length > 1) params.set('run_id', ids.join(','))
     const qs = params.toString()
-    window.history.replaceState(null, '', qs ? `#/experiments?${qs}` : '#/experiments')
+    replaceHash(qs ? `#/experiments?${qs}` : '#/experiments')
     set({ view: 'experiments' })
   },
-  openProposals: () => {
-    window.history.replaceState(null, '', '#/proposals')
+  openProposals: ({ id } = {}) => {
+    const params = new URLSearchParams()
+    if (id?.trim()) params.set('id', id.trim())
+    const qs = params.toString()
+    replaceHash(qs ? `#/proposals?${qs}` : '#/proposals')
     set({ view: 'proposals' })
+  },
+  openEdge: ({ project, version } = {}) => {
+    const params = new URLSearchParams()
+    if (project?.trim()) params.set('project', project.trim())
+    if (version?.trim()) params.set('version', version.trim())
+    const qs = params.toString()
+    replaceHash(qs ? `#/edge?${qs}` : '#/edge')
+    set({ view: 'edge' })
   },
   openData: ({ mode, project, version, label } = {}) => {
     const params = new URLSearchParams()
@@ -124,7 +143,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (version?.trim()) params.set('version', version.trim())
     if (label?.trim()) params.set('label', label.trim())
     const qs = params.toString()
-    window.history.replaceState(null, '', qs ? `#/data?${qs}` : '#/data')
+    replaceHash(qs ? `#/data?${qs}` : '#/data')
     set({ view: 'data' })
   },
   openProjects: ({ project, tab } = {}) => {
@@ -132,7 +151,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (project?.trim()) params.set('project', project.trim())
     if (tab?.trim()) params.set('tab', tab.trim())
     const qs = params.toString()
-    window.history.replaceState(null, '', qs ? `#/projects?${qs}` : '#/projects')
+    replaceHash(qs ? `#/projects?${qs}` : '#/projects')
     set({ view: 'projects' })
   },
   pendingProposalCount: 0,

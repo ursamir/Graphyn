@@ -102,10 +102,19 @@ export default function WorkersView() {
               </p>
               <button
                 type="button"
+                className="btn-primary"
+                onClick={() => {
+                  useAppStore.getState().setView('system')
+                  window.history.replaceState(null, '', '#/system')
+                }}
+              >
+                Open System
+              </button>
+              <button
+                type="button"
                 className="btn-secondary"
                 onClick={() => {
-                  useAppStore.getState().setView('edge')
-                  window.history.replaceState(null, '', '#/edge')
+                  useAppStore.getState().openEdge()
                 }}
               >
                 Edge deploy instead

@@ -3,7 +3,7 @@ import { Copy, Download, GitBranch, History, Play, RefreshCw, Workflow } from 'l
 import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
-import { CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
+import { EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
 import { formatLocaleDateTime, humanNodeLabel, humanizeTemplateName, shortRunId } from '../../lib/format'
 
 interface Artifact {
@@ -28,72 +28,6 @@ function findCopyablePath(data: unknown, depth = 0): string | null {
     }
   }
   return null
-}
-
-
-function lineageInputIds(lineage: unknown): Array<{ id: string; label: string }> {
-  if (!lineage || typeof lineage !== 'object') return []
-  const rec = lineage as Record<string, unknown>
-  const raw = rec.inputs
-  if (!Array.isArray(raw)) return []
-  return raw.flatMap((item) => {
-    if (typeof item === 'string' && item.trim()) {
-      return [{ id: item, label: item }]
-    }
-    if (item && typeof item === 'object') {
-      const o = item as Record<string, unknown>
-      const id = String(o.artifact_id ?? o.id ?? '').trim()
-      if (!id) return []
-      const label = String(o.node_type ?? o.artifact_type ?? o.name ?? id)
-      return [{ id, label }]
-    }
-    return []
-  })
-}
-
-function LineageList({
-  lineage,
-  onOpen,
-}: {
-  lineage: unknown
-  onOpen: (id: string) => void
-}) {
-  if (lineage == null) return <p className="text-sm text-ink-500">No lineage.</p>
-  const inputs = lineageInputIds(lineage)
-  const rest =
-    lineage && typeof lineage === 'object' && !Array.isArray(lineage)
-      ? Object.fromEntries(
-          Object.entries(lineage as Record<string, unknown>).filter(([k]) => k !== 'inputs'),
-        )
-      : lineage
-  return (
-    <div className="space-y-3">
-      {inputs.length > 0 ? (
-        <ul className="space-y-1.5">
-          {inputs.map((item) => (
-            <li
-              key={item.id}
-              className="flex items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2"
-            >
-              <button
-                type="button"
-                className="min-w-0 flex-1 truncate text-left text-sm font-medium text-ink-900 hover:text-accent-700"
-                onClick={() => onOpen(item.id)}
-              >
-                {item.label}
-              </button>
-              <CopyableMono value={item.id} />
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-xs text-ink-400">No input artifacts.</p>
-      )}
-      {rest && typeof rest === 'object' && Object.keys(rest as object).length > 0 && (
-        <KeyValue data={rest} empty="No other lineage fields." />
-      )}
-    </div>
-  )
 }
 
 
@@ -131,7 +65,6 @@ export default function ArtifactsView() {
     () => initialHash.artifactId || null,
   )
   const [detail, setDetail] = React.useState<unknown>(null)
-  const [lineage, setLineage] = React.useState<unknown>(null)
   const [runFilter, setRunFilter] = React.useState(() => initialHash.runId)
   const [nodeTypeFilter, setNodeTypeFilter] = React.useState('')
   const [artifactTypeFilter, setArtifactTypeFilter] = React.useState('')
@@ -167,12 +100,8 @@ export default function ArtifactsView() {
     if (!aid) return
     setSelected(aid)
     try {
-      const [d, l] = await Promise.all([
-        apiJson(`/artifacts/${aid}`),
-        apiJson(`/artifacts/${aid}/lineage`),
-      ])
+      const d = await apiJson(`/artifacts/${aid}`)
       setDetail(d)
-      setLineage(l)
       // If deep-linked by artifact_id alone, adopt run_id from the record.
       if (d && typeof d === 'object') {
         const rid = String((d as Artifact).run_id ?? '').trim()
@@ -498,18 +427,21 @@ export default function ArtifactsView() {
                 )}
               </div>
             )}
-            <h3 className="text-sm font-semibold">Artifact</h3>
-            <KeyValue
-              data={(() => {
-                if (!detail || typeof detail !== 'object') return detail
-                const omit = new Set(['run', 'run_meta', 'run_detail', 'graph', 'logs', 'status_detail'])
-                return Object.fromEntries(
-                  Object.entries(detail as Record<string, unknown>).filter(([k]) => !omit.has(k)),
-                )
-              })()}
-            />
-            <h3 className="text-sm font-semibold">Lineage</h3>
-            <LineageList lineage={lineage} onOpen={(id) => void open(id)} />
+            <p className="rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-600">
+              Provenance and upstream inputs live in Trace — use{' '}
+              <button
+                type="button"
+                className="font-medium text-accent-700 hover:underline"
+                onClick={() => {
+                  const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
+                  const runId = String(rec.run_id ?? '').trim()
+                  openTrace({ artifactId: selected, runId: runId || undefined })
+                }}
+              >
+                Trace lineage
+              </button>{' '}
+              instead of dumping full metadata here.
+            </p>
           </>
         )}
       </div>

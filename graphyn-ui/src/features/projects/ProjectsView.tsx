@@ -115,6 +115,8 @@ export default function ProjectsView() {
   const openData = useAppStore((s) => s.openData)
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
+  const openEdge = useAppStore((s) => s.openEdge)
+  const openExperiments = useAppStore((s) => s.openExperiments)
   const setView = useAppStore((s) => s.setView)
   const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
@@ -296,12 +298,10 @@ export default function ProjectsView() {
   }
 
   const useInEdge = () => {
-    const params = new URLSearchParams()
-    if (selected) params.set('project', selected)
-    if (versionFocus) params.set('version', versionFocus)
-    const qs = params.toString()
-    window.history.replaceState(null, '', qs ? `#/edge?${qs}` : '#/edge')
-    setView('edge')
+    openEdge({
+      project: selected || undefined,
+      version: versionFocus || undefined,
+    })
   }
 
   const create = async () => {
@@ -610,6 +610,9 @@ export default function ProjectsView() {
                   </button>
                   <button type="button" className="btn-secondary" onClick={() => void openInBuilder()}>
                     Open in Builder
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={() => openExperiments()}>
+                    Experiments
                   </button>
                   <button type="button" className="btn-secondary" onClick={useInEdge}>
                     Use in Edge
