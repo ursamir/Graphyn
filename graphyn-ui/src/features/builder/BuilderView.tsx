@@ -38,6 +38,7 @@ import { ConfirmButton, EmptyState, ErrorBanner, StatusBadge } from '../../compo
 import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
 import {
   buildGraphFromCanvas,
+  type NodePlacement,
   catalogPorts,
   type GraphIR,
   type NodeCatalogEntry,
@@ -209,6 +210,13 @@ function BuilderInner() {
               n.id === node.id
                 ? { ...n, data: { ...n.data, config: { ...n.data.config, [key]: value } } }
                 : n,
+            ),
+          )
+        },
+        onChangePlacement: (next) => {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === node.id ? { ...n, data: { ...n.data, placement: next } } : n,
             ),
           )
         },
@@ -412,6 +420,7 @@ function BuilderInner() {
           runtime: entry?.runtime,
           config: { ...defaultsFromSchema(entry), ...(n.config ?? {}) },
           schemaProps: entry?.config_schema?.properties ?? {},
+          placement: (n.placement as NodePlacement | null | undefined) ?? null,
           inputs: ports.inputs,
           outputs: ports.outputs,
           status: 'idle',
@@ -1324,6 +1333,93 @@ function BuilderInner() {
                             </div>
                           </div>
                         )}
+                        <div className="mb-3 rounded-lg border border-ink-200 bg-ink-50/70 p-2.5 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                              Placement (Mode B)
+                            </div>
+                            <button
+                              type="button"
+                              className="text-[11px] text-accent-700 hover:underline"
+                              onClick={() => node.data.onChangePlacement?.(null)}
+                            >
+                              Reset auto
+                            </button>
+                          </div>
+                          <p className="text-[10px] leading-snug text-ink-400">
+                            Local Mode A ignores these hints. Distributed Mode B routes by mode / tags / GPU / pool / worker.
+                          </p>
+                          {(() => {
+                            const p = node.data.placement ?? { mode: 'auto' as const }
+                            const setP = (patch: Partial<NodePlacement>) => {
+                              const next: NodePlacement = { ...p, ...patch }
+                              node.data.onChangePlacement?.(next)
+                            }
+                            return (
+                              <>
+                                <label className="block text-[12px] text-ink-700">
+                                  <span className="font-medium">Mode</span>
+                                  <select
+                                    className="field-control mt-1"
+                                    value={p.mode ?? 'auto'}
+                                    onChange={(e) =>
+                                      setP({
+                                        mode: e.target.value as NodePlacement['mode'],
+                                      })
+                                    }
+                                  >
+                                    <option value="auto">auto</option>
+                                    <option value="local">local</option>
+                                    <option value="worker">worker</option>
+                                    <option value="pool">pool</option>
+                                  </select>
+                                </label>
+                                <label className="block text-[12px] text-ink-700">
+                                  <span className="font-medium">Tags</span>
+                                  <input
+                                    className="field-control mt-1 font-mono"
+                                    placeholder="gpu,edge (comma-separated)"
+                                    value={(p.tags ?? []).join(',')}
+                                    onChange={(e) =>
+                                      setP({
+                                        tags: e.target.value
+                                          .split(',')
+                                          .map((t) => t.trim())
+                                          .filter(Boolean),
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <label className="flex items-center gap-2 text-[12px] text-ink-700">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(p.require_gpu)}
+                                    onChange={(e) => setP({ require_gpu: e.target.checked })}
+                                  />
+                                  <span className="font-medium">Require GPU</span>
+                                </label>
+                                <label className="block text-[12px] text-ink-700">
+                                  <span className="font-medium">Pool</span>
+                                  <input
+                                    className="field-control mt-1 font-mono"
+                                    placeholder="gpu-lab"
+                                    value={p.pool ?? ''}
+                                    onChange={(e) => setP({ pool: e.target.value.trim() || null })}
+                                  />
+                                </label>
+                                <label className="block text-[12px] text-ink-700">
+                                  <span className="font-medium">Worker</span>
+                                  <input
+                                    className="field-control mt-1 font-mono"
+                                    placeholder="worker id"
+                                    value={p.worker ?? ''}
+                                    onChange={(e) => setP({ worker: e.target.value.trim() || null })}
+                                  />
+                                </label>
+                              </>
+                            )
+                          })()}
+                        </div>
                         {(() => {
                           const entries = Object.entries(node.data.schemaProps ?? {}) as [string, Record<string, unknown>][]
                           if (entries.length === 0) return <div className="text-sm text-ink-400">No config fields</div>

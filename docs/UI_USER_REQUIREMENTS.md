@@ -743,7 +743,7 @@ Health/readiness reflect this API. Mode B: **MISSING — I need** readiness to s
 
 ## 9. Out of scope for this requirements pass
 
-- Implementing the above in UI code
+- ~~Implementing the above in UI code~~ — **P0/P1 implementation started** on `cursor/usecase-plugins-workflows` (console gaps: Trace prefill, Runs filters, Compare honesty, placement inspector, Mode B copy, System backend/reconcile, Secrets jump key, artifact titles, Plugins catalog toast). P2 still out of scope.
 - CloudAgent / automated coding agents applying these changes
 - FaceRecognition product surface
 - Inventing promotion / RBAC UIs beyond noting them as vision gaps

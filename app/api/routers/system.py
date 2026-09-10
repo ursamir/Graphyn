@@ -44,10 +44,28 @@ def health_check():
 
 @router.get("/readiness", summary="Readiness check")
 def readiness_check():
-    """Return readiness status with minimal dependency checks."""
+    """Return readiness status with minimal dependency checks.
+
+    Includes backend mode (local vs distributed) and registered worker count so
+    the console System page can surface Mode A/B without guessing.
+    """
+    import os
+
+    backend_id = (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python"
+    backend_mode = "distributed" if backend_id == "distributed" else "local"
+    worker_count = 0
+    try:
+        from app.core.distributed.registry import get_worker_registry
+
+        worker_count = len(get_worker_registry().list(include_stale=True))
+    except Exception:
+        worker_count = 0
     return {
         "status": "ready",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "backend": backend_id,
+        "backend_mode": backend_mode,
+        "worker_count": worker_count,
         "checks": {
             "runs_dir_exists": _runs_dir().exists(),
             "cache_dir_exists": _cache_dir().exists(),

@@ -1,6 +1,6 @@
 import { Handle, Position, type NodeProps } from 'reactflow'
 import clsx from 'clsx'
-import type { PortDef } from '../../types/graph'
+import type { NodePlacement, PortDef } from '../../types/graph'
 import { AudioLines, Box, Brain, GitBranch, Pencil, Sparkles, X } from 'lucide-react'
 import { schemaFieldHint } from '../../lib/format'
 
@@ -10,6 +10,8 @@ export type GraphynNodeData = {
   category?: string
   config: Record<string, unknown>
   schemaProps?: Record<string, Record<string, unknown>>
+  /** IR 1.2+ placement (Mode B). */
+  placement?: NodePlacement | null
   inputs: PortDef[]
   outputs: PortDef[]
   status?: 'idle' | 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled' | 'success' | 'error'
@@ -17,6 +19,7 @@ export type GraphynNodeData = {
   lastError?: string
   runtime?: string
   onChangeConfig?: (key: string, value: unknown) => void
+  onChangePlacement?: (next: NodePlacement | null) => void
   onDelete?: () => void
   onValidateConfig?: () => void
   onOpenInspector?: () => void

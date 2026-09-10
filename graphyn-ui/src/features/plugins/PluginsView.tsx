@@ -49,6 +49,9 @@ interface DepStatus {
 
 const DEPS_INSTALL_TIMEOUT_MS = 900_000
 
+const DOCS_GETTING_STARTED_MODE_B =
+  'https://github.com/ursamir/Graphyn/blob/main/docs/GETTING_STARTED.md#mode-b--multi-machine-control-plane--workers'
+
 function formatElapsed(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000))
   const m = Math.floor(totalSec / 60)
@@ -110,9 +113,12 @@ export default function PluginsView() {
     return () => window.clearInterval(id)
   }, [installingName, installStartedAt])
 
-  const afterMutation = async () => {
+  const afterMutation = async (opts?: { announceCatalog?: boolean }) => {
     await load()
     await refreshCatalog?.()
+    if (opts?.announceCatalog) {
+      pushToast('Builder catalog refreshed', 'success')
+    }
   }
 
   const pollInstall = (name: string) => {
@@ -128,7 +134,7 @@ export default function PluginsView() {
                 : `Installed ${name}`,
               rec.status === 'failed' ? 'error' : 'success',
             )
-            await afterMutation()
+            await afterMutation({ announceCatalog: rec.status !== 'failed' })
           }
         })
         .catch(() => undefined)
@@ -150,7 +156,7 @@ export default function PluginsView() {
           'success',
         )
       }
-      await afterMutation()
+      await afterMutation({ announceCatalog: !failed })
       if (expanded === name) {
         try {
           setDepStatus(await apiJson<DepStatus>(`/plugins/${encodeURIComponent(name)}/dependencies`))
@@ -199,7 +205,7 @@ export default function PluginsView() {
         pollInstall(name)
       } else {
         pushToast(`Installed ${name}`, 'success')
-        await afterMutation()
+        await afterMutation({ announceCatalog: true })
       }
       setSource('')
     } catch (err) {
@@ -310,6 +316,18 @@ export default function PluginsView() {
           </button>
         }
       />
+      <p className="rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
+        Mode B: workers need the same plugins they claim, plus shared storage for datasets —{' '}
+        <a
+          href={DOCS_GETTING_STARTED_MODE_B}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-accent-700 hover:underline"
+        >
+          Getting Started · Mode B
+        </a>
+        .
+      </p>
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
       <section className="surface-card space-y-3 p-5">
@@ -517,7 +535,7 @@ export default function PluginsView() {
                               danger
                               onConfirm={() =>
                                 void apiJson(`/plugins/${encodeURIComponent(p.name)}`, { method: 'DELETE' })
-                                  .then(afterMutation)
+                                  .then(() => afterMutation())
                                   .then(() => {
                                     setMenuFor(null)
                                     pushToast(`Uninstalled ${p.name}`, 'success')

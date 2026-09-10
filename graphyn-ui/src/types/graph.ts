@@ -1,3 +1,12 @@
+export type NodePlacement = {
+  mode?: 'auto' | 'local' | 'worker' | 'pool'
+  worker?: string | null
+  pool?: string | null
+  tags?: string[]
+  require_gpu?: boolean
+  min_vram_mib?: number | null
+}
+
 export interface GraphNode {
   id: string
   node_type: string
@@ -5,6 +14,8 @@ export interface GraphNode {
   label?: string | null
   capability_metadata?: unknown
   event_trigger?: unknown
+  /** IR 1.2+ distributed placement hint (Mode B). */
+  placement?: NodePlacement | null
 }
 
 export interface GraphEdge {
@@ -76,7 +87,11 @@ export function buildGraphFromCanvas(
   nodes: Array<{
     id: string
     position?: { x: number; y: number }
-    data: { nodeType: string; config: Record<string, unknown> }
+    data: {
+      nodeType: string
+      config: Record<string, unknown>
+      placement?: NodePlacement | null
+    }
   }>,
   edges: Array<{
     source: string
@@ -91,8 +106,18 @@ export function buildGraphFromCanvas(
   for (const n of nodes) {
     if (n.position) positions[n.id] = n.position
   }
+  const hasPlacement = nodes.some((n) => {
+    const p = n.data.placement
+    if (!p) return false
+    if (p.mode && p.mode !== 'auto') return true
+    if (p.require_gpu) return true
+    if (p.worker || p.pool) return true
+    if (Array.isArray(p.tags) && p.tags.length > 0) return true
+    if (p.min_vram_mib != null) return true
+    return false
+  })
   return {
-    schema_version: '1.1',
+    schema_version: hasPlacement ? '1.2' : '1.1',
     metadata: {
       name,
       seed,
@@ -107,6 +132,7 @@ export function buildGraphFromCanvas(
       label: null,
       capability_metadata: null,
       event_trigger: null,
+      placement: n.data.placement ?? null,
     })),
     edges: edges.map((e) => ({
       src_id: e.source,

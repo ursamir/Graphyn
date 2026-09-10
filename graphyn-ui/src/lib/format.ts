@@ -224,7 +224,19 @@ export function formatCleanupToast(res: unknown): string {
   const skipped = tooNew + latest + running
   const days = Number(o.older_than_days ?? 7)
   const daysLabel = Number.isFinite(days) ? String(days) : '7'
+  const reconcile =
+    o.reconcile && typeof o.reconcile === 'object'
+      ? (o.reconcile as Record<string, unknown>)
+      : null
+  const reconciled = Number(reconcile?.reconciled ?? 0) || 0
+  const reconcileSuffix =
+    reconciled > 0
+      ? ` · reconciled ${reconciled} abandoned ${reconciled === 1 ? 'run' : 'runs'}`
+      : ''
   if (runs === 0 && cache === 0 && artifacts === 0) {
+    if (reconciled > 0) {
+      return `Reconciled ${reconciled} abandoned ${reconciled === 1 ? 'run' : 'runs'} (nothing deleted)`
+    }
     if (skipped > 0) {
       const kept = `${skipped} ${skipped === 1 ? 'run' : 'runs'} kept`
       if (tooNew > 0) {
@@ -238,7 +250,7 @@ export function formatCleanupToast(res: unknown): string {
   if (runs) parts.push(`${runs} ${runs === 1 ? 'run' : 'runs'}`)
   if (cache) parts.push(`${cache} cache ${cache === 1 ? 'entry' : 'entries'}`)
   if (artifacts) parts.push(`${artifacts} ${artifacts === 1 ? 'artifact' : 'artifacts'}`)
-  return parts.length ? `Deleted ${parts.join(', ')}` : 'Nothing to delete'
+  return parts.length ? `Deleted ${parts.join(', ')}${reconcileSuffix}` : 'Nothing to delete'
 }
 
 export function formatValidationErrors(errors: unknown): string {

@@ -66,6 +66,8 @@ export default function SystemView() {
   const [deleteArtifacts, setDeleteArtifacts] = React.useState(false)
   const [cleanupArmed, setCleanupArmed] = React.useState(false)
   const [cleanupConfirmText, setCleanupConfirmText] = React.useState("")
+  const [reconcileAbandoned, setReconcileAbandoned] = React.useState(true)
+  const [reconciling, setReconciling] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [auditEvents, setAuditEvents] = React.useState<
@@ -123,6 +125,18 @@ export default function SystemView() {
   }, [refresh])
 
   const metricsLine = formatMetricsSummary(metrics)
+  const readyObj = ready && typeof ready === 'object' ? (ready as Record<string, unknown>) : null
+  const backendMode = String(readyObj?.backend_mode ?? '').trim()
+  const backendId = String(readyObj?.backend ?? '').trim()
+  const workerCount = Number(readyObj?.worker_count ?? NaN)
+  const backendLabel =
+    backendMode === 'distributed'
+      ? 'Distributed'
+      : backendMode === 'local'
+        ? 'Local'
+        : backendId
+          ? backendId
+          : ''
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
@@ -137,6 +151,65 @@ export default function SystemView() {
       />
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
       {loading && <LoadingBlock label="Loading system status…" />}
+
+      {(backendLabel || Number.isFinite(workerCount)) && (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Backend</span>
+          {backendLabel ? (
+            <span
+              className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[12px] font-medium text-ink-800"
+              title={backendId || undefined}
+            >
+              {backendLabel}
+              {backendId && backendId !== backendMode ? (
+                <span className="ml-1 font-mono text-[10px] text-ink-500">{backendId}</span>
+              ) : null}
+            </span>
+          ) : null}
+          {Number.isFinite(workerCount) ? (
+            <button
+              type="button"
+              className="rounded-full border border-ink-200 bg-white px-2.5 py-0.5 text-[12px] text-ink-700 hover:border-accent-300 hover:text-accent-800"
+              onClick={() => {
+                setView('workers')
+                window.history.replaceState(null, '', '#/workers')
+              }}
+              title="Open Workers"
+            >
+              {workerCount} {workerCount === 1 ? 'worker' : 'workers'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn-secondary ml-auto"
+            disabled={reconciling}
+            onClick={() => {
+              setReconciling(true)
+              void apiJson('/system/cleanup', {
+                method: 'POST',
+                body: JSON.stringify({
+                  older_than_days: 36500,
+                  delete_cache: false,
+                  delete_artifacts: false,
+                  keep_latest: true,
+                  reconcile_abandoned: true,
+                  stale_after_hours: 1,
+                }),
+              })
+                .then((res) => {
+                  pushToast(formatCleanupToast(res), 'success')
+                  void refresh()
+                })
+                .catch((err) =>
+                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                )
+                .finally(() => setReconciling(false))
+            }}
+          >
+            {reconciling ? 'Reconciling…' : 'Reconcile abandoned runs'}
+          </button>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         {[
@@ -353,6 +426,18 @@ export default function SystemView() {
           />
           Delete workspace artifacts
         </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={reconcileAbandoned}
+            onChange={(e) => {
+              setReconcileAbandoned(e.target.checked)
+              setCleanupArmed(false)
+              setCleanupConfirmText('')
+            }}
+          />
+          Reconcile abandoned RUNNING/QUEUED runs first
+        </label>
         {!cleanupArmed ? (
           <button
             type="button"
@@ -406,6 +491,8 @@ export default function SystemView() {
                       delete_cache: deleteCache,
                       delete_artifacts: deleteArtifacts,
                       keep_latest: true,
+                      reconcile_abandoned: reconcileAbandoned,
+                      stale_after_hours: 1,
                     }),
                   })
                     .then((res) => {

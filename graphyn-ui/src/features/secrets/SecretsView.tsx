@@ -69,6 +69,10 @@ export default function SecretsView() {
           </button>
         }
       />
+      <p className="mb-4 max-w-xl rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
+        Mode B: workers resolve secret <span className="font-medium text-ink-800">names</span> from the
+        control plane — do not embed values in Graph IR.
+      </p>
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
       <form onSubmit={onSubmit} className="mb-6 max-w-xl rounded-2xl border border-ink-200 bg-white p-4">
         <label className="block text-sm text-ink-600">

@@ -70,6 +70,9 @@ function humanizeDataError(err: unknown): { message: string; detail: string; inv
   return { message: detail, detail, invalidPath: false }
 }
 
+const DOCS_GETTING_STARTED_MODE_B =
+  'https://github.com/ursamir/Graphyn/blob/main/docs/GETTING_STARTED.md#mode-b--multi-machine-control-plane--workers'
+
 export default function DataView() {
   const pushToast = useAppStore((s) => s.pushToast)
   const openProjects = useAppStore((s) => s.openProjects)
@@ -451,6 +454,18 @@ export default function DataView() {
           </div>
         }
       />
+      <p className="rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
+        Mode B: workers need shared storage (or copied inputs) for these paths —{' '}
+        <a
+          href={DOCS_GETTING_STARTED_MODE_B}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-accent-700 hover:underline"
+        >
+          Getting Started · Mode B
+        </a>
+        .
+      </p>
       {error && <ErrorBanner message={error} title={errorDetail ?? undefined} onRetry={() => void loadSources()} />}
 
       <div className="flex flex-wrap gap-2">

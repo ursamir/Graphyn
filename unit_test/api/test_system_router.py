@@ -44,6 +44,19 @@ class TestHealthCheck:
         assert dt.tzinfo is not None
 
 
+class TestReadiness:
+    def test_readiness_includes_backend_mode_and_worker_count(self, api_client):
+        """GET /api/v1/system/readiness exposes backend_mode + worker_count for System UI."""
+        resp = api_client.get("/api/v1/system/readiness")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body.get("status") == "ready"
+        assert "backend" in body
+        assert body.get("backend_mode") in {"local", "distributed"}
+        assert isinstance(body.get("worker_count"), int)
+        assert body["worker_count"] >= 0
+
+
 import json
 import os
 import time
