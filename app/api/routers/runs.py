@@ -79,6 +79,7 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
         read_metrics_json,
         slug_from_artifacts_posix,
     )
+    from app.core.run_project import infer_project_from_graph_file, normalize_project_name, normalize_version_tag
 
     out = dict(meta)
     run_id = str(out.get("run_id") or run_path.name)
@@ -93,6 +94,17 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
                 out["graph_name"] = str(gmeta["name"]).strip()
         except Exception:
             pass
+    # Soft upgrade: infer project / version_tag from graph.json when meta lacks them.
+    if not normalize_project_name(out.get("project")):
+        inferred = infer_project_from_graph_file(run_path)
+        if inferred.get("project"):
+            out["project"] = inferred["project"]
+        if inferred.get("version_tag") and not normalize_version_tag(out.get("version_tag")):
+            out["version_tag"] = inferred["version_tag"]
+    elif not normalize_version_tag(out.get("version_tag")):
+        inferred = infer_project_from_graph_file(run_path)
+        if inferred.get("version_tag"):
+            out["version_tag"] = inferred["version_tag"]
     slug = None
     artifacts = out.get("artifacts_dir")
     if isinstance(artifacts, str) and artifacts.strip():
@@ -143,14 +155,16 @@ def list_runs(
     offset: int = Query(0, ge=0, description="Number of runs to skip"),
     project: str | None = Query(
         None,
-        description="Optional soft filter: match graph_name / meta.project containing this string (Phase 1 — not authoritative project_id scoping)",
+        description="Hard filter: only runs whose meta.project (or inferred graph stamp) equals this name",
     ),
 ):
     """Return a summary list of pipeline runs, newest first, with pagination.
 
     Use limit/offset for large run histories. Default: first 50 runs.
-    When ``project`` is set, soft-filter enriched metas (best-effort Phase 1).
+    When ``project`` is set, return only runs scoped to that project (Phase 2).
     """
+    from app.core.run_project import normalize_project_name, project_matches
+
     runs_root = _get_runs_root()
     if not runs_root.exists():
         return []
@@ -167,12 +181,12 @@ def list_runs(
     except OSError:
         return []
 
-    needle = (project or "").strip().lower()
+    needle = normalize_project_name(project)
     if needle:
-        # Wider scan then filter — still best-effort, not true project_id scoping.
-        scan = entries[: max(offset + limit * 5, 200)]
+        # Scan newest-first until we fill the requested page of matches.
         matched = []
-        for entry in scan:
+        skipped = 0
+        for entry in entries:
             meta_path = entry / "meta.json"
             if not meta_path.exists():
                 continue
@@ -182,13 +196,15 @@ def list_runs(
                 continue
             if not isinstance(meta, dict):
                 continue
-            enriched = _enrich_run_summary(meta, entry)
-            blob = " ".join(
-                str(enriched.get(k) or "") for k in ("graph_name", "project")
-            ).lower()
-            if needle in blob:
-                matched.append(enriched)
-        return matched[offset : offset + limit]
+            if not project_matches(meta, needle, entry):
+                continue
+            if skipped < offset:
+                skipped += 1
+                continue
+            matched.append(_enrich_run_summary(meta, entry))
+            if len(matched) >= limit:
+                break
+        return matched
 
     page = entries[offset : offset + limit]
     runs = []

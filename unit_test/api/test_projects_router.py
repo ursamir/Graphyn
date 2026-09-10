@@ -134,3 +134,48 @@ class TestGetTaxonomy:
             resp = api_client.get("/api/v1/projects/my-project/taxonomy")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
+
+
+class TestProjectLinks:
+    def test_links_roundtrip(self, api_client, tmp_path, monkeypatch):
+        """GET/POST/DELETE /projects/{name}/links persists under the project dir."""
+        monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
+        monkeypatch.setenv("GRAPHYN_API_TOKEN", "")
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+        from app.domain.project_manager import ProjectManager
+
+        pm = ProjectManager()
+        # Rebind router singleton
+        import app.api.routers.projects as projects_router
+
+        projects_router._pm = pm
+        pm.create("demo-proj")
+
+        get0 = api_client.get("/api/v1/projects/demo-proj/links")
+        assert get0.status_code == 200
+        assert get0.json() == {"inputs": [], "outputs": []}
+
+        post = api_client.post(
+            "/api/v1/projects/demo-proj/links",
+            json={"inputs": ["speech-cmds"], "outputs": [{"version": "v1"}]},
+        )
+        assert post.status_code == 200
+        body = post.json()
+        assert body["inputs"] == ["speech-cmds"]
+        assert body["outputs"] == [{"version": "v1"}]
+
+        links_file = tmp_path / "datasets" / "output" / "demo-proj" / "links.json"
+        assert links_file.is_file()
+
+        get1 = api_client.get("/api/v1/projects/demo-proj/links")
+        assert get1.status_code == 200
+        assert get1.json()["inputs"] == ["speech-cmds"]
+
+        delete = api_client.request(
+            "DELETE",
+            "/api/v1/projects/demo-proj/links",
+            json={"inputs": ["speech-cmds"]},
+        )
+        assert delete.status_code == 200
+        assert delete.json()["inputs"] == []
+        assert delete.json()["outputs"] == [{"version": "v1"}]

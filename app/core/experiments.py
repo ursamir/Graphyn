@@ -157,11 +157,21 @@ def _run_row_from_dir(run_path: Path) -> tuple[str, dict[str, Any]] | None:
     if isinstance(graph_name, str):
         graph_name = graph_name.strip() or None
 
+    from app.core.run_project import resolve_run_project, normalize_version_tag
+
+    project = resolve_run_project(meta, run_path)
+    version_tag = normalize_version_tag(meta.get("version_tag"))
+    if not version_tag:
+        gmeta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
+        version_tag = normalize_version_tag(gmeta.get("version_tag")) if gmeta else None
+
     row = {
         "run_id": run_id,
         "status": str(meta.get("status") or (exp or {}).get("status") or "unknown"),
         "created_at": created_at,
         "graph_name": graph_name,
+        "project": project,
+        "version_tag": version_tag,
         "parameters": parameters,
         "metrics": metrics,
         "tags": tags,
@@ -201,10 +211,21 @@ def collect_run_rows(runs_root: Path | None = None) -> list[tuple[str, dict[str,
     return rows
 
 
-def list_experiments(runs_root: Path | None = None) -> list[dict[str, Any]]:
-    """Return ``[{experiment_name, runs}, ...]`` sorted by name (default first)."""
+def list_experiments(
+    runs_root: Path | None = None,
+    project: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return ``[{experiment_name, runs}, ...]`` sorted by name (default first).
+
+    When ``project`` is set, only include runs whose resolved project matches.
+    """
+    from app.core.run_project import normalize_project_name
+
+    needle = normalize_project_name(project)
     buckets: dict[str, list[dict[str, Any]]] = {}
     for name, row in collect_run_rows(runs_root):
+        if needle and row.get("project") != needle:
+            continue
         buckets.setdefault(name, []).append(row)
 
     def _sort_key(name: str) -> tuple[int, str]:
@@ -222,9 +243,13 @@ def list_experiments(runs_root: Path | None = None) -> list[dict[str, Any]]:
     return out
 
 
-def get_experiment(name: str, runs_root: Path | None = None) -> dict[str, Any] | None:
+def get_experiment(
+    name: str,
+    runs_root: Path | None = None,
+    project: str | None = None,
+) -> dict[str, Any] | None:
     target = (name or "").strip() or "default"
-    for block in list_experiments(runs_root):
+    for block in list_experiments(runs_root, project=project):
         if block["experiment_name"] == target:
             return block
     return None

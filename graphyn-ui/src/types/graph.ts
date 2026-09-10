@@ -34,6 +34,8 @@ export interface GraphIR {
     description: string
     created_at: string | null
     tags: string[]
+    project?: string | null
+    version_tag?: string | null
   }
   nodes: GraphNode[]
   edges: GraphEdge[]

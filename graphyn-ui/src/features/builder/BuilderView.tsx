@@ -34,6 +34,7 @@ import {
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
+import { stampProjectOnGraph } from '../../lib/projectStamp'
 import { ConfirmButton, EmptyState, ErrorBanner, StatusBadge } from '../../components/ui'
 import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
 import {
@@ -148,6 +149,7 @@ function BuilderInner() {
   const openData = useAppStore((s) => s.openData)
   const openProjects = useAppStore((s) => s.openProjects)
   const builderDataset = useAppStore((s) => s.builderDataset)
+  const activeProject = useAppStore((s) => s.activeProject)
   const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
   const setGetCanvasGraph = useAppStore((s) => s.setGetCanvasGraph)
 
@@ -490,6 +492,13 @@ function BuilderInner() {
     addLog('Run cancelled by user', 'warning')
   }
 
+  const graphForRun = React.useCallback(() => {
+    const base = currentGraph()
+    const project = (activeProject || builderDataset?.project || '').trim()
+    if (!project) return base
+    return stampProjectOnGraph(base, project, builderDataset?.version)
+  }, [currentGraph, activeProject, builderDataset])
+
   const handleRun = async () => {
     clearLogs()
     setRunHadErrors(false)
@@ -501,7 +510,7 @@ function BuilderInner() {
     const controller = new AbortController()
     abortRef.current = controller
     try {
-      const graph = currentGraph()
+      const graph = graphForRun()
       const res = await apiFetch('/pipelines/run', {
         method: 'POST',
         body: JSON.stringify(graph),
@@ -619,7 +628,7 @@ function BuilderInner() {
   const handleRunAsync = async () => {
     setActionError(null)
     try {
-      const graph = currentGraph()
+      const graph = graphForRun()
       const res = await apiJson<{ run_id: string }>('/pipelines/run-async', {
         method: 'POST',
         body: JSON.stringify(graph),

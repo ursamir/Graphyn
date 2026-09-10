@@ -1,6 +1,6 @@
 # Graphyn Console — Project-first information architecture (Phase 1)
 
-> **Status:** Phase 1 UI shell (2026-09-10). Locked product Decision B: do **not** invent a second Project type — evolve current Projects into the full workspace. Dataset versions/snapshots remain a facet of the same project.
+> **Status:** Phase 2 project scoping shipped (2026-09-10). Locked product Decision B: do **not** invent a second Project type — evolve current Projects into the full workspace. Dataset versions/snapshots remain a facet of the same project.
 >
 > **Supersedes for IA:** [UI_USER_REQUIREMENTS.md](./UI_USER_REQUIREMENTS.md) sections 0-1 sidebar / Observe peer layout and the "Projects = dataset workspace only" framing. **P0/P1 controls** (Trace prefill, Runs filters, Compare honesty, Mode A/B chips, etc.) remain valid **inside** this new shell.
 >
@@ -41,8 +41,8 @@ Header shows an **active project chip** (switch / clear). Sidebar prefers:
 | Overview | `#/projects?project={name}` | Project home |
 | Linked data | `#/projects?project={name}&tab=versions` | Versions / snapshots facets |
 | Builder | `#/builder` | Pipelines for this workspace |
-| Runs | `#/runs` | Client-filtered toward project when metadata allows |
-| Experiments | `#/experiments` | Compare / track within workspace |
+| Runs | `#/runs` | `GET /runs?project=` hard filter when active project set |
+| Experiments | `#/experiments` | `GET /experiments?project=` when active project set |
 
 Global **Build** (Templates, Proposals), **Library** (Data), **Deploy**, **Admin** remain available below or beside the project strip.
 
@@ -77,7 +77,7 @@ Selected project shows workspace cards:
 
 - Linked / versions data (existing tabs condensed)
 - Pipelines / Open Builder
-- Recent runs (client-side filter by `graph_name` / project stamp — see limitations)
+- Recent runs (`GET /runs?project=` — Phase 2 hard filter)
 - Experiments entry
 - Empty CTAs: Link data (Data), Open Templates, Open Builder
 
@@ -95,30 +95,41 @@ Before **Open in Builder**: if no `activeProject`, prompt Create/select project 
 
 ---
 
-## 5. Phase 1 vs Phase 2 (backend scoping)
+## 5. Phase 2 shipped (backend scoping)
 
-| | Phase 1 (this ship) | Phase 2 (later) |
-|---|---|---|
-| Active project | Client store + localStorage + URL | Same + server session optional |
-| Runs / experiments filter | Client-side by graph_name / stamps when present | True project_id on journals + GET /runs?project= hard filter |
-| Graph stamping | Config/metadata project / version_tag on dataset nodes | First-class run-project FK |
-| DB migration | None required | Add project scoping columns / indexes as needed |
-| Observe APIs | Unchanged contracts | Scoped list endpoints, RBAC per project |
+| Capability | Behavior |
+|---|---|
+| Persist project on runs | Builder / Templates→Builder stamp `metadata.project` (+ optional `version_tag`); `POST /pipelines/run[-async]` writes `project` / `version_tag` into run `meta.json` (and orchestrator re-stamps from graph / node configs). |
+| Hard `GET /runs?project=` | Exact match on `meta.project`, with soft upgrade: if missing, infer from journal `graph.json` metadata / dataset node `config.project`. |
+| Experiments | `GET /experiments?project=` filters run rows by the same resolved project field. |
+| Project-linked datasets | `GET/POST/DELETE /projects/{name}/links` persists `{ inputs: string[], outputs?: {version}[] }` in `links.json` (mirrored on `project.json`). Project home: Link from Data picker + unlink; Browse files still opens Data with project context. |
+| Templates → project → Builder → Run | Active project required (Phase 1 gate); stamp on graph; run writes `meta.project`; project home recent runs uses `GET /runs?project=`. |
 
-**Limitation:** Until Phase 2, recent-runs filtering is best-effort (graph_name / stamps only).
+Disk layout unchanged: projects live under `workspace/datasets/output/{project}/`.
 
 ---
 
-## 6. Success criteria (Phase 1)
+## 6. Success criteria
+
+### Phase 1 (done)
 - doc shipped
 - Working shell: project chip, sidebar, home cards, Templates gate, declutter
 - build must pass
 - no charts work this phase
 
+### Phase 2 (this ship)
+- `GET /runs?project=` hard filter + unit tests
+- links API + unit tests
+- experiments scoped via `?project=`
+- `graphyn-ui` build passes
+- no P2 charts / device flash / RBAC
+
 ---
 
-## 7. Deferred
+## 7. Phase 3 remaining / deferred
 
+- **RBAC per project** (authz on Observe / links / Builder run)
+- Optional server-side active-project session
 - charts / device flash
-- DB project_id work
-- second Workspace type
+- DB-backed `project_id` indexes (filesystem journals remain source of truth for now)
+- second Workspace type (Decision B still locks one Project type)

@@ -100,6 +100,7 @@ export default function ExperimentsView() {
   const openTrace = useAppStore((s) => s.openTrace)
   const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
+  const activeProject = useAppStore((s) => s.activeProject)
 
   const [blocks, setBlocks] = React.useState<ExperimentBlock[] | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -115,7 +116,9 @@ export default function ExperimentsView() {
     setError(null)
     setLoading(true)
     try {
-      const data = await apiJson<ExperimentBlock[]>('/experiments')
+      const query: Record<string, string> = {}
+      if (activeProject) query.project = activeProject
+      const data = await apiJson<ExperimentBlock[]>('/experiments', { query })
       const list = Array.isArray(data) ? data : []
       setBlocks(list)
       setSelectedExp((prev) => {
@@ -129,7 +132,7 @@ export default function ExperimentsView() {
     } finally {
       setLoading(false)
     }
-  }, [pushToast])
+  }, [pushToast, activeProject])
 
   React.useEffect(() => {
     void refresh()

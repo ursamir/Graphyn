@@ -3,7 +3,7 @@ import { RefreshCw, Copy, Pencil } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { useAppStore } from '../../store/appStore'
-import { stampProjectOnGraph, runMatchesProject } from '../../lib/projectStamp'
+import { stampProjectOnGraph } from '../../lib/projectStamp'
 import {
   ConfirmButton,
   CollapsibleJson,
@@ -100,7 +100,10 @@ export default function ProjectsView() {
   const [diffB, setDiffB] = React.useState('')
   const [diffResult, setDiffResult] = React.useState<unknown>(null)
   const [lineage, setLineage] = React.useState<unknown>(null)
-  const [recentRuns, setRecentRuns] = React.useState<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string }>>([])
+  const [recentRuns, setRecentRuns] = React.useState<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>([])
+  const [links, setLinks] = React.useState<{ inputs: string[]; outputs: Array<{ version: string }> }>({ inputs: [], outputs: [] })
+  const [inputLabels, setInputLabels] = React.useState<string[]>([])
+  const [linkPick, setLinkPick] = React.useState('')
 
   const load = React.useCallback(async () => {
     setError(null)
@@ -152,11 +155,26 @@ export default function ProjectsView() {
       setSnapshots(Array.isArray(snaps) ? snaps : [])
       setLineage(lin)
       try {
-        const runs = await apiJson<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>('/runs', { query: { limit: 50, offset: 0 } })
-        const matched = (Array.isArray(runs) ? runs : []).filter((r) => runMatchesProject(r, name)).slice(0, 8)
-        setRecentRuns(matched)
+        const [runs, linkData, inputs] = await Promise.all([
+          apiJson<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>('/runs', {
+            query: { limit: 8, offset: 0, project: name },
+          }),
+          apiJson<{ inputs?: string[]; outputs?: Array<{ version: string }> }>(`/projects/${encodeURIComponent(name)}/links`).catch(() => ({ inputs: [], outputs: [] })),
+          apiJson<Array<{ label?: string } | string>>('/data/inputs').catch(() => []),
+        ])
+        setRecentRuns(Array.isArray(runs) ? runs.slice(0, 8) : [])
+        setLinks({
+          inputs: Array.isArray(linkData?.inputs) ? linkData.inputs : [],
+          outputs: Array.isArray(linkData?.outputs) ? linkData.outputs : [],
+        })
+        const labels = (Array.isArray(inputs) ? inputs : [])
+          .map((x) => (typeof x === 'string' ? x : String(x?.label ?? '')))
+          .filter(Boolean)
+        setInputLabels(labels)
+        setLinkPick(labels.find((l) => !(linkData?.inputs || []).includes(l)) || labels[0] || '')
       } catch {
         setRecentRuns([])
+        setLinks({ inputs: [], outputs: [] })
       }
       const first =
         typeof vers[0] === 'string'
@@ -460,6 +478,34 @@ export default function ProjectsView() {
     }
   }
 
+  const linkInput = async () => {
+    if (!selected || !linkPick.trim()) return
+    try {
+      const next = await apiJson<{ inputs: string[]; outputs: Array<{ version: string }> }>(
+        `/projects/${encodeURIComponent(selected)}/links`,
+        { method: 'POST', body: JSON.stringify({ inputs: [linkPick.trim()] }) },
+      )
+      setLinks({ inputs: next.inputs ?? [], outputs: next.outputs ?? [] })
+      pushToast(`Linked input "${linkPick.trim()}"`, 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const unlinkInput = async (label: string) => {
+    if (!selected) return
+    try {
+      const next = await apiJson<{ inputs: string[]; outputs: Array<{ version: string }> }>(
+        `/projects/${encodeURIComponent(selected)}/links`,
+        { method: 'DELETE', body: JSON.stringify({ inputs: [label] }) },
+      )
+      setLinks({ inputs: next.inputs ?? [], outputs: next.outputs ?? [] })
+      pushToast(`Unlinked "${label}"`, 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
   const versionOptions = versions.map((v) =>
     typeof v === 'string' ? v : String((v as { version?: string }).version ?? JSON.stringify(v)),
   )
@@ -610,23 +656,51 @@ export default function ProjectsView() {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
+              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm sm:col-span-2 xl:col-span-2">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Linked data</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">
-                  {versionOptions.length} version{versionOptions.length === 1 ? '' : 's'}
+                  {links.inputs.length} input{links.inputs.length === 1 ? '' : 's'} · {versionOptions.length} version{versionOptions.length === 1 ? '' : 's'}
                 </div>
                 <p className="mt-1 text-xs text-ink-500">
-                  {versionOptions.length === 0
-                    ? 'Empty until a pipeline/export writes output/{project}.'
-                    : `Focus: ${versionFocus || versionOptions[0]}`}
+                  Link global Data input labels here. Browse files still opens Data with this project context.
                 </p>
-                <button
-                  type="button"
-                  className="btn-secondary mt-2"
-                  onClick={() => openData({ mode: 'inputs', project: selected })}
-                >
-                  Link data
-                </button>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <select
+                    className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm"
+                    value={linkPick}
+                    onChange={(e) => setLinkPick(e.target.value)}
+                    aria-label="Link input label from Data"
+                  >
+                    <option value="">Select input label…</option>
+                    {inputLabels.map((label) => (
+                      <option key={label} value={label} disabled={links.inputs.includes(label)}>
+                        {label}{links.inputs.includes(label) ? ' (linked)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn-secondary" onClick={() => void linkInput()} disabled={!linkPick}>
+                    Link from Data
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => openData({ mode: 'outputs', project: selected, version: versionFocus || undefined })}
+                  >
+                    Browse files
+                  </button>
+                </div>
+                {links.inputs.length > 0 && (
+                  <ul className="mt-2 flex flex-wrap gap-1.5">
+                    {links.inputs.map((label) => (
+                      <li key={label} className="inline-flex items-center gap-1 rounded-full border border-ink-200 bg-ink-50 px-2 py-0.5 text-xs">
+                        {label}
+                        <button type="button" className="text-ink-400 hover:text-danger-600" onClick={() => void unlinkInput(label)} aria-label={`Unlink ${label}`}>
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Pipelines</div>
@@ -642,7 +716,7 @@ export default function ProjectsView() {
                   {recentRuns.length} matched
                 </div>
                 <p className="mt-1 text-xs text-ink-500">
-                  Phase 1 client filter by graph_name / stamps — not server project_id yet.
+                  Via GET /runs?project= (meta.project / inferred graph stamp).
                 </p>
                 {recentRuns.length === 0 ? (
                   <button

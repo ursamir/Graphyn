@@ -299,3 +299,79 @@ class TestGetRunGraph:
             resp = api_client.get("/api/v1/runs/missing/graph")
         assert resp.status_code == 404
 
+
+class TestListRunsProjectFilter:
+    def test_hard_project_filter_matches_meta(self, api_client, tmp_path, monkeypatch):
+        """GET /runs?project= returns only runs with matching meta.project."""
+        monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
+        monkeypatch.setenv("GRAPHYN_API_TOKEN", "")
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+        for rid, project in (("run-a1", "alpha"), ("run-b1", "beta"), ("run-a2", "alpha")):
+            d = runs_dir / rid
+            d.mkdir()
+            (d / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": rid,
+                        "status": "completed",
+                        "project": project,
+                        "graph_name": f"{project}-pipeline",
+                    }
+                )
+            )
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.get("/api/v1/runs", params={"project": "alpha", "limit": 50})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 2
+        assert {r["run_id"] for r in data} == {"run-a1", "run-a2"}
+        assert all(r.get("project") == "alpha" for r in data)
+
+    def test_hard_project_filter_infers_from_graph_metadata(self, api_client, tmp_path, monkeypatch):
+        """Missing meta.project is soft-upgraded from graph.json metadata.project."""
+        monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
+        monkeypatch.setenv("GRAPHYN_API_TOKEN", "")
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+        d = runs_dir / "run-infer"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps({"run_id": "run-infer", "status": "completed", "graph_name": "demo"})
+        )
+        (d / "graph.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {"name": "demo", "project": "gamma", "seed": 1},
+                    "nodes": [],
+                    "edges": [],
+                }
+            )
+        )
+        other = runs_dir / "run-other"
+        other.mkdir()
+        (other / "meta.json").write_text(
+            json.dumps({"run_id": "run-other", "status": "completed", "project": "delta"})
+        )
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.get("/api/v1/runs", params={"project": "gamma"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["run_id"] == "run-infer"
+        assert data[0]["project"] == "gamma"
+
+    def test_project_filter_excludes_unrelated(self, api_client, tmp_path, monkeypatch):
+        monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
+        monkeypatch.setenv("GRAPHYN_API_TOKEN", "")
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+        d = runs_dir / "run-x"
+        d.mkdir()
+        (d / "meta.json").write_text(
+            json.dumps({"run_id": "run-x", "status": "completed", "project": "only-me"})
+        )
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.get("/api/v1/runs", params={"project": "nobody"})
+        assert resp.status_code == 200
+        assert resp.json() == []

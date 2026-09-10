@@ -176,7 +176,7 @@ class ProjectManager:
         dst.mkdir(parents=True, exist_ok=True)
 
         # Copy metadata files only
-        for fname in ("taxonomy.json", "contract.json", "spec.md"):
+        for fname in ("taxonomy.json", "contract.json", "spec.md", "links.json"):
             src_file = src / fname
             if src_file.exists():
                 shutil.copy2(str(src_file), str(dst / fname))
@@ -213,6 +213,120 @@ class ProjectManager:
                             proj_file, exc,
                         )
         return result
+
+    # ------------------------------------------------------------------ #
+    # Linked datasets (Phase 2)                                            #
+    # ------------------------------------------------------------------ #
+
+    def _links_path(self, name: str) -> Path:
+        return self._project_dir(name) / "links.json"
+
+    def get_links(self, name: str) -> dict:
+        """Return ``{inputs: string[], outputs: {version}[]}`` for a project."""
+        self._require_project(name)
+        data = self._read_json(self._links_path(name), {})
+        if not isinstance(data, dict):
+            data = {}
+        inputs = data.get("inputs")
+        outputs = data.get("outputs")
+        if not isinstance(inputs, list):
+            inputs = []
+        if not isinstance(outputs, list):
+            outputs = []
+        clean_inputs: list[str] = []
+        for item in inputs:
+            if isinstance(item, str) and item.strip() and item.strip() not in clean_inputs:
+                clean_inputs.append(item.strip())
+        clean_outputs: list[dict] = []
+        seen_versions: set[str] = set()
+        for item in outputs:
+            if isinstance(item, str) and item.strip():
+                ver = item.strip()
+                payload = {"version": ver}
+            elif isinstance(item, dict):
+                ver = str(item.get("version") or "").strip()
+                if not ver:
+                    continue
+                payload = {"version": ver}
+            else:
+                continue
+            if ver in seen_versions:
+                continue
+            seen_versions.add(ver)
+            clean_outputs.append(payload)
+        return {"inputs": clean_inputs, "outputs": clean_outputs}
+
+    def add_links(
+        self,
+        name: str,
+        inputs: list[str] | None = None,
+        outputs: list[dict] | None = None,
+    ) -> dict:
+        """Merge input labels and/or output version refs into links.json."""
+        self._require_project(name)
+        current = self.get_links(name)
+        if inputs:
+            for label in inputs:
+                if not isinstance(label, str) or not label.strip():
+                    continue
+                self._validate_name(label.strip())
+                if label.strip() not in current["inputs"]:
+                    current["inputs"].append(label.strip())
+        if outputs:
+            seen = {o["version"] for o in current["outputs"]}
+            for item in outputs:
+                if isinstance(item, str):
+                    ver = item.strip()
+                elif isinstance(item, dict):
+                    ver = str(item.get("version") or "").strip()
+                else:
+                    continue
+                if not ver or ver in seen:
+                    continue
+                if not self._VERSION_RE.match(ver) and not self._SAFE_NAME_RE.match(ver):
+                    raise ValueError(f"Invalid output version ref {ver!r}")
+                current["outputs"].append({"version": ver})
+                seen.add(ver)
+        self._write_json(self._links_path(name), current)
+        # Also mirror into project.json for durability / discoverability
+        proj_file = self._project_dir(name) / "project.json"
+        meta = self._read_json(proj_file, {})
+        if isinstance(meta, dict):
+            meta["links"] = current
+            meta["updated_at"] = self._now()
+            self._write_json(proj_file, meta)
+        return current
+
+    def remove_links(
+        self,
+        name: str,
+        inputs: list[str] | None = None,
+        outputs: list[dict] | None = None,
+    ) -> dict:
+        """Remove specific input labels and/or output version refs."""
+        self._require_project(name)
+        current = self.get_links(name)
+        if inputs:
+            drop = {i.strip() for i in inputs if isinstance(i, str) and i.strip()}
+            current["inputs"] = [i for i in current["inputs"] if i not in drop]
+        if outputs:
+            drop_v: set[str] = set()
+            for item in outputs:
+                if isinstance(item, str) and item.strip():
+                    drop_v.add(item.strip())
+                elif isinstance(item, dict):
+                    ver = str(item.get("version") or "").strip()
+                    if ver:
+                        drop_v.add(ver)
+            current["outputs"] = [o for o in current["outputs"] if o["version"] not in drop_v]
+        self._write_json(self._links_path(name), current)
+        proj_file = self._project_dir(name) / "project.json"
+        meta = self._read_json(proj_file, {})
+        if isinstance(meta, dict):
+            meta["links"] = current
+            meta["updated_at"] = self._now()
+            self._write_json(proj_file, meta)
+        return current
 
     # ------------------------------------------------------------------ #
     # Taxonomy                                                             #

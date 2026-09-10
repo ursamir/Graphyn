@@ -114,6 +114,13 @@ class RestoreVersionBody(BaseModel):
     pass
 
 
+class ProjectLinksBody(BaseModel):
+    inputs: Optional[list[str]] = None
+    outputs: Optional[list[dict]] = None
+
+
+
+
 # ------------------------------------------------------------------ #
 # Project lifecycle                                                    #
 # ------------------------------------------------------------------ #
@@ -153,6 +160,29 @@ def set_project_status(name: str, body: SetStatusBody):
 def clone_project(name: str, body: CloneProjectBody):
     """POST /projects/{name}/clone — clone a project."""
     return _handle(_pm.clone, name, body.new_name)
+
+
+
+# ------------------------------------------------------------------ #
+# Linked datasets (Phase 2)                                            #
+# ------------------------------------------------------------------ #
+
+@router.get("/{name}/links")
+def get_project_links(name: str):
+    """GET /projects/{name}/links — linked input labels and output version refs."""
+    return _handle(_pm.get_links, name)
+
+
+@router.post("/{name}/links")
+def add_project_links(name: str, body: ProjectLinksBody):
+    """POST /projects/{name}/links — merge linked inputs/outputs."""
+    return _handle(_pm.add_links, name, body.inputs, body.outputs)
+
+
+@router.delete("/{name}/links")
+def remove_project_links(name: str, body: ProjectLinksBody = Body(...)):
+    """DELETE /projects/{name}/links — unlink specific inputs/outputs."""
+    return _handle(_pm.remove_links, name, body.inputs, body.outputs)
 
 
 # ------------------------------------------------------------------ #

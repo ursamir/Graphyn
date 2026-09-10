@@ -353,7 +353,7 @@ export default function RunsView() {
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
           title="Runs"
-          description={activeProject ? `Runs for project "${activeProject}" (Phase 1 client filter by graph_name / stamps). Trace and Artifacts open from a run detail.` : "Execution history, logs, and ops controls. Open a project to scope this list."}
+          description={activeProject ? `Runs for project "${activeProject}" (GET /runs?project= hard filter). Trace and Artifacts open from a run detail.` : "Execution history, logs, and ops controls. Open a project to scope this list."}
           actions={
             <button type="button" onClick={() => void load()} className="btn-secondary">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh

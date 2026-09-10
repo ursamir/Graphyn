@@ -41,27 +41,37 @@ export function stampProjectOnGraph(graph: GraphIR, project: string, version?: s
     }
     return changed ? { ...n, config: cfg } : n
   })
-  const meta = { ...(graph.metadata ?? {}), name: graph.metadata?.name || project }
+  const meta = {
+    ...(graph.metadata ?? {}),
+    name: graph.metadata?.name || project,
+    project,
+    ...(version ? { version_tag: version } : {}),
+  }
   return { ...graph, nodes, metadata: meta }
 }
 
-/** Best-effort Phase-1 match: graph_name / project fields mention the active project. */
+/** Phase-2 match: prefer exact meta.project / run.project; soft fallback for legacy runs. */
 export function runMatchesProject(
   run: { graph_name?: unknown; project?: unknown; meta?: unknown; [k: string]: unknown },
   project: string,
 ): boolean {
-  const p = project.trim().toLowerCase()
+  const p = project.trim()
   if (!p) return true
-  const graphName = String(run.graph_name ?? '').toLowerCase()
-  if (graphName && (graphName === p || graphName.includes(p))) return true
-  const direct = String(run.project ?? '').toLowerCase()
-  if (direct && (direct === p || direct.includes(p))) return true
+  const direct = String(run.project ?? '').trim()
+  if (direct && direct === p) return true
   const meta = run.meta && typeof run.meta === 'object' ? (run.meta as Record<string, unknown>) : null
   if (meta) {
-    const mp = String(meta.project ?? '').toLowerCase()
-    if (mp && (mp === p || mp.includes(p))) return true
+    const mp = String(meta.project ?? '').trim()
+    if (mp && mp === p) return true
+  }
+  // Soft legacy fallback (pre-Phase-2 journals without project stamp)
+  const pl = p.toLowerCase()
+  const graphName = String(run.graph_name ?? '').toLowerCase()
+  if (graphName && (graphName === pl || graphName.includes(pl))) return true
+  if (direct && direct.toLowerCase().includes(pl)) return true
+  if (meta) {
     const mg = String(meta.graph_name ?? '').toLowerCase()
-    if (mg && (mg === p || mg.includes(p))) return true
+    if (mg && (mg === pl || mg.includes(pl))) return true
   }
   return false
 }

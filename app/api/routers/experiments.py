@@ -16,11 +16,16 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 
 
 @router.get("", summary="List experiments with runs")
-def list_experiments_endpoint():
+def list_experiments_endpoint(
+    project: str | None = Query(
+        None,
+        description="Hard filter: only runs scoped to this project (meta.project / inferred)",
+    ),
+):
     """Aggregate experiments from run dirs (experiment.json or meta+metrics)."""
     from app.core.experiments import list_experiments
 
-    return list_experiments()
+    return list_experiments(project=project)
 
 
 @router.get("/compare", summary="Compare selected runs")

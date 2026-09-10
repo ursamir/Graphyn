@@ -105,6 +105,9 @@ class IRMetadata(BaseModel):
     description: str = ""
     created_at: str | None = None
     tags: tuple[str, ...] = ()
+    # Phase 2 project-first workspace stamp (optional; persisted onto run meta).
+    project: str | None = None
+    version_tag: str | None = None
 
     @field_validator("name")
     @classmethod

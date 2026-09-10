@@ -196,6 +196,24 @@ class SaveTemplateRequest(BaseModel):
 
 # ── Format detection helper ───────────────────────────────────────────────────
 
+
+def _stamp_graph_project(graph, payload: dict):
+    """Merge optional project / version_tag from payload into GraphIR metadata."""
+    from app.core.run_project import extract_project_fields_from_payload
+
+    fields = extract_project_fields_from_payload(payload, graph)
+    if not fields:
+        return graph, fields
+    meta = getattr(graph, "metadata", None)
+    if meta is None:
+        return graph, fields
+    updates = {k: v for k, v in fields.items() if v}
+    if not updates:
+        return graph, fields
+    new_meta = meta.model_copy(update=updates)
+    return graph.model_copy(update={"metadata": new_meta}), fields
+
+
 def _is_ir_payload(payload: dict) -> bool:
     """Detect IR JSON format by presence of schema_version field (Req 4.7.5)."""
     return "schema_version" in payload
@@ -281,6 +299,7 @@ def run_pipeline_stream(payload: dict = Body(...)):
     """
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
+        graph, _project_fields = _stamp_graph_project(graph, payload)
     except HTTPException:
         raise
     except Exception as exc:
@@ -339,6 +358,7 @@ def run_pipeline_async(payload: dict = Body(...)):
     """
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
+        graph, project_fields = _stamp_graph_project(graph, payload)
     except HTTPException:
         raise
     except Exception as exc:
@@ -349,6 +369,10 @@ def run_pipeline_async(payload: dict = Body(...)):
     # Create ONE RunManager before the thread starts so run_id is known immediately
     run_mgr = RunManager()
     run_id = run_mgr.run_id
+
+    # Persist project scoping immediately so GET /runs?project= can filter mid-flight
+    for key, value in project_fields.items():
+        run_mgr._write_meta_field(key, value)
 
     # Save YAML config for backward compat if YAML was submitted
     if not _is_ir_payload(payload):

@@ -167,6 +167,13 @@ async def run_pipeline_ir_async(
     graph_name = _graph_display_name(graph)
     if graph_name:
         run._write_meta_field("graph_name", graph_name)
+    try:
+        from app.core.run_project import extract_project_fields_from_graph
+
+        for key, value in extract_project_fields_from_graph(graph).items():
+            run._write_meta_field(key, value)
+    except Exception:
+        log.warning("Failed to stamp project fields on run %s", run.run_id, exc_info=True)
     register_active_run(run)
 
     pipeline_cfg = _ir_to_pipeline_config(graph)
