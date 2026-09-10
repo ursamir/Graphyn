@@ -15,6 +15,29 @@ interface Artifact {
   [key: string]: unknown
 }
 
+
+function artifactHumanTitle(a: Artifact | Record<string, unknown>): string {
+  const o = a as Record<string, unknown>
+  const meta = o.metadata && typeof o.metadata === 'object' && !Array.isArray(o.metadata)
+    ? (o.metadata as Record<string, unknown>)
+    : {}
+  for (const key of ['name', 'title', 'display_name', 'filename']) {
+    const v = o[key]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  for (const key of ['title', 'display_name', 'filename', 'name', 'model_name']) {
+    const v = meta[key]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  const path = typeof o.path === 'string' ? o.path : typeof meta.path === 'string' ? meta.path : ''
+  if (path.trim()) {
+    const base = path.trim().split(/[/\\]/).filter(Boolean).pop()
+    if (base) return base
+  }
+  const nodeType = String(o.node_type ?? '').trim()
+  return nodeType ? humanNodeLabel(nodeType) : 'Artifact'
+}
+
 function findCopyablePath(data: unknown, depth = 0): string | null {
   if (!data || typeof data !== 'object' || depth > 2) return null
   const o = data as Record<string, unknown>
@@ -203,7 +226,16 @@ export default function ArtifactsView() {
               value={runFilter}
               onChange={(e) => setRunFilter(e.target.value)}
               placeholder="run id"
-              className="mt-0.5 block rounded-lg border border-ink-200 px-2 py-1 text-sm"
+              title={
+                initialHash.runId && runFilter === initialHash.runId
+                  ? 'Prefilled from Runs — edit to broaden filter'
+                  : undefined
+              }
+              className={`mt-0.5 block rounded-lg border border-ink-200 px-2 py-1 text-sm ${
+                initialHash.runId && runFilter === initialHash.runId
+                  ? 'bg-ink-50 font-mono text-[11px] text-ink-500'
+                  : ''
+              }`}
             />
           </label>
           <label className="text-[11px] font-medium text-ink-500">
@@ -273,8 +305,8 @@ export default function ArtifactsView() {
                       selected === id ? 'border-accent-400 bg-accent-50' : 'border-ink-200 bg-white'
                     }`}
                   >
-                    <div className="font-medium">
-                      {a.node_type ? humanNodeLabel(String(a.node_type)) : 'Artifact'}
+                    <div className="font-medium" title={String(a.node_type ?? '') || undefined}>
+                      {artifactHumanTitle(a)}
                     </div>
                     <div className="text-[11px] text-ink-500">
                       {shortRunId(String(a.run_id ?? ''))} · {String(a.artifact_type ?? '—')}
@@ -315,7 +347,6 @@ export default function ArtifactsView() {
           <>
             {(() => {
               const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
-              const nodeType = String(rec.node_type ?? '').trim()
               const artifactType = String(rec.artifact_type ?? '').trim()
               const runId = String(rec.run_id ?? '').trim()
               const created = String(rec.created_at ?? rec.ts ?? '').trim()
@@ -323,7 +354,7 @@ export default function ArtifactsView() {
               return (
                 <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm space-y-1">
                   <div className="text-base font-semibold text-ink-900">
-                    {nodeType ? humanNodeLabel(nodeType) : 'Artifact'}
+                    {artifactHumanTitle(rec)}
                     {artifactType ? (
                       <span className="ml-2 text-sm font-normal text-ink-500">{artifactType}</span>
                     ) : null}

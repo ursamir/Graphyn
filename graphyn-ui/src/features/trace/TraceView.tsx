@@ -98,10 +98,15 @@ export default function TraceView() {
   const initial = parseTraceHash()
   const [artifactId, setArtifactId] = React.useState(initial.artifactId)
   const [runId, setRunId] = React.useState(initial.runId)
+  const [idsUnlocked, setIdsUnlocked] = React.useState(
+    () => !(initial.artifactId.trim() || initial.runId.trim()),
+  )
   const [trace, setTrace] = React.useState<TracePayload | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [selectedHop, setSelectedHop] = React.useState<number>(0)
+  const hasPrefill = Boolean(artifactId.trim() || runId.trim())
+  const showRawIdPaste = idsUnlocked || !hasPrefill
 
   const load = React.useCallback(
     async (aid?: string, rid?: string) => {
@@ -194,36 +199,56 @@ export default function TraceView() {
       />
 
       <div className="rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block text-sm">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-              Artifact ID
-            </span>
-            <input
-              className="field-control mt-0 w-full font-mono text-xs"
-              value={artifactId}
-              placeholder="artifact uuid / id"
-              onChange={(e) => setArtifactId(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void load()
-              }}
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-              Run ID
-            </span>
-            <input
-              className="field-control mt-0 w-full font-mono text-xs"
-              value={runId}
-              placeholder="run id"
-              onChange={(e) => setRunId(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void load()
-              }}
-            />
-          </label>
-        </div>
+        {hasPrefill && !showRawIdPaste ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-sm text-ink-700">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Context</span>
+            {runId.trim() ? (
+              <span className="rounded-full border border-ink-200 bg-white px-2 py-0.5 font-mono text-[11px] text-ink-600" title={runId}>
+                run {shortRunId(runId)}
+              </span>
+            ) : null}
+            {artifactId.trim() ? (
+              <span className="rounded-full border border-ink-200 bg-white px-2 py-0.5 font-mono text-[11px] text-ink-600" title={artifactId}>
+                artifact {artifactId.length > 12 ? `${artifactId.slice(0, 8)}…` : artifactId}
+              </span>
+            ) : null}
+            <span className="text-[11px] text-ink-400">Opened from Runs / Artifacts — no paste needed.</span>
+            <button type="button" className="btn-quiet ml-auto text-[11px]" onClick={() => setIdsUnlocked(true)}>
+              Change IDs
+            </button>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm">
+              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                Artifact ID
+              </span>
+              <input
+                className="field-control mt-0 w-full font-mono text-xs"
+                value={artifactId}
+                placeholder="artifact uuid / id"
+                onChange={(e) => setArtifactId(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void load()
+                }}
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                Run ID
+              </span>
+              <input
+                className="field-control mt-0 w-full font-mono text-xs"
+                value={runId}
+                placeholder="run id"
+                onChange={(e) => setRunId(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void load()
+                }}
+              />
+            </label>
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           <button type="button" className="btn-primary" onClick={() => void load()}>
             <Search className="h-3.5 w-3.5" /> Trace
@@ -234,6 +259,7 @@ export default function TraceView() {
             onClick={() => {
               setArtifactId('')
               setRunId('')
+              setIdsUnlocked(true)
               setTrace(null)
               setError(null)
               writeTraceHash('', '')
@@ -250,7 +276,7 @@ export default function TraceView() {
       {!loading && !error && !trace && (
         <EmptyState
           title="Start a backtrack"
-          description="Paste an artifact or run id, or use View lineage from Runs / Artifacts."
+          description="Open View lineage from Runs / Artifacts (IDs arrive prefilled), or paste an id below."
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <button

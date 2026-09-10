@@ -139,6 +139,7 @@ const JUMP_KEYS: Record<string, AppView> = {
   g: 'edge',
   w: 'workers',
   l: 'plugins',
+  k: 'secrets',
   s: 'system',
 }
 
@@ -465,9 +466,10 @@ export default function App() {
                 <button
                   type="button"
                   className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+                  title="Opens Experiments with this run preselected — pick a second run to Compare"
                   onClick={() => openExperiments({ runIds: [lastRunId] })}
                 >
-                  Compare
+                  Compare…
                 </button>
                 <button
                   type="button"

@@ -17,6 +17,7 @@ const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: strin
       { keys: 'G', action: 'Edge deploy' },
       { keys: 'W', action: 'Workers' },
       { keys: 'L', action: 'Plugins' },
+      { keys: 'K', action: 'Secrets' },
       { keys: 'S', action: 'System' },
     ],
   },

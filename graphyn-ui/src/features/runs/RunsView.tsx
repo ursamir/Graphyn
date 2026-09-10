@@ -65,6 +65,12 @@ function isStaleRunning(status?: string | null, createdAt?: string | null): bool
   return age != null && age >= STALE_RUNNING_MS
 }
 
+function runDisplayName(r: Pick<RunSummary, 'graph_name'>): string {
+  const raw = String(r.graph_name ?? '').trim()
+  if (raw) return humanizeTemplateName(raw)
+  return 'Pipeline'
+}
+
 const PANEL_LABELS: Record<string, string> = {
   logs: 'Logs',
   debug: 'Debug',
@@ -97,6 +103,8 @@ export default function RunsView() {
   const [previewUrls, setPreviewUrls] = React.useState<Record<string, string>>({})
   const [panel, setPanel] = React.useState<'logs' | 'debug' | 'checkpoints' | 'artifacts'>('logs')
   const [error, setError] = React.useState<string | null>(null)
+  const [statusFilter, setStatusFilter] = React.useState<string>('all')
+  const [nameQuery, setNameQuery] = React.useState('')
   const limit = 50
 
   const load = React.useCallback(async () => {
@@ -322,6 +330,19 @@ export default function RunsView() {
     }
   }
 
+  const filteredRuns = React.useMemo(() => {
+    if (!runs) return null
+    const q = nameQuery.trim().toLowerCase()
+    const statusNeedle = statusFilter === 'all' ? '' : statusFilter.toLowerCase()
+    return runs.filter((r) => {
+      if (statusNeedle && String(r.status ?? '').toLowerCase() !== statusNeedle) return false
+      if (!q) return true
+      const rawName = String(r.graph_name ?? '')
+      const hay = `${rawName} ${runDisplayName(r)} ${r.run_id}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [runs, statusFilter, nameQuery])
+
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
@@ -335,6 +356,35 @@ export default function RunsView() {
           }
         />
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
+        {runs && runs.length > 0 ? (
+          <div className="mb-3 flex flex-wrap items-end gap-2">
+            <label className="text-[11px] font-medium text-ink-500">
+              Status
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="mt-0.5 block rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-800"
+              >
+                <option value="all">All</option>
+                <option value="running">Running</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="paused">Paused</option>
+                <option value="queued">Queued</option>
+              </select>
+            </label>
+            <label className="min-w-[12rem] flex-1 text-[11px] font-medium text-ink-500">
+              Graph / search
+              <input
+                value={nameQuery}
+                onChange={(e) => setNameQuery(e.target.value)}
+                placeholder="Filter by graph name or run id"
+                className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
+              />
+            </label>
+          </div>
+        ) : null}
         {runs === null ? (
           <LoadingBlock />
         ) : runs.length === 0 ? (
@@ -366,9 +416,26 @@ export default function RunsView() {
               </div>
             }
           />
+        ) : !filteredRuns || filteredRuns.length === 0 ? (
+          <EmptyState
+            title="No runs match"
+            description="Try clearing the status filter or search query."
+            action={
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setStatusFilter('all')
+                  setNameQuery('')
+                }}
+              >
+                Clear filters
+              </button>
+            }
+          />
         ) : (
           <ul className="space-y-1.5">
-            {runs.map((r) => {
+            {filteredRuns.map((r) => {
               const metric = formatRunMetric(r.metrics)
               return (
               <li key={r.run_id}>
@@ -381,8 +448,8 @@ export default function RunsView() {
                       : 'border-ink-200/70 bg-white hover:border-ink-300 hover:bg-ink-50/80'
                   }`}
                 >
-                  <div className="truncate text-sm font-medium text-ink-900">
-                    {r.graph_name ? humanizeTemplateName(String(r.graph_name)) : 'Pipeline'}
+                  <div className="truncate text-sm font-medium text-ink-900" title={String(r.graph_name ?? '') || undefined}>
+                    {runDisplayName(r)}
                   </div>
                   <div className="flex items-center gap-1.5 justify-self-end">
                     <StatusBadge status={String(r.status ?? 'unknown')} />

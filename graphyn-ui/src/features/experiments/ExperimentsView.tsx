@@ -253,6 +253,16 @@ export default function ExperimentsView() {
 
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
 
+      {selectedIds.length === 1 ? (
+        <div
+          role="status"
+          className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+        >
+          One run is preselected ({selectedIds[0].slice(0, 8)}…). Select a second run in the table, then
+          Compare — a single run is not enough for a side-by-side.
+        </div>
+      ) : null}
+
       {loading && blocks === null ? (
         <LoadingBlock label="Loading experiments…" />
       ) : !blocks || blocks.length === 0 || tableRuns.length === 0 ? (
