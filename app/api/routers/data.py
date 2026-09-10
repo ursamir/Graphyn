@@ -79,7 +79,7 @@ def list_input_datasets():
         if not label_path.is_dir():
             continue
         count = sum(
-            1 for _, _, files in os.walk(label_path)
+            1 for _, _, files in os.walk(label_path, followlinks=True)
             for f in files if f.lower().endswith(SUPPORTED_AUDIO_EXTENSIONS)
         )
         labels.append({"label": label, "file_count": count})
@@ -95,7 +95,7 @@ def get_input_dataset(label: str):
         raise HTTPException(status_code=404, detail=f"Label '{label}' not found")
 
     files = []
-    for root, _, filenames in os.walk(label_path):
+    for root, _, filenames in os.walk(label_path, followlinks=True):
         for f in filenames:
             if f.lower().endswith(SUPPORTED_AUDIO_EXTENSIONS):
                 abs_path = os.path.join(root, f)

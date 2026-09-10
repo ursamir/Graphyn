@@ -105,10 +105,6 @@ class AudioExporterNode(Node):
     def process(self, samples: list[AudioSample]) -> list[AudioSample]:
         import soundfile as sf  # type: ignore
 
-        # LOW: None/empty guard — return early rather than crashing on enumerate
-        if not samples:
-            return []
-
         cfg = self.config
         version_tag = str(cfg.version_tag or "v1").strip() or "v1"
         if not self._VERSION_RE.match(version_tag):
@@ -141,6 +137,18 @@ class AudioExporterNode(Node):
             import shutil
             shutil.rmtree(out_root)
         out_root.mkdir(parents=True, exist_ok=True)
+
+        # Always stamp a version dir (labels.csv + lineage) so Projects Versions
+        # populates even when upstream produced zero samples.
+        if not samples:
+            self._write_manifests(cfg, out_root, [], [])
+            self._write_lineage(out_root, version_tag, 0)
+            self._register_version(Path(output_dir), version_tag)
+            log.info(
+                "AudioExporterNode: no samples — stamped empty version at %s",
+                out_root,
+            )
+            return []
 
         # Assign splits
         rng = random.Random(cfg.random_seed)
@@ -242,6 +250,7 @@ class AudioExporterNode(Node):
             out_root,
             split_counts,
         )
+        self._register_version(Path(output_dir), version_tag)
 
         return samples
 
@@ -317,6 +326,28 @@ class AudioExporterNode(Node):
         except OSError as exc:
             log.warning("AudioExporterNode: could not write project.json: %s", exc)
 
+    def _register_version(self, project_dir: Path, version_tag: str) -> None:
+        """Ensure project.json lists the stamped version (for UI / meta)."""
+        try:
+            project_dir = Path(project_dir)
+            meta_path = project_dir / "project.json"
+            if not meta_path.exists():
+                return
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                return
+            versions = meta.get("versions")
+            if not isinstance(versions, list):
+                versions = []
+            if version_tag not in versions:
+                versions.append(version_tag)
+                meta["versions"] = versions
+                from datetime import datetime, timezone
+                meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+                meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("AudioExporterNode: could not update project.json versions: %s", exc)
+
     def _write_lineage(self, out_root: Path, version_tag: str, n_samples: int) -> None:
         """Write lineage.json with run_id when the executor set ``self._run_id``."""
         from datetime import datetime, timezone
@@ -327,7 +358,7 @@ class AudioExporterNode(Node):
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "node_type": self.node_type,
         }
-        run_id = str(getattr(self, "_run_id", "") or "").strip()
+        run_id = str(getattr(self, "_run_id", "") or getattr(self, "_current_run_id", "") or "").strip()
         if run_id:
             lineage["run_id"] = run_id
         try:

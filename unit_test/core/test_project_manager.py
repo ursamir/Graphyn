@@ -41,6 +41,20 @@ def test_create_project_has_draft_status_and_empty_versions(pm: ProjectManager):
 
 # ── Req 22.2 — create twice raises ValueError ─────────────────────────────────
 
+
+
+def test_create_seeds_spec_taxonomy_contract(pm: ProjectManager):
+    """New projects get non-blank Spec / Taxonomy / Contract defaults."""
+    pm.create("seeded")
+    d = pm.BASE / "seeded"
+    assert (d / "spec.md").exists()
+    assert "# Project spec" in (d / "spec.md").read_text(encoding="utf-8")
+    tax = json.loads((d / "taxonomy.json").read_text(encoding="utf-8"))
+    assert isinstance(tax, list) and tax[0]["name"] == "unlabeled"
+    contract = json.loads((d / "contract.json").read_text(encoding="utf-8"))
+    assert isinstance(contract, dict)
+    assert "required_fields" in contract
+
 def test_create_project_twice_raises_value_error(pm: ProjectManager):
     """Req 22.2 — create('my-project') called twice raises ValueError."""
     pm.create("my-project")

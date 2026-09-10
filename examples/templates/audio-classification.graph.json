@@ -40,7 +40,7 @@
       "node_type": "segmenter",
       "config": {
         "mode": "fixed",
-        "window_ms": 3000,
+        "window_ms": 500,
         "overlap": 0.0
       },
       "label": null,

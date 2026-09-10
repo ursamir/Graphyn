@@ -233,12 +233,16 @@ class SegmenterNode(Node):
         step = max(1, int(window_size * (1.0 - self.config.overlap)))
 
         if len(y) < window_size:
+            # Short clips (e.g. speech-commands ~0.6s) should still flow
+            # downstream rather than emptying the pipeline.
             log.warning(
                 "SegmenterNode: sample %s (%d samples) shorter than window "
-                "(%d samples) — no segments produced",
+                "(%d samples) — emitting whole clip as one segment",
                 s.path, len(y), window_size,
             )
-            return []
+            if len(y) == 0 or not self._within_bounds(len(y), sr):
+                return []
+            return [self._make_segment(s, y, 0, len(y), 0)]
 
         segments: list[AudioSample] = []
         seg_id = 0

@@ -45,6 +45,23 @@ class ProjectManager:
     # G3-30: regex for safe project names used as directory components
     _SAFE_NAME_RE = re.compile(r'^[\w\-]{1,128}$')
 
+    DEFAULT_SPEC_MD = (
+        "# Project spec\n\n"
+        "Describe what this dataset is for, the target labels, and the quality bar.\n\n"
+        "## Goals\n\n- \n\n"
+        "## Labels\n\n- \n\n"
+        "## Notes\n\n- \n"
+    )
+    DEFAULT_TAXONOMY: list = [{"name": "unlabeled", "children": []}]
+    DEFAULT_CONTRACT: dict = {
+        "_hint": "Optional data contract. Set duration bounds / sample_rate / required fields as needed.",
+        "min_duration_ms": None,
+        "max_duration_ms": None,
+        "sample_rate_hz": None,
+        "required_fields": ["path", "label", "split"],
+    }
+
+
     @classmethod
     def _validate_name(cls, name: str) -> None:
         """Raise ValueError if name is not safe for use as a directory component (G3-30 fix)."""
@@ -102,6 +119,10 @@ class ProjectManager:
             "versions": [],
         }
         self._write_json(d / "project.json", meta)
+        # Seed product-quality empty defaults so Spec/Taxonomy/Contract are not blank.
+        (d / "spec.md").write_text(self.DEFAULT_SPEC_MD, encoding="utf-8")
+        self._write_json(d / "taxonomy.json", list(self.DEFAULT_TAXONOMY))
+        self._write_json(d / "contract.json", dict(self.DEFAULT_CONTRACT))
         return meta
 
     def rename(self, name: str, new_name: str) -> dict:
@@ -633,8 +654,16 @@ class ProjectManager:
         versions = []
         for sub in sorted(d.iterdir()):
             if self._is_version_dir(sub):
-                meta_file = sub / "metadata.json"
-                meta = self._read_json(meta_file, {})
+                # Prefer lineage.json (dict). metadata.json from AudioExporter is a
+                # sample list — never spread it into the version summary.
+                lineage = self._read_json(sub / "lineage.json", {})
+                meta = lineage if isinstance(lineage, dict) else {}
+                if not meta:
+                    raw = self._read_json(sub / "metadata.json", {})
+                    if isinstance(raw, dict):
+                        meta = raw
+                    elif isinstance(raw, list):
+                        meta = {"n_samples": len(raw)}
                 versions.append({"version": sub.name, **meta})
         return versions
 

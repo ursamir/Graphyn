@@ -71,9 +71,9 @@ interface AppState {
   setView: (view: AppView) => void
   focusRunId: string | null
   focusArtifactId: string | null
-  openRun: (id: string) => void
-  openTrace: (opts: { artifactId?: string; runId?: string }) => void
-  openArtifacts: (opts?: { runId?: string; artifactId?: string }) => void
+  openRun: (id: string, opts?: { project?: string }) => void
+  openTrace: (opts: { artifactId?: string; runId?: string; project?: string }) => void
+  openArtifacts: (opts?: { runId?: string; artifactId?: string; project?: string }) => void
   openExperiments: (opts?: { runIds?: string[] }) => void
   openProposals: (opts?: { id?: string }) => void
   openEdge: (opts?: { project?: string; version?: string }) => void
@@ -163,11 +163,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   setView: (view) => set({ view }),
   focusRunId: null,
   focusArtifactId: null,
-  openRun: (id) => {
+  openRun: (id, opts) => {
+    const proj = opts?.project?.trim() || ''
+    if (proj) {
+      persistActiveProject(proj)
+      set({ activeProject: proj })
+    }
     replaceHash(`#/runs/${id}`)
     set({ view: 'runs', focusRunId: id, lastRunId: id })
   },
-  openTrace: ({ artifactId, runId }) => {
+  openTrace: ({ artifactId, runId, project }) => {
+    const proj = project?.trim() || ''
+    if (proj) {
+      persistActiveProject(proj)
+      set({ activeProject: proj })
+    }
     const params = new URLSearchParams()
     if (artifactId?.trim()) params.set('artifact_id', artifactId.trim())
     if (runId?.trim()) params.set('run_id', runId.trim())
@@ -175,7 +185,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     replaceHash(qs ? `#/trace?${qs}` : '#/trace')
     set({ view: 'trace' })
   },
-  openArtifacts: ({ runId, artifactId } = {}) => {
+  openArtifacts: ({ runId, artifactId, project } = {}) => {
+    const proj = project?.trim() || ''
+    if (proj) {
+      persistActiveProject(proj)
+      set({ activeProject: proj })
+    }
     const params = new URLSearchParams()
     if (runId?.trim()) params.set('run_id', runId.trim())
     const aid = artifactId?.trim() || ''

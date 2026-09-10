@@ -316,3 +316,37 @@ class TestSafeChildLexicalJail:
         assert path == (output_root.resolve() / 'proj' / 'v1')
         assert path.is_relative_to(output_root.resolve())
         assert path.is_symlink()
+
+
+class TestInputSymlinkTree:
+    """Label dirs may contain symlinks to class dirs with wavs (speech-commands)."""
+
+    def test_list_inputs_follows_directory_symlinks(self, api_client, tmp_path):
+        patcher, input_root = _patch_input(tmp_path)
+        real_go = input_root / "go"
+        real_go.mkdir()
+        (real_go / "go_000.wav").write_bytes(b"RIFF")
+        (real_go / "go_001.wav").write_bytes(b"RIFF")
+        label = input_root / "speech-commands"
+        label.mkdir()
+        (label / "go").symlink_to(real_go)
+        with patcher:
+            resp = api_client.get("/api/v1/data/inputs")
+        assert resp.status_code == 200
+        by_label = {row["label"]: row["file_count"] for row in resp.json()}
+        assert by_label["speech-commands"] == 2
+        assert by_label["go"] == 2
+
+    def test_get_input_follows_directory_symlinks_nested_paths(self, api_client, tmp_path):
+        patcher, input_root = _patch_input(tmp_path)
+        real_go = input_root / "go"
+        real_go.mkdir()
+        (real_go / "go_000.wav").write_bytes(b"RIFF")
+        label = input_root / "speech-commands"
+        label.mkdir()
+        (label / "go").symlink_to(real_go)
+        with patcher:
+            resp = api_client.get("/api/v1/data/inputs/speech-commands")
+        assert resp.status_code == 200
+        paths = {row["path"] for row in resp.json()}
+        assert "speech-commands/go/go_000.wav" in paths

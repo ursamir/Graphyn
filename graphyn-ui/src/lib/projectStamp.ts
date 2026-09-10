@@ -13,7 +13,7 @@ export function stampProjectOnGraph(graph: GraphIR, project: string, version?: s
     const cfg = { ...(n.config ?? {}) } as Record<string, unknown>
     let changed = false
     if (DATASET_NODES.has(n.node_type) || 'project' in cfg) {
-      if (cfg.project === undefined || cfg.project === null || cfg.project === '') {
+      if (cfg.project !== project) {
         cfg.project = project
         changed = true
       }

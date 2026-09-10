@@ -55,6 +55,17 @@
   - Spec/versions endpoints respond (draft project may have empty versions until export versions materialize)
 - Headless Chrome without saved Bearer token shows Settings / “Sign in with your API token” (expected). Existing box Chrome CDP rejects unauthenticated DevTools origins (`--remote-allow-origins` not set on pid 2505194). No UI runtime exceptions observed in API-backed flows.
 
+
+
+## Browser E2E gap fixes (2026-09-10 IST)
+
+| Gap | Fix |
+|---|---|
+| `speech-commands` showed 0 files | `GET /data/inputs` + `GET /data/inputs/{label}` now use `os.walk(..., followlinks=True)` so class-dir symlinks (`speech-commands/go/*.wav`) count and list. Unit test: symlink tree. Curl proof: `file_count=48`. |
+| Project Versions empty after audio-classification | Root cause: segmenter `window_ms=3000` on ~0.6s clips → 0 segments → exporter early-return. Fixes: (1) template `window_ms=500`; (2) segmenter emits whole clip when shorter than window; (3) exporter always stamps `v1` + `labels.csv` + `lineage.json` (even empty); (4) NodeExecutor sets `node._run_id` so lineage includes `run_id`; (5) `list_versions` tolerates list-shaped `metadata.json`. Re-run `006c4274…` → `datasets/output/e2e-audio-classification/v1` with 32 samples + `run_id`. |
+| Spec / Taxonomy / Contract blank | `ProjectManager.create` seeds `spec.md`, starter taxonomy, contract with hint; UI textareas get placeholders. |
+| Artifact deep-link stale project | `openArtifacts` / `openTrace` / `openRun` accept `project`; RunsView + ArtifactsView sync `activeProject` from `run.meta.project`. |
+
 ## Reproduce
 
 ```bash

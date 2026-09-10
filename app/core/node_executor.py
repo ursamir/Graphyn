@@ -183,6 +183,7 @@ class NodeExecutor:
             try:
                 # on_start() calls observer.on_node_start() internally (base.py).
                 # Do NOT call observer directly here — that would fire the event twice.
+                node._run_id = self._run_id
                 node._current_run_id = self._run_id  # type: ignore[attr-defined]
                 node.on_start()
             except Exception as exc:
@@ -329,6 +330,7 @@ class NodeExecutor:
             )
         from app.core.write_paths import ensure_node_write_dirs
 
+        node._run_id = self._run_id
         node._current_run_id = self._run_id  # type: ignore[attr-defined]
         # Cooperative cancel (DIST-CANCEL-2): honour request_cancel / cancel_check
         # before start and between stream items. Does not interrupt mid-yield

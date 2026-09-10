@@ -79,6 +79,7 @@ function writeArtifactsHash(runId: string, artifactId: string) {
 export default function ArtifactsView() {
   const openRun = useAppStore((s) => s.openRun)
   const openTrace = useAppStore((s) => s.openTrace)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
   const focusArtifactId = useAppStore((s) => s.focusArtifactId)
@@ -117,6 +118,29 @@ export default function ArtifactsView() {
   React.useEffect(() => {
     void load()
   }, [load])
+
+  React.useEffect(() => {
+    const rid = runFilter.trim()
+    if (!rid) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const d = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(rid)}`)
+        if (cancelled) return
+        const meta = d?.meta && typeof d.meta === 'object' ? (d.meta as Record<string, unknown>) : null
+        const proj = String(meta?.project ?? d?.project ?? '').trim()
+        if (proj && useAppStore.getState().activeProject !== proj) {
+          setActiveProject(proj)
+        }
+      } catch {
+        /* optional sync */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [runFilter, setActiveProject])
+
 
   const open = React.useCallback(async (id: string) => {
     const aid = id.trim()
@@ -403,7 +427,7 @@ export default function ArtifactsView() {
                 onClick={() => {
                   const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
                   const runId = String(rec.run_id ?? '').trim()
-                  openTrace({ artifactId: selected, runId: runId || undefined })
+                  openTrace({ artifactId: selected, runId: runId || undefined, project: useAppStore.getState().activeProject || undefined })
                 }}
               >
                 <GitBranch className="h-3.5 w-3.5" /> Trace lineage
@@ -480,7 +504,7 @@ export default function ArtifactsView() {
                 onClick={() => {
                   const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
                   const runId = String(rec.run_id ?? '').trim()
-                  openTrace({ artifactId: selected, runId: runId || undefined })
+                  openTrace({ artifactId: selected, runId: runId || undefined, project: useAppStore.getState().activeProject || undefined })
                 }}
               >
                 Trace lineage

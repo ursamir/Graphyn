@@ -112,15 +112,21 @@ def stamp(graph: dict, project: str) -> dict:
         g["metadata"] = meta
     meta["project"] = project
     meta.setdefault("version_tag", "v1")
-    # rewrite exporter project if present
+    # Always stamp Library project onto exporters / dataset sinks
     for node in g.get("nodes") or []:
         if not isinstance(node, dict):
             continue
         cfg = node.get("config")
         if not isinstance(cfg, dict):
             continue
-        if "project" in cfg:
+        ntype = str(node.get("type") or node.get("node_type") or "")
+        if ntype in {"audio_exporter", "export", "dataset_versioner", "dataset_builder"} or "project" in cfg:
             cfg["project"] = project
+        if ntype in {"audio_exporter", "export", "dataset_versioner", "dataset_builder"}:
+            od = str(cfg.get("output_dir") or "").replace("\\", "/")
+            # Keep artifact-sink exports under artifacts/; rewrite Library dataset sinks.
+            if "/datasets/output/" in od or not od:
+                cfg["output_dir"] = f"workspace/datasets/output/{project}"
         # small epoch overrides for train nodes
         ntype = node.get("type") or node.get("node_type") or ""
         if any(k in str(ntype).lower() for k in ("train", "classifier", "model")):

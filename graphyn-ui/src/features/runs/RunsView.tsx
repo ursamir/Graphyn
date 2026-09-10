@@ -91,6 +91,7 @@ export default function RunsView() {
   const openProjects = useAppStore((s) => s.openProjects)
   const openData = useAppStore((s) => s.openData)
   const activeProject = useAppStore((s) => s.activeProject)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
   const closeProject = useAppStore((s) => s.closeProject)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
 
@@ -152,6 +153,11 @@ export default function RunsView() {
       setDebug(dbg)
       setCheckpoints(Array.isArray(cps) ? cps : [])
       setOutputFiles(Array.isArray(outs) ? outs : [])
+      const meta = d?.meta && typeof d.meta === 'object' ? (d.meta as Record<string, unknown>) : null
+      const proj = String(meta?.project ?? d?.project ?? '').trim()
+      if (proj && useAppStore.getState().activeProject !== proj) {
+        setActiveProject(proj)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -297,6 +303,12 @@ export default function RunsView() {
   )
 
   const selectedSummary = runs?.find((r) => r.run_id === selected)
+  const runProject = String(
+    (detail?.meta as { project?: string } | undefined)?.project ??
+      selectedSummary?.project ??
+      detail?.project ??
+      '',
+  ).trim()
   const graphName = String(
     selectedSummary?.graph_name ??
       (detail?.meta as { graph_name?: string } | undefined)?.graph_name ??
@@ -602,14 +614,14 @@ export default function RunsView() {
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => openTrace({ runId: selected })}
+                onClick={() => openTrace({ runId: selected, project: runProject || undefined })}
               >
                 <GitBranch className="h-3.5 w-3.5" /> Trace
               </button>
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => openArtifacts({ runId: selected })}
+                onClick={() => openArtifacts({ runId: selected, project: runProject || undefined })}
               >
                 <Archive className="h-3.5 w-3.5" /> Artifacts
               </button>
@@ -825,14 +837,14 @@ export default function RunsView() {
                   <button
                     type="button"
                     className="btn-secondary"
-                    onClick={() => openArtifacts({ runId: selected })}
+                    onClick={() => openArtifacts({ runId: selected, project: runProject || undefined })}
                   >
                     <Archive className="h-3.5 w-3.5" /> Open in Artifacts
                   </button>
                   <button
                     type="button"
                     className="btn-secondary"
-                    onClick={() => openTrace({ runId: selected })}
+                    onClick={() => openTrace({ runId: selected, project: runProject || undefined })}
                   >
                     <GitBranch className="h-3.5 w-3.5" /> Trace lineage
                   </button>

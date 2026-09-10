@@ -865,6 +865,7 @@ export default function ProjectsView() {
                   value={spec}
                   onChange={(e) => setSpec(e.target.value)}
                   rows={16}
+                  placeholder={"# Project spec\n\nDescribe goals, labels, and quality bar…"}
                   className="w-full rounded-xl border border-ink-200 p-3 font-mono text-sm"
                 />
                 <button type="button" className="btn-primary" onClick={() => void saveSpec()}>
@@ -875,11 +876,12 @@ export default function ProjectsView() {
 
             {tab === 'taxonomy' && (
               <section className="space-y-2">
-                <p className="text-sm text-ink-500">JSON list or map of labels/classes this dataset uses (the taxonomy).</p>
+                <p className="text-sm text-ink-500">JSON list of labels/classes (starter: one unlabeled node). Edit and save when ready.</p>
                 <textarea
                   value={taxonomy}
                   onChange={(e) => setTaxonomy(e.target.value)}
                   rows={16}
+                  placeholder={'[\n  { "name": "unlabeled", "children": [] }\n]'}
                   className="w-full rounded-xl border border-ink-200 p-3 font-mono text-sm"
                 />
                 <button type="button" className="btn-primary" onClick={() => void saveTaxonomy()}>
@@ -890,11 +892,12 @@ export default function ProjectsView() {
 
             {tab === 'contract' && (
               <section className="space-y-2">
-                <p className="text-sm text-ink-500">JSON schema/contract for records in this project (fields, types, required keys).</p>
+                <p className="text-sm text-ink-500">JSON data contract (duration bounds, sample rate, required fields). Empty object is fine until you need gates.</p>
                 <textarea
                   value={contract}
                   onChange={(e) => setContract(e.target.value)}
                   rows={16}
+                  placeholder={'{\n  "_hint": "Optional data contract",\n  "required_fields": ["path", "label", "split"]\n}'}
                   className="w-full rounded-xl border border-ink-200 p-3 font-mono text-sm"
                 />
                 <button type="button" className="btn-primary" onClick={() => void saveContract()}>
