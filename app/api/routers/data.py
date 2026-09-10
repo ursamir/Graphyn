@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,6 +29,9 @@ from app.core.config import datasets_input_dir as _datasets_input_dir
 from app.core.config import datasets_output_dir as _datasets_output_dir
 
 router = APIRouter(prefix="/data", tags=["data"])
+
+# Align with ProjectManager._VERSION_RE — exclude snapshots/ and junk dirs.
+_VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
 
 SUPPORTED_AUDIO_EXTENSIONS = (".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac")
 
@@ -128,7 +132,11 @@ async def upload_file(file: UploadFile = File(...)):
 
 @router.get("/outputs", summary="List output dataset projects")
 def list_output_datasets():
-    """Return a list of output dataset projects and their versions."""
+    """Return a list of output dataset projects and their versions.
+
+    Version dirs must match ProjectManager ``_VERSION_RE`` (e.g. v1, v1.0.0).
+    ``snapshots/`` and other non-version directories are excluded.
+    """
     output_root = _output_root()
     if not output_root.exists():
         return []
@@ -139,7 +147,7 @@ def list_output_datasets():
             continue
         versions = sorted(
             v for v in os.listdir(project_path)
-            if (project_path / v).is_dir()
+            if (project_path / v).is_dir() and bool(_VERSION_RE.match(v))
         )
         result.append({"project": project, "versions": versions})
     return result
@@ -245,18 +253,57 @@ class MergeRequest(BaseModel):
 
 @router.post("/merge", summary="Merge datasets")
 def merge_datasets(body: MergeRequest):
-    """Copy audio files from multiple source versions into a target version."""
+    """Copy audio files from multiple source versions into a target version.
+
+    Ensures ``project.json`` exists on the target project (so Projects sidebar
+    sees it) and writes/refreshes ``labels.csv`` under the target version.
+    """
     import shutil
+
+    from app.domain.project_manager import ProjectManager
 
     if not body.sources:
         raise HTTPException(status_code=422, detail="sources must not be empty")
+    if not _VERSION_RE.match(body.target_version):
+        raise HTTPException(
+            status_code=422,
+            detail="target_version must match vN / vN.N.N (e.g. v1, v1.0.0)",
+        )
 
     output_root = _output_root()
+    pm = ProjectManager()
+    # Ensure project workspace exists for Projects sidebar discovery.
+    project_root = output_root / body.target_project
+    if not (project_root / "project.json").exists():
+        try:
+            if project_root.exists():
+                now = datetime.now(timezone.utc).isoformat()
+                (project_root / "project.json").write_text(
+                    __import__("json").dumps(
+                        {
+                            "name": body.target_project,
+                            "status": "draft",
+                            "created_at": now,
+                            "updated_at": now,
+                            "versions": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                pm.create(body.target_project)
+        except ValueError:
+            # Name validation failure — fall through; copy may still succeed.
+            project_root.mkdir(parents=True, exist_ok=True)
+
     target_dir = _safe_child(output_root, body.target_project, body.target_version)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     files_copied = 0
     errors = []
+    label_rows: list[dict] = []
 
     for source in body.sources:
         src_project = source.get("project")
@@ -272,15 +319,57 @@ def merge_datasets(body: MergeRequest):
         if not src_dir.exists():
             errors.append(f"Source not found: {src_project}/{src_version}")
             continue
+        src_labels = src_dir / "labels.csv"
+        src_label_map: dict[str, dict] = {}
+        if src_labels.exists():
+            with open(src_labels, newline="") as f:
+                for row in csv.DictReader(f):
+                    rel_path = (row.get("path") or "").replace("\\", "/")
+                    # Normalize version-prefixed paths from older exporters.
+                    prefix = f"{src_version}/"
+                    if rel_path.startswith(prefix):
+                        rel_path = rel_path[len(prefix):]
+                    if rel_path:
+                        src_label_map[rel_path] = row
         for wav_file in src_dir.rglob("*.wav"):
             rel = wav_file.relative_to(src_dir)
             dst = target_dir / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(wav_file), str(dst))
             files_copied += 1
+            rel_s = str(rel).replace("\\", "/")
+            row = src_label_map.get(rel_s)
+            if row:
+                label_rows.append(
+                    {
+                        "id": len(label_rows),
+                        "path": rel_s,
+                        "label": row.get("label") or "unknown",
+                        "split": row.get("split") or "train",
+                    }
+                )
+            else:
+                parts = Path(rel_s).parts
+                split = parts[0] if len(parts) > 0 else "train"
+                label = parts[1] if len(parts) > 1 else "unknown"
+                label_rows.append(
+                    {
+                        "id": len(label_rows),
+                        "path": rel_s,
+                        "label": label,
+                        "split": split,
+                    }
+                )
+
+    labels_csv = target_dir / "labels.csv"
+    with open(labels_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["id", "path", "label", "split"])
+        writer.writeheader()
+        writer.writerows(label_rows)
 
     return {
         "target": f"{body.target_project}/{body.target_version}",
         "files_copied": files_copied,
         "errors": errors,
+        "labels_written": len(label_rows),
     }

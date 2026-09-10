@@ -219,3 +219,21 @@ class TestDeleteOutputDataset:
         with patcher:
             resp = api_client.delete("/api/v1/data/outputs/%2e%2e/v1")
         assert resp.status_code == 400
+
+class TestListOutputVersionFilter:
+    def test_list_outputs_excludes_snapshots_and_non_version_dirs(self, api_client, tmp_path):
+        """GET /data/outputs only lists vN / vN.N.N dirs (aligns with ProjectManager)."""
+        patcher, output_root = _patch_output(tmp_path)
+        proj = output_root / "demo"
+        (proj / "v1").mkdir(parents=True)
+        (proj / "v1.0.0").mkdir(parents=True)
+        (proj / "snapshots").mkdir(parents=True)
+        (proj / "working").mkdir(parents=True)
+        with patcher:
+            resp = api_client.get("/api/v1/data/outputs")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body) == 1
+        assert body[0]["project"] == "demo"
+        assert body[0]["versions"] == ["v1", "v1.0.0"]
+

@@ -102,7 +102,7 @@ export default function WorkersView() {
       ) : !workers || workers.length === 0 ? (
         <EmptyState
           title="No workers registered"
-          description="Mode B needs a distributed control plane plus at least one worker. Set GRAPHYN_BACKEND=distributed on the API host, start a worker with the CLI, then refresh. Packaging models onto devices is Edge deploy — different from workers."
+          description="Local Mode A runs pipelines in-process and needs no workers. Mode B needs a distributed control plane plus at least one registered worker — set GRAPHYN_BACKEND=distributed, start a worker with the CLI, then refresh. Packaging models onto devices is Edge deploy — different from workers."
           action={
             <div className="flex flex-col items-center gap-3">
               <div className="w-full max-w-xl rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-left">

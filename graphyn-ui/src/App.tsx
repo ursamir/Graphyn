@@ -323,7 +323,23 @@ export default function App() {
 
   const go = (id: AppView) => {
     setView(id)
-    window.history.replaceState(null, '', `#/${id}`)
+    const PRESERVE_QUERY = new Set<AppView>([
+      'trace',
+      'edge',
+      'experiments',
+      'proposals',
+      'artifacts',
+      'data',
+      'projects',
+    ])
+    const raw = window.location.hash.replace(/^#\/?/, '')
+    const qIdx = raw.indexOf('?')
+    const query = qIdx >= 0 ? raw.slice(qIdx) : ''
+    if (PRESERVE_QUERY.has(id) && PRESERVE_QUERY.has(view) && query) {
+      window.history.replaceState(null, '', `#/${id}${query}`)
+    } else {
+      window.history.replaceState(null, '', `#/${id}`)
+    }
     if (narrow) setNavOpen(false)
   }
 

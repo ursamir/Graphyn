@@ -10,7 +10,7 @@ import {
   RefreshCw,
   Workflow,
 } from 'lucide-react'
-import { apiJson, downloadOutputFile } from '../../api/client'
+import { apiFetch, apiJson, downloadOutputFile } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import {
@@ -88,6 +88,45 @@ export default function EdgeWizardView() {
   const [running, setRunning] = React.useState(false)
   const [downloadPath, setDownloadPath] = React.useState<string | null>(null)
   const [downloading, setDownloading] = React.useState(false)
+  const [modelPathMissing, setModelPathMissing] = React.useState(false)
+  const [modelPathChecking, setModelPathChecking] = React.useState(false)
+
+  // Probe model path: 404 => missing; 400 "directory" / 200 / other jailed hit => present.
+  React.useEffect(() => {
+    let cancelled = false
+    const path = modelPath.trim()
+    if (!path) {
+      setModelPathMissing(true)
+      return
+    }
+    setModelPathChecking(true)
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await apiFetch('/outputs/file', { query: { path } })
+          if (cancelled) return
+          if (res.status === 404) {
+            setModelPathMissing(true)
+          } else if (res.status === 400) {
+            const body = await res.json().catch(() => ({} as { detail?: string }))
+            const detail = String((body as { detail?: string }).detail || '')
+            // Directory is a valid SavedModel root — treat as present.
+            setModelPathMissing(!/directory/i.test(detail))
+          } else {
+            setModelPathMissing(false)
+          }
+        } catch {
+          if (!cancelled) setModelPathMissing(true)
+        } finally {
+          if (!cancelled) setModelPathChecking(false)
+        }
+      })()
+    }, 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(handle)
+    }
+  }, [modelPath])
 
   React.useEffect(() => {
     const apply = () => {
@@ -421,6 +460,27 @@ export default function EdgeWizardView() {
                   ) : null}{' '}
                   — adjust path if your trainer wrote elsewhere.
                 </span>
+              ) : null}
+              {!modelPathChecking && modelPathMissing ? (
+                <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                  <p className="font-medium">Model path not found on disk</p>
+                  <p className="mt-1 text-amber-900/90">
+                    <code className="font-mono">{modelPath || '(empty)'}</code> is missing. Train or
+                    export a model first — do not invent a fake path. Use Templates/Builder to train,
+                    or pick an existing artifact.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button type="button" className="btn-secondary" onClick={() => setView('templates')}>
+                      Templates
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={() => setView('builder')}>
+                      Builder
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={() => openArtifacts({})}>
+                      Artifacts
+                    </button>
+                  </div>
+                </div>
               ) : null}
             </label>
             <label className="block text-sm sm:col-span-2">

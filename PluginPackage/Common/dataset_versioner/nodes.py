@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import re
 import hashlib
 import json
 import logging
@@ -82,21 +83,33 @@ class DatasetVersionerNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = Field(default='workspace/datasets/versioned', title="Output dir", description="Directory under workspace/artifacts for written files.")
-        version_tag: str = Field(default='', title="Version tag", description="Dataset/export version label (e.g. v1, 2026-09-08).")
+        output_dir: str = Field(default='workspace/datasets/output/versioned', title="Output dir", description="Project root under workspace/datasets/output/{project}; version_tag is appended.")
+        project: str = Field(default='', title="Project", description="Optional project name; when set, output_dir becomes workspace/datasets/output/{project}.")
+        version_tag: str = Field(default='v1', title="Version tag", description="Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0). Empty defaults to v1 — hash-style tags are rejected.")
         include_metadata: bool = Field(default=True, title="Include metadata", description="Bundle model metadata / labels JSON with the package (On/Off).")
         create_snapshot: bool = Field(default=False, title="Create Snapshot", description="Enable create snapshot.")
 
     # ── SISO process ──────────────────────────────────────────────────────────
+
+    _VERSION_RE: ClassVar[re.Pattern[str]] = re.compile(r"^v\d+(\.\d+)*$")
 
     def process(self, dataset):
         result = copy.deepcopy(dataset)
 
         # Compute hash from training data
         dataset_hash = self._compute_hash(dataset)
-        version = self.config.version_tag or f"v_{dataset_hash[:12]}"
-
-        out_dir = Path(self.config.output_dir) / version
+        version = str(self.config.version_tag or "v1").strip() or "v1"
+        if not self._VERSION_RE.match(version):
+            raise ValueError(
+                f"DatasetVersionerNode: version_tag {version!r} must match "
+                "vN / vN.N.N (e.g. v1, v1.0.0) — hash-style tags like "
+                f"v_{{hash}} are not allowed."
+            )
+        output_dir = str(self.config.output_dir or "").strip()
+        project = str(getattr(self.config, "project", "") or "").strip()
+        if project:
+            output_dir = f"workspace/datasets/output/{project}"
+        out_dir = Path(output_dir) / version
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Write manifest CSV, lineage JSON, and optional snapshot.
@@ -208,7 +221,11 @@ class DatasetVersionerNode(Node):
                 "test":  int(len(dataset.y_test))  if dataset.y_test  is not None else 0,
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "node_type": self.node_type,
         }
+        run_id = str(getattr(self, "_run_id", "") or "").strip()
+        if run_id:
+            lineage["run_id"] = run_id
         if self.config.include_metadata:
             lineage["metadata"] = dataset.metadata
 

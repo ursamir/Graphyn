@@ -304,7 +304,12 @@ export default function DataView() {
     try {
       const res = await apiJson<{ job_id: string }>('/ingest/huggingface', {
         method: 'POST',
-        body: JSON.stringify({ repo_id: hfRepo, split: 'train', audio_col: 'audio' }),
+        body: JSON.stringify({
+          repo_id: hfRepo,
+          split: 'train',
+          audio_col: 'audio',
+          label_override: ingestLabel.trim() || undefined,
+        }),
       })
       setIngestLog([`job ${res.job_id} started`])
       await streamJob(res.job_id, 'huggingface')
@@ -385,7 +390,7 @@ export default function DataView() {
     <div className="h-full overflow-y-auto p-6 space-y-4">
       <PageHeader
         title="Data"
-        description="Files in / files out — upload inputs, browse outputs, ingest, and merge. Projects owns workspace metadata (versions, snapshots, lineage) for the same output folders."
+        description="Data = filesystem inputs/outputs under workspace/datasets/{input,output}. Projects = workspace metadata over output/{project}; versions appear only after pipeline/export writes — a draft project alone will not list versions here either."
         actions={
           <div className="flex gap-2">
             <button type="button" className="btn-secondary" onClick={upload}>
@@ -448,7 +453,7 @@ export default function DataView() {
             outputs.length === 0 ? (
               <EmptyState
                 title="No output datasets"
-                description="Pipeline dataset versions live under workspace/datasets/output. Run a data-prep pipeline from Templates → Builder, or open Projects for versioned workspaces."
+                description="No version folders yet under workspace/datasets/output (v1 / v1.0.0 style). Creating a draft Project does not create versions — run Templates → Builder (audio-classification) or merge datasets first. Open Projects for snapshots/lineage once versions exist."
                 action={
                   <div className="flex flex-wrap justify-center gap-2">
                     <button type="button" className="btn-primary" onClick={browseTemplatesForDataPrep}>

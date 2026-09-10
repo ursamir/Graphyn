@@ -57,23 +57,31 @@ function templatePriority(name: string, nodeTypes: string[] | undefined, descrip
 }
 
 function applyProjectToGraph(graph: GraphIR, project: string, version?: string): GraphIR {
+  const datasetNodes = new Set([
+    'dataset_versioner',
+    'dataset_builder',
+    'audio_exporter',
+    'export',
+  ])
   const nodes = (graph.nodes ?? []).map((n) => {
     const cfg = { ...(n.config ?? {}) } as Record<string, unknown>
     let changed = false
-    // Stamp project(+version) onto dataset/export nodes; leave ingest input paths alone.
-    if (
-      n.node_type === 'dataset_versioner' ||
-      n.node_type === 'dataset_builder' ||
-      n.node_type === 'audio_exporter' ||
-      n.node_type === 'export' ||
-      'project' in cfg
-    ) {
+    // Stamp project(+version_tag) onto dataset/export nodes; leave ingest input paths alone.
+    if (datasetNodes.has(n.node_type) || 'project' in cfg) {
       if (cfg.project === undefined || cfg.project === null || cfg.project === '') {
         cfg.project = project
         changed = true
       }
     }
-    if (typeof cfg.output_dir === 'string' && cfg.output_dir.includes('workspace/artifacts/')) {
+    // Library loop: exporters/versioners write under datasets/output/{project}/{version_tag}.
+    // Do NOT rewrite into workspace/artifacts/{project}/...
+    if (datasetNodes.has(n.node_type)) {
+      const next = `workspace/datasets/output/${project}`
+      if (cfg.output_dir !== next) {
+        cfg.output_dir = next
+        changed = true
+      }
+    } else if (typeof cfg.output_dir === 'string' && cfg.output_dir.includes('workspace/artifacts/')) {
       const next = `workspace/artifacts/${project}/${n.node_type}`
       if (cfg.output_dir !== next) {
         cfg.output_dir = next
@@ -81,19 +89,15 @@ function applyProjectToGraph(graph: GraphIR, project: string, version?: string):
       }
     }
     if (version) {
+      // Stamp version_tag (not legacy `version`) for audio_exporter / dataset_versioner.
       if (
-        ('version' in cfg || n.node_type === 'dataset_versioner' || n.node_type === 'dataset_builder') &&
-        (cfg.version === undefined || cfg.version === null || cfg.version === '')
+        datasetNodes.has(n.node_type) ||
+        'version_tag' in cfg
       ) {
-        cfg.version = version
-        changed = true
-      }
-      if (
-        ('version_tag' in cfg || n.node_type === 'audio_exporter') &&
-        (cfg.version_tag === undefined || cfg.version_tag === null || cfg.version_tag === '')
-      ) {
-        cfg.version_tag = version
-        changed = true
+        if (cfg.version_tag === undefined || cfg.version_tag === null || cfg.version_tag === '') {
+          cfg.version_tag = version
+          changed = true
+        }
       }
     }
     return changed ? { ...n, config: cfg } : n
@@ -502,7 +506,7 @@ export default function ProjectsView() {
       <div className="shrink-0 border-b border-ink-200/70 bg-white/60 px-5 pt-5 pb-3">
         <PageHeader
           title="Projects"
-          description="Workspace for Data outputs — versions, snapshots, lineage (not a second file browser). Browse files in Data."
+          description="Projects = workspace over workspace/datasets/output/{project}. Versions appear only after a pipeline/export writes them — a draft project alone has no versions. Data = filesystem inputs/outputs for the same folders."
           actions={
             <div className="flex flex-wrap gap-2">
               <button type="button" className="btn-secondary" onClick={() => openData({ mode: 'outputs' })}>
@@ -536,7 +540,7 @@ export default function ProjectsView() {
         ) : projects.length === 0 ? (
           <EmptyState
             title="No dataset projects"
-            description="Create a named workspace above, or upload/ingest files under Library → Data first."
+            description="Create a named workspace above. Draft projects start with versions:[]. Run Templates → Builder (audio-classification) or merge under Data so versions appear under output/{project}."
             action={
               <button
                 type="button"
@@ -733,7 +737,27 @@ export default function ProjectsView() {
                     onConfirm={() => void restoreVersion()}
                   />
                 </div>
-                <KeyValue data={versions} empty="No versions." />
+                {versions.length === 0 ? (
+                  <EmptyState
+                    title="No versions yet"
+                    description="A draft project has versions:[] until a pipeline or export writes workspace/datasets/output/{project}/{version}. Open Templates/Builder (audio-classification) or browse Data outputs — this is not “no data” in Data."
+                    action={
+                      <div className="flex flex-wrap justify-center gap-2">
+                        <button type="button" className="btn-primary" onClick={() => setView('templates')}>
+                          Open Templates
+                        </button>
+                        <button type="button" className="btn-secondary" onClick={() => setView('builder')}>
+                          Open Builder
+                        </button>
+                        <button type="button" className="btn-secondary" onClick={() => openData({ mode: 'outputs' })}>
+                          Open Data
+                        </button>
+                      </div>
+                    }
+                  />
+                ) : (
+                  <KeyValue data={versions} />
+                )}
                 {versionStats != null && <KeyValue data={versionStats} />}
                 {versionSamples != null && <CollapsibleJson value={versionSamples} label="Samples" />}
               </section>
@@ -773,7 +797,11 @@ export default function ProjectsView() {
                       const name =
                         typeof s === 'string'
                           ? s
-                          : String((s as { name?: string }).name ?? `snapshot-${i}`)
+                          : String(
+                              (s as { snapshot_name?: string; name?: string }).snapshot_name ??
+                                (s as { name?: string }).name ??
+                                `snapshot-${i}`,
+                            )
                       return (
                         <li
                           key={name}

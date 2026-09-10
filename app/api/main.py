@@ -261,6 +261,34 @@ _OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 _INPUT_ROOT.mkdir(parents=True, exist_ok=True)
 _RUNS_ROOT.mkdir(parents=True, exist_ok=True)
 
+# One-shot abandoned-run reconcile at API import/startup (also available via
+# POST /system/cleanup). Skipped under pytest / GRAPHYN_SKIP_STARTUP_RECONCILE.
+# See app.core.run_cleanup.reconcile_abandoned_runs.
+import sys as _sys
+
+_skip_startup_reconcile = (
+    "pytest" in _sys.modules
+    or os.environ.get("GRAPHYN_SKIP_STARTUP_RECONCILE", "").strip().lower()
+    in ("1", "true", "yes")
+)
+if not _skip_startup_reconcile:
+    try:
+        from app.core.run_cleanup import reconcile_abandoned_runs as _reconcile_abandoned
+
+        _reconcile_result = _reconcile_abandoned()
+        if _reconcile_result.get("reconciled"):
+            _logger.info(
+                "Startup reconcile: marked %s abandoned RUNNING/QUEUED run(s) failed",
+                _reconcile_result["reconciled"],
+            )
+        else:
+            _logger.info(
+                "Startup reconcile: examined=%s reconciled=0",
+                _reconcile_result.get("examined", 0),
+            )
+    except Exception as exc:
+        _logger.warning("Startup reconcile of abandoned runs failed: %s", exc)
+
 _logger.info(
     "Static mounts resolved — /files → %s | /input-files → %s | /run-files → %s",
     _OUTPUT_ROOT,

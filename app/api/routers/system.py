@@ -68,6 +68,8 @@ class CleanupRequest(BaseModel):
     delete_cache: bool = True
     delete_artifacts: bool = False
     keep_latest: bool = True
+    reconcile_abandoned: bool = True
+    stale_after_hours: float = Field(1.0, ge=0)
 
 
 @router.post("/cleanup", summary="Clean up old runs and cache")
@@ -78,6 +80,11 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
     Currently running/paused runs are never deleted. When ``keep_latest`` is
     true (default), the run that ``latest/`` still points at is kept, including
     its ``workspace/artifacts/<slug>/runs/<id>`` folder.
+
+    By default (``reconcile_abandoned=true``), RUNNING/QUEUED journals with no
+    active worker/lease and age > ``stale_after_hours`` are marked ``failed``
+    with reason ``stale_reconciled`` before deletion policy runs. Journals are
+    never deleted by reconcile alone.
 
     Optional cache cleanup applies the same age cutoff under ``cache/``.
     When ``delete_artifacts`` is true, matching
@@ -92,6 +99,8 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
         delete_cache=body.delete_cache,
         delete_artifacts=body.delete_artifacts,
         keep_latest=body.keep_latest,
+        reconcile_abandoned=body.reconcile_abandoned,
+        stale_after_hours=body.stale_after_hours,
     )
 
 

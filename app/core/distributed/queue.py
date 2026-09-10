@@ -211,6 +211,21 @@ class JobQueue:
             job = self._jobs.get(job_id)
             return job is not None and job.status == "cancelled"
 
+    def has_active_jobs_for_run(self, run_id: str) -> bool:
+        """True if any pending/claimed/running job belongs to ``run_id``."""
+        rid = str(run_id or "").strip()
+        if not rid:
+            return False
+        with self._lock:
+            for job in self._jobs.values():
+                if str(job.run_id or "") == rid and job.status in (
+                    "pending",
+                    "claimed",
+                    "running",
+                ):
+                    return True
+        return False
+
 
     def _sync_from_store_unlocked(self, *, job_id: str | None = None) -> None:
         """Merge durable store snapshot into in-memory state (cross-process).

@@ -1,11 +1,12 @@
 """AudioExporterNode — write AudioSample objects to WAV files on disk.
 
 Organises output as:
-    {output_dir}/{split}/{label}/{id}.wav
+    {output_dir}/{version_tag}/{split}/{label}/{id}.wav
 
-Also writes:
-    {output_dir}/labels.csv   — id, path, label, split
-    {output_dir}/metadata.json — per-sample metadata
+Also writes under the version dir:
+    labels.csv     — id, path, label, split (paths relative to version dir)
+    metadata.json  — per-sample metadata
+    lineage.json   — version + optional run_id for Projects lineage
 
 Splits samples into train/val/test according to split_ratios.
 If a sample already has a 'split' key in its metadata, that value is used
@@ -16,6 +17,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 import random
 from pathlib import Path
 from typing import ClassVar, Literal
@@ -86,10 +88,11 @@ class AudioExporterNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = Field(default="workspace/artifacts/audio_export", title="Output dir", description="Directory under workspace/artifacts for written files.")
+        output_dir: str = Field(default="workspace/datasets/output/audio_export", title="Output dir", description="Project root under workspace/datasets/output/{project}; version_tag is appended.")
+        project: str = Field(default='', title="Project", description="Optional project name; when set, output_dir becomes workspace/datasets/output/{project}.")
         format: Literal["wav"] = Field(default='wav', title="Format", description="Output audio format. Currently wav only (soundfile PCM). One of: wav.")
         split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Train/val/test ratios as JSON; should sum to ~1.0.")
-        version_tag: str = Field(default='v1', title="Version tag", description="Dataset/export version label (e.g. v1, 2026-09-08).")
+        version_tag: str = Field(default='v1', title="Version tag", description="Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0).")
         random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible splits and sampling.")
         append: bool = Field(default=False, title="Append", description="Append files into an existing export tree instead of replacing it (On/Off).")
 
@@ -97,6 +100,7 @@ class AudioExporterNode(Node):
 
     # Maximum filename-collision retries before raising
     _MAX_COLLISION_RETRIES: ClassVar[int] = 9999
+    _VERSION_RE: ClassVar[re.Pattern[str]] = re.compile(r"^v\d+(\.\d+)*$")
 
     def process(self, samples: list[AudioSample]) -> list[AudioSample]:
         import soundfile as sf  # type: ignore
@@ -106,7 +110,21 @@ class AudioExporterNode(Node):
             return []
 
         cfg = self.config
-        out_root = Path(cfg.output_dir) / cfg.version_tag
+        version_tag = str(cfg.version_tag or "v1").strip() or "v1"
+        if not self._VERSION_RE.match(version_tag):
+            raise ValueError(
+                f"AudioExporterNode: version_tag {version_tag!r} must match "
+                "vN / vN.N.N (e.g. v1, v1.0.0) — not hash-style tags."
+            )
+        output_dir = str(cfg.output_dir or "").strip()
+        project = str(getattr(cfg, "project", "") or "").strip()
+        if project:
+            output_dir = f"workspace/datasets/output/{project}"
+        out_root = Path(output_dir) / version_tag
+
+        # Ensure project.json exists when exporting into datasets/output/{project}
+        if project or "/datasets/output/" in output_dir.replace("\\", "/"):
+            self._ensure_project_meta(Path(output_dir), project)
 
         # CRITICAL: validate output_dir is inside the workspace root to prevent
         # shutil.rmtree from deleting arbitrary filesystem directories.
@@ -114,7 +132,7 @@ class AudioExporterNode(Node):
         workspace_root = Path.cwd().resolve()
         if not str(out_root_resolved).startswith(str(workspace_root)):
             raise ValueError(
-                f"AudioExporterNode: output_dir '{cfg.output_dir}' resolves to "
+                f"AudioExporterNode: output_dir '{output_dir}' resolves to "
                 f"'{out_root_resolved}' which is outside the workspace root "
                 f"'{workspace_root}'. Refusing to proceed."
             )
@@ -190,7 +208,7 @@ class AudioExporterNode(Node):
                     log.warning("AudioExporterNode: sample %d has no data, skipping", idx)
                     continue
 
-                rel_path = str(wav_path.relative_to(out_root.parent))
+                rel_path = str(wav_path.relative_to(out_root)).replace("\\", "/")
                 rows.append({
                     "id": idx,
                     "path": rel_path,
@@ -211,6 +229,7 @@ class AudioExporterNode(Node):
             # so successfully written WAV files are not orphaned.
             if rows or meta_entries:
                 self._write_manifests(cfg, out_root, rows, meta_entries)
+                self._write_lineage(out_root, version_tag, len(rows))
 
         # Count by split for logging (uses the rows already written)
         split_counts: dict[str, int] = {}
@@ -266,3 +285,54 @@ class AudioExporterNode(Node):
         all_meta = existing_meta + meta_entries
         with open(meta_json, "w") as f:
             json.dump(all_meta, f, indent=2, default=str)
+
+    def _ensure_project_meta(self, project_dir: Path, project: str) -> None:
+        """Create project.json when missing so Projects sidebar discovers the export."""
+        try:
+            project_dir = Path(project_dir)
+            name = project or project_dir.name
+            if not name or name in {"output", "datasets", "workspace"}:
+                return
+            project_dir.mkdir(parents=True, exist_ok=True)
+            meta_path = project_dir / "project.json"
+            if meta_path.exists():
+                return
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc).isoformat()
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "name": name,
+                        "status": "draft",
+                        "created_at": now,
+                        "updated_at": now,
+                        "versions": [],
+                    },
+                    indent=2,
+                )
+                + '\n',
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            log.warning("AudioExporterNode: could not write project.json: %s", exc)
+
+    def _write_lineage(self, out_root: Path, version_tag: str, n_samples: int) -> None:
+        """Write lineage.json with run_id when the executor set ``self._run_id``."""
+        from datetime import datetime, timezone
+
+        lineage = {
+            "version": version_tag,
+            "n_samples": n_samples,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "node_type": self.node_type,
+        }
+        run_id = str(getattr(self, "_run_id", "") or "").strip()
+        if run_id:
+            lineage["run_id"] = run_id
+        try:
+            with open(out_root / "lineage.json", "w", encoding="utf-8") as f:
+                json.dump(lineage, f, indent=2)
+        except OSError as exc:
+            log.warning("AudioExporterNode: could not write lineage.json: %s", exc)
+

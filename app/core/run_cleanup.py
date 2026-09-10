@@ -4,8 +4,8 @@ Bounded Context:  Platform Infrastructure
 Responsibility:   Path-jailed deletion of run journals and workspace artifact
                   run folders, plus system cleanup policy.
 Owns:             cleanup_workspace, delete_run, helper path-jail rmtree.
-Public Surface:   cleanup_workspace, delete_run, FINISHED_STATUSES,
-                  ACTIVE_STATUSES.
+Public Surface:   cleanup_workspace, delete_run, reconcile_abandoned_runs,
+                  FINISHED_STATUSES, ACTIVE_STATUSES, RECONCILE_STATUSES.
 Must NOT:         Delete examples/, datasets/input, or anything outside
                   {project_dir}/runs, cache, artifacts.
 Dependencies:     shutil, json, datetime, pathlib; app.core.config;
@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 FINISHED_STATUSES = frozenset({"completed", "failed", "cancelled"})
 ACTIVE_STATUSES = frozenset({"running", "paused"})
+# Journals left "running"/"queued" after process death — reconcile these.
+RECONCILE_STATUSES = frozenset({"running", "queued"})
+DEFAULT_STALE_AFTER_HOURS = 1.0
 
 
 class RunInProgressError(RuntimeError):
@@ -244,6 +247,158 @@ def _prune_empty_runs_dir(slug: str) -> None:
         pass
 
 
+
+def _parse_created_at(meta: dict[str, Any]) -> datetime | None:
+    raw = meta.get("created_at") or meta.get("started_at") or meta.get("timestamp")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _run_age_seconds(run_path: Path, meta: dict[str, Any]) -> float:
+    """Age from created_at when present, else directory mtime."""
+    created = _parse_created_at(meta)
+    if created is not None:
+        return max(0.0, (_now() - created).total_seconds())
+    try:
+        return max(0.0, _now().timestamp() - run_path.stat().st_mtime)
+    except OSError:
+        return 0.0
+
+
+def _has_active_worker_or_lease(run_id: str) -> bool:
+    """True if this process (or Redis peer / job queue) still owns the run."""
+    try:
+        from app.core.run_control import get_active_run, is_active_on_another_worker
+
+        if get_active_run(run_id) is not None:
+            return True
+        if is_active_on_another_worker(run_id):
+            return True
+    except Exception as exc:
+        logger.debug("active-run check failed for %s: %s", run_id, exc)
+
+    try:
+        from app.core.distributed.queue import get_job_queue
+
+        queue = get_job_queue()
+        if hasattr(queue, "has_active_jobs_for_run"):
+            return bool(queue.has_active_jobs_for_run(run_id))
+        # Fallback: inspect in-memory jobs dict (tests / older queues).
+        jobs = getattr(queue, "_jobs", {}) or {}
+        for job in jobs.values():
+            status = str(getattr(job, "status", "") or "").lower()
+            jrun = str(getattr(job, "run_id", "") or "")
+            if jrun == run_id and status in {"pending", "claimed", "running"}:
+                return True
+    except Exception as exc:
+        logger.debug("job-queue check failed for %s: %s", run_id, exc)
+    return False
+
+
+def _atomic_write_meta(run_path: Path, meta: dict[str, Any]) -> None:
+    meta_file = run_path / "meta.json"
+    tmp = meta_file.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(meta_file)
+
+
+def reconcile_abandoned_runs(
+    *,
+    stale_after_hours: float | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Mark abandoned RUNNING/QUEUED journals terminal without deleting them.
+
+    Approach (single clear path): call from ``POST /system/cleanup`` (default on)
+    and once at API process startup. We deliberately do **not** reconcile on
+    every ``GET /runs`` list — that would add per-request I/O and surprise
+    clients mid-poll. Journals are never deleted here.
+
+    Rule: meta status in {running, queued} AND no matching active RunManager /
+    Redis peer / JobQueue lease AND age > threshold → status=failed with
+    reason ``abandoned`` / ``stale_reconciled``.
+    """
+    import os
+
+    if stale_after_hours is None:
+        raw = os.environ.get("GRAPHYN_STALE_RUN_HOURS", "").strip()
+        try:
+            stale_after_hours = float(raw) if raw else DEFAULT_STALE_AFTER_HOURS
+        except ValueError:
+            stale_after_hours = DEFAULT_STALE_AFTER_HOURS
+    threshold_s = max(0.0, float(stale_after_hours) * 3600.0)
+
+    runs_root = runs_dir()
+    examined = 0
+    reconciled: list[str] = []
+    skipped_active = 0
+    skipped_too_new = 0
+    skipped_other = 0
+
+    if not runs_root.exists():
+        return {
+            "reconciled": 0,
+            "reconciled_run_ids": [],
+            "examined": 0,
+            "skipped_active": 0,
+            "skipped_too_new": 0,
+            "skipped_other": 0,
+            "stale_after_hours": stale_after_hours,
+            "dry_run": dry_run,
+        }
+
+    for entry in list(runs_root.iterdir()):
+        if not entry.is_dir() or not _jailed(entry, runs_root):
+            continue
+        meta = _load_meta(entry)
+        status = _run_status(entry, meta)
+        if status not in RECONCILE_STATUSES:
+            continue
+        examined += 1
+        run_id = str(meta.get("run_id") or entry.name)
+        age = _run_age_seconds(entry, meta)
+        if age < threshold_s:
+            skipped_too_new += 1
+            continue
+        if _has_active_worker_or_lease(run_id):
+            skipped_active += 1
+            continue
+        if dry_run:
+            reconciled.append(run_id)
+            continue
+        updated = dict(meta)
+        updated["run_id"] = run_id
+        updated["status"] = "failed"
+        updated["error"] = "abandoned"
+        updated["reason"] = "stale_reconciled"
+        updated["reconciled_at"] = _now().isoformat()
+        try:
+            _atomic_write_meta(entry, updated)
+        except OSError as exc:
+            logger.warning("failed to reconcile run %s: %s", run_id, exc)
+            skipped_other += 1
+            continue
+        reconciled.append(run_id)
+
+    return {
+        "reconciled": len(reconciled),
+        "reconciled_run_ids": reconciled,
+        "examined": examined,
+        "skipped_active": skipped_active,
+        "skipped_too_new": skipped_too_new,
+        "skipped_other": skipped_other,
+        "stale_after_hours": stale_after_hours,
+        "dry_run": dry_run,
+    }
+
+
 def delete_run(run_id: str, *, require_finished: bool = True) -> dict[str, Any]:
     """Delete a run journal and its workspace artifact run folder.
 
@@ -278,12 +433,34 @@ def cleanup_workspace(
     delete_cache: bool = True,
     delete_artifacts: bool = False,
     keep_latest: bool = True,
+    reconcile_abandoned: bool = True,
+    stale_after_hours: float | None = None,
 ) -> dict[str, Any]:
     """Apply cleanup policy inside the project jail.
 
     ``older_than_days`` may be 0 (delete all finished runs, subject to
     keep_latest / running guards).
+
+    When ``reconcile_abandoned`` is true (default), abandoned RUNNING/QUEUED
+    journals older than ``stale_after_hours`` are marked failed first — see
+    :func:`reconcile_abandoned_runs`. Journals are never deleted by reconcile.
     """
+    reconcile_stats: dict[str, Any] = {
+        "reconciled": 0,
+        "reconciled_run_ids": [],
+        "examined": 0,
+        "skipped_active": 0,
+        "skipped_too_new": 0,
+        "skipped_other": 0,
+        "stale_after_hours": stale_after_hours,
+        "dry_run": False,
+    }
+    if reconcile_abandoned:
+        reconcile_stats = reconcile_abandoned_runs(
+            stale_after_hours=stale_after_hours,
+            dry_run=False,
+        )
+
     days = max(0, int(older_than_days))
     cutoff = _now() - timedelta(days=days)
     runs_deleted = 0
@@ -416,4 +593,5 @@ def cleanup_workspace(
         "runs_skipped_running": skipped_running,
         "older_than_days": days,
         "keep_latest": keep_latest,
+        "reconcile": reconcile_stats,
     }
