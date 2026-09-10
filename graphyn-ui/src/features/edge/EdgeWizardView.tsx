@@ -100,6 +100,29 @@ export default function EdgeWizardView() {
     return () => window.removeEventListener('hashchange', apply)
   }, [])
 
+  // Keep project/version in the hash across wizard steps so the chip survives navigation.
+  React.useEffect(() => {
+    if (!linkedProject && !linkedVersion) return
+    const params = new URLSearchParams()
+    if (linkedProject) params.set('project', linkedProject)
+    if (linkedVersion) params.set('version', linkedVersion)
+    const next = `#/edge?${params.toString()}`
+    if (window.location.hash !== next) {
+      window.history.replaceState(null, '', next)
+    }
+  }, [linkedProject, linkedVersion, step])
+
+  // Wire linked dataset into path-like fields when still at defaults.
+  React.useEffect(() => {
+    if (!linkedProject) return
+    setPackageName((prev) => (prev === 'edge_model' ? `${linkedProject}_edge` : prev))
+    setModelPath((prev) =>
+      prev === 'workspace/artifacts/models/saved_model'
+        ? `workspace/artifacts/${linkedProject}/saved_model`
+        : prev,
+    )
+  }, [linkedProject])
+
   const configuredGraph = React.useMemo(() => {
     const base = graph ?? EDGE_DEPLOY_TEMPLATE
     return applyEdgeConfig(base, {
@@ -387,6 +410,18 @@ export default function EdgeWizardView() {
                 onChange={(e) => setModelPath(e.target.value)}
                 placeholder="workspace/artifacts/models/saved_model"
               />
+              {linkedProject ? (
+                <span className="mt-1 block text-[11px] text-ink-400">
+                  Linked dataset <code className="font-mono">{linkedProject}</code>
+                  {linkedVersion ? (
+                    <>
+                      {' '}
+                      / <code className="font-mono">{linkedVersion}</code>
+                    </>
+                  ) : null}{' '}
+                  — adjust path if your trainer wrote elsewhere.
+                </span>
+              ) : null}
             </label>
             <label className="block text-sm sm:col-span-2">
               <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">

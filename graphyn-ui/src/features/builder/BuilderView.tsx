@@ -29,6 +29,8 @@ import {
   AlertTriangle,
   ExternalLink,
   X,
+  Database,
+  FolderKanban,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -142,6 +144,10 @@ function BuilderInner() {
   const pendingProposalCount = useAppStore((s) => s.pendingProposalCount)
   const openProposals = useAppStore((s) => s.openProposals)
   const openRun = useAppStore((s) => s.openRun)
+  const openData = useAppStore((s) => s.openData)
+  const openProjects = useAppStore((s) => s.openProjects)
+  const builderDataset = useAppStore((s) => s.builderDataset)
+  const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
   const setGetCanvasGraph = useAppStore((s) => s.setGetCanvasGraph)
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphynNodeData>([])
@@ -827,7 +833,7 @@ function BuilderInner() {
                 description={
                   bootStatus === 401 || !getApiToken()
                     ? 'Paste your API token in Settings to load the node catalog.'
-                    : 'Install a plugin to populate the catalog, then add nodes here.'
+                    : 'Install a plugin to populate the catalog, then add nodes here — or browse Data / Projects while you wait.'
                 }
                 action={
                   bootStatus === 401 || !getApiToken() ? (
@@ -835,16 +841,28 @@ function BuilderInner() {
                       Open Settings
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={() => {
-                        setView('plugins')
-                        window.history.replaceState(null, '', '#/plugins')
-                      }}
-                    >
-                      Open Plugins
-                    </button>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => {
+                          setView('plugins')
+                          window.history.replaceState(null, '', '#/plugins')
+                        }}
+                      >
+                        Open Plugins
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => openData({ mode: 'inputs' })}
+                      >
+                        <Database className="h-3.5 w-3.5" /> Open Data
+                      </button>
+                      <button type="button" className="btn-secondary" onClick={() => openProjects()}>
+                        <FolderKanban className="h-3.5 w-3.5" /> Open Projects
+                      </button>
+                    </div>
                   )
                 }
               />
@@ -918,6 +936,42 @@ function BuilderInner() {
             >
               {pendingProposalCount} proposal{pendingProposalCount === 1 ? '' : 's'}
             </button>
+          )}
+          {builderDataset?.project && (
+            <div
+              className="inline-flex items-center gap-1.5 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950"
+              title={
+                builderDataset.version
+                  ? `${builderDataset.project} / ${builderDataset.version}`
+                  : builderDataset.project
+              }
+            >
+              <span>
+                Dataset: {builderDataset.project}
+                {builderDataset.version ? ` / ${builderDataset.version}` : ''}
+              </span>
+              <button
+                type="button"
+                className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-accent-800 hover:bg-accent-100"
+                onClick={() =>
+                  openData({
+                    mode: 'outputs',
+                    project: builderDataset.project,
+                    version: builderDataset.version,
+                  })
+                }
+              >
+                Open Data
+              </button>
+              <button
+                type="button"
+                className="rounded-full p-0.5 text-accent-700 hover:bg-accent-100"
+                aria-label="Clear dataset link"
+                onClick={() => setBuilderDataset(null)}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
           )}
           {!isRunning ? (
             <button
@@ -1063,17 +1117,43 @@ function BuilderInner() {
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
               <div className="pointer-events-auto max-w-sm rounded-3xl border border-ink-200/80 bg-white/90 px-8 py-7 text-center shadow-soft backdrop-blur">
                 <div className="text-lg font-semibold text-ink-950">Start a pipeline</div>
-                <p className="mt-2 text-sm leading-relaxed text-ink-500">Pick a node from the left, or open a template and run it.</p>
-                <button
-                  type="button"
-                  className="btn-primary mt-3"
-                  onClick={() => {
-                    setView('templates')
-                    window.history.replaceState(null, '', '#/templates')
-                  }}
-                >
-                  Open Templates
-                </button>
+                <p className="mt-2 text-sm leading-relaxed text-ink-500">
+                  Pick a node from the left, open a template, or pull files / a dataset workspace into the loop.
+                </p>
+                <div className="mt-3 flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => {
+                      setView('templates')
+                      window.history.replaceState(null, '', '#/templates')
+                    }}
+                  >
+                    Open Templates
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      openData({
+                        mode: 'outputs',
+                        project: builderDataset?.project,
+                        version: builderDataset?.version,
+                      })
+                    }
+                  >
+                    <Database className="h-3.5 w-3.5" /> Open Data
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      openProjects({ project: builderDataset?.project })
+                    }
+                  >
+                    <FolderKanban className="h-3.5 w-3.5" /> Open Projects
+                  </button>
+                </div>
               </div>
             </div>
           )}

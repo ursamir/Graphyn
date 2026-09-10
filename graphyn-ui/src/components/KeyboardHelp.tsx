@@ -13,6 +13,7 @@ const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: strin
       { keys: 'E', action: 'Experiments' },
       { keys: 'A', action: 'Artifacts' },
       { keys: 'D', action: 'Data' },
+      { keys: 'J', action: 'Projects' },
       { keys: 'G', action: 'Edge deploy' },
       { keys: 'W', action: 'Workers' },
       { keys: 'L', action: 'Plugins' },

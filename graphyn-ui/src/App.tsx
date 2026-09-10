@@ -135,6 +135,7 @@ const JUMP_KEYS: Record<string, AppView> = {
   e: 'experiments',
   a: 'artifacts',
   d: 'data',
+  j: 'projects',
   g: 'edge',
   w: 'workers',
   l: 'plugins',

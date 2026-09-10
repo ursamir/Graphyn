@@ -73,6 +73,9 @@ interface AppState {
   pendingGraph: GraphIR | null
   loadGraphIntoBuilder: (graph: GraphIR) => void
   consumePendingGraph: () => GraphIR | null
+  /** Active dataset project(+version) linked into Builder (Projects → Open in Builder). */
+  builderDataset: { project: string; version?: string } | null
+  setBuilderDataset: (ctx: { project: string; version?: string } | null) => void
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -175,4 +178,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (g) set({ pendingGraph: null })
     return g
   },
+  builderDataset: null,
+  setBuilderDataset: (builderDataset) => set({ builderDataset }),
 }))

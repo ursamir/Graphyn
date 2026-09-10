@@ -1,6 +1,7 @@
 import React from 'react'
 import { RefreshCw, Copy, Pencil } from 'lucide-react'
 import { apiJson } from '../../api/client'
+import type { GraphIR } from '../../types/graph'
 import { useAppStore } from '../../store/appStore'
 import {
   ConfirmButton,
@@ -36,6 +37,71 @@ function parseProjectsHash(): { project?: string; tab?: Tab } {
   return { project, tab }
 }
 
+
+const DATA_PREP_NAME_HINTS = [
+  'audio-classification',
+  'speech-commands',
+  'dataset_ingest',
+  'data-prep',
+  'data_prep',
+]
+
+function templatePriority(name: string, nodeTypes: string[] | undefined, description?: string): number {
+  const blob = [name, description ?? '', ...(nodeTypes ?? [])].join(' ').toLowerCase()
+  let score = 0
+  if (name === 'audio-classification' || name.endsWith('/audio-classification')) score += 100
+  if (/speech-commands/.test(blob)) score += 80
+  if (/dataset_ingest/.test(blob) || (nodeTypes ?? []).includes('dataset_ingest')) score += 60
+  if (/audio-classification|data-prep|data_prep|ingest/.test(blob)) score += 40
+  return score
+}
+
+function applyProjectToGraph(graph: GraphIR, project: string, version?: string): GraphIR {
+  const nodes = (graph.nodes ?? []).map((n) => {
+    const cfg = { ...(n.config ?? {}) } as Record<string, unknown>
+    let changed = false
+    // Stamp project(+version) onto dataset/export nodes; leave ingest input paths alone.
+    if (
+      n.node_type === 'dataset_versioner' ||
+      n.node_type === 'dataset_builder' ||
+      n.node_type === 'audio_exporter' ||
+      n.node_type === 'export' ||
+      'project' in cfg
+    ) {
+      if (cfg.project === undefined || cfg.project === null || cfg.project === '') {
+        cfg.project = project
+        changed = true
+      }
+    }
+    if (typeof cfg.output_dir === 'string' && cfg.output_dir.includes('workspace/artifacts/')) {
+      const next = `workspace/artifacts/${project}/${n.node_type}`
+      if (cfg.output_dir !== next) {
+        cfg.output_dir = next
+        changed = true
+      }
+    }
+    if (version) {
+      if (
+        ('version' in cfg || n.node_type === 'dataset_versioner' || n.node_type === 'dataset_builder') &&
+        (cfg.version === undefined || cfg.version === null || cfg.version === '')
+      ) {
+        cfg.version = version
+        changed = true
+      }
+      if (
+        ('version_tag' in cfg || n.node_type === 'audio_exporter') &&
+        (cfg.version_tag === undefined || cfg.version_tag === null || cfg.version_tag === '')
+      ) {
+        cfg.version_tag = version
+        changed = true
+      }
+    }
+    return changed ? { ...n, config: cfg } : n
+  })
+  const meta = { ...(graph.metadata ?? {}), name: graph.metadata?.name || project }
+  return { ...graph, nodes, metadata: meta }
+}
+
 function lineageIds(lineage: unknown): { runId?: string; artifactId?: string } {
   if (!lineage || typeof lineage !== 'object') return {}
   const o = lineage as Record<string, unknown>
@@ -50,6 +116,8 @@ export default function ProjectsView() {
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const setView = useAppStore((s) => s.setView)
+  const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
+  const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const initialHash = React.useMemo(() => parseProjectsHash(), [])
   const [projects, setProjects] = React.useState<Project[] | null>(null)
   const [selected, setSelected] = React.useState<string | null>(initialHash.project ?? null)
@@ -151,15 +219,80 @@ export default function ProjectsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const openInBuilder = () => {
-    setView('builder')
-    window.history.replaceState(null, '', '#/builder')
-    pushToast(
-      selected
-        ? `Builder ready — use project "${selected}" in dataset nodes or open a data-prep template`
-        : 'Open a data-prep template or wire dataset nodes on the canvas',
-      'info',
-    )
+  const openInBuilder = async () => {
+    if (!selected) {
+      setView('builder')
+      window.history.replaceState(null, '', '#/builder')
+      pushToast('Open a data-prep template or wire dataset nodes on the canvas', 'info')
+      return
+    }
+    const version = versionFocus.trim() || undefined
+    setBuilderDataset({ project: selected, version })
+
+    try {
+      const raw = await apiJson<unknown>('/pipelines/templates')
+      const list = Array.isArray(raw)
+        ? raw.map((item) => {
+            if (typeof item === 'string') return { name: item }
+            if (item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string') {
+              return item as { name: string; description?: string; node_types?: string[] }
+            }
+            return { name: String(item) }
+          })
+        : []
+      const preferredNames = [
+        'audio-classification',
+        'ex-02-speech-commands',
+        'ex-06-speech-commands-e2e',
+        ...DATA_PREP_NAME_HINTS,
+      ]
+      let pick: string | undefined
+      for (const hint of preferredNames) {
+        const hit = list.find((t) => t.name === hint || t.name.includes(hint))
+        if (hit) {
+          pick = hit.name
+          break
+        }
+      }
+      if (!pick) {
+        const ranked = list
+          .map((t) => ({
+            ...t,
+            score: templatePriority(t.name, t.node_types, t.description),
+          }))
+          .filter((t) => t.score > 0)
+          .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+        pick = ranked[0]?.name
+      }
+
+      if (pick) {
+        const data = await apiJson<{ graph?: GraphIR }>(
+          `/pipelines/templates/${encodeURIComponent(pick)}`,
+        )
+        if (data.graph) {
+          const graph = applyProjectToGraph(data.graph, selected, version)
+          loadGraphIntoBuilder(graph)
+          pushToast(`Opened ${pick} with dataset "${selected}"`, 'success')
+          return
+        }
+      }
+
+      setView('builder')
+      window.history.replaceState(null, '', '#/builder')
+      pushToast(
+        `Builder ready — dataset "${selected}" linked (no data-prep template found)`,
+        'info',
+      )
+    } catch (err) {
+      setView('builder')
+      window.history.replaceState(null, '', '#/builder')
+      pushToast(
+        err instanceof Error
+          ? `Dataset "${selected}" linked — ${err.message}`
+          : `Dataset "${selected}" linked`,
+        'info',
+      )
+    }
   }
 
   const useInEdge = () => {
@@ -475,7 +608,7 @@ export default function ProjectsView() {
                   >
                     Browse files
                   </button>
-                  <button type="button" className="btn-secondary" onClick={openInBuilder}>
+                  <button type="button" className="btn-secondary" onClick={() => void openInBuilder()}>
                     Open in Builder
                   </button>
                   <button type="button" className="btn-secondary" onClick={useInEdge}>
