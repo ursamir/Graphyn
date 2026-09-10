@@ -13,10 +13,11 @@ export function EmptyState({
   action?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink-200 bg-white/60 px-6 py-16 text-center">
-      <div className="text-type-section text-ink-800">{title}</div>
-      {description && <p className="mt-2 max-w-md text-type-body text-ink-500">{description}</p>}
-      {action && <div className="mt-4">{action}</div>}
+    <div className="empty-state-shell">
+      <div className="mb-3 h-10 w-10 rounded-2xl border border-ink-200/60 bg-white shadow-sm" aria-hidden />
+      <div className="text-type-section tracking-tight text-ink-900">{title}</div>
+      {description && <p className="mt-2 max-w-md text-type-body leading-relaxed text-ink-500">{description}</p>}
+      {action && <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{action}</div>}
     </div>
   )
 }
@@ -297,12 +298,12 @@ export function NeedProjectPrompt({
 }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <div className="mx-auto max-w-md rounded-2xl border border-ink-200/80 bg-white px-6 py-10 text-center shadow-sm">
-        <p className="text-base font-semibold text-ink-950">Open or create a project to start work</p>
-        <p className="mt-2 text-sm leading-relaxed text-ink-500">
-          Builder, Runs, and Experiments are scoped to a project. Global Data, Templates, and Proposals stay available from the sidebar.
+      <div className="mx-auto max-w-md rounded-2xl border border-ink-200/50 bg-gradient-to-b from-white to-[#f7f9fb] px-8 py-12 text-center shadow-sm">
+        <p className="text-base font-semibold tracking-tight text-ink-950">Open or create a project to start work</p>
+        <p className="mt-2.5 text-sm leading-relaxed text-ink-500">
+          Editor, Runs, and Experiments stay scoped to a workspace. Global Data, Templates, and Proposals remain in the sidebar.
         </p>
-        <button type="button" className="btn-primary mt-5" onClick={onOpenProjects}>
+        <button type="button" className="btn-primary mt-6" onClick={onOpenProjects}>
           Open Projects
         </button>
       </div>
@@ -322,13 +323,13 @@ export function PageHeader({
   scope?: 'project' | 'global'
 }) {
   return (
-    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-type-page text-ink-950">{title}</h1>
+    <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+      <div className="min-w-0 max-w-3xl">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <h1 className="text-type-page tracking-tight text-ink-950">{title}</h1>
           {scope ? <ScopeBadge scope={scope} /> : null}
         </div>
-        {description && <p className="mt-0.5 max-w-2xl text-type-body text-ink-500">{description}</p>}
+        {description && <p className="mt-1.5 max-w-2xl text-type-body leading-relaxed text-ink-500">{description}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </div>

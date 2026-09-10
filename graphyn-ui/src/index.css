@@ -4,9 +4,11 @@
 
 :root {
   color-scheme: light;
-  --shadow-sm: 0 1px 2px rgba(26, 33, 41, 0.05);
-  --shadow-md: 0 8px 24px rgba(26, 33, 41, 0.08), 0 1px 2px rgba(26, 33, 41, 0.04);
-  --shadow-lg: 0 18px 50px rgba(26, 33, 41, 0.14);
+  --shadow-sm: 0 1px 2px rgba(26, 33, 41, 0.04);
+  --shadow-md: 0 4px 16px rgba(26, 33, 41, 0.06), 0 1px 2px rgba(26, 33, 41, 0.03);
+  --shadow-lg: 0 12px 40px rgba(26, 33, 41, 0.10);
+  --border-soft: rgba(26, 33, 41, 0.08);
+  --surface-muted: #f7f9fb;
 }
 
 html,
@@ -18,9 +20,10 @@ body,
 body {
   margin: 0;
   font-family: Inter, system-ui, sans-serif;
-  background: #eef2f6;
+  background: #f3f5f8;
   color: #1a2129;
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.011em;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
@@ -100,9 +103,9 @@ textarea:focus-visible {
 }
 
 .bg-canvas {
-  background-color: #f0f0f0;
-  background-image: radial-gradient(#c8c8c8 1px, transparent 1px);
-  background-size: 18px 18px;
+  background-color: #f6f7f9;
+  background-image: radial-gradient(rgba(26, 33, 41, 0.07) 1px, transparent 1px);
+  background-size: 20px 20px;
 }
 
 @layer components {
@@ -137,9 +140,24 @@ textarea:focus-visible {
     @apply bg-ink-950 text-white shadow-sm hover:bg-ink-800 hover:text-white;
   }
   .surface-card {
-    @apply rounded-2xl border border-ink-200/70 bg-white shadow-sm;
+    @apply rounded-2xl border border-ink-200/60 bg-white shadow-sm;
+  }
+  .editorial-card {
+    @apply rounded-2xl border border-ink-200/50 bg-white p-4 shadow-sm transition;
+    box-shadow: var(--shadow-sm);
+  }
+  .editorial-card:hover {
+    box-shadow: var(--shadow-md);
+    border-color: rgba(26, 33, 41, 0.12);
+  }
+  .page-shell-header {
+    @apply shrink-0 border-b border-ink-200/50 bg-white/70 px-5 pt-5 pb-3 backdrop-blur-md;
+  }
+  .empty-state-shell {
+    @apply flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink-200/70 bg-gradient-to-b from-white to-[#f7f9fb] px-8 py-16 text-center;
   }
 }
+
 
 
 @layer utilities {
@@ -165,10 +183,10 @@ textarea:focus-visible {
 }
 
 .graphyn-node {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 3px rgba(26, 33, 41, 0.06), 0 0 0 1px rgba(26, 33, 41, 0.05);
 }
 .graphyn-node.is-selected {
-  box-shadow: 0 0 0 2px #111, 0 8px 24px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 0 0 2px #159288, 0 6px 18px rgba(21, 146, 136, 0.18);
 }
 .graphyn-handle {
   width: 14px !important;

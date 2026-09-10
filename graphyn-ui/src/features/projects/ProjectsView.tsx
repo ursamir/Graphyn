@@ -512,7 +512,7 @@ export default function ProjectsView() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 border-b border-ink-200/70 bg-white/60 px-5 pt-5 pb-3">
+      <div className="page-shell-header">
         <PageHeader
           title={selected ? 'Workspace' : 'Workspaces'}
           scope={selected ? 'project' : 'global'}
@@ -572,8 +572,8 @@ export default function ProjectsView() {
                 <button
                   type="button"
                   onClick={() => void open(p.name)}
-                  className={`w-full rounded-xl border px-3 py-2 text-left ${
-                    selected === p.name ? 'border-accent-400 bg-accent-50' : 'border-ink-200 bg-white'
+                  className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${
+                    selected === p.name ? 'border-accent-300/80 bg-accent-50/80 shadow-sm' : 'border-ink-200/70 bg-white hover:border-ink-300 hover:bg-ink-50/40'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -589,9 +589,9 @@ export default function ProjectsView() {
 
       <div className="overflow-y-auto p-4 space-y-4">
         {!selected ? (
-          <div className="mx-auto max-w-md rounded-2xl border border-ink-200/80 bg-white px-6 py-8 shadow-sm">
-            <h3 className="text-lg font-semibold text-ink-950">Open or create a project to start work</h3>
-            <p className="mt-2 text-sm leading-relaxed text-ink-500">
+          <div className="mx-auto max-w-lg rounded-2xl border border-ink-200/50 bg-gradient-to-b from-white to-[#f7f9fb] px-8 py-10 shadow-sm">
+            <h3 className="text-lg font-semibold tracking-tight text-ink-950">Open or create a project to start work</h3>
+            <p className="mt-2.5 text-sm leading-relaxed text-ink-500">
               Like opening a folder in an IDE — a project is the workspace for pipelines (Editor), runs, experiments, and linked data under{' '}
               <code className="font-mono text-[12px] text-ink-700">{'workspace/datasets/output/{project}'}</code>.
             </p>
@@ -605,8 +605,8 @@ export default function ProjectsView() {
           <>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="text-lg font-semibold text-ink-950">{selected}</h3>
-                <p className="mt-1 text-xs text-ink-500">
+                <h3 className="text-xl font-semibold tracking-tight text-ink-950">{selected}</h3>
+                <p className="mt-1.5 text-xs leading-relaxed text-ink-500">
                   Opened workspace · key <code className="font-mono">{selected}</code>
                   {versionFocus ? <> / <code className="font-mono">{versionFocus}</code></> : null}
                 </p>
@@ -630,8 +630,8 @@ export default function ProjectsView() {
               </div>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-xl border border-accent-200/70 bg-white p-3 shadow-sm sm:col-span-2 xl:col-span-2">
+            <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="editorial-card border-accent-200/40 sm:col-span-2 xl:col-span-2">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Linked data</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">
                   {links.inputs.length} input{links.inputs.length === 1 ? '' : 's'} · {versionOptions.length} version{versionOptions.length === 1 ? '' : 's'}
@@ -705,7 +705,7 @@ export default function ProjectsView() {
                   </ul>
                 )}
               </div>
-              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
+              <div className="editorial-card">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Pipelines</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">Editor</div>
                 <p className="mt-1 text-xs text-ink-500">Primary canvas — stamp this workspace and run.</p>
@@ -725,7 +725,7 @@ export default function ProjectsView() {
                   </button>
                 </div>
               </div>
-              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
+              <div className="editorial-card">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Runs</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">
                   {recentRuns.length === 0 ? 'No runs yet' : `${recentRuns.length} matched`}
@@ -796,7 +796,7 @@ export default function ProjectsView() {
                   </>
                 )}
               </div>
-              <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
+              <div className="editorial-card">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Experiments</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">Compare runs</div>
                 <p className="mt-1 text-xs text-ink-500">Params and metrics across runs in this workspace.</p>

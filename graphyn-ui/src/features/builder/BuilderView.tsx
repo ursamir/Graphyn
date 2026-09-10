@@ -988,7 +988,7 @@ function BuilderInner() {
         </div>
         {catalogOpen ? (
         <>
-        <div className="sticky top-0 z-10 border-b border-ink-100 bg-white p-2">
+        <div className="sticky top-0 z-10 border-b border-ink-100/80 bg-white/95 p-2 backdrop-blur-sm">
           <input
             id="builder-catalog-search"
             value={filter}
@@ -1120,7 +1120,7 @@ function BuilderInner() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200/70 bg-white/90 px-3 py-2 backdrop-blur">
+        <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200/50 bg-white/80 px-3 py-1.5 backdrop-blur-md">
           <span
             className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950"
             title="Editor scoped to open workspace"
