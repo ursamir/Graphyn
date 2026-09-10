@@ -102,7 +102,7 @@ export default function ExperimentsView() {
   const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
   const activeProject = useAppStore((s) => s.activeProject)
-  const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const closeProject = useAppStore((s) => s.closeProject)
   const openProjects = useAppStore((s) => s.openProjects)
 
   const [blocks, setBlocks] = React.useState<ExperimentBlock[] | null>(null)
@@ -278,7 +278,7 @@ export default function ExperimentsView() {
           <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => openProjects()}>
             Switch
           </button>
-          <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => setActiveProject(null)}>
+          <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => closeProject()}>
             Clear
           </button>
         </span>

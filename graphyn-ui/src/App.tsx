@@ -173,12 +173,15 @@ export default function App() {
   const openProjects = useAppStore((s) => s.openProjects)
   const activeProject = useAppStore((s) => s.activeProject)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const closeProject = useAppStore((s) => s.closeProject)
   const openProject = useAppStore((s) => s.openProject)
   const statusMessage = useAppStore((s) => s.statusMessage)
+  const runOutcome = useAppStore((s) => s.runOutcome)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const isRunning = useAppStore((s) => s.isRunning)
   const toasts = useAppStore((s) => s.toasts)
   const dismissToast = useAppStore((s) => s.dismissToast)
+  const dismissAllToasts = useAppStore((s) => s.dismissAllToasts)
   const pushToast = useAppStore((s) => s.pushToast)
   const bootError = useAppStore((s) => s.bootError)
   const bootStatus = useAppStore((s) => s.bootStatus)
@@ -199,6 +202,11 @@ export default function App() {
   const [narrow, setNarrow] = React.useState(() =>
     typeof window !== 'undefined' ? !window.matchMedia('(min-width: 768px)').matches : false,
   )
+  /** When a project is open, Global/Admin is collapsed by default (IDE-first). */
+  const [globalNavOpen, setGlobalNavOpen] = React.useState(false)
+  React.useEffect(() => {
+    if (activeProject) setGlobalNavOpen(false)
+  }, [activeProject])
 
   React.useEffect(() => {
     const mq = window.matchMedia('(min-width: 768px)')
@@ -430,6 +438,15 @@ export default function App() {
       ? statusMessage
       : 'Running'
     : statusMessage
+  const chipTone = isRunning
+    ? 'bg-amber-100 text-amber-900'
+    : runOutcome === 'failed'
+      ? 'bg-rose-100 text-rose-800'
+      : runOutcome === 'cancelled'
+        ? 'bg-ink-100 text-ink-600'
+        : runOutcome === 'succeeded'
+          ? 'bg-emerald-100 text-emerald-800'
+          : 'bg-ink-100 text-ink-600'
 
   return (
     <ErrorBoundary>
@@ -469,12 +486,12 @@ export default function App() {
               <span className="hidden text-[12px] text-ink-400 sm:inline">Connected</span>
             )}
             {isRunning && (
-              <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900">
+              <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
                 {chipLabel}
               </span>
             )}
             {!isRunning && chipLabel && (
-              <span className="hidden max-w-[14rem] truncate rounded-full bg-ink-100 px-2.5 py-0.5 text-[11px] text-ink-600 sm:inline">
+              <span className={clsx('hidden max-w-[14rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium sm:inline', chipTone)}>
                 {chipLabel}
               </span>
             )}
@@ -502,7 +519,7 @@ export default function App() {
                   className="ml-0.5 rounded-full border border-ink-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-500 hover:border-ink-300 hover:text-ink-800"
                   title="Close workspace"
                   aria-label="Close workspace"
-                  onClick={() => setActiveProject(null)}
+                  onClick={() => closeProject()}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -611,7 +628,7 @@ export default function App() {
             >
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
                 {activeProject && (
-                  <div className="mb-3 rounded-xl border border-accent-200/80 bg-accent-50/60 p-1.5 shadow-sm">
+                  <div className="mb-3 rounded-xl border-2 border-accent-300 bg-accent-50/80 p-1.5 shadow-md ring-1 ring-accent-200/50">
                     <div className="flex items-center justify-between px-2 pb-1 pt-0.5">
                       <div className="text-[10px] font-semibold uppercase tracking-wide text-accent-800">
                         In project
@@ -620,7 +637,7 @@ export default function App() {
                         type="button"
                         className="text-[10px] font-medium text-accent-700/80 hover:text-accent-950"
                         title="Close workspace"
-                        onClick={() => setActiveProject(null)}
+                        onClick={() => closeProject()}
                       >
                         Close
                       </button>
@@ -663,11 +680,22 @@ export default function App() {
                   </div>
                 )}
                 {activeProject ? (
-                  <div className="mb-4">
-                    <div className="px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                      Global
-                    </div>
-                    <div className="space-y-0.5">
+                  <div className="mb-4 rounded-xl border border-ink-200/70 bg-white/40">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left"
+                      aria-expanded={globalNavOpen}
+                      onClick={() => setGlobalNavOpen((o) => !o)}
+                    >
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                        Global / Settings
+                      </span>
+                      <span className="text-[10px] font-medium text-ink-400">
+                        {globalNavOpen ? 'Hide' : 'Show'}
+                      </span>
+                    </button>
+                    {globalNavOpen && (
+                    <div className="space-y-0.5 border-t border-ink-100/80 px-1 pb-1.5 pt-1">
                       {(
                         [
                           { id: 'templates' as AppView, label: 'Templates', icon: BookOpen },
@@ -711,6 +739,7 @@ export default function App() {
                         )
                       })}
                     </div>
+                    )}
                   </div>
                 ) : (
                   GLOBAL_NAV_GROUPS.map((group) => (
@@ -777,7 +806,7 @@ export default function App() {
         </div>
 
         <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-        <ToastHost toasts={toasts} onDismiss={dismissToast} />
+        <ToastHost toasts={toasts} onDismiss={dismissToast} onDismissAll={dismissAllToasts} />
 
         {settingsOpen && (
           <div

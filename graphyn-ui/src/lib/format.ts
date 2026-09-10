@@ -129,7 +129,13 @@ export function formatExecutionEvent(
     return { text: n != null ? `Pipeline starting · ${n} nodes` : 'Pipeline starting', level: 'info' }
   }
   if (kind === 'done' || kind === 'pipeline_done') {
-    const parts = ['Pipeline complete', dur].filter(Boolean)
+    // Neutral finish line — Builder overlays "with errors" / cancelled when known.
+    const failed = ev.success === false || ev.ok === false || ev.failed === true
+    if (failed) {
+      const parts = ['Pipeline finished with errors', dur].filter(Boolean)
+      return { text: parts.join(' · '), level: 'error' }
+    }
+    const parts = ['Pipeline finished', dur].filter(Boolean)
     return { text: parts.join(' · '), level: 'success' }
   }
   if (kind === 'pipeline_summary') {

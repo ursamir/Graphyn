@@ -639,36 +639,64 @@ export default function ProjectsView() {
                 <p className="mt-1 text-xs text-ink-500">
                   Explorer — link labels from the global library into this workspace.
                 </p>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <select
-                    className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm"
-                    value={linkPick}
-                    onChange={(e) => setLinkPick(e.target.value)}
-                    aria-label="Link input label from Data"
-                  >
-                    <option value="">Select input label…</option>
-                    {inputLabels.map((label) => (
-                      <option key={label} value={label} disabled={links.inputs.includes(label)}>
-                        {label}{links.inputs.includes(label) ? ' (linked)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn-primary" onClick={() => void linkInput()} disabled={!linkPick}>
-                    Link from library
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => openData({ mode: 'outputs', project: selected, version: versionFocus || undefined })}
-                  >
-                    Browse
-                  </button>
+                <div className="mt-2 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm"
+                      value={linkPick}
+                      onChange={(e) => setLinkPick(e.target.value)}
+                      aria-label="Link input label from Data"
+                    >
+                      <option value="">Select input label…</option>
+                      {inputLabels.map((label) => (
+                        <option key={label} value={label} disabled={links.inputs.includes(label)}>
+                          {label}{links.inputs.includes(label) ? ' (already linked)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <ConfirmButton
+                      label={linkPick ? `Link “${linkPick}”` : 'Link from library'}
+                      confirmLabel={linkPick ? `Confirm link “${linkPick}”?` : 'Confirm link'}
+                      onConfirm={() => void linkInput()}
+                      disabled={!linkPick || links.inputs.includes(linkPick)}
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => openData({ mode: 'outputs', project: selected, version: versionFocus || undefined })}
+                    >
+                      Browse
+                    </button>
+                  </div>
+                  {linkPick ? (
+                    <p className="text-[11px] text-ink-500">
+                      Selected to link:{' '}
+                      <span className="font-semibold text-ink-800">{linkPick}</span>
+                      {links.inputs.includes(linkPick) ? (
+                        <span className="text-amber-800"> · already linked</span>
+                      ) : links.inputs.length > 0 ? (
+                        <span>
+                          {' '}
+                          · currently linked:{' '}
+                          <span className="font-medium text-ink-700">{links.inputs.join(', ')}</span>
+                        </span>
+                      ) : (
+                        <span> · none linked yet</span>
+                      )}
+                    </p>
+                  ) : links.inputs.length > 0 ? (
+                    <p className="text-[11px] text-ink-500">
+                      Currently linked:{' '}
+                      <span className="font-medium text-ink-700">{links.inputs.join(', ')}</span>
+                    </p>
+                  ) : null}
                 </div>
                 {links.inputs.length > 0 && (
                   <ul className="mt-2 flex flex-wrap gap-1.5">
                     {links.inputs.map((label) => (
-                      <li key={label} className="inline-flex items-center gap-1 rounded-full border border-ink-200 bg-ink-50 px-2 py-0.5 text-xs">
-                        {label}
+                      <li key={label} className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2 py-0.5 text-xs text-accent-950">
+                        <span className="font-medium">{label}</span>
+                        <span className="text-[10px] text-accent-700/80">linked</span>
                         <button type="button" className="text-ink-400 hover:text-danger-600" onClick={() => void unlinkInput(label)} aria-label={`Unlink ${label}`}>
                           ×
                         </button>
@@ -700,36 +728,72 @@ export default function ProjectsView() {
               <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Runs</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">
-                  {recentRuns.length} matched
+                  {recentRuns.length === 0 ? 'No runs yet' : `${recentRuns.length} matched`}
                 </div>
                 <p className="mt-1 text-xs text-ink-500">
-                  Run panel for this workspace (GET /runs?project=).
+                  {recentRuns.length === 0
+                    ? 'No runs for this workspace yet — open the Editor or start from a template.'
+                    : 'Run panel for this workspace (GET /runs?project=).'}
                 </p>
                 {recentRuns.length === 0 ? (
-                  <button
-                    type="button"
-                    className="btn-secondary mt-2"
-                    onClick={() => {
-                      setView('templates')
-                      window.history.replaceState(null, '', '#/templates')
-                    }}
-                  >
-                    Open Templates
-                  </button>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        setView('builder')
+                        window.history.replaceState(null, '', '#/builder')
+                      }}
+                    >
+                      Open Editor
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setView('templates')
+                        window.history.replaceState(null, '', '#/templates')
+                      }}
+                    >
+                      Open Templates
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setView('runs')
+                        window.history.replaceState(null, '', '#/runs')
+                      }}
+                    >
+                      Open Runs
+                    </button>
+                  </div>
                 ) : (
-                  <ul className="mt-2 space-y-1">
-                    {recentRuns.slice(0, 4).map((r) => (
-                      <li key={r.run_id}>
-                        <button
-                          type="button"
-                          className="text-left text-xs text-accent-800 hover:underline"
-                          onClick={() => useAppStore.getState().openRun(r.run_id)}
-                        >
-                          {r.run_id.slice(0, 8)}… {r.status || ''} {r.graph_name ? `· ${r.graph_name}` : ''}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <ul className="mt-2 space-y-1">
+                      {recentRuns.slice(0, 4).map((r) => (
+                        <li key={r.run_id}>
+                          <button
+                            type="button"
+                            className="text-left text-xs text-accent-800 hover:underline"
+                            onClick={() => useAppStore.getState().openRun(r.run_id)}
+                          >
+                            {r.run_id.slice(0, 8)}… {r.status || ''} {r.graph_name ? `· ${r.graph_name}` : ''}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      className="btn-secondary mt-2"
+                      onClick={() => {
+                        setView('runs')
+                        window.history.replaceState(null, '', '#/runs')
+                      }}
+                    >
+                      Open Runs
+                    </button>
+                  </>
                 )}
               </div>
               <div className="rounded-xl border border-ink-200 bg-white p-3 shadow-sm">

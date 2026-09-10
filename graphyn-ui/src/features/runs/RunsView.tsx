@@ -91,7 +91,7 @@ export default function RunsView() {
   const openProjects = useAppStore((s) => s.openProjects)
   const openData = useAppStore((s) => s.openData)
   const activeProject = useAppStore((s) => s.activeProject)
-  const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const closeProject = useAppStore((s) => s.closeProject)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
 
   const [runs, setRuns] = React.useState<RunSummary[] | null>(null)
@@ -383,7 +383,7 @@ export default function RunsView() {
             <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => openProjects()}>
               Switch
             </button>
-            <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => setActiveProject(null)}>
+            <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => closeProject()}>
               Clear
             </button>
           </span>

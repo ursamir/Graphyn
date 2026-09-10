@@ -37,6 +37,7 @@ function parseDataHash(): {
   project?: string
   version?: string
   label?: string
+  manage?: boolean
 } {
   const raw = window.location.hash.replace(/^#\/?/, '')
   const qIdx = raw.indexOf('?')
@@ -46,11 +47,19 @@ function parseDataHash(): {
   const mode = (['outputs', 'inputs', 'ingest', 'merge'] as const).includes(modeRaw as DataMode)
     ? (modeRaw as DataMode)
     : undefined
+  const manageRaw = (params.get('manage') || '').trim().toLowerCase()
+  const manage =
+    manageRaw === '1' || manageRaw === 'true' || manageRaw === 'yes'
+      ? true
+      : manageRaw === '0' || manageRaw === 'false'
+        ? false
+        : undefined
   return {
     mode,
     project: sanitizePathSeg(params.get('project')),
     version: sanitizePathSeg(params.get('version')),
     label: sanitizePathSeg(params.get('label')),
+    manage,
   }
 }
 
@@ -82,6 +91,12 @@ export default function DataView() {
   const [outputs, setOutputs] = React.useState<OutputProject[]>([])
   const [inputs, setInputs] = React.useState<InputLabel[]>([])
   const [mode, setMode] = React.useState<DataMode>(initialHash.mode ?? 'outputs')
+  const [uxMode, setUxMode] = React.useState<'browse' | 'manage'>(() => {
+    if (initialHash.manage === true) return 'manage'
+    if (initialHash.manage === false) return 'browse'
+    const m = initialHash.mode
+    return m === 'ingest' || m === 'merge' ? 'manage' : 'browse'
+  })
   const [project, setProject] = React.useState(initialHash.project ?? '')
   const [version, setVersion] = React.useState(initialHash.version ?? '')
   const [label, setLabel] = React.useState(initialHash.label ?? '')
@@ -162,7 +177,17 @@ export default function DataView() {
     const apply = () => {
       const h = parseDataHash()
       if (h.mode) setMode(h.mode)
-      if (h.project) setProject(h.project)
+      if (h.manage === true) setUxMode('manage')
+      else if (h.manage === false) setUxMode('browse')
+      else if (h.mode === 'ingest' || h.mode === 'merge') setUxMode('manage')
+      const raw = window.location.hash
+      if (h.project) {
+        setProject(h.project)
+      } else if (raw.startsWith('#/data') && !/[?&]project=/.test(raw)) {
+        // Close-project stripped ?project= — unscope global library selection.
+        setProject('')
+        setVersion('')
+      }
       if (h.version) setVersion(h.version)
       if (h.label) setLabel(h.label)
     }
@@ -174,6 +199,9 @@ export default function DataView() {
   React.useEffect(() => {
     const params = new URLSearchParams()
     if (mode) params.set('mode', mode)
+    if (uxMode === 'manage' && (mode === 'inputs' || mode === 'outputs')) {
+      params.set('manage', '1')
+    }
     if (project.trim()) params.set('project', project.trim())
     if (version.trim()) params.set('version', version.trim())
     if (label.trim()) params.set('label', label.trim())
@@ -182,7 +210,7 @@ export default function DataView() {
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', next)
     }
-  }, [mode, project, version, label])
+  }, [mode, uxMode, project, version, label])
 
   React.useEffect(() => {
     let cancelled = false
@@ -284,6 +312,7 @@ export default function DataView() {
         const body = await res.json()
         pushToast(`Uploaded ${body.filename ?? file.name}`, 'success')
         await loadSources()
+        setUxMode('manage')
         setMode('inputs')
         setLabel('uploads')
       } catch (err) {
@@ -439,15 +468,19 @@ export default function DataView() {
 
   const versions = outputs.find((o) => o.project === project)?.versions ?? []
 
-  const uxMode: 'browse' | 'manage' = mode === 'ingest' || mode === 'merge' ? 'manage' : 'browse'
-  const setUxMode = (next: 'browse' | 'manage') => {
+  const switchUxMode = (next: 'browse' | 'manage') => {
     setError(null)
     setErrorDetail(null)
     setPathRecovery(false)
+    setUxMode(next)
     if (next === 'browse') {
-      setMode(mode === 'inputs' ? 'inputs' : 'outputs')
+      setMode(mode === 'inputs' || mode === 'outputs' ? mode : 'outputs')
+    } else if (mode !== 'ingest' && mode !== 'merge' && mode !== 'inputs' && mode !== 'outputs') {
+      setMode('ingest')
+    } else if (mode === 'inputs' || mode === 'outputs') {
+      // Keep Upload/delete surface inside Manage
     } else {
-      setMode(mode === 'merge' ? 'merge' : 'ingest')
+      // ingest / merge already manage-native
     }
   }
 
@@ -506,7 +539,7 @@ export default function DataView() {
                 ? 'bg-white text-ink-950 shadow-sm ring-1 ring-ink-200/80'
                 : 'text-ink-500 hover:text-ink-800',
             )}
-            onClick={() => setUxMode(m)}
+            onClick={() => switchUxMode(m)}
           >
             {label}
           </button>
@@ -571,6 +604,7 @@ export default function DataView() {
                 setError(null)
                 setErrorDetail(null)
                 setPathRecovery(false)
+                setUxMode('manage')
                 setMode(mode === 'outputs' ? 'outputs' : 'inputs')
               }}
             >
@@ -647,6 +681,7 @@ export default function DataView() {
                         setPathRecovery(false)
                         setError(null)
                         setErrorDetail(null)
+                        setUxMode('manage')
                         setMode('inputs')
                         upload()
                       }}
@@ -726,7 +761,10 @@ export default function DataView() {
                 <button
                   type="button"
                   className="btn-secondary text-[12px]"
-                  onClick={() => setUxMode('manage')}
+                  onClick={() => {
+                    setUxMode('manage')
+                    // Stay on current outputs/inputs selection for delete workflow
+                  }}
                 >
                   Manage…
                 </button>

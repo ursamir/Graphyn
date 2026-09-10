@@ -107,7 +107,7 @@ export function StatusBadge({
 }) {
   const s = status.toLowerCase()
   const tone =
-    s.includes('complete') || s === 'ok' || s === 'ready' || s === 'enabled' || s === 'success' || s === 'accepted'
+    s.includes('complete') || s.includes('succeed') || s === 'ok' || s === 'ready' || s === 'enabled' || s === 'success' || s === 'accepted'
       ? 'bg-emerald-100 text-emerald-800'
       : s.includes('fail') || s.includes('error') || s === 'cancelled' || s === 'rejected'
         ? 'bg-rose-100 text-rose-800'
@@ -185,10 +185,13 @@ export function ConfirmButton({
 export function ToastHost({
   toasts,
   onDismiss,
+  onDismissAll,
 }: {
   toasts: Array<{ id: string; message: string; tone: 'info' | 'success' | 'error' }>
   onDismiss: (id: string) => void
+  onDismissAll?: () => void
 }) {
+  if (toasts.length === 0) return null
   return (
     <div
       className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-full max-w-sm flex-col gap-2"
@@ -196,6 +199,17 @@ export function ToastHost({
       aria-relevant="additions text"
       aria-atomic="false"
     >
+      {toasts.length > 1 && onDismissAll ? (
+        <div className="pointer-events-auto flex justify-end">
+          <button
+            type="button"
+            className="rounded-full border border-ink-200 bg-white/95 px-2.5 py-0.5 text-[11px] font-medium text-ink-600 shadow-sm hover:border-ink-300 hover:text-ink-900"
+            onClick={onDismissAll}
+          >
+            Dismiss all ({toasts.length})
+          </button>
+        </div>
+      ) : null}
       {toasts.map((t) => (
         <div
           key={t.id}

@@ -26,6 +26,8 @@ import {
   MoreHorizontal,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   AlertTriangle,
   ExternalLink,
   X,
@@ -58,6 +60,58 @@ const defaultEdgeOptions = {
   style: EDGE_STYLE,
   markerEnd: EDGE_MARKER,
 }
+
+const CATALOG_OPEN_KEY = 'graphyn.builder.catalogOpen'
+const LOG_COLLAPSED_KEY = 'graphyn.builder.logCollapsed'
+
+function readBoolPref(key: string, defaultValue: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key)
+    if (v === null) return defaultValue
+    return v === '1' || v === 'true'
+  } catch {
+    return defaultValue
+  }
+}
+
+function writeBoolPref(key: string, value: boolean) {
+  try {
+    localStorage.setItem(key, value ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Light pre-run check: DatasetIngest / path-like nodes with empty path config. */
+function findMissingInputPaths(
+  nodes: Array<{ id: string; data: { nodeType: string; label?: string; config?: Record<string, unknown> } }>,
+): Array<{ id: string; label: string; nodeType: string }> {
+  const out: Array<{ id: string; label: string; nodeType: string }> = []
+  for (const n of nodes) {
+    const t = n.data.nodeType || ''
+    const bare = t.replace(/^Isolated_/, '')
+    const isPathNode =
+      /DatasetIngest/i.test(bare) ||
+      /^(LocalFile|FileInput|AudioInput|LoadDataset|DatasetLoader)/i.test(bare)
+    if (!isPathNode) continue
+    const cfg = n.data.config ?? {}
+    const pathKeys = ['path', 'input_path', 'dataset_path', 'manifest_path', 'audio_path', 'source_path']
+    const hasAnyKey = pathKeys.some((k) => k in cfg)
+    // DatasetIngest always expects a path; others only when a path-like key exists.
+    if (!/DatasetIngest/i.test(bare) && !hasAnyKey) continue
+    const values = pathKeys.map((k) => String(cfg[k] ?? '').trim()).filter(Boolean)
+    // HuggingFace / remote ids are fine non-empty strings; empty is the problem.
+    if (values.length === 0) {
+      out.push({
+        id: n.id,
+        label: n.data.label || humanNodeLabel(t),
+        nodeType: t,
+      })
+    }
+  }
+  return out
+}
+
 
 function layoutLeftToRight<T extends { id: string; position: { x: number; y: number } }>(
   nodes: T[],
@@ -142,6 +196,7 @@ function BuilderInner() {
   const lastRunId = useAppStore((s) => s.lastRunId)
   const setLastRunId = useAppStore((s) => s.setLastRunId)
   const setStatusMessage = useAppStore((s) => s.setStatusMessage)
+  const setRunOutcome = useAppStore((s) => s.setRunOutcome)
   const pushToast = useAppStore((s) => s.pushToast)
   const pendingProposalCount = useAppStore((s) => s.pendingProposalCount)
   const openProposals = useAppStore((s) => s.openProposals)
@@ -162,8 +217,10 @@ function BuilderInner() {
   const [moreOpen, setMoreOpen] = React.useState(false)
   const [showRawLogs, setShowRawLogs] = React.useState(false)
   const [logHeight, setLogHeight] = React.useState(148)
-  const [logCollapsed, setLogCollapsed] = React.useState(true)
+  const [catalogOpen, setCatalogOpen] = React.useState(() => readBoolPref(CATALOG_OPEN_KEY, true))
+  const [logCollapsed, setLogCollapsed] = React.useState(() => readBoolPref(LOG_COLLAPSED_KEY, true))
   const [runHadErrors, setRunHadErrors] = React.useState(false)
+  const [runCancelled, setRunCancelled] = React.useState(false)
   const [inspectorId, setInspectorId] = React.useState<string | null>(null)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
 
@@ -184,6 +241,14 @@ function BuilderInner() {
   React.useEffect(() => {
     if (isRunning) setLogCollapsed(false)
   }, [isRunning])
+
+  React.useEffect(() => {
+    writeBoolPref(CATALOG_OPEN_KEY, catalogOpen)
+  }, [catalogOpen])
+
+  React.useEffect(() => {
+    writeBoolPref(LOG_COLLAPSED_KEY, logCollapsed)
+  }, [logCollapsed])
 
   React.useEffect(() => {
     if (!moreOpen) return
@@ -488,6 +553,9 @@ function BuilderInner() {
     abortRef.current?.abort()
     abortRef.current = null
     setIsRunning(false)
+    setRunCancelled(true)
+    setRunHadErrors(false)
+    setRunOutcome('cancelled')
     setStatusMessage('Run cancelled')
     addLog('Run cancelled by user', 'warning')
   }
@@ -500,15 +568,33 @@ function BuilderInner() {
   }, [currentGraph, activeProject, builderDataset])
 
   const handleRun = async () => {
+    // Light pre-run path check (empty DatasetIngest / input paths)
+    const missingPaths = findMissingInputPaths(nodesRef.current)
+    if (missingPaths.length > 0) {
+      const names = missingPaths.map((m) => m.label).join(', ')
+      const msg = `Missing path on: ${names}. Set a dataset/input path before Run (or Validate).`
+      setActionError({ title: 'Cannot run — missing path', message: msg, detail: msg })
+      setStatusMessage(msg)
+      setRunOutcome('failed')
+      setRunHadErrors(true)
+      setRunCancelled(false)
+      pushToast(msg, 'error')
+      addLog(msg, 'error')
+      return
+    }
+
     clearLogs()
     setRunHadErrors(false)
+    setRunCancelled(false)
     setActionError(null)
     setLogCollapsed(false)
     setIsRunning(true)
+    setRunOutcome('running')
     setStatusMessage('Running…')
     setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'pending' } })))
     const controller = new AbortController()
     abortRef.current = controller
+    let streamCancelled = false
     try {
       const graph = graphForRun()
       const res = await apiFetch('/pipelines/run', {
@@ -518,12 +604,29 @@ function BuilderInner() {
         timeoutMs: 30 * 60 * 1000,
         headers: { 'Content-Type': 'application/json' },
       })
-      if (!res.ok) throw new ApiError(`Run failed: HTTP ${res.status}`, res.status, '/pipelines/run')
+      if (!res.ok) {
+        let detail = `Run failed: HTTP ${res.status}`
+        try {
+          const body = await res.clone().json()
+          if (typeof body?.detail === 'string') detail = body.detail
+          else if (typeof body?.error === 'string') detail = body.error
+          else if (body?.detail != null) detail = JSON.stringify(body.detail)
+        } catch {
+          try {
+            const t = await res.clone().text()
+            if (t.trim()) detail = t.trim().slice(0, 500)
+          } catch {
+            /* keep status text */
+          }
+        }
+        throw new ApiError(detail, res.status, '/pipelines/run')
+      }
       if (!res.body) throw new Error('No response body')
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
       let hadError = false
+      let wasCancelled = false
       let lastErrorDetail = ''
       let runId: string | null = null
       while (true) {
@@ -541,7 +644,7 @@ function BuilderInner() {
               runId = ev.run_id
               setLastRunId(ev.run_id)
             }
-            const t = String(ev.type ?? '')
+            const t = String(ev.type ?? ev.event ?? '')
             const idx = Number(ev.node_index)
             const nodeId = typeof ev.node_id === 'string' ? ev.node_id : undefined
             if (t === 'pipeline_start') {
@@ -563,6 +666,7 @@ function BuilderInner() {
               setNodeExecStatus({ index: idx, nodeId }, 'failed', { lastError: errMsg })
             }
             if (t === 'cancelled' || t === 'pipeline_cancelled') {
+              wasCancelled = true
               setNodes((nds) =>
                 nds.map((n) =>
                   normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
@@ -571,7 +675,12 @@ function BuilderInner() {
                 ),
               )
             }
-            const formatted = formatExecutionLine(trimmed)
+            let formatted = formatExecutionLine(trimmed)
+            if ((t === 'done' || t === 'pipeline_done') && hadError) {
+              formatted = { text: 'Pipeline finished with errors', level: 'error', raw: trimmed }
+            } else if ((t === 'done' || t === 'pipeline_done') && wasCancelled) {
+              formatted = { text: 'Pipeline cancelled', level: 'warning', raw: trimmed }
+            }
             addLog(
               formatted.text,
               formatted.level.includes('error') ? 'error' : formatted.level,
@@ -579,24 +688,48 @@ function BuilderInner() {
             )
           } catch {
             const formatted = formatExecutionLine(trimmed)
+            if (/fail|error/i.test(formatted.text)) {
+              hadError = true
+              lastErrorDetail = lastErrorDetail || formatted.text
+            }
             addLog(formatted.text, formatted.level, formatted.raw)
           }
         }
       }
-      setRunHadErrors(hadError)
-      setStatusMessage(hadError ? 'Run finished with errors' : 'Run complete')
-      if (hadError) {
+      if (streamCancelled || wasCancelled) {
+        setRunCancelled(true)
+        setRunHadErrors(false)
+        setRunOutcome('cancelled')
+        setStatusMessage('Run cancelled')
+      } else if (hadError) {
+        setRunHadErrors(true)
+        setRunCancelled(false)
+        setRunOutcome('failed')
+        setStatusMessage('Run failed')
         setActionError({
-          title: 'Run finished with errors',
+          title: 'Run failed',
           message: lastErrorDetail ? lastErrorDetail.slice(0, 180) : 'One or more nodes failed during execution.',
           detail: lastErrorDetail || undefined,
         })
+        pushToast(
+          lastErrorDetail ? `Run failed: ${lastErrorDetail.slice(0, 120)}` : 'Run failed',
+          'error',
+        )
       } else {
-        pushToast('Run complete', 'success')
+        setRunHadErrors(false)
+        setRunCancelled(false)
+        setRunOutcome('succeeded')
+        setStatusMessage('Run succeeded')
+        pushToast('Run succeeded', 'success')
       }
       if (runId) setLastRunId(runId)
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
+        streamCancelled = true
+        setRunCancelled(true)
+        setRunHadErrors(false)
+        setRunOutcome('cancelled')
+        setStatusMessage('Run cancelled')
         setNodes((nds) =>
           nds.map((n) =>
             normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
@@ -610,11 +743,14 @@ function BuilderInner() {
       const msg = err instanceof Error ? err.message : String(err)
       addLog(msg, 'error')
       setRunHadErrors(true)
-      setStatusMessage(msg)
+      setRunCancelled(false)
+      setRunOutcome('failed')
+      setStatusMessage('Run failed')
       setActionError({ title: 'Run failed', message: msg, detail: msg })
+      pushToast(msg, 'error')
       setNodes((nds) =>
         nds.map((n) =>
-          normalizeExecStatus(n.data.status) === 'running'
+          normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
             ? { ...n, data: { ...n.data, status: 'failed' } }
             : n,
         ),
@@ -829,7 +965,29 @@ function BuilderInner() {
 
   return (
     <div className="flex h-full min-h-0">
-      <aside className="flex w-[17.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-white">
+      <aside
+        className={
+          catalogOpen
+            ? 'flex w-[17.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-white'
+            : 'flex w-10 shrink-0 flex-col border-r border-ink-200/80 bg-white'
+        }
+      >
+        <div className="flex items-center justify-between gap-1 border-b border-ink-100 px-1.5 py-1">
+          {catalogOpen ? (
+            <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Catalog</div>
+          ) : null}
+          <button
+            type="button"
+            className="btn-icon ml-auto"
+            aria-label={catalogOpen ? 'Collapse node catalog' : 'Expand node catalog'}
+            title={catalogOpen ? 'Collapse catalog' : 'Expand catalog'}
+            onClick={() => setCatalogOpen((v) => !v)}
+          >
+            {catalogOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+          </button>
+        </div>
+        {catalogOpen ? (
+        <>
         <div className="sticky top-0 z-10 border-b border-ink-100 bg-white p-2">
           <input
             id="builder-catalog-search"
@@ -951,6 +1109,14 @@ function BuilderInner() {
             </div>
           )}
         </div>
+        </>
+        ) : (
+          <div className="flex flex-1 items-start justify-center pt-2">
+            <span className="write-vertical-right rotate-180 text-[10px] font-semibold uppercase tracking-wide text-ink-400 [writing-mode:vertical-rl]">
+              Nodes
+            </span>
+          </div>
+        )}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -1239,7 +1405,15 @@ function BuilderInner() {
                   {lastRunId || isRunning ? (
                     <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 bg-ink-50/70 px-3 py-1.5 text-[11px] text-ink-600">
                       <span className="font-semibold uppercase tracking-wide text-ink-400">Execution</span>
-                      {isRunning ? <StatusBadge status="running" /> : lastRunId ? <StatusBadge status={runHadErrors ? 'failed' : 'complete'} /> : null}
+                      {isRunning ? (
+                        <StatusBadge status="running" />
+                      ) : runCancelled ? (
+                        <StatusBadge status="cancelled" />
+                      ) : runHadErrors ? (
+                        <StatusBadge status="failed" />
+                      ) : lastRunId ? (
+                        <StatusBadge status="succeeded" />
+                      ) : null}
                       {lastRunId ? (
                         <>
                           <span className="font-mono text-ink-500" title={lastRunId}>

@@ -19,10 +19,30 @@ export type AppView =
 
 export type ToastTone = 'info' | 'success' | 'error'
 
+export type RunOutcome = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
 interface Toast {
   id: string
   message: string
   tone: ToastTone
+  createdAt: number
+}
+
+const MAX_TOASTS = 3
+const TOAST_TTL_MS: Record<ToastTone, number> = {
+  info: 3500,
+  success: 3000,
+  error: 6000,
+}
+
+const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function clearToastTimer(id: string) {
+  const t = toastTimers.get(id)
+  if (t) {
+    clearTimeout(t)
+    toastTimers.delete(id)
+  }
 }
 
 const ACTIVE_PROJECT_KEY = 'graphyn.activeProject'
@@ -85,9 +105,14 @@ interface AppState {
   setLastRunId: (id: string | null) => void
   statusMessage: string | null
   setStatusMessage: (msg: string | null) => void
+  runOutcome: RunOutcome
+  setRunOutcome: (outcome: RunOutcome) => void
   toasts: Toast[]
   pushToast: (message: string, tone?: ToastTone) => void
   dismissToast: (id: string) => void
+  dismissAllToasts: () => void
+  /** Clear active project and strip ?project= from Data/Projects hash so global library is unscoped. */
+  closeProject: () => void
   bootError: string | null
   bootStatus: number | null
   setBootError: (message: string | null, status?: number | null) => void
@@ -190,6 +215,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     persistActiveProject(next)
     set({ activeProject: next })
   },
+  closeProject: () => {
+    persistActiveProject(null)
+    set({ activeProject: null })
+    const raw = window.location.hash.replace(/^#\/?/, '')
+    const pathOnly = raw.split('?')[0] || ''
+    const qIdx = raw.indexOf('?')
+    if (qIdx < 0) return
+    const params = new URLSearchParams(raw.slice(qIdx + 1))
+    if (!params.has('project')) return
+    params.delete('project')
+    // When leaving a workspace, Data should not stay scoped to that project.
+    if (pathOnly === 'data' || pathOnly.startsWith('data/') || pathOnly === 'projects' || pathOnly.startsWith('projects/')) {
+      const qs = params.toString()
+      replaceHash(qs ? `#/${pathOnly}?${qs}` : `#/${pathOnly}`)
+    }
+  },
   openProject: (name, opts) => {
     const n = name.trim()
     if (!n) return
@@ -217,12 +258,37 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLastRunId: (lastRunId) => set({ lastRunId }),
   statusMessage: null,
   setStatusMessage: (statusMessage) => set({ statusMessage }),
+  runOutcome: 'idle',
+  setRunOutcome: (runOutcome) => set({ runOutcome }),
   toasts: [],
-  pushToast: (message, tone = 'info') =>
+  pushToast: (message, tone = 'info') => {
+    const id = crypto.randomUUID()
     set((s) => ({
-      toasts: [...s.toasts, { id: crypto.randomUUID(), message, tone }].slice(-5),
-    })),
-  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+      toasts: [...s.toasts, { id, message, tone, createdAt: Date.now() }].slice(-MAX_TOASTS),
+    }))
+    // Drop oldest timers when capped
+    const remaining = new Set(get().toasts.map((t) => t.id))
+    for (const tid of [...toastTimers.keys()]) {
+      if (!remaining.has(tid)) clearToastTimer(tid)
+    }
+    clearToastTimer(id)
+    const ttl = TOAST_TTL_MS[tone] ?? 3500
+    toastTimers.set(
+      id,
+      setTimeout(() => {
+        toastTimers.delete(id)
+        get().dismissToast(id)
+      }, ttl),
+    )
+  },
+  dismissToast: (id) => {
+    clearToastTimer(id)
+    set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+  },
+  dismissAllToasts: () => {
+    for (const id of [...toastTimers.keys()]) clearToastTimer(id)
+    set({ toasts: [] })
+  },
   bootError: null,
   bootStatus: null,
   setBootError: (bootError, bootStatus = null) => set({ bootError, bootStatus: bootStatus ?? null }),

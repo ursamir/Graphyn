@@ -265,19 +265,32 @@ export default function ArtifactsView() {
           <LoadingBlock />
         ) : items.length === 0 ? (
           <EmptyState
-            title="No artifacts yet"
-            description="Run a pipeline from Builder that produces node outputs, then refresh. Trace is the backtrack surface; this page is the library."
+            title={runFilter.trim() ? 'This run produced no artifacts' : 'No artifacts yet'}
+            description={
+              runFilter.trim()
+                ? 'The filtered run has no stored artifacts (common for failed or cancelled runs). Open the run for logs, or recover in the Editor.'
+                : 'Run a pipeline from the Editor that produces node outputs, then refresh. Trace is the backtrack surface; this page is the library.'
+            }
             action={
               <div className="flex flex-wrap justify-center gap-2">
+                {runFilter.trim() ? (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => openRun(runFilter.trim())}
+                  >
+                    Open Run
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  className="btn-primary"
+                  className={runFilter.trim() ? 'btn-secondary' : 'btn-primary'}
                   onClick={() => {
                     useAppStore.getState().setView('builder')
                     window.history.replaceState(null, '', '#/builder')
                   }}
                 >
-                  Open Builder
+                  Open Editor
                 </button>
                 <button
                   type="button"
