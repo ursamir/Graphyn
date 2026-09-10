@@ -198,15 +198,20 @@ export function ToastHost({
       aria-live="polite"
       aria-relevant="additions text"
       aria-atomic="false"
+      data-testid="toast-host"
     >
-      {toasts.length > 1 && onDismissAll ? (
-        <div className="pointer-events-auto flex justify-end">
+      {onDismissAll ? (
+        <div className="pointer-events-auto flex items-center justify-between gap-2 rounded-lg border border-ink-200 bg-white/95 px-2.5 py-1.5 shadow-md">
+          <span className="text-[11px] font-medium text-ink-500">
+            {toasts.length} notification{toasts.length === 1 ? '' : 's'}
+          </span>
           <button
             type="button"
-            className="rounded-full border border-ink-200 bg-white/95 px-2.5 py-0.5 text-[11px] font-medium text-ink-600 shadow-sm hover:border-ink-300 hover:text-ink-900"
+            className="text-[12px] font-semibold text-accent-800 underline decoration-accent-400 underline-offset-2 hover:text-accent-950"
             onClick={onDismissAll}
+            data-testid="toast-dismiss-all"
           >
-            Dismiss all ({toasts.length})
+            Dismiss all
           </button>
         </div>
       ) : null}

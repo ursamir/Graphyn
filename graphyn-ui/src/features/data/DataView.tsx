@@ -87,6 +87,8 @@ export default function DataView() {
   const pushToast = useAppStore((s) => s.pushToast)
   const openProjects = useAppStore((s) => s.openProjects)
   const setView = useAppStore((s) => s.setView)
+  const activeProject = useAppStore((s) => s.activeProject)
+  const dataUnscopeEpoch = useAppStore((s) => s.dataUnscopeEpoch)
   const initialHash = React.useMemo(() => parseDataHash(), [])
   const [outputs, setOutputs] = React.useState<OutputProject[]>([])
   const [inputs, setInputs] = React.useState<InputLabel[]>([])
@@ -106,7 +108,36 @@ export default function DataView() {
   const [errorDetail, setErrorDetail] = React.useState<string | null>(null)
   const [pathRecovery, setPathRecovery] = React.useState(false)
   const skippedOutputKey = React.useRef<string | null>(null)
+  /** After closeProject: keep outputs dropdown empty; do not revive prior project via loadSources/hash-sync. */
+  const libraryClearRef = React.useRef(false)
+  /** Omit project from hash while clearing — prevents stale React state from re-writing ?project=. */
+  const skipProjectHashRef = React.useRef(false)
+  const appliedUnscopeEpochRef = React.useRef<number | null>(null)
   const [loading, setLoading] = React.useState(true)
+
+  // Layout before hash-sync effect: reset selection when workspace project is closed.
+  React.useLayoutEffect(() => {
+    const first = appliedUnscopeEpochRef.current === null
+    const prevEpoch = appliedUnscopeEpochRef.current
+    appliedUnscopeEpochRef.current = dataUnscopeEpoch
+    if (first) {
+      // Mounted after a close into global Data (no ?project=): prevent loadSources from auto-picking
+      // the previous workspace project. Honor explicit openData({ project }) / deep links.
+      if (dataUnscopeEpoch > 0 && activeProject == null && !initialHash.project) {
+        libraryClearRef.current = true
+        skipProjectHashRef.current = true
+        setProject('')
+        setVersion('')
+      }
+      return
+    }
+    if (prevEpoch !== dataUnscopeEpoch) {
+      libraryClearRef.current = true
+      skipProjectHashRef.current = true
+      setProject('')
+      setVersion('')
+    }
+  }, [dataUnscopeEpoch, activeProject])
 
   // ingest
   const [urls, setUrls] = React.useState('')
@@ -143,6 +174,11 @@ export default function DataView() {
           // Leave empty so EmptyState CTAs / manual select drive next steps.
           setVersion('')
           skippedOutputKey.current = null
+          return ''
+        }
+        // Global library after closeProject: do not prefer previous project from local state.
+        if (libraryClearRef.current || (useAppStore.getState().activeProject == null && skipProjectHashRef.current)) {
+          setVersion('')
           return ''
         }
         const proj =
@@ -182,9 +218,12 @@ export default function DataView() {
       else if (h.mode === 'ingest' || h.mode === 'merge') setUxMode('manage')
       const raw = window.location.hash
       if (h.project) {
+        libraryClearRef.current = false
         setProject(h.project)
       } else if (raw.startsWith('#/data') && !/[?&]project=/.test(raw)) {
         // Close-project stripped ?project= — unscope global library selection.
+        libraryClearRef.current = true
+        skipProjectHashRef.current = true
         setProject('')
         setVersion('')
       }
@@ -202,15 +241,25 @@ export default function DataView() {
     if (uxMode === 'manage' && (mode === 'inputs' || mode === 'outputs')) {
       params.set('manage', '1')
     }
-    if (project.trim()) params.set('project', project.trim())
-    if (version.trim()) params.set('version', version.trim())
+    // When activeProject was cleared, do not re-write stale project into the hash.
+    if (skipProjectHashRef.current) {
+      if (!project.trim()) {
+        skipProjectHashRef.current = false
+      }
+      // omit project + version while clearing / stale
+    } else if (project.trim()) {
+      params.set('project', project.trim())
+      if (version.trim()) params.set('version', version.trim())
+    } else if (version.trim()) {
+      params.set('version', version.trim())
+    }
     if (label.trim()) params.set('label', label.trim())
     const qs = params.toString()
     const next = qs ? `#/data?${qs}` : '#/data'
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', next)
     }
-  }, [mode, uxMode, project, version, label])
+  }, [mode, uxMode, project, version, label, dataUnscopeEpoch])
 
   React.useEffect(() => {
     let cancelled = false
@@ -733,7 +782,20 @@ export default function DataView() {
               />
             ) : (
             <div className="flex flex-wrap items-center gap-2">
-              <select value={project} onChange={(e) => { setError(null); setErrorDetail(null); setProject(e.target.value); setVersion(outputs.find((o) => o.project === e.target.value)?.versions[0] ?? '') }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
+              <select
+                value={project}
+                onChange={(e) => {
+                  setError(null)
+                  setErrorDetail(null)
+                  libraryClearRef.current = false
+                  skipProjectHashRef.current = false
+                  const next = e.target.value
+                  setProject(next)
+                  setVersion(outputs.find((o) => o.project === next)?.versions[0] ?? '')
+                }}
+                className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
+              >
+                <option value="">Select project…</option>
                 {outputs.map((o) => <option key={o.project} value={o.project}>{o.project}</option>)}
               </select>
               <select value={version} onChange={(e) => { setError(null); setErrorDetail(null); setVersion(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">

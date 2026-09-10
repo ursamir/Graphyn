@@ -113,6 +113,8 @@ interface AppState {
   dismissAllToasts: () => void
   /** Clear active project and strip ?project= from Data/Projects hash so global library is unscoped. */
   closeProject: () => void
+  /** Bumped when workspace project is cleared — DataView resets selection / hash scope. */
+  dataUnscopeEpoch: number
   bootError: string | null
   bootStatus: number | null
   setBootError: (message: string | null, status?: number | null) => void
@@ -129,6 +131,26 @@ interface AppState {
   setBuilderDataset: (ctx: { project: string; version?: string } | null) => void
 }
 
+
+/** Strip ?project= from Data/Projects hashes so global library is not left scoped. */
+function stripProjectFromWorkspaceHash() {
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const pathOnly = raw.split('?')[0] || ''
+  const qIdx = raw.indexOf('?')
+  if (qIdx < 0) return
+  const params = new URLSearchParams(raw.slice(qIdx + 1))
+  if (!params.has('project')) return
+  params.delete('project')
+  if (
+    pathOnly === 'data' ||
+    pathOnly.startsWith('data/') ||
+    pathOnly === 'projects' ||
+    pathOnly.startsWith('projects/')
+  ) {
+    const qs = params.toString()
+    replaceHash(qs ? `#/${pathOnly}?${qs}` : `#/${pathOnly}`)
+  }
+}
 
 /** replaceState does not fire hashchange — notify mounted views to re-parse query. */
 function replaceHash(hash: string) {
@@ -213,23 +235,26 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveProject: (name) => {
     const next = name?.trim() || null
     persistActiveProject(next)
-    set({ activeProject: next })
+    if (next === null) {
+      set((s) => ({
+        activeProject: null,
+        dataUnscopeEpoch: s.dataUnscopeEpoch + 1,
+        builderDataset: null,
+      }))
+      stripProjectFromWorkspaceHash()
+    } else {
+      set({ activeProject: next })
+    }
   },
+  dataUnscopeEpoch: 0,
   closeProject: () => {
     persistActiveProject(null)
-    set({ activeProject: null })
-    const raw = window.location.hash.replace(/^#\/?/, '')
-    const pathOnly = raw.split('?')[0] || ''
-    const qIdx = raw.indexOf('?')
-    if (qIdx < 0) return
-    const params = new URLSearchParams(raw.slice(qIdx + 1))
-    if (!params.has('project')) return
-    params.delete('project')
-    // When leaving a workspace, Data should not stay scoped to that project.
-    if (pathOnly === 'data' || pathOnly.startsWith('data/') || pathOnly === 'projects' || pathOnly.startsWith('projects/')) {
-      const qs = params.toString()
-      replaceHash(qs ? `#/${pathOnly}?${qs}` : `#/${pathOnly}`)
-    }
+    set((s) => ({
+      activeProject: null,
+      dataUnscopeEpoch: s.dataUnscopeEpoch + 1,
+      builderDataset: null,
+    }))
+    stripProjectFromWorkspaceHash()
   },
   openProject: (name, opts) => {
     const n = name.trim()
