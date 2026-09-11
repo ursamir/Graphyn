@@ -103,7 +103,7 @@ def load_template(name: str) -> tuple[dict, Path]:
         path = base / f"{name}.graph.json"
         if path.is_file():
             return json.loads(path.read_text()), path
-    code, body = api("GET", f"/api/v1/pipelines/templates/{name}")
+    code, body = api("GET", f"/pipelines/templates/{name}")
     if code == 200 and isinstance(body, dict):
         g = body.get("graph") if "graph" in body else body
         return g, Path(f"<api:{name}>")
@@ -224,9 +224,9 @@ def poll_run(run_id: str, timeout_s: float = 600.0):
     start = time.time()
     last = None
     while time.time() - start < timeout_s:
-        code, body = api("GET", f"/api/v1/runs/{run_id}/status")
+        code, body = api("GET", f"/runs/{run_id}/status")
         if code != 200:
-            code, body = api("GET", f"/api/v1/runs/{run_id}")
+            code, body = api("GET", f"/runs/{run_id}")
         last = body
         status = None
         if isinstance(body, dict):
@@ -238,7 +238,7 @@ def poll_run(run_id: str, timeout_s: float = 600.0):
 
 
 def artifacts(run_id: str):
-    code, body = api("GET", f"/api/v1/runs/{run_id}/artifacts")
+    code, body = api("GET", f"/runs/{run_id}/artifacts")
     if code != 200:
         return []
     if isinstance(body, list):
@@ -319,7 +319,7 @@ def run_graph(name: str, source: str = "template") -> dict:
     elif row["artifact_count"]:
         row["notes"] = f"artifacts={row['artifact_count']}"
     else:
-        code, outs = api("GET", f"/api/v1/runs/{run_id}/outputs")
+        code, outs = api("GET", f"/runs/{run_id}/outputs")
         row["notes"] = f"outputs={str(outs)[:300]}"
     return row
 
