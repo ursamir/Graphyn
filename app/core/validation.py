@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import pydantic
+from app.core.nodes.config import sanitize_node_config_dict
 
 from typing import Any
 
@@ -241,8 +242,9 @@ def validate_pipeline(config: Any, registry: Any) -> list[dict]:
                 f"Available types: {', '.join(available)}"
             )
 
-        # Validate config using Pydantic
+        # Validate config using Pydantic (strip legacy UI stamp keys first)
         try:
+            config_in = sanitize_node_config_dict(node_class.Config, config_in)
             node_class.Config.model_validate(config_in)
         except pydantic.ValidationError as exc:
             raise ValueError(

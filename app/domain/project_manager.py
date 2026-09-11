@@ -174,6 +174,9 @@ class ProjectManager:
     def set_status(self, name: str, status: str) -> dict:
         """Update project status field."""
         valid = {"draft", "in-progress", "ready", "archived"}
+        # Legacy UI used "active"; treat as in-progress.
+        if status == "active":
+            status = "in-progress"
         if status not in valid:
             raise ValueError(
                 f"Invalid status '{status}'. Must be one of: {', '.join(sorted(valid))}"

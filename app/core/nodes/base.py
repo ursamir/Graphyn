@@ -19,7 +19,7 @@ import inspect
 import logging
 from typing import Any, AsyncGenerator, ClassVar, Generic, TypeVar
 
-from app.core.nodes.config import NodeConfig
+from app.core.nodes.config import NodeConfig, sanitize_node_config_dict
 from app.core.nodes.ports import InputPort, OutputPort
 from app.core.nodes.retry import RetryPolicy
 # SA-B5 fix: import the public name at module level so static analysis can see
@@ -82,7 +82,8 @@ class Node(Generic[InputT, OutputT]):
         if config is None:
             config = {}
         if isinstance(config, dict):
-            self.config: NodeConfig = self.Config.model_validate(config)
+            cleaned = sanitize_node_config_dict(self.Config, config)
+            self.config: NodeConfig = self.Config.model_validate(cleaned)
         elif isinstance(config, self.Config):
             self.config = config
         else:
@@ -93,7 +94,9 @@ class Node(Generic[InputT, OutputT]):
             # so callers understand the type mismatch rather than seeing a raw
             # Pydantic field error.
             try:
-                self.config = self.Config.model_validate(config.model_dump())
+                dumped = config.model_dump() if hasattr(config, "model_dump") else dict(config)
+                cleaned = sanitize_node_config_dict(self.Config, dumped)
+                self.config = self.Config.model_validate(cleaned)
             except Exception as exc:
                 raise TypeError(
                     f"{type(self).__name__} expects config type "

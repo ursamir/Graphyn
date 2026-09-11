@@ -112,7 +112,7 @@ export function StatusBadge({
       ? 'bg-emerald-100 text-emerald-800'
       : s.includes('fail') || s.includes('error') || s === 'cancelled' || s === 'rejected'
         ? 'bg-rose-100 text-rose-800'
-        : s.includes('run') || s.includes('install') || s === 'paused' || s === 'pending'
+        : s.includes('run') || s.includes('install') || s === 'paused' || s === 'pending' || s === 'in-progress' || s === 'active' || s === 'draft'
           ? 'bg-amber-100 text-amber-900'
           : 'bg-ink-100 text-ink-700'
   return (

@@ -1,9 +1,7 @@
 import React from 'react'
 import { RefreshCw, Copy, Pencil } from 'lucide-react'
 import { apiJson } from '../../api/client'
-import type { GraphIR } from '../../types/graph'
 import { useAppStore } from '../../store/appStore'
-import { stampProjectOnGraph } from '../../lib/projectStamp'
 import {
   ConfirmButton,
   CollapsibleJson,
@@ -25,7 +23,18 @@ type Tab = 'spec' | 'taxonomy' | 'contract' | 'versions' | 'snapshots' | 'diff'
 
 const TABS: Tab[] = ['spec', 'taxonomy', 'contract', 'versions', 'snapshots', 'diff']
 
-const STATUSES = ['active', 'archived', 'draft', 'ready'] as const
+/** API ProjectManager.set_status enum (never 'active'). */
+const STATUSES = ['draft', 'in-progress', 'ready', 'archived'] as const
+type ProjectStatus = (typeof STATUSES)[number]
+
+/** Map legacy stored 'active' → 'in-progress' for display / select value. */
+function normalizeProjectStatus(raw: unknown): ProjectStatus {
+  const s = String(raw ?? 'draft').trim().toLowerCase()
+  if (s === 'active') return 'in-progress'
+  if ((STATUSES as readonly string[]).includes(s)) return s as ProjectStatus
+  return 'draft'
+}
+
 
 function parseProjectsHash(): { project?: string; tab?: Tab } {
   const raw = window.location.hash.replace(/^#\/?/, '')
@@ -38,24 +47,6 @@ function parseProjectsHash(): { project?: string; tab?: Tab } {
   return { project, tab }
 }
 
-
-const DATA_PREP_NAME_HINTS = [
-  'audio-classification',
-  'speech-commands',
-  'dataset_ingest',
-  'data-prep',
-  'data_prep',
-]
-
-function templatePriority(name: string, nodeTypes: string[] | undefined, description?: string): number {
-  const blob = [name, description ?? '', ...(nodeTypes ?? [])].join(' ').toLowerCase()
-  let score = 0
-  if (name === 'audio-classification' || name.endsWith('/audio-classification')) score += 100
-  if (/speech-commands/.test(blob)) score += 80
-  if (/dataset_ingest/.test(blob) || (nodeTypes ?? []).includes('dataset_ingest')) score += 60
-  if (/audio-classification|data-prep|data_prep|ingest/.test(blob)) score += 40
-  return score
-}
 
 function lineageIds(lineage: unknown): { runId?: string; artifactId?: string } {
   if (!lineage || typeof lineage !== 'object') return {}
@@ -71,11 +62,8 @@ export default function ProjectsView() {
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openEdge = useAppStore((s) => s.openEdge)
-  const openExperiments = useAppStore((s) => s.openExperiments)
   const setView = useAppStore((s) => s.setView)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
-  const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
-  const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const initialHash = React.useMemo(() => parseProjectsHash(), [])
   const [projects, setProjects] = React.useState<Project[] | null>(null)
   const [selected, setSelected] = React.useState<string | null>(initialHash.project ?? null)
@@ -203,82 +191,6 @@ export default function ProjectsView() {
     if (initialHash.project) void open(initialHash.project)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  const openInBuilder = async () => {
-    if (!selected) {
-      setView('builder')
-      window.history.replaceState(null, '', '#/builder')
-      pushToast('Open a data-prep template or wire dataset nodes on the canvas', 'info')
-      return
-    }
-    const version = versionFocus.trim() || undefined
-    setBuilderDataset({ project: selected, version })
-
-    try {
-      const raw = await apiJson<unknown>('/pipelines/templates')
-      const list = Array.isArray(raw)
-        ? raw.map((item) => {
-            if (typeof item === 'string') return { name: item }
-            if (item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string') {
-              return item as { name: string; description?: string; node_types?: string[] }
-            }
-            return { name: String(item) }
-          })
-        : []
-      const preferredNames = [
-        'audio-classification',
-        'ex-02-speech-commands',
-        'ex-06-speech-commands-e2e',
-        ...DATA_PREP_NAME_HINTS,
-      ]
-      let pick: string | undefined
-      for (const hint of preferredNames) {
-        const hit = list.find((t) => t.name === hint || t.name.includes(hint))
-        if (hit) {
-          pick = hit.name
-          break
-        }
-      }
-      if (!pick) {
-        const ranked = list
-          .map((t) => ({
-            ...t,
-            score: templatePriority(t.name, t.node_types, t.description),
-          }))
-          .filter((t) => t.score > 0)
-          .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
-        pick = ranked[0]?.name
-      }
-
-      if (pick) {
-        const data = await apiJson<{ graph?: GraphIR }>(
-          `/pipelines/templates/${encodeURIComponent(pick)}`,
-        )
-        if (data.graph) {
-          const graph = stampProjectOnGraph(data.graph, selected, version)
-          loadGraphIntoBuilder(graph)
-          pushToast(`Opened ${pick} with dataset "${selected}"`, 'success')
-          return
-        }
-      }
-
-      setView('builder')
-      window.history.replaceState(null, '', '#/builder')
-      pushToast(
-        `Builder ready — dataset "${selected}" linked (no data-prep template found)`,
-        'info',
-      )
-    } catch (err) {
-      setView('builder')
-      window.history.replaceState(null, '', '#/builder')
-      pushToast(
-        err instanceof Error
-          ? `Dataset "${selected}" linked — ${err.message}`
-          : `Dataset "${selected}" linked`,
-        'info',
-      )
-    }
-  }
 
   const useInEdge = () => {
     openEdge({
@@ -578,7 +490,7 @@ export default function ProjectsView() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-medium">{p.name}</span>
-                    {p.status && <StatusBadge status={String(p.status)} />}
+                    {p.status && <StatusBadge status={normalizeProjectStatus(p.status)} />}
                   </div>
                 </button>
               </li>
@@ -597,8 +509,8 @@ export default function ProjectsView() {
             </p>
             <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-ink-700">
               <li>Create or open a workspace (header shows Project · name).</li>
-              <li>Open Editor or New from template to stamp pipelines.</li>
-              <li>Link data from the library, run, then use the Run / Experiments panels.</li>
+              <li>Use From template (or the Editor sidebar) to stamp pipelines.</li>
+              <li>Link data from the library, run from the Editor, then review in Run / Experiments.</li>
             </ol>
           </div>
         ) : (
@@ -615,7 +527,7 @@ export default function ProjectsView() {
                     Status
                     <select
                       className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm text-ink-800"
-                      value={String(projects?.find((p) => p.name === selected)?.status ?? 'draft')}
+                      value={normalizeProjectStatus(projects?.find((p) => p.name === selected)?.status)}
                       onChange={(e) => void setStatus(e.target.value)}
                       aria-label="Project status"
                     >
@@ -707,15 +619,14 @@ export default function ProjectsView() {
               </div>
               <div className="editorial-card">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Pipelines</div>
-                <div className="mt-1 text-sm font-semibold text-ink-900">Editor</div>
-                <p className="mt-1 text-xs text-ink-500">Primary canvas — stamp this workspace and run.</p>
+                <div className="mt-1 text-sm font-semibold text-ink-900">Stamp and run</div>
+                <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                  Start from a template into this workspace. Use the Editor sidebar to open the canvas.
+                </p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <button type="button" className="btn-primary" onClick={() => void openInBuilder()}>
-                    Open Editor
-                  </button>
                   <button
                     type="button"
-                    className="btn-secondary"
+                    className="btn-primary"
                     onClick={() => {
                       setView('templates')
                       window.history.replaceState(null, '', '#/templates')
@@ -726,27 +637,17 @@ export default function ProjectsView() {
                 </div>
               </div>
               <div className="editorial-card">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Runs</div>
+                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Recent runs</div>
                 <div className="mt-1 text-sm font-semibold text-ink-900">
-                  {recentRuns.length === 0 ? 'No runs yet' : `${recentRuns.length} matched`}
+                  {recentRuns.length === 0 ? 'None yet' : `${recentRuns.length} matched`}
                 </div>
-                <p className="mt-1 text-xs text-ink-500">
+                <p className="mt-1 text-xs leading-relaxed text-ink-500">
                   {recentRuns.length === 0
-                    ? 'No runs for this workspace yet — open the Editor or start from a template.'
-                    : 'Run panel for this workspace (GET /runs?project=).'}
+                    ? 'Stamp a template, then run from the Editor. The Run sidebar lists all workspace runs.'
+                    : 'Latest matches for this workspace — open one below.'}
                 </p>
                 {recentRuns.length === 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={() => {
-                        setView('builder')
-                        window.history.replaceState(null, '', '#/builder')
-                      }}
-                    >
-                      Open Editor
-                    </button>
+                  <div className="mt-2">
                     <button
                       type="button"
                       className="btn-secondary"
@@ -755,54 +656,31 @@ export default function ProjectsView() {
                         window.history.replaceState(null, '', '#/templates')
                       }}
                     >
-                      Open Templates
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => {
-                        setView('runs')
-                        window.history.replaceState(null, '', '#/runs')
-                      }}
-                    >
-                      Open Runs
+                      From template
                     </button>
                   </div>
                 ) : (
-                  <>
-                    <ul className="mt-2 space-y-1">
-                      {recentRuns.slice(0, 4).map((r) => (
-                        <li key={r.run_id}>
-                          <button
-                            type="button"
-                            className="text-left text-xs text-accent-800 hover:underline"
-                            onClick={() => useAppStore.getState().openRun(r.run_id)}
-                          >
-                            {r.run_id.slice(0, 8)}… {r.status || ''} {r.graph_name ? `· ${r.graph_name}` : ''}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                    <button
-                      type="button"
-                      className="btn-secondary mt-2"
-                      onClick={() => {
-                        setView('runs')
-                        window.history.replaceState(null, '', '#/runs')
-                      }}
-                    >
-                      Open Runs
-                    </button>
-                  </>
+                  <ul className="mt-2 space-y-1">
+                    {recentRuns.slice(0, 4).map((r) => (
+                      <li key={r.run_id}>
+                        <button
+                          type="button"
+                          className="text-left text-xs text-accent-800 hover:underline"
+                          onClick={() => useAppStore.getState().openRun(r.run_id)}
+                        >
+                          {r.run_id.slice(0, 8)}… {r.status || ''} {r.graph_name ? `· ${r.graph_name}` : ''}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
-              <div className="editorial-card">
+              <div className="editorial-card bg-[#fafbfc]">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Experiments</div>
-                <div className="mt-1 text-sm font-semibold text-ink-900">Compare runs</div>
-                <p className="mt-1 text-xs text-ink-500">Params and metrics across runs in this workspace.</p>
-                <button type="button" className="btn-secondary mt-2" onClick={() => openExperiments()}>
-                  Open Experiments
-                </button>
+                <div className="mt-1 text-sm font-semibold text-ink-900">Compare quietly</div>
+                <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                  Diff params and metrics across runs from the Experiments sidebar — no extra hop from here.
+                </p>
               </div>
             </div>
 

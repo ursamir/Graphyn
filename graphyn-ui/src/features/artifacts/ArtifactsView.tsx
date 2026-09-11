@@ -303,29 +303,20 @@ export default function ArtifactsView() {
                     className="btn-primary"
                     onClick={() => openRun(runFilter.trim())}
                   >
-                    Open Run
+                    Open this run
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  className={runFilter.trim() ? 'btn-secondary' : 'btn-primary'}
-                  onClick={() => {
-                    useAppStore.getState().setView('builder')
-                    window.history.replaceState(null, '', '#/builder')
-                  }}
-                >
-                  Open Editor
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    useAppStore.getState().setView('runs')
-                    window.history.replaceState(null, '', '#/runs')
-                  }}
-                >
-                  Open Runs
-                </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => {
+                      useAppStore.getState().setView('templates')
+                      window.history.replaceState(null, '', '#/templates')
+                    }}
+                  >
+                    From template
+                  </button>
+                )}
               </div>
             }
           />

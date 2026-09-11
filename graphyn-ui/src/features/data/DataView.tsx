@@ -5,6 +5,7 @@ import {
   apiJson,
   apiUrl,
   fetchAuthenticatedBlobUrl,
+  fetchInputBlobUrl,
   getApiToken,
 } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -336,9 +337,15 @@ export default function DataView() {
 
   const openFile = async (path: string, kind: 'files' | 'input-files') => {
     try {
-      const objUrl = await fetchAuthenticatedBlobUrl(
-        `/${kind}/${path.split('/').map(encodeURIComponent).join('/')}`,
-      )
+      // Input trees often nest via directory symlinks (environmental-sounds/*, speech-commands/*).
+      // Use the jailed /data/inputs/file API instead of StaticFiles (/input-files), which 404s
+      // when follow_symlink is false.
+      const objUrl =
+        kind === 'input-files'
+          ? await fetchInputBlobUrl(path)
+          : await fetchAuthenticatedBlobUrl(
+              `/${kind}/${path.split('/').map(encodeURIComponent).join('/')}`,
+            )
       window.open(objUrl, '_blank', 'noopener,noreferrer')
       setTimeout(() => URL.revokeObjectURL(objUrl), 60_000)
     } catch (err) {

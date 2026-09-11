@@ -7,6 +7,8 @@ Responsibility:   Base configuration model for all node Config classes.
 Owns:             NodeConfig Pydantic base class.
 Public Surface:   NodeConfig — subclass as ``class Config(NodeConfig)`` inside
                   each Node subclass.
+                  sanitize_node_config_dict — strip UI stamp keys unknown to a
+                  Config schema so old stamped graphs still validate.
 Must NOT:         Import from app.domain, app.api, or app.models.
                   Must not contain node-specific fields.
 Dependencies:     pydantic.
@@ -15,7 +17,57 @@ Reason To Change: Global config model settings change (e.g. extra policy,
 """
 from __future__ import annotations
 
+import logging
+from typing import Any, Mapping
+
 from pydantic import BaseModel, ConfigDict
+
+log = logging.getLogger(__name__)
+
+# Keys the UI / project-stamp may inject onto nodes. Strip with a warning when
+# the target Config does not declare them (extra="forbid" would otherwise fail).
+STAMP_CONFIG_KEYS = frozenset({"project", "output_dir", "version_tag"})
+
+
+def sanitize_node_config_dict(
+    config_cls: type[BaseModel],
+    data: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return a config dict safe for ``config_cls.model_validate``.
+
+    - Drops stamp keys (``project``, ``output_dir``, ``version_tag``) that are
+      not declared on *config_cls*, logging a warning (legacy stamped graphs).
+    - If ``output_dir`` is present but undeclared while ``output_path`` *is*
+      declared and empty/missing, copy ``output_dir`` → ``output_path`` first
+      (trainer-like nodes) then still drop ``output_dir``.
+    """
+    if data is None:
+        return {}
+    cleaned = dict(data)
+    fields = getattr(config_cls, "model_fields", None) or {}
+    known = set(fields)
+
+    if (
+        "output_dir" in cleaned
+        and "output_dir" not in known
+        and "output_path" in known
+    ):
+        cur = cleaned.get("output_path")
+        if cur is None or cur == "":
+            cleaned["output_path"] = cleaned["output_dir"]
+
+    stripped: list[str] = []
+    for key in STAMP_CONFIG_KEYS:
+        if key in cleaned and key not in known:
+            cleaned.pop(key, None)
+            stripped.append(key)
+    if stripped:
+        log.warning(
+            "Stripped unknown stamp key(s) %s from %s config (not in schema)",
+            stripped,
+            getattr(config_cls, "__name__", str(config_cls)),
+        )
+    return cleaned
 
 
 class NodeConfig(BaseModel):

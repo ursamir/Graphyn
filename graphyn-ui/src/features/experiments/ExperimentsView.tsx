@@ -303,28 +303,16 @@ export default function ExperimentsView() {
           title="No experiments yet"
           description="Compare starts from Runs — execute a pipeline, then return here to pick runs and diff params/metrics."
           action={
-            <div className="flex flex-wrap justify-center gap-2">
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => {
-                  setView('runs')
-                  window.history.replaceState(null, '', '#/runs')
-                }}
-              >
-                Open Runs
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setView('builder')
-                  window.history.replaceState(null, '', '#/builder')
-                }}
-              >
-                Open Builder
-              </button>
-            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                setView('runs')
+                window.history.replaceState(null, '', '#/runs')
+              }}
+            >
+              Pick runs to compare
+            </button>
           }
         />
       ) : (

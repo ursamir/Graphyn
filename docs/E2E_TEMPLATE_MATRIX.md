@@ -5,6 +5,8 @@
 **API:** `http://127.0.0.1:8001` with `GRAPHYN_HOME=/workspace/Graphyn/.graphyn-e2e`, `GRAPHYN_PROJECT_DIR=/workspace/Graphyn/workspace`  
 **Runners:** `scripts/e2e_all_templates_runner.py` (primary), `scripts/e2e_audio_pass_runner.py` (legacy audio subset)
 
+> **Environment note (2026-09-11):** This matrix was run on **local uvicorn** (`GRAPHYN_PROJECT_DIR=/workspace/Graphyn/workspace`), **not** Server-99 Docker. After pulling stamp/sanitize + `/data/inputs/file` fixes, rebuild/restart the Docker stack under `~/Desktop/newAudio3` so the container picks up the new engine and API code.
+
 ## Free provider strategy
 
 | Role | Provider | Notes |

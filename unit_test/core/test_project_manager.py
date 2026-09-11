@@ -234,3 +234,10 @@ def test_delete_prunes_empty_leftover_dirs(pm: ProjectManager):
     leftover.mkdir()
     pm.delete("keep-me", confirm="keep-me")
     assert not leftover.exists()
+
+
+def test_set_status_active_alias_maps_to_in_progress(pm: ProjectManager):
+    """Legacy UI status 'active' is accepted as in-progress."""
+    pm.create("proj_active")
+    meta = pm.set_status("proj_active", "active")
+    assert meta["status"] == "in-progress"

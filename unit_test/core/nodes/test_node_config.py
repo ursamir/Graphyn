@@ -58,3 +58,82 @@ class TestNodeConfigModelValidate:
         restored = _AllDefaultConfig.model_validate(dumped)
         assert restored.sample_rate == 22050
         assert restored.mono is False
+
+
+class _TrainerLikeConfig(NodeConfig):
+    """Mirrors trainer: output_path only — no project / output_dir."""
+    output_path: str = "workspace/artifacts/models"
+    epochs: int = 1
+
+
+class TestSanitizeStampKeys:
+    """Legacy UI stamps must not fail Config validation (extra=forbid)."""
+
+    def test_sanitize_strips_project_and_output_dir(self):
+        from app.core.nodes.config import sanitize_node_config_dict
+
+        raw = {
+            "output_path": "workspace/artifacts/speech-commands",
+            "epochs": 2,
+            "project": "r2",
+            "output_dir": "/workspace/datasets/output/r2",
+            "version_tag": "v1",
+        }
+        cleaned = sanitize_node_config_dict(_TrainerLikeConfig, raw)
+        assert "project" not in cleaned
+        assert "output_dir" not in cleaned
+        assert "version_tag" not in cleaned
+        assert cleaned["output_path"] == "workspace/artifacts/speech-commands"
+        cfg = _TrainerLikeConfig.model_validate(cleaned)
+        assert cfg.epochs == 2
+
+    def test_sanitize_maps_output_dir_to_output_path_when_missing(self):
+        from app.core.nodes.config import sanitize_node_config_dict
+
+        raw = {"project": "r2", "output_dir": "workspace/artifacts/models/r2"}
+        cleaned = sanitize_node_config_dict(_TrainerLikeConfig, raw)
+        assert cleaned["output_path"] == "workspace/artifacts/models/r2"
+        assert "output_dir" not in cleaned
+        assert "project" not in cleaned
+
+    def test_node_init_accepts_stamped_extras(self):
+        from typing import ClassVar
+
+        from app.core.nodes.base import Node
+        from app.core.nodes.metadata import NodeMetadata
+        from app.core.nodes.ports import InputPort, OutputPort
+
+        class _Trainerish(Node):
+            node_type: ClassVar[str] = "_test_trainerish"
+            input_ports: ClassVar[dict] = {
+                "input": InputPort(name="input", data_type=object)
+            }
+            output_ports: ClassVar[dict] = {
+                "output": OutputPort(name="output", data_type=object)
+            }
+            metadata: ClassVar[NodeMetadata] = NodeMetadata(
+                node_type="_test_trainerish",
+                label="Trainerish",
+                description="stamp regression",
+                category="Test",
+            )
+
+            class Config(_TrainerLikeConfig):
+                pass
+
+            def process(self, inputs: dict) -> dict:
+                return {"output": inputs.get("input")}
+
+        node = _Trainerish(
+            config={
+                "output_path": "workspace/artifacts/speech-commands",
+                "project": "r2",
+                "output_dir": "/workspace/datasets/output/r2",
+                "version_tag": "v1",
+            }
+        )
+        assert node.config.output_path == "workspace/artifacts/speech-commands"
+        dumped = node.config.model_dump()
+        assert "project" not in dumped
+        assert "output_dir" not in dumped
+        assert "version_tag" not in dumped

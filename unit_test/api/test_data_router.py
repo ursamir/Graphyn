@@ -350,3 +350,60 @@ class TestInputSymlinkTree:
         assert resp.status_code == 200
         paths = {row["path"] for row in resp.json()}
         assert "speech-commands/go/go_000.wav" in paths
+
+
+class TestDownloadInputFile:
+    """GET /api/v1/data/inputs/file — nested symlink trees must open (not 404)."""
+
+    def test_nested_symlink_file_returns_200_bytes(self, api_client, tmp_path):
+        patcher, input_root = _patch_input(tmp_path)
+        real = input_root / "car_horn"
+        real.mkdir()
+        payload = b"RIFF_nested_wav_bytes"
+        (real / "car_horn_004.wav").write_bytes(payload)
+        label = input_root / "environmental-sounds"
+        label.mkdir()
+        (label / "car_horn").symlink_to(real)
+        with patcher:
+            resp = api_client.get(
+                "/api/v1/data/inputs/file",
+                params={"path": "environmental-sounds/car_horn/car_horn_004.wav"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.content == payload
+
+    def test_speech_commands_nested_symlink_returns_200(self, api_client, tmp_path):
+        patcher, input_root = _patch_input(tmp_path)
+        real = input_root / "go"
+        real.mkdir()
+        payload = b"RIFF_go_wav"
+        (real / "go_000.wav").write_bytes(payload)
+        label = input_root / "speech-commands"
+        label.mkdir()
+        (label / "go").symlink_to(real)
+        with patcher:
+            resp = api_client.get(
+                "/api/v1/data/inputs/file",
+                params={"path": "speech-commands/go/go_000.wav"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.content == payload
+
+    def test_missing_file_returns_404(self, api_client, tmp_path):
+        patcher, input_root = _patch_input(tmp_path)
+        (input_root / "uploads").mkdir()
+        with patcher:
+            resp = api_client.get(
+                "/api/v1/data/inputs/file",
+                params={"path": "uploads/nope.wav"},
+            )
+        assert resp.status_code == 404
+
+    def test_path_traversal_rejected(self, api_client, tmp_path):
+        patcher, _ = _patch_input(tmp_path)
+        with patcher:
+            resp = api_client.get(
+                "/api/v1/data/inputs/file",
+                params={"path": "../etc/passwd"},
+            )
+        assert resp.status_code == 400

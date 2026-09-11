@@ -22,7 +22,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.core.config import datasets_input_dir as _datasets_input_dir
@@ -84,6 +85,43 @@ def list_input_datasets():
         )
         labels.append({"label": label, "file_count": count})
     return labels
+
+
+_INPUT_MEDIA_TYPES = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".flac": "audio/flac",
+}
+
+
+@router.get("/inputs/file", summary="Download an input dataset file")
+def download_input_file(
+    path: str = Query(..., description="Path relative to datasets/input (may be nested)"),
+):
+    """Serve an input audio file via path-jailed ``_safe_child``.
+
+    Nested labels (e.g. ``environmental-sounds/car_horn/x.wav``) often use
+    intermediate directory symlinks. Starlette ``StaticFiles`` defaults to
+    ``follow_symlink=False`` and 404s those paths; this endpoint joins under
+    the input root without resolving the leaf for jail checks, then lets
+    ``FileResponse`` open through the symlink.
+    """
+    rel = (path or "").replace("\\", "/").lstrip("/")
+    parts = [p for p in rel.split("/") if p]
+    if not parts or any(p in {"", ".", ".."} for p in parts):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    file_path = _safe_child(_input_root(), *parts)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    media = _INPUT_MEDIA_TYPES.get(file_path.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        path=str(file_path),
+        media_type=media,
+        filename=file_path.name,
+    )
 
 
 @router.get("/inputs/{label}", summary="List files in an input dataset label")

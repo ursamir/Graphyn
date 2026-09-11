@@ -171,6 +171,14 @@ export async function fetchAuthenticatedBlobUrl(staticPath: string): Promise<str
   return URL.createObjectURL(blob)
 }
 
+/** Authenticated blob URL for a jailed input dataset file (caller must revoke). */
+export async function fetchInputBlobUrl(filePath: string): Promise<string> {
+  const res = await apiFetch('/data/inputs/file', { query: { path: filePath }, timeoutMs: 120000 })
+  if (!res.ok) throw new ApiError(`Failed to load file (${res.status})`, res.status, filePath)
+  const blob = await res.blob()
+  return URL.createObjectURL(blob)
+}
+
 /** Authenticated blob URL for a jailed output file (caller must revoke). */
 export async function fetchOutputBlobUrl(filePath: string): Promise<string> {
   const res = await apiFetch('/outputs/file', { query: { path: filePath }, timeoutMs: 120000 })
