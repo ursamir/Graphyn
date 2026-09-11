@@ -1,7 +1,7 @@
 [plugin]
 name             = "asr-transcribe"
-version          = "1.0.0"
-description      = "Adapter node: transcribe audio via OpenAI-compatible (default), AssemblyAI (poll), or Deepgram."
+version          = "1.1.0"
+description      = "Adapter node: transcribe audio via OpenAI-compatible, AssemblyAI, Deepgram, or local faster-whisper."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
@@ -15,14 +15,15 @@ dependencies = [
 
 optional_dependencies = [
     "httpx>=0.27",
+    "faster-whisper>=1.0",
 ]
 
 runtime = "inprocess"
 node_types = ["asr_transcribe"]
 
 [config_schema.asr_transcribe]
-provider = { type = "string", title = "Provider", default = "openai_compat", description = "Remote ASR provider. One of: openai_compat, assemblyai, deepgram. Requires the matching API key secret/env.", enum = ["openai_compat", "assemblyai", "deepgram"], ui = { group = "Basic" } }
+provider = { type = "string", title = "Provider", default = "openai_compat", description = "ASR provider. Remote: openai_compat, assemblyai, deepgram (API keys). Local/free: local_whisper or faster_whisper (faster-whisper CPU).", enum = ["openai_compat", "assemblyai", "deepgram", "local_whisper", "faster_whisper"], ui = { group = "Basic" } }
 language = { type = "string", title = "Language", default = "en", description = "BCP-47 / ISO language code (e.g. en).", ui = { group = "Basic" } }
-model = { type = "string", title = "Model", default = "", description = "Provider model id (e.g. whisper-1). Empty = provider default.", ui = { group = "Basic" } }
-base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL override (openai_compat only).", ui = { group = "Advanced" } }
+model = { type = "string", title = "Model", default = "", description = "Provider model id (e.g. whisper-1, tiny, base). Empty = provider default.", ui = { group = "Basic" } }
+base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL override (openai_compat only). Groq: https://api.groq.com/openai/v1", ui = { group = "Advanced" } }
 timeout_s = { type = "number", title = "Timeout (s)", default = 30.0, description = "Request/operation timeout in seconds.", ui = { group = "Advanced" } }

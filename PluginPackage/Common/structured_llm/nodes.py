@@ -1,10 +1,11 @@
-"""StructuredLlmNode — JSON-schema extract via OpenAI-compatible HTTP."""
+"""StructuredLlmNode — JSON-schema extract via OpenAI-compatible HTTP or local heuristic."""
 from __future__ import annotations
 
 import importlib
 import json
 import logging
 import os
+import re
 from typing import Any, ClassVar, Literal
 from pydantic import Field
 
@@ -47,6 +48,133 @@ def _text_of(value: Any) -> str:
     return str(value)
 
 
+def _resolve_key(env_key: str) -> str:
+    try:
+        from app.core.secrets import resolve_secret
+        return resolve_secret(env_key)
+    except Exception:
+        return os.environ.get(env_key, "").strip()
+
+
+def _base_looks_like_groq(base: str) -> bool:
+    return "groq.com" in (base or "").strip().lower()
+
+
+def _resolve_openai_compat_key(base_url: str) -> str:
+    key = _resolve_key("OPENAI_API_KEY")
+    if key:
+        return key
+    base = (base_url or os.environ.get("OPENAI_BASE_URL") or "").strip()
+    if _base_looks_like_groq(base):
+        return _resolve_key("GROQ_API_KEY")
+    return ""
+
+
+def _schema_default(prop_schema: dict) -> Any:
+    t = (prop_schema or {}).get("type") or "string"
+    if t == "array":
+        return []
+    if t == "object":
+        return {}
+    if t == "integer":
+        return 0
+    if t == "number":
+        return 0.0
+    if t == "boolean":
+        return False
+    return ""
+
+
+def _heuristic_extract(text: str, schema: dict) -> dict:
+    """Deterministic keyword / sentence extract for E2E when no LLM key is available.
+
+    Not a substitute for a real LLM — fills schema properties from transcript text
+    using simple rules so call-analytics / meeting-crm graphs can complete locally.
+    """
+    props = (schema or {}).get("properties") or {}
+    required = list((schema or {}).get("required") or [])
+    raw = (text or "").strip()
+    lowered = raw.lower()
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw) if s.strip()]
+    first = sentences[0] if sentences else (raw[:240] if raw else "no transcript")
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_\-]{2,}", raw)
+
+    out: dict[str, Any] = {}
+    for name, prop in props.items():
+        if not isinstance(prop, dict):
+            prop = {}
+        key = str(name).lower()
+        ptype = prop.get("type") or "string"
+
+        if key in {"summary", "pain", "next_step", "owner", "customer_id"}:
+            if key == "summary":
+                out[name] = first
+            elif key == "pain":
+                hit = next((s for s in sentences if any(w in s.lower() for w in ("pain", "issue", "problem", "blocked", "frustrat"))), first)
+                out[name] = hit
+            elif key == "next_step":
+                hit = next((s for s in sentences if any(w in s.lower() for w in ("next", "follow", "schedule", "action", "will"))), first)
+                out[name] = hit
+            elif key == "owner":
+                m = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", raw)
+                out[name] = m.group(1) if m else "owner"
+            elif key == "customer_id":
+                m = re.search(r"\b(?:cust(?:omer)?[_-]?id|id)[:\s#]*([A-Za-z0-9\-]+)\b", raw, re.I)
+                out[name] = m.group(1) if m else "unknown"
+            continue
+
+        if key == "sentiment":
+            if any(w in lowered for w in ("angry", "upset", "terrible", "frustrated", "cancel")):
+                out[name] = "negative"
+            elif any(w in lowered for w in ("great", "thanks", "happy", "love", "excellent")):
+                out[name] = "positive"
+            else:
+                out[name] = "neutral"
+            continue
+
+        if key in {"topics", "action_items", "objections"} and ptype == "array":
+            if key == "topics":
+                # top unique content words
+                stop = {"the", "and", "for", "that", "this", "with", "from", "have", "will", "your", "our"}
+                topics = []
+                for w in words:
+                    wl = w.lower()
+                    if wl in stop or wl in topics:
+                        continue
+                    topics.append(wl)
+                    if len(topics) >= 5:
+                        break
+                out[name] = topics or ["general"]
+            elif key == "action_items":
+                items = [s for s in sentences if any(w in s.lower() for w in ("will", "should", "need", "action", "follow", "schedule"))]
+                out[name] = items[:5] or ([first] if first else [])
+            else:  # objections
+                items = [s for s in sentences if any(w in s.lower() for w in ("but", "however", "concern", "object", "expensive", "risk"))]
+                out[name] = items[:5]
+            continue
+
+        # generic fill
+        if ptype == "array":
+            out[name] = [first] if first else []
+        elif ptype == "integer":
+            m = re.search(r"\b(\d+)\b", raw)
+            out[name] = int(m.group(1)) if m else 0
+        elif ptype == "number":
+            m = re.search(r"\b(\d+(?:\.\d+)?)\b", raw)
+            out[name] = float(m.group(1)) if m else 0.0
+        elif ptype == "boolean":
+            out[name] = any(w in lowered for w in ("yes", "true", "confirm"))
+        elif ptype == "object":
+            out[name] = {"text": first}
+        else:
+            out[name] = first
+
+    for req in required:
+        if req not in out:
+            out[req] = _schema_default((props.get(req) or {}))
+    return out
+
+
 class StructuredLlmNode(Node):
     """Extract a JSON object matching json_schema from transcript/text."""
 
@@ -57,10 +185,10 @@ class StructuredLlmNode(Node):
         label="Structured LLM",
         description=(
             "Extract JSON matching a schema from text. "
-            "Default provider is openai_compat (requires OPENAI_API_KEY)."
+            "Providers: openai_compat (OPENAI_API_KEY / Groq), local_heuristic (free E2E)."
         ),
         category="Processing",
-        version="1.0.0",
+        version="1.1.0",
         tags=["llm", "json", "extract", "common"],
         requires_gpu=False,
         supports_cpu=True,
@@ -90,32 +218,46 @@ class StructuredLlmNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: Literal["openai_compat"] = Field(default='openai_compat', title="Provider", description="LLM provider backend. Only openai_compat is supported.")
+        provider: Literal["openai_compat", "local_heuristic"] = Field(
+            default="openai_compat",
+            title="Provider",
+            description="LLM backend: openai_compat (HTTP) or local_heuristic (deterministic, free).",
+        )
         json_schema: dict = Field(default={}, title="JSON Schema", description="JSON Schema object the model must satisfy.")
-        schema_name: str = Field(default='extracted', title="Schema name", description="Name attached to the structured-output schema for the provider.")
-        model: str = Field(default='gpt-4o-mini', title="Model", description="Chat model id (default gpt-4o-mini). Requires OPENAI_API_KEY.")
-        base_url: str = Field(default='', title="Base URL", description="OpenAI-compatible base URL override.")
+        schema_name: str = Field(default="extracted", title="Schema name", description="Name attached to the structured-output schema for the provider.")
+        model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id (default gpt-4o-mini). Requires OPENAI_API_KEY or Groq.")
+        base_url: str = Field(default="", title="Base URL", description="OpenAI-compatible base URL override. Groq: https://api.groq.com/openai/v1")
         timeout_s: float = Field(default=30.0, title="Timeout (s)", description="Request/operation timeout in seconds.")
-        system_prompt: str = Field(default='Extract JSON matching the provided schema. Reply with JSON only.', title="System prompt", description="System instruction for extraction; keep output JSON-only.")
+        system_prompt: str = Field(
+            default="Extract JSON matching the provided schema. Reply with JSON only.",
+            title="System prompt",
+            description="System instruction for extraction; keep output JSON-only.",
+        )
 
     def process(self, value):
         schema = self.config.json_schema or {"type": "object", "properties": {}}
         provider = (self.config.provider or "openai_compat").strip().lower()
         text = _text_of(value)
+        if provider == "local_heuristic":
+            data = _heuristic_extract(text, schema)
+            return StructuredDocument(
+                data=data,
+                schema_name=self.config.schema_name,
+                provider="local_heuristic",
+                raw_text=text,
+                metadata={"mode": "heuristic"},
+            )
         if provider != "openai_compat":
             raise RuntimeError(
-                f"StructuredLlmNode: unknown provider {provider!r}. Use openai_compat."
+                f"StructuredLlmNode: unknown provider {provider!r}. "
+                "Use openai_compat or local_heuristic."
             )
-        try:
-            from app.core.secrets import resolve_secret
-            api_key = resolve_secret("OPENAI_API_KEY")
-        except Exception:
-            api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        api_key = _resolve_openai_compat_key(self.config.base_url or "")
         if not api_key:
             raise RuntimeError(
                 "StructuredLlmNode: provider='openai_compat' requires secret/env "
-                "OPENAI_API_KEY. Store it with `graphyn secrets set OPENAI_API_KEY` "
-                "or export the env var."
+                "OPENAI_API_KEY (or GROQ_API_KEY when base_url is Groq). "
+                "For a free local path use provider='local_heuristic'."
             )
         data = self._openai_extract(api_key, text, schema)
         return StructuredDocument(
@@ -134,10 +276,17 @@ class StructuredLlmNode(Node):
                 "StructuredLlmNode: openai_compat requires the 'httpx' package. "
                 "Install httpx (e.g. pip install httpx)."
             ) from exc
-        base = (self.config.base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+        base = (
+            self.config.base_url
+            or os.environ.get("OPENAI_BASE_URL")
+            or "https://api.openai.com/v1"
+        ).rstrip("/")
         url = f"{base}/chat/completions"
+        model = self.config.model
+        if _base_looks_like_groq(base) and (not model or model.startswith("gpt-")):
+            model = "llama-3.1-8b-instant"
         payload = {
-            "model": self.config.model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": self.config.system_prompt},
                 {"role": "user", "content": text or ""},
@@ -151,12 +300,27 @@ class StructuredLlmNode(Node):
                 },
             },
         }
+        # Groq may not support json_schema response_format on all models — fall back to json_object
         resp = httpx.post(
             url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=payload,
             timeout=self.config.timeout_s,
         )
+        status_code = int(getattr(resp, "status_code", 200) or 200)
+        if status_code >= 400 and _base_looks_like_groq(base):
+            payload["response_format"] = {"type": "json_object"}
+            payload["messages"][0]["content"] = (
+                self.config.system_prompt
+                + " Schema: "
+                + json.dumps(schema)
+            )
+            resp = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=self.config.timeout_s,
+            )
         resp.raise_for_status()
         body = resp.json()
         content = (((body.get("choices") or [{}])[0].get("message") or {}).get("content")) or "{}"

@@ -293,7 +293,9 @@ class NodeExecutor:
             raw_cfg = getattr(node, "config", None)
             if raw_cfg is not None:
                 if hasattr(raw_cfg, "model_dump"):
-                    config = raw_cfg.model_dump()
+                    # exclude_none: isolated workers re-validate with pydantic;
+                    # explicit nulls from stub/schema padding must not override Field defaults.
+                    config = raw_cfg.model_dump(exclude_none=True)
                 elif isinstance(raw_cfg, dict):
                     config = dict(raw_cfg)
             seed = int(getattr(node, "seed", 42) or 42)

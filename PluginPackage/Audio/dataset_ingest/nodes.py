@@ -170,7 +170,7 @@ class DatasetIngestNode(Node):
                 checkpoint_buffer.clear()
 
         if self.config.recursive:
-            for dirpath, dirnames, filenames in os.walk(root_path):
+            for dirpath, dirnames, filenames in os.walk(root_path, followlinks=True):
                 dirnames.sort()  # deterministic order
                 audio_files = sorted(
                     f for f in filenames

@@ -3,7 +3,7 @@
   "metadata": {
     "name": "captions",
     "seed": 42,
-    "description": "Captions: ingest audio, Deepgram ASR with word timings, export SRT/VTT/JSON. Requires DEEPGRAM_API_KEY.",
+    "description": "Captions: ingest audio, local_whisper ASR with word timings, export SRT/VTT/JSON. Free local path (faster-whisper).",
     "created_at": null,
     "tags": [
       "example",
@@ -29,8 +29,9 @@
       "id": "asr_transcribe_1",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "deepgram",
-        "language": "en"
+        "provider": "local_whisper",
+        "language": "en",
+        "model": "tiny"
       },
       "label": null,
       "capability_metadata": null,

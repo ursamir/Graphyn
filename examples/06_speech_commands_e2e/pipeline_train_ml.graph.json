@@ -3,7 +3,7 @@
   "metadata": {
     "name": "speech_commands_e2e_train_ml",
     "seed": 42,
-    "description": "E2E speech commands — ML training phase. Full pipeline: ingest → features → dataset → model_builder → trainer → evaluator → edge_optimizer.",
+    "description": "E2E speech commands \u2014 ML training phase. Full pipeline: ingest \u2192 features \u2192 dataset \u2192 model_builder \u2192 trainer \u2192 evaluator \u2192 edge_optimizer.",
     "created_at": null,
     "tags": [
       "audio",
@@ -20,7 +20,8 @@
       "config": {
         "path": "workspace/datasets/input/speech-commands",
         "recursive": true,
-        "source_type": "filesystem"
+        "source_type": "filesystem",
+        "limit": 8
       },
       "label": null,
       "capability_metadata": null,
@@ -60,7 +61,8 @@
         "num_layers": 4,
         "dropout_rate": 0.25,
         "learning_rate": 0.001,
-        "backend": "keras"
+        "backend": "keras",
+        "output_path": "workspace/artifacts/speech-commands/models"
       },
       "label": null,
       "capability_metadata": null,

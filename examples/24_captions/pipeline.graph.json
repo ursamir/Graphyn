@@ -29,8 +29,9 @@
       "id": "asr_transcribe_1",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "deepgram",
-        "language": "en"
+        "provider": "local_whisper",
+        "language": "en",
+        "model": "tiny"
       },
       "label": null,
       "capability_metadata": null,

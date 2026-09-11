@@ -1,0 +1,374 @@
+{
+  "generated_at": "2026-09-11 10:01 IST",
+  "branch": "cursor/usecase-plugins-workflows",
+  "api": "http://127.0.0.1:8001",
+  "free_providers": {
+    "asr": "local_whisper (faster-whisper tiny, CPU)",
+    "llm": "local_heuristic (deterministic schema fill); Groq openai_compat fallback if GROQ_API_KEY+base_url",
+    "webhook": "https://httpbin.org/post"
+  },
+  "templates": [
+    {
+      "template": "audio-classification",
+      "status": "COMPLETED",
+      "run_id": "f8a7dfccf608445b8e8a91470d89bc0f",
+      "notes": "artifacts=1; fresh reconfirm"
+    },
+    {
+      "template": "basic-wakeword",
+      "status": "COMPLETED",
+      "run_id": "15eeb3dae1f74bf7a46f57f66dd6dc3e",
+      "notes": "artifacts=1"
+    },
+    {
+      "template": "audio-quality-check",
+      "status": "COMPLETED",
+      "run_id": "4556c917ba4c48ba877f9541b0959a49",
+      "notes": "artifacts=1"
+    },
+    {
+      "template": "podcast-leveling",
+      "status": "COMPLETED",
+      "run_id": "a0c24ef1fce8433f8235134ea2aacbaf",
+      "notes": "artifacts=1"
+    },
+    {
+      "template": "speech-recognition",
+      "status": "COMPLETED",
+      "run_id": "d5bc6ec8e8034a99a4d3c01fc16f7f4c",
+      "notes": "artifacts=2"
+    },
+    {
+      "template": "doc-rag-ingest",
+      "status": "COMPLETED",
+      "run_id": "f9f33605a76e4fc19c89be767d6630c5",
+      "notes": "artifacts=3"
+    },
+    {
+      "template": "edge-deploy",
+      "status": "COMPLETED",
+      "run_id": "dfa82f23af3d4ed9a7dcc6814dd9445f",
+      "notes": "artifacts=3"
+    },
+    {
+      "template": "captions",
+      "status": "COMPLETED",
+      "run_id": "ef5a52c687f64f24a9a7f3285ea94b5e",
+      "notes": "local_whisper ASR (free); artifacts=3"
+    },
+    {
+      "template": "call-analytics",
+      "status": "COMPLETED",
+      "run_id": "6858e0deec4e42adae4c1ff04797e63a",
+      "notes": "local_whisper + local_heuristic + httpbin; artifacts=7"
+    },
+    {
+      "template": "meeting-crm",
+      "status": "COMPLETED",
+      "run_id": "b7882cd61bc64d599e0d950a59b5566e",
+      "notes": "local_whisper + local_heuristic + httpbin; artifacts=5"
+    },
+    {
+      "template": "ex-01-wake-word",
+      "status": "COMPLETED",
+      "run_id": "08fee9781ef248eea553224b8f279d8a",
+      "notes": "artifacts=3"
+    },
+    {
+      "template": "ex-02-speech-commands",
+      "status": "COMPLETED",
+      "run_id": "dac9d278999d4bf0894deb72e8a74e0b",
+      "notes": "artifacts=4"
+    },
+    {
+      "template": "ex-03-environmental-sounds",
+      "status": "COMPLETED",
+      "run_id": "8d6357685a094fe7945062c89b9df103",
+      "notes": "path heal environmental-sounds/*; artifacts=4"
+    },
+    {
+      "template": "ex-04-speaker-verification",
+      "status": "COMPLETED",
+      "run_id": "390042cd31ae484b85f682abb4b5554a",
+      "notes": "path heal speaker-verification/*; artifacts=4"
+    },
+    {
+      "template": "ex-05-speech-enhancement",
+      "status": "COMPLETED",
+      "run_id": "a677e544302f45c5a3761986e260c2e9",
+      "notes": "path heal speech-enhancement/*; artifacts=3"
+    },
+    {
+      "template": "ex-06-speech-commands-e2e",
+      "status": "COMPLETED",
+      "run_id": "b78feabaabc4408c8b9b3613c71b4466",
+      "notes": "followlinks ingest + exclude_none isolated dump; artifacts=6"
+    },
+    {
+      "template": "ex-09-parallel-execution",
+      "status": "COMPLETED",
+      "run_id": "3a5f670ec30449f6a4cba20cebb9e8bb",
+      "notes": "artifacts=11"
+    },
+    {
+      "template": "ex-10-resumable-pipeline",
+      "status": "COMPLETED",
+      "run_id": "6cde5d2375384063860553dc93b8fe78",
+      "notes": "artifacts=1"
+    },
+    {
+      "template": "ex-12-conditional-branching",
+      "status": "COMPLETED",
+      "run_id": "2a42356c0b3840fdb3423364e414ebd2",
+      "notes": "stamp no longer injects project into artifact sinks; artifacts=7"
+    },
+    {
+      "template": "ex-18-pipeline-composition",
+      "status": "COMPLETED",
+      "run_id": "56d58286cce243dba0c025b454bf1d16",
+      "notes": "artifacts=3"
+    },
+    {
+      "template": "ex-19-capability-scheduling",
+      "status": "COMPLETED",
+      "run_id": "b9150da55b29494db634f419c1cf9fbe",
+      "notes": "file_path \u2192 yes_000.wav; artifacts=2"
+    },
+    {
+      "template": "ex-22-call-analytics",
+      "status": "COMPLETED",
+      "run_id": "5b2219b4b78b43d9bef2e52edbabeb3b",
+      "notes": "free ASR/LLM path; artifacts=3"
+    },
+    {
+      "template": "ex-23-meeting-crm",
+      "status": "COMPLETED",
+      "run_id": "9b2d0c50d47747f195e7e61f4c1cef0c",
+      "notes": "free ASR/LLM path; artifacts=3"
+    },
+    {
+      "template": "ex-24-captions",
+      "status": "COMPLETED",
+      "run_id": "64d40a3378e24f9b9fab0a54e2fd8831",
+      "notes": "local_whisper; artifacts=1"
+    },
+    {
+      "template": "ex-25-doc-rag-ingest",
+      "status": "COMPLETED",
+      "run_id": "c3b6567b744d4146a868ee3aee90eafe",
+      "notes": "artifacts=3"
+    },
+    {
+      "template": "ex-26-nightly-compliance",
+      "status": "SKIPPED_EXTERNAL",
+      "run_id": null,
+      "notes": "Slack chat.postMessage \u2014 needs Slack token"
+    },
+    {
+      "template": "ex-27-github-triage",
+      "status": "SKIPPED_EXTERNAL",
+      "run_id": null,
+      "notes": "GitHub Issues API \u2014 needs GitHub token"
+    },
+    {
+      "template": "ex-28-asr-eval-merge",
+      "status": "COMPLETED",
+      "run_id": "aa9e4a2f19124be6ab82d2d3408c0f33",
+      "notes": "local_whisper ASR eval merge; artifacts=4"
+    },
+    {
+      "template": "ex-29-distributed-placement",
+      "status": "COMPLETED",
+      "run_id": "8c776657314c4e3d983efaf79ec3acad",
+      "notes": "artifacts=3"
+    },
+    {
+      "template": "ex-30-edge-deploy",
+      "status": "COMPLETED",
+      "run_id": "83d6712b231a44b28e69e9298b391fde",
+      "notes": "artifacts=3"
+    }
+  ],
+  "examples": [
+    {
+      "example": "01_wake_word",
+      "status": "COMPLETED",
+      "run_id": "08fee9781ef248eea553224b8f279d8a",
+      "notes": "via ex-01-wake-word"
+    },
+    {
+      "example": "02_speech_commands",
+      "status": "COMPLETED",
+      "run_id": "dac9d278999d4bf0894deb72e8a74e0b",
+      "notes": "via ex-02-speech-commands"
+    },
+    {
+      "example": "03_environmental_sounds",
+      "status": "COMPLETED",
+      "run_id": "8d6357685a094fe7945062c89b9df103",
+      "notes": "via ex-03"
+    },
+    {
+      "example": "04_speaker_verification",
+      "status": "COMPLETED",
+      "run_id": "390042cd31ae484b85f682abb4b5554a",
+      "notes": "via ex-04"
+    },
+    {
+      "example": "05_speech_enhancement",
+      "status": "COMPLETED",
+      "run_id": "a677e544302f45c5a3761986e260c2e9",
+      "notes": "via ex-05"
+    },
+    {
+      "example": "06_speech_commands_e2e",
+      "status": "COMPLETED",
+      "run_id": "b78feabaabc4408c8b9b3613c71b4466",
+      "notes": "via ex-06"
+    },
+    {
+      "example": "07_mcp_agent_pipeline",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['agent.py']; README/CLI demo, not API template"
+    },
+    {
+      "example": "08_rest_api_streaming",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['stream_client.py']; streaming client demo"
+    },
+    {
+      "example": "09_parallel_execution",
+      "status": "COMPLETED",
+      "run_id": "3a5f670ec30449f6a4cba20cebb9e8bb",
+      "notes": "via ex-09"
+    },
+    {
+      "example": "10_resumable_pipeline",
+      "status": "COMPLETED",
+      "run_id": "6cde5d2375384063860553dc93b8fe78",
+      "notes": "via ex-10"
+    },
+    {
+      "example": "11_artifact_lineage",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['lineage_demo.py']"
+    },
+    {
+      "example": "12_conditional_branching",
+      "status": "COMPLETED",
+      "run_id": "2a42356c0b3840fdb3423364e414ebd2",
+      "notes": "via ex-12"
+    },
+    {
+      "example": "13_csv_data_processing",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['csv_pipeline.py']"
+    },
+    {
+      "example": "14_plugin_manifest",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['manifest_demo.py']"
+    },
+    {
+      "example": "15_event_driven_pipeline",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['event_driven_demo.py']"
+    },
+    {
+      "example": "16_deterministic_replay",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['replay_demo.py']"
+    },
+    {
+      "example": "17_partial_execution",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['partial_demo.py']"
+    },
+    {
+      "example": "18_pipeline_composition",
+      "status": "COMPLETED",
+      "run_id": "56d58286cce243dba0c025b454bf1d16",
+      "notes": "via ex-18"
+    },
+    {
+      "example": "19_capability_scheduling",
+      "status": "COMPLETED",
+      "run_id": "b9150da55b29494db634f419c1cf9fbe",
+      "notes": "via ex-19"
+    },
+    {
+      "example": "20_retry_fault_tolerance",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['retry_demo.py']"
+    },
+    {
+      "example": "21_runtime_control_api",
+      "status": "N/A_SCRIPT",
+      "run_id": null,
+      "notes": "scripts=['runtime_control_demo.py']"
+    },
+    {
+      "example": "22_call_analytics",
+      "status": "COMPLETED",
+      "run_id": "5b2219b4b78b43d9bef2e52edbabeb3b",
+      "notes": "via ex-22 free path"
+    },
+    {
+      "example": "23_meeting_crm",
+      "status": "COMPLETED",
+      "run_id": "9b2d0c50d47747f195e7e61f4c1cef0c",
+      "notes": "via ex-23 free path"
+    },
+    {
+      "example": "24_captions",
+      "status": "COMPLETED",
+      "run_id": "64d40a3378e24f9b9fab0a54e2fd8831",
+      "notes": "via ex-24 local_whisper"
+    },
+    {
+      "example": "25_doc_rag_ingest",
+      "status": "COMPLETED",
+      "run_id": "c3b6567b744d4146a868ee3aee90eafe",
+      "notes": "via ex-25"
+    },
+    {
+      "example": "26_nightly_compliance",
+      "status": "SKIPPED_EXTERNAL",
+      "run_id": null,
+      "notes": "Slack token required"
+    },
+    {
+      "example": "27_github_triage",
+      "status": "SKIPPED_EXTERNAL",
+      "run_id": null,
+      "notes": "GitHub token required"
+    },
+    {
+      "example": "28_asr_eval_merge",
+      "status": "COMPLETED",
+      "run_id": "aa9e4a2f19124be6ab82d2d3408c0f33",
+      "notes": "via ex-28"
+    },
+    {
+      "example": "29_distributed_placement",
+      "status": "COMPLETED",
+      "run_id": "8c776657314c4e3d983efaf79ec3acad",
+      "notes": "via ex-29"
+    },
+    {
+      "example": "30_edge_deploy",
+      "status": "COMPLETED",
+      "run_id": "83d6712b231a44b28e69e9298b391fde",
+      "notes": "via ex-30"
+    }
+  ]
+}

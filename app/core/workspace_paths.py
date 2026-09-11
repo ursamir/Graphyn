@@ -711,13 +711,21 @@ def publish_latest(slug: str, run_id: str) -> str:
 
 
 def _dir_has_ingest_files(path: Path) -> bool:
-    """True when *path* is a directory that contains at least one file."""
+    """True when *path* is a directory that contains at least one file.
+
+    Follows directory symlinks (class-folder trees like speech-commands/go → …/go).
+    """
     try:
         if not path.is_dir():
             return False
-        for child in path.rglob("*"):
-            if child.is_file():
+        for dirpath, _dirnames, filenames in os.walk(path, followlinks=True):
+            if filenames:
                 return True
+            # also count symlink-to-file entries that walk may list
+            for name in _dirnames:
+                child = Path(dirpath) / name
+                if child.is_file():
+                    return True
     except OSError:
         return False
     return False

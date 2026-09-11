@@ -1,5 +1,9 @@
 # E2E Audio Pass — local template matrix
 
+> **Superseded for full coverage:** see [`docs/E2E_TEMPLATE_MATRIX.md`](E2E_TEMPLATE_MATRIX.md) (2026-09-11 10:01 IST) — all UI templates + ex-01…30 + example folders, including free-path captions/call-analytics/meeting-crm via `local_whisper` / `local_heuristic`.
+
+# E2E Audio Pass — local template matrix
+
 **Date:** 2026-09-10 (Asia/Kolkata)  
 **Branch:** `cursor/usecase-plugins-workflows`  
 **API:** `http://127.0.0.1:8001` with `GRAPHYN_HOME=/workspace/Graphyn/.graphyn-e2e`, `GRAPHYN_PROJECT_DIR=/workspace/Graphyn/workspace`  

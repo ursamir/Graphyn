@@ -3,7 +3,7 @@
   "metadata": {
     "name": "call-analytics",
     "seed": 42,
-    "description": "Call analytics: ingest audio, Deepgram ASR, redact PII, OpenAI structured extract, gate, webhook. Requires DEEPGRAM_API_KEY and OPENAI_API_KEY. Set http_webhook url to your callback.",
+    "description": "Call analytics: local_whisper ASR \u2192 PII redact \u2192 local_heuristic extract \u2192 eval_gate \u2192 httpbin webhook. Free local E2E.",
     "created_at": null,
     "tags": [
       "example",
@@ -42,8 +42,9 @@
       "id": "asr_transcribe_2",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "deepgram",
-        "language": "en"
+        "provider": "local_whisper",
+        "language": "en",
+        "model": "tiny"
       },
       "label": null,
       "capability_metadata": null,
@@ -63,7 +64,7 @@
       "id": "structured_llm_4",
       "node_type": "structured_llm",
       "config": {
-        "provider": "openai_compat",
+        "provider": "local_heuristic",
         "schema_name": "call_analytics",
         "json_schema": {
           "type": "object",
@@ -119,7 +120,7 @@
       "id": "http_webhook_6",
       "node_type": "http_webhook",
       "config": {
-        "url": "https://example.com/webhooks/call-analytics",
+        "url": "https://httpbin.org/post",
         "timeout_s": 2.0,
         "hmac_secret": "",
         "provider": "http"

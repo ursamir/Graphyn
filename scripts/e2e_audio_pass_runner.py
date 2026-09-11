@@ -30,9 +30,8 @@ PRIORITY = [
 
 # Templates that need paid cloud keys
 KEY_TEMPLATES = {
-    "call-analytics": "Deepgram + OpenAI",
-    "captions": "Deepgram",
-    "meeting-crm": "OpenAI-compat ASR/LLM",
+    # Historical key gates — free path now available via local_whisper / local_heuristic.
+    # Kept empty so the legacy runner no longer auto-skips; prefer e2e_all_templates_runner.py.
 }
 
 # Small epoch overrides where ML train appears
@@ -120,9 +119,14 @@ def stamp(graph: dict, project: str) -> dict:
         if not isinstance(cfg, dict):
             continue
         ntype = str(node.get("type") or node.get("node_type") or "")
-        if ntype in {"audio_exporter", "export", "dataset_versioner", "dataset_builder"} or "project" in cfg:
+        if "project" in cfg:
             cfg["project"] = project
-        if ntype in {"audio_exporter", "export", "dataset_versioner", "dataset_builder"}:
+        if "output_dir" in cfg:
+            od = str(cfg.get("output_dir") or "").replace("\\", "/")
+            if "/datasets/output/" in od:
+                cfg["output_dir"] = f"workspace/datasets/output/{project}"
+        if ntype in {"audio_exporter", "export", "dataset_versioner"}:
+            cfg["project"] = project
             od = str(cfg.get("output_dir") or "").replace("\\", "/")
             # Keep artifact-sink exports under artifacts/; rewrite Library dataset sinks.
             if "/datasets/output/" in od or not od:
@@ -154,17 +158,19 @@ def skip_reason(name: str, graph: dict) -> str | None:
     return None
 
 def needs_keys(name: str, graph: dict) -> str | None:
+    """Paid-key gate. Free local_whisper / local_heuristic graphs are never skipped."""
+    blob = json.dumps(graph).lower()
+    if "local_whisper" in blob or "faster_whisper" in blob or "local_heuristic" in blob:
+        return None
     if name in KEY_TEMPLATES:
         return KEY_TEMPLATES[name]
-    blob = json.dumps(graph).lower()
     reasons = []
     if "deepgram" in blob and not os.environ.get("DEEPGRAM_API_KEY"):
         reasons.append("Deepgram")
-    if ("openai" in blob or "openai_compat" in blob) and not (
-        os.environ.get("OPENAI_API_KEY") or os.environ.get("GRAPHYN_OPENAI_API_KEY")
+    if ("openai_compat" in blob) and not (
+        os.environ.get("OPENAI_API_KEY") or os.environ.get("GRAPHYN_OPENAI_API_KEY") or os.environ.get("GROQ_API_KEY")
     ):
-        # openai_compat may work with local/mock — only skip if clearly call/meeting/captions
-        if name in KEY_TEMPLATES or any(x in name for x in ("call", "caption", "meeting", "crm", "triage", "compliance")):
+        if any(x in name for x in ("call", "caption", "meeting", "crm", "triage", "compliance")):
             reasons.append("OpenAI")
     if reasons:
         return "+".join(reasons)

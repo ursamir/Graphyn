@@ -4,6 +4,8 @@ Providers:
     openai_compat  — HTTP POST {base}/audio/transcriptions (OPENAI_API_KEY) [default]
     assemblyai     — upload + create + POLL until completed (ASSEMBLYAI_API_KEY)
     deepgram       — Deepgram listen REST (DEEPGRAM_API_KEY)
+    local_whisper  — on-box faster-whisper (CPU; no paid API key)
+    faster_whisper — alias of local_whisper
 """
 from __future__ import annotations
 
@@ -41,6 +43,13 @@ _PROVIDER_ENV = {
     "deepgram": "DEEPGRAM_API_KEY",
 }
 
+_LOCAL_PROVIDERS = frozenset({"local_whisper", "faster_whisper"})
+_REMOTE_PROVIDERS = frozenset(_PROVIDER_ENV.keys())
+_ALL_PROVIDERS = tuple(sorted(_REMOTE_PROVIDERS | _LOCAL_PROVIDERS))
+
+# Process-local WhisperModel cache: (model_name, device, compute_type) -> model
+_WHISPER_MODELS: dict[tuple[str, str, str], Any] = {}
+
 
 def _resolve_key(env_key: str) -> str:
     try:
@@ -48,7 +57,6 @@ def _resolve_key(env_key: str) -> str:
         return resolve_secret(env_key)
     except Exception:
         return os.environ.get(env_key, "").strip()
-
 
 
 def _coerce_samples(audio: Any) -> list:
@@ -59,8 +67,24 @@ def _coerce_samples(audio: Any) -> list:
     return [audio]
 
 
+def _base_looks_like_groq(base: str) -> bool:
+    b = (base or "").strip().lower()
+    return "groq.com" in b
+
+
+def _resolve_openai_compat_key(base_url: str) -> str:
+    """OPENAI_API_KEY, or GROQ_API_KEY when base_url points at Groq."""
+    key = _resolve_key("OPENAI_API_KEY")
+    if key:
+        return key
+    base = (base_url or os.environ.get("OPENAI_BASE_URL") or "").strip()
+    if _base_looks_like_groq(base):
+        return _resolve_key("GROQ_API_KEY")
+    return ""
+
+
 class AsrTranscribeNode(Node):
-    """Transcribe audio to a typed Transcript via HTTP ASR providers."""
+    """Transcribe audio to a typed Transcript via HTTP ASR or local Whisper."""
 
     node_type: ClassVar[str] = "asr_transcribe"
 
@@ -69,10 +93,11 @@ class AsrTranscribeNode(Node):
         label="ASR Transcribe",
         description=(
             "Transcribe audio to text with optional word timestamps. "
-            "Default provider is openai_compat (requires OPENAI_API_KEY)."
+            "Providers: openai_compat (default), assemblyai, deepgram, "
+            "local_whisper / faster_whisper (CPU, no paid key)."
         ),
         category="Processing",
-        version="1.0.0",
+        version="1.1.0",
         tags=["asr", "speech", "transcript", "common"],
         requires_gpu=False,
         supports_cpu=True,
@@ -102,10 +127,27 @@ class AsrTranscribeNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: Literal["openai_compat", "assemblyai", "deepgram"] = Field(default='openai_compat', title="Provider", description="Remote ASR provider. One of: openai_compat, assemblyai, deepgram.")
-        language: str = Field(default='en', title="Language", description="BCP-47 / ISO language code (e.g. en).")
-        model: str = Field(default='', title="Model", description="Provider model id (e.g. whisper-1). Empty = provider default.")
-        base_url: str = Field(default='', title="Base URL", description="OpenAI-compatible base URL override (openai_compat only).")
+        provider: Literal[
+            "openai_compat", "assemblyai", "deepgram", "local_whisper", "faster_whisper"
+        ] = Field(
+            default="openai_compat",
+            title="Provider",
+            description=(
+                "ASR provider. Remote: openai_compat, assemblyai, deepgram. "
+                "Local (free): local_whisper / faster_whisper via faster-whisper."
+            ),
+        )
+        language: str = Field(default="en", title="Language", description="BCP-47 / ISO language code (e.g. en).")
+        model: str = Field(
+            default="",
+            title="Model",
+            description="Provider model id (e.g. whisper-1, tiny, base). Empty = provider default.",
+        )
+        base_url: str = Field(
+            default="",
+            title="Base URL",
+            description="OpenAI-compatible base URL override (openai_compat only). Groq: https://api.groq.com/openai/v1",
+        )
         timeout_s: float = Field(default=30.0, title="Timeout (s)", description="Request/operation timeout in seconds.")
 
     def process(self, audio):
@@ -114,20 +156,96 @@ class AsrTranscribeNode(Node):
             return Transcript(text="", language=self.config.language, words=[], metadata={"empty": True})
 
         provider = (self.config.provider or "openai_compat").strip().lower()
+        if provider in _LOCAL_PROVIDERS:
+            return self._local_whisper(samples, provider_label=provider)
         if provider not in _PROVIDER_ENV:
             raise RuntimeError(
                 f"AsrTranscribeNode: unknown provider {provider!r}. "
-                "Use openai_compat, assemblyai, or deepgram."
+                f"Use {', '.join(_ALL_PROVIDERS)}."
             )
-        env_key = _PROVIDER_ENV[provider]
-        api_key = _resolve_key(env_key)
+        if provider == "openai_compat":
+            api_key = _resolve_openai_compat_key(self.config.base_url or "")
+            env_hint = "OPENAI_API_KEY (or GROQ_API_KEY when base_url is Groq)"
+        else:
+            env_key = _PROVIDER_ENV[provider]
+            api_key = _resolve_key(env_key)
+            env_hint = env_key
         if not api_key:
             raise RuntimeError(
                 f"AsrTranscribeNode: provider={provider!r} requires secret/env "
-                f"{env_key}. Store it with `graphyn secrets set {env_key}` or export "
-                f"the env var."
+                f"{env_hint}. Store it with `graphyn secrets set …` or export "
+                f"the env var. For a free local path use provider='local_whisper'."
             )
         return self._http_transcribe(provider, api_key, samples)
+
+    def _local_whisper(self, samples: list, *, provider_label: str = "local_whisper") -> Transcript:
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "AsrTranscribeNode: provider='local_whisper' requires the "
+                "'faster-whisper' package in the runtime venv "
+                "(pip install faster-whisper)."
+            ) from exc
+
+        sample = samples[0]
+        path = getattr(sample, "path", "") or ""
+        model_name = (self.config.model or "tiny").strip() or "tiny"
+        device = "cpu"
+        compute_type = "int8"
+        cache_key = (model_name, device, compute_type)
+        model = _WHISPER_MODELS.get(cache_key)
+        if model is None:
+            log.info("AsrTranscribeNode: loading faster-whisper model=%s device=%s", model_name, device)
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            _WHISPER_MODELS[cache_key] = model
+
+        language = (self.config.language or "en").strip() or None
+        # Prefer file path; fall back to in-memory float32 mono at sample_rate
+        audio_arg: Any
+        if path and os.path.isfile(path):
+            audio_arg = path
+        else:
+            data = getattr(sample, "data", None)
+            if data is None:
+                raise RuntimeError(
+                    "AsrTranscribeNode: local_whisper requires AudioSample.path "
+                    "or AudioSample.data."
+                )
+            audio_arg = np.asarray(data, dtype=np.float32).reshape(-1)
+
+        segments_iter, info = model.transcribe(
+            audio_arg,
+            language=language if language and language != "auto" else None,
+            word_timestamps=True,
+            vad_filter=False,
+        )
+        texts: list[str] = []
+        words: list = []
+        for seg in segments_iter:
+            texts.append(seg.text or "")
+            for w in getattr(seg, "words", None) or []:
+                words.append(
+                    WordTiming(
+                        word=str(getattr(w, "word", "") or "").strip(),
+                        start=float(getattr(w, "start", 0.0) or 0.0),
+                        end=float(getattr(w, "end", 0.0) or 0.0),
+                        speaker="",
+                    )
+                )
+        text = " ".join(t.strip() for t in texts if t and t.strip()).strip()
+        detected = getattr(info, "language", None) or self.config.language
+        return Transcript(
+            text=text,
+            language=str(detected or self.config.language),
+            words=words,
+            metadata={
+                "provider": provider_label,
+                "model": model_name,
+                "device": device,
+                "compute_type": compute_type,
+            },
+        )
 
     def _http_transcribe(self, provider: str, api_key: str, samples: list) -> Transcript:
         sample = samples[0]
@@ -170,10 +288,14 @@ class AsrTranscribeNode(Node):
         return resp.json()
 
     def _openai_compat(self, api_key: str, path: str, sample) -> Transcript:
-        base = (self.config.base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+        base = (
+            self.config.base_url
+            or os.environ.get("OPENAI_BASE_URL")
+            or "https://api.openai.com/v1"
+        ).rstrip("/")
         url = f"{base}/audio/transcriptions"
         headers = {"Authorization": f"Bearer {api_key}"}
-        model = self.config.model or "whisper-1"
+        model = self.config.model or ("whisper-large-v3-turbo" if _base_looks_like_groq(base) else "whisper-1")
         if not path:
             raise RuntimeError(
                 "AsrTranscribeNode: openai_compat requires AudioSample.path to a readable audio file."
@@ -193,7 +315,12 @@ class AsrTranscribeNode(Node):
                     speaker=str(w.get("speaker") or ""),
                 )
             )
-        return Transcript(text=text, language=str(body.get("language") or self.config.language), words=words, metadata={"provider": "openai_compat"})
+        return Transcript(
+            text=text,
+            language=str(body.get("language") or self.config.language),
+            words=words,
+            metadata={"provider": "openai_compat", "base_url": base},
+        )
 
     def _assemblyai(self, api_key: str, path: str) -> Transcript:
         if not path:

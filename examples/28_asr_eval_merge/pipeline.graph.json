@@ -31,8 +31,9 @@
       "id": "asr",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "openai_compat",
-        "language": "en"
+        "provider": "local_whisper",
+        "language": "en",
+        "model": "tiny"
       },
       "label": null,
       "capability_metadata": null,

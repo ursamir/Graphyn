@@ -90,3 +90,46 @@ def test_openai_extract_httpx_mocked(installed_cls, monkeypatch):
     assert out.data["pain"] == "latency"
     assert out.provider == "openai_compat"
     mocked.assert_called_once()
+
+
+def test_local_heuristic_provider(installed_cls):
+    node = installed_cls(
+        config={"provider": "local_heuristic", "json_schema": SCHEMA, "schema_name": "crm"},
+        seed=0,
+    )
+    out = node.process({"input": "Alex is blocked by pricing. Next we will schedule a demo."})["output"]
+    assert out.provider == "local_heuristic"
+    assert isinstance(out.data, dict)
+    assert out.data.get("pain")
+    assert out.data.get("next_step")
+    assert out.data.get("owner")
+
+
+def test_openai_compat_groq_key_fallback(installed_cls, monkeypatch):
+    from unittest.mock import MagicMock, patch
+    import json as _json
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    node = installed_cls(
+        config={
+            "provider": "openai_compat",
+            "json_schema": SCHEMA,
+            "base_url": "https://api.groq.com/openai/v1",
+            "model": "llama-3.1-8b-instant",
+        },
+        seed=0,
+    )
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": _json.dumps({
+            "pain": "price", "objections": [], "next_step": "call", "owner": "Sam", "score": 1
+        })}}]
+    }
+    with patch("httpx.post", return_value=mock_resp) as post:
+        out = node.process({"input": "hello"})["output"]
+    assert out.data["pain"] == "price"
+    headers = post.call_args.kwargs.get("headers") or {}
+    assert headers.get("Authorization") == "Bearer gsk-test"

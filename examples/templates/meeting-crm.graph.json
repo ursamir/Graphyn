@@ -3,7 +3,7 @@
   "metadata": {
     "name": "meeting-crm",
     "seed": 42,
-    "description": "Meeting CRM extract: openai_compat ASR \u2192 PII redact \u2192 structured CRM fields \u2192 eval gate \u2192 webhook. Requires OPENAI_API_KEY. Set http_webhook url to your callback.",
+    "description": "Meeting CRM: local_whisper ASR \u2192 PII redact \u2192 local_heuristic extract \u2192 eval_gate \u2192 httpbin webhook. Free local E2E.",
     "created_at": null,
     "tags": [
       "example",
@@ -30,8 +30,9 @@
       "id": "asr_transcribe_1",
       "node_type": "asr_transcribe",
       "config": {
-        "provider": "openai_compat",
-        "language": "en"
+        "provider": "local_whisper",
+        "language": "en",
+        "model": "tiny"
       },
       "label": null,
       "capability_metadata": null,
@@ -51,7 +52,7 @@
       "id": "structured_llm_3",
       "node_type": "structured_llm",
       "config": {
-        "provider": "openai_compat",
+        "provider": "local_heuristic",
         "schema_name": "meeting_crm",
         "json_schema": {
           "type": "object",
@@ -102,7 +103,7 @@
       "id": "http_webhook_5",
       "node_type": "http_webhook",
       "config": {
-        "url": "https://example.com/webhooks/meeting-crm",
+        "url": "https://httpbin.org/post",
         "timeout_s": 2.0,
         "provider": "http"
       },

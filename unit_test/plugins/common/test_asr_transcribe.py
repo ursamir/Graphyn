@@ -119,3 +119,71 @@ def test_assemblyai_polls_until_completed(installed_cls, tmp_path, monkeypatch):
     assert out.text == "hello there"
     assert out.metadata.get("status") == "completed"
     assert len(out.words) == 2
+
+
+def test_local_whisper_provider_accepted(installed_cls):
+    node = installed_cls(config={"provider": "local_whisper", "model": "tiny"}, seed=0)
+    assert node.config.provider == "local_whisper"
+
+
+def test_faster_whisper_alias_accepted(installed_cls):
+    node = installed_cls(config={"provider": "faster_whisper", "model": "tiny"}, seed=0)
+    assert node.config.provider == "faster_whisper"
+
+
+def test_local_whisper_mocked_model(installed_cls, tmp_path):
+    """Unit test with a mocked WhisperModel — no heavy download."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+    import importlib
+
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFF" + b"\x00" * 64)
+    sample = _sample()
+    sample.path = str(wav)
+
+    word = SimpleNamespace(word="hello", start=0.0, end=0.4)
+    seg = SimpleNamespace(text=" hello", words=[word])
+    info = SimpleNamespace(language="en")
+    fake_model = MagicMock()
+    fake_model.transcribe.return_value = (iter([seg]), info)
+
+    node = installed_cls(config={"provider": "local_whisper", "model": "tiny"}, seed=0)
+    mod = importlib.import_module(type(node).__module__)
+    if hasattr(mod, "_WHISPER_MODELS"):
+        mod._WHISPER_MODELS.clear()
+
+    with patch("faster_whisper.WhisperModel", return_value=fake_model):
+        out = node.process({"input": [sample]})["output"]
+    assert out.text.strip() == "hello"
+    assert out.metadata.get("provider") == "local_whisper"
+    assert len(out.words) == 1
+    assert out.words[0].word == "hello"
+
+
+def test_openai_compat_groq_key_fallback(installed_cls, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFF....WAVEfmt ")
+    sample = _sample()
+    sample.path = str(wav)
+    node = installed_cls(
+        config={
+            "provider": "openai_compat",
+            "base_url": "https://api.groq.com/openai/v1",
+            "model": "whisper-large-v3-turbo",
+        },
+        seed=0,
+    )
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"text": "hi", "language": "en", "words": []}
+
+    with patch("httpx.post", return_value=mock_resp) as post:
+        out = node.process({"input": [sample]})["output"]
+    assert out.text == "hi"
+    headers = post.call_args.kwargs.get("headers") or {}
+    assert headers.get("Authorization") == "Bearer gsk-test"

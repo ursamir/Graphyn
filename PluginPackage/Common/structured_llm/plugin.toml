@@ -1,7 +1,7 @@
 [plugin]
 name             = "structured-llm"
-version          = "1.0.0"
-description      = "Extract JSON matching a schema from text via OpenAI-compatible chat completions (requires OPENAI_API_KEY)."
+version          = "1.1.0"
+description      = "Extract JSON matching a schema from text via OpenAI-compatible chat or local heuristic."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
@@ -19,10 +19,10 @@ runtime = "inprocess"
 node_types = ["structured_llm"]
 
 [config_schema.structured_llm]
-provider = { type = "string", title = "Provider", default = "openai_compat", description = "LLM provider backend. Only openai_compat is supported (requires OPENAI_API_KEY).", enum = ["openai_compat"], ui = { group = "Basic" } }
-json_schema = {  type = "object", title = "JSON Schema", default = { }, description = "JSON Schema object the model must satisfy.", widget = "json", ui = { group = "Basic" } }
+provider = { type = "string", title = "Provider", default = "openai_compat", description = "openai_compat (OPENAI/Groq) or local_heuristic (free).", enum = ["openai_compat", "local_heuristic"], ui = { group = "Basic" } }
+json_schema = { type = "object", title = "JSON Schema", default = { }, description = "JSON Schema object the model must satisfy.", widget = "json", ui = { group = "Basic" } }
 schema_name = { type = "string", title = "Schema name", default = "extracted", description = "Name attached to the structured-output schema for the provider.", ui = { group = "Basic" } }
-model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Chat model id (default gpt-4o-mini). Requires OPENAI_API_KEY.", ui = { group = "Basic" } }
-base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL override.", ui = { group = "Advanced" } }
+model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Chat model id. Requires OPENAI_API_KEY or Groq when using openai_compat.", ui = { group = "Basic" } }
+base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL override. Groq: https://api.groq.com/openai/v1", ui = { group = "Advanced" } }
 timeout_s = { type = "number", title = "Timeout (s)", default = 30.0, description = "Request/operation timeout in seconds.", ui = { group = "Advanced" } }
 system_prompt = { type = "string", title = "System prompt", default = "Extract JSON matching the provided schema. Reply with JSON only.", description = "System instruction for extraction; keep output JSON-only.", ui = { group = "Basic" } }
