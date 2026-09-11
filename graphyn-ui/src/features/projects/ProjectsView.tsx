@@ -91,7 +91,20 @@ export default function ProjectsView() {
   const [lineage, setLineage] = React.useState<unknown>(null)
   const [recentRuns, setRecentRuns] = React.useState<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>([])
   const [projectPipelines, setProjectPipelines] = React.useState<
-    Array<{ name: string; updated_at?: string | null; node_count?: number; graph_name?: string | null }>
+    Array<{
+      name: string
+      updated_at?: string | null
+      node_count?: number
+      graph_name?: string | null
+      version_count?: number
+      latest_version?: string | null
+      environments?: {
+        draft?: string | null
+        staging?: string | null
+        prod?: string | null
+        pending_prod?: { version?: string } | null
+      }
+    }>
   >([])
   const [links, setLinks] = React.useState<{ inputs: string[]; outputs: Array<{ version: string }> }>({ inputs: [], outputs: [] })
   const [inputLabels, setInputLabels] = React.useState<string[]>([])
@@ -153,9 +166,22 @@ export default function ProjectsView() {
           }),
           apiJson<{ inputs?: string[]; outputs?: Array<{ version: string }> }>(`/projects/${encodeURIComponent(name)}/links`).catch(() => ({ inputs: [], outputs: [] })),
           apiJson<Array<{ label?: string } | string>>('/data/inputs').catch(() => []),
-          apiJson<Array<{ name: string; updated_at?: string | null; node_count?: number; graph_name?: string | null }>>(
-            `/projects/${encodeURIComponent(name)}/pipelines`,
-          ).catch(() => []),
+          apiJson<
+            Array<{
+              name: string
+              updated_at?: string | null
+              node_count?: number
+              graph_name?: string | null
+              version_count?: number
+              latest_version?: string | null
+              environments?: {
+                draft?: string | null
+                staging?: string | null
+                prod?: string | null
+                pending_prod?: { version?: string } | null
+              }
+            }>
+          >(`/projects/${encodeURIComponent(name)}/pipelines`).catch(() => []),
         ])
         setRecentRuns(Array.isArray(runs) ? runs.slice(0, 8) : [])
         setProjectPipelines(Array.isArray(pipes) ? pipes : [])
@@ -209,14 +235,65 @@ export default function ProjectsView() {
     })
   }
 
-  const openProjectPipeline = async (pipelineName: string) => {
+  const openProjectPipeline = async (pipelineName: string, env?: string) => {
     if (!selected) return
     try {
       const graph = await apiJson<GraphIR>(
         `/projects/${encodeURIComponent(selected)}/pipelines/${encodeURIComponent(pipelineName)}`,
+        env ? { query: { env } } : undefined,
       )
       useAppStore.getState().loadGraphIntoBuilder(graph)
-      pushToast(`Opened ${pipelineName} in Editor`, 'success')
+      pushToast(`Opened ${pipelineName}${env ? ` (${env})` : ''} in Editor`, 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const publishPipeline = async (pipelineName: string, setEnv?: 'staging' | 'prod') => {
+    if (!selected) return
+    try {
+      const res = await apiJson<{ version?: string; status?: string }>(
+        `/projects/${encodeURIComponent(selected)}/pipelines/${encodeURIComponent(pipelineName)}/publish`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            message: 'Published from Projects',
+            set_env: setEnv,
+          }),
+        },
+      )
+      pushToast(
+        setEnv === 'prod'
+          ? `Published ${res.version} — prod pending approval`
+          : `Published ${res.version}${setEnv ? ` → ${setEnv}` : ''}`,
+        'success',
+      )
+      await open(selected)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const promotePipeline = async (
+    pipelineName: string,
+    opts: { to_env: 'staging' | 'prod'; from_env?: string; version?: string; approve?: boolean },
+  ) => {
+    if (!selected) return
+    try {
+      const res = await apiJson<{ status?: string; version?: string }>(
+        `/projects/${encodeURIComponent(selected)}/pipelines/${encodeURIComponent(pipelineName)}/promote`,
+        {
+          method: 'POST',
+          body: JSON.stringify(opts),
+        },
+      )
+      pushToast(
+        res.status === 'pending_approval'
+          ? `Prod promotion pending approval (${res.version || opts.version || ''})`
+          : `Promoted to ${opts.to_env}`,
+        'success',
+      )
+      await open(selected)
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -646,23 +723,95 @@ export default function ProjectsView() {
                   {projectPipelines.length === 0 ? 'None yet' : `${projectPipelines.length} saved`}
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  Project-owned Graph IR. Stamp from a template or Save to project in the Editor.
+                  Draft head in Editor; publish versions to staging, approve for prod.
                 </p>
                 {projectPipelines.length > 0 ? (
-                  <ul className="mt-2 space-y-1">
-                    {projectPipelines.slice(0, 6).map((p) => (
-                      <li key={p.name}>
-                        <button
-                          type="button"
-                          className="text-left text-xs text-accent-800 hover:underline"
-                          onClick={() => void openProjectPipeline(p.name)}
-                        >
-                          {p.name}
-                          {p.node_count != null ? ` · ${p.node_count} nodes` : ''}
-                          {p.graph_name ? ` · ${p.graph_name}` : ''}
-                        </button>
-                      </li>
-                    ))}
+                  <ul className="mt-2 space-y-2">
+                    {projectPipelines.slice(0, 6).map((p) => {
+                      const envs = p.environments || {}
+                      return (
+                        <li key={p.name} className="rounded-lg border border-ink-100 px-2 py-1.5">
+                          <button
+                            type="button"
+                            className="text-left text-xs font-medium text-accent-800 hover:underline"
+                            onClick={() => void openProjectPipeline(p.name)}
+                          >
+                            {p.name}
+                            {p.node_count != null ? ` · ${p.node_count} nodes` : ''}
+                            {p.latest_version ? ` · ${p.latest_version}` : ''}
+                          </button>
+                          <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-ink-500">
+                            <span className="rounded bg-ink-50 px-1.5 py-0.5">draft</span>
+                            {envs.staging ? (
+                              <button
+                                type="button"
+                                className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-900 hover:underline"
+                                onClick={() => void openProjectPipeline(p.name, 'staging')}
+                              >
+                                staging:{envs.staging}
+                              </button>
+                            ) : (
+                              <span className="rounded bg-ink-50 px-1.5 py-0.5">staging:—</span>
+                            )}
+                            {envs.prod ? (
+                              <button
+                                type="button"
+                                className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-900 hover:underline"
+                                onClick={() => void openProjectPipeline(p.name, 'prod')}
+                              >
+                                prod:{envs.prod}
+                              </button>
+                            ) : (
+                              <span className="rounded bg-ink-50 px-1.5 py-0.5">prod:—</span>
+                            )}
+                            {envs.pending_prod?.version ? (
+                              <span className="rounded bg-rose-50 px-1.5 py-0.5 text-rose-800">
+                                pending {envs.pending_prod.version}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            <button
+                              type="button"
+                              className="btn-secondary !px-2 !py-0.5 text-[10px]"
+                              onClick={() => void publishPipeline(p.name, 'staging')}
+                            >
+                              Publish → staging
+                            </button>
+                            {envs.staging ? (
+                              <button
+                                type="button"
+                                className="btn-secondary !px-2 !py-0.5 text-[10px]"
+                                onClick={() =>
+                                  void promotePipeline(p.name, {
+                                    to_env: 'prod',
+                                    from_env: 'staging',
+                                    approve: false,
+                                  })
+                                }
+                              >
+                                Request prod
+                              </button>
+                            ) : null}
+                            {envs.pending_prod?.version ? (
+                              <button
+                                type="button"
+                                className="btn-primary !px-2 !py-0.5 text-[10px]"
+                                onClick={() =>
+                                  void promotePipeline(p.name, {
+                                    to_env: 'prod',
+                                    version: envs.pending_prod?.version,
+                                    approve: true,
+                                  })
+                                }
+                              >
+                                Approve prod
+                              </button>
+                            ) : null}
+                          </div>
+                        </li>
+                      )
+                    })}
                   </ul>
                 ) : null}
                 <div className="mt-2 flex flex-wrap gap-2">

@@ -727,6 +727,8 @@ Readiness check with basic filesystem dependency validation.
 
 `backend_mode` is `local` (Mode A) or `distributed` (Mode B). The console header chip uses this field.
 
+`GET /api/v1/system/health`, `/readiness`, and `/auth-status` are **public** (no Bearer) so the UI can show Mode / Auth honesty before Settings is filled. All other `/api/v1/*` routes still require the token when `GRAPHYN_API_TOKEN` is set.
+
 ---
 
 ### `GET /api/v1/system/auth-status`
@@ -931,19 +933,40 @@ Stream progress events for a HuggingFace ingestion job (same SSE format as URL s
 
 Full project lifecycle management. See `app/api/routers/projects.py` for the complete endpoint list. Key operations include create, get, update, delete, clone, list versions, manage taxonomy, contract, spec, annotations, quality reports, and snapshots.
 
-### Project pipelines (Wave 1)
+### Project pipelines (Wave 1 + versions)
 
 Graph IR assets owned by a project live at
-`workspace/datasets/output/{project}/pipelines/{name}.graph.json`.
+`workspace/datasets/output/{project}/pipelines/{name}.graph.json` (**draft** head).
+Versions: `pipelines/{name}/versions/vN.graph.json`. Envs: `pipelines/{name}/environments.json`.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/v1/projects/{name}/pipelines` | List `{name, updated_at, node_count, graph_name}` |
-| GET | `/api/v1/projects/{name}/pipelines/{pipeline}` | Full Graph IR |
-| PUT | `/api/v1/projects/{name}/pipelines/{pipeline}` | Validate IR, reject inline secrets, stamp `metadata.project`, write atomically |
-| DELETE | `/api/v1/projects/{name}/pipelines/{pipeline}` | Delete pipeline file |
+| GET | `/api/v1/projects/{name}/pipelines` | List + `environments` + `version_count` |
+| GET | `/api/v1/projects/{name}/pipelines/{pipeline}` | Draft IR (`?env=staging\|prod` resolves pointer) |
+| PUT | `/api/v1/projects/{name}/pipelines/{pipeline}` | Save draft (secret fail-closed, stamp project) |
+| DELETE | `/api/v1/projects/{name}/pipelines/{pipeline}` | Delete draft file |
+| GET | `.../versions` | Published snapshots |
+| GET | `.../environments` | draft / staging / prod / pending_prod |
+| POST | `.../publish` | `{ message?, set_env?: staging\|prod }` |
+| POST | `.../promote` | `{ to_env, version?, from_env?, approve? }` — prod needs `approve: true` |
+| POST | `.../rollback` | `{ version }` → copy onto draft |
 
 **Errors:** `404` if project/pipeline missing; `422` for invalid name, IR, or inline secrets.
+
+### Model registry (lite)
+
+`workspace/artifacts/_registry/models.json` — name → stages (`staging`/`prod`/`latest`) with source `run_id` + artifact slug. Prod uses request/approve.
+
+| Method | Path |
+|---|---|
+| GET | `/api/v1/models` |
+| GET | `/api/v1/models/{name}` |
+| POST | `/api/v1/models` — `{ name, run_id, slug, stage? }` |
+| POST | `/api/v1/models/{name}/request-prod` |
+| POST | `/api/v1/models/{name}/approve-prod` |
+
+Promoting a run to `staging` in the Runs UI also auto-registers a model row when a slug is returned.
+
 
 ### Validate secret policy
 

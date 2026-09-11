@@ -99,6 +99,18 @@ Before **Open in Editor**: if no `activeProject`, prompt Create/select project �
 ### 4.5 Project pipelines (Wave 1)
 
 Durable graphs for a workspace: `workspace/datasets/output/{project}/pipelines/{name}.graph.json`.
+
+### 4.5.1 Pipeline versions + environments (Wave 7)
+
+| Concept | Storage |
+|---|---|
+| **Draft** | `{name}.graph.json` (Editor save) |
+| **Versions** | `{name}/versions/vN.graph.json` |
+| **Envs** | `{name}/environments.json` → `staging` / `prod` pointers |
+
+Flow: edit draft → **Publish → staging** → **Request prod** → **Approve prod**. Schedules default to `env=prod`.
+
+API: `POST .../publish`, `POST .../promote` (`approve: true` for prod), `GET .../versions`, `GET ...?env=staging|prod`.
 Editor **Save to project**; Overview lists and reopens them. Global templates remain a stamp source, not the system of record.
 ---
 

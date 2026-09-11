@@ -66,6 +66,7 @@ def create_schedule(
     pipeline: str,
     interval_minutes: int = 60,
     enabled: bool = True,
+    env: str = "prod",
     base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     if not _SAFE_NAME.match(name or ""):
@@ -74,6 +75,9 @@ def create_schedule(
         raise ValueError("Invalid project name")
     if not _SAFE_NAME.match(pipeline or ""):
         raise ValueError("Invalid pipeline name")
+    env_s = (env or "prod").strip().lower()
+    if env_s not in ("draft", "staging", "prod"):
+        raise ValueError("env must be draft, staging, or prod")
     minutes = max(1, min(int(interval_minutes), 60 * 24 * 30))
     now = _now()
     item = {
@@ -81,6 +85,7 @@ def create_schedule(
         "name": name,
         "project": project,
         "pipeline": pipeline,
+        "env": env_s,
         "interval_minutes": minutes,
         "enabled": bool(enabled),
         "created_at": now.isoformat(),
@@ -121,21 +126,22 @@ def set_schedule_enabled(
     raise KeyError(schedule_id)
 
 
-def _execute_pipeline(project: str, pipeline: str) -> str:
+def _execute_pipeline(project: str, pipeline: str, env: str = "prod") -> str:
     from app.core.config import datasets_output_dir
     from app.core.ir.loader import load_ir
-    from app.core.project_pipelines import get_pipeline
+    from app.core.pipeline_environments import get_environment_graph
     from app.core.run_journal import RunManager
     from app.core.runtime_backend import get_backend
 
     project_dir = datasets_output_dir() / project
     if not project_dir.is_dir():
         raise FileNotFoundError(f"Project not found: {project}")
-    data = get_pipeline(project_dir, pipeline)
+    data = get_environment_graph(project_dir, pipeline, env=env or "prod")
     graph = load_ir(data)
     run_mgr = RunManager()
     run_mgr._write_meta_field("project", project)
     run_mgr._write_meta_field("schedule", True)
+    run_mgr._write_meta_field("pipeline_env", env or "prod")
 
     def _run() -> None:
         try:
@@ -159,7 +165,8 @@ def run_schedule_now(schedule_id: str, base_dir: str | Path | None = None) -> di
             raise KeyError(schedule_id)
         project = str(item.get("project") or "")
         pipeline = str(item.get("pipeline") or "")
-    run_id = _execute_pipeline(project, pipeline)
+        env = str(item.get("env") or "prod")
+    run_id = _execute_pipeline(project, pipeline, env=env)
     now = _now()
     with _lock:
         items = _load(path)

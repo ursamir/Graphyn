@@ -50,6 +50,7 @@ from app.api.routers.workers import router as workers_router
 from app.api.routers.trace import router as trace_router
 from app.api.routers.experiments import router as experiments_router
 from app.api.routers.proposals import router as proposals_router
+from app.api.routers.models import router as models_router
 from app.api.observability import record_request
 from app.core.config import api_token, auth_required, datasets_output_dir, datasets_input_dir, runs_dir
 
@@ -90,8 +91,27 @@ _FAIL_CLOSED = (
     "GRAPHYN_API_TOKEN. Set GRAPHYN_API_TOKEN and send Authorization: Bearer …"
 )
 
+# Honesty / liveness under /api/v1 — UI must read these before Settings token is set.
+_PUBLIC_API_PATHS = frozenset(
+    {
+        "/api/v1/system/health",
+        "/api/v1/system/readiness",
+        "/api/v1/system/auth-status",
+    }
+)
 
-def _auth_dep(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
+
+def _is_public_api_path(path: str) -> bool:
+    p = (path or "").rstrip("/") or "/"
+    return p in _PUBLIC_API_PATHS
+
+
+def _auth_dep(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+):
+    if _is_public_api_path(request.url.path):
+        return
     token = api_token()  # read on every call
     if not token:
         if auth_required():
@@ -202,6 +222,7 @@ app.include_router(secrets_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(trace_router,       prefix="/api/v1", dependencies=_deps)
 app.include_router(experiments_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(proposals_router,   prefix="/api/v1", dependencies=_deps)
+app.include_router(models_router,      prefix="/api/v1", dependencies=_deps)
 
 
 @app.get("/")

@@ -106,8 +106,10 @@ A user (or agent) can:
 | 2026-09-07 | **Console IA (vision-aligned nav)** | Restructured sidebar: **Build** (Builder, Templates, Proposals) · **Observe** (Runs, Trace, Experiments, Artifacts) · **Library** (Plugins, Data, Projects) · **Deploy** (Edge, Workers) · **Admin** (Secrets, System). Deep-link query preservation for Trace/Edge/Experiments/Proposals/Data/Projects. |
 | 2026-09-10 | **Data vs Projects loop** | Data = filesystem (inputs/outputs); Projects = dataset workspace UI over the same `workspace/datasets/output/{project}` (spec, taxonomy, contract, versions, snapshots, lineage). Shared key: project name (+ version). Loop: Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge. |
 | 2026-09-11 | **North-star Waves 1–6 (lite)** | Project-owned pipelines + secret fail-closed; Mode chip; MCP accept/reject + observe parity (29 tools); promote aliases (`latest`/`staging`/`prod`) + Edge promote; run webhooks fire on terminal; schedules CRUD + ticker; auth-status honesty + actor via `X-Actor` on mutations. |
+| 2026-09-11 | **Docker IDE loop (env gap)** | Public `/system/auth-status|health|readiness` (Bearer not required); nginx forwards `X-Actor`; `scripts/docker_ide_loop_smoke.sh` proves project→pipeline→run→Trace on Compose. |
+| 2026-09-11 | **Pipeline versions + environments** | Draft head + `versions/vN` + staging/prod pointers; prod requires approve; Projects UI Publish/Request/Approve; schedules `env=prod` default. |
 
-Still open from §3: full SSO/RBAC, device flash/OTA, full MLflow registry, OTel; deepen agentic auto-apply guardrails.
+Still open from §3: full SSO/RBAC, device flash/OTA, full MLflow registry, durable cron across restarts, OTel; deepen agentic auto-apply guardrails. Docker smoke + pipeline envs close env proof + versioning pillars — not the full device/RBAC/OTel bar.
 
 ### Console map
 

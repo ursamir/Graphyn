@@ -20,10 +20,11 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app.api.actor import resolve_actor
 from app.domain.project_manager import ProjectManager
 from app.domain.quality_checker import QualityChecker
 
@@ -512,24 +513,163 @@ def export_quality_report(
 @router.get("/{name}/pipelines", summary="List project pipelines")
 def list_project_pipelines(name: str):
     """GET /projects/{name}/pipelines — Graph IR files under pipelines/."""
+    from app.core.pipeline_environments import enrich_pipeline_summary
     from app.core.project_pipelines import list_pipelines
 
     project_dir = _handle(_pm._require_project, name)
-    return list_pipelines(project_dir)
+    return [enrich_pipeline_summary(project_dir, row) for row in list_pipelines(project_dir)]
+
+
+@router.get("/{name}/pipelines/{pipeline}/versions", summary="List pipeline versions")
+def list_pipeline_versions(name: str, pipeline: str):
+    from app.core.pipeline_environments import list_versions
+
+    project_dir = _handle(_pm._require_project, name)
+    return {"pipeline": pipeline, "versions": list_versions(project_dir, pipeline)}
+
+
+@router.get(
+    "/{name}/pipelines/{pipeline}/versions/{version}",
+    summary="Get a published pipeline version",
+)
+def get_pipeline_version(name: str, pipeline: str, version: str):
+    from app.core.pipeline_environments import get_version
+
+    project_dir = _handle(_pm._require_project, name)
+    return _handle(get_version, project_dir, pipeline, version)
+
+
+@router.get(
+    "/{name}/pipelines/{pipeline}/environments",
+    summary="Get draft/staging/prod environment pointers",
+)
+def get_pipeline_environments(name: str, pipeline: str):
+    from app.core.pipeline_environments import get_environments
+
+    project_dir = _handle(_pm._require_project, name)
+    return get_environments(project_dir, pipeline)
+
+
+class PipelinePublishBody(BaseModel):
+    message: Optional[str] = None
+    set_env: Optional[str] = Field(
+        None, description="Optional: staging (immediate) or prod (pending approval)"
+    )
+
+
+class PipelinePromoteBody(BaseModel):
+    to_env: str = Field(..., description="staging or prod")
+    version: Optional[str] = None
+    from_env: Optional[str] = Field(None, description="e.g. staging → prod")
+    approve: bool = Field(
+        False,
+        description="Required true to point prod (creates pending_prod when false)",
+    )
+
+
+class PipelineRollbackBody(BaseModel):
+    version: str
+
+
+@router.post("/{name}/pipelines/{pipeline}/publish", summary="Publish draft → version")
+def publish_pipeline_version(
+    name: str, pipeline: str, request: Request, body: PipelinePublishBody = PipelinePublishBody()
+):
+    from app.core.pipeline_environments import publish_version
+
+    project_dir = _handle(_pm._require_project, name)
+    try:
+        return publish_version(
+            project_dir,
+            pipeline,
+            project_name=name,
+            message=body.message,
+            set_env=body.set_env,
+            actor=resolve_actor(request),
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/{name}/pipelines/{pipeline}/promote", summary="Promote version to env")
+def promote_pipeline_env(
+    name: str, pipeline: str, request: Request, body: PipelinePromoteBody
+):
+    from app.core.pipeline_environments import promote_environment
+
+    project_dir = _handle(_pm._require_project, name)
+    try:
+        return promote_environment(
+            project_dir,
+            pipeline,
+            to_env=body.to_env,
+            version=body.version,
+            from_env=body.from_env,
+            approve=body.approve,
+            actor=resolve_actor(request),
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{name}/pipelines/{pipeline}/rollback",
+    summary="Copy a version back onto draft head",
+)
+def rollback_pipeline_draft(
+    name: str, pipeline: str, request: Request, body: PipelineRollbackBody
+):
+    from app.core.pipeline_environments import rollback_draft_to_version
+
+    project_dir = _handle(_pm._require_project, name)
+    try:
+        graph = rollback_draft_to_version(
+            project_dir, pipeline, body.version, project_name=name
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="pipeline.rollback",
+            resource_type="pipeline",
+            resource_id=f"{name}/{pipeline}@{body.version}",
+            meta={},
+        )
+    except Exception:
+        pass
+    return {"pipeline": pipeline, "version": body.version, "graph": graph}
 
 
 @router.get("/{name}/pipelines/{pipeline}", summary="Get a project pipeline")
-def get_project_pipeline(name: str, pipeline: str):
-    """GET /projects/{name}/pipelines/{pipeline} — full Graph IR."""
+def get_project_pipeline(
+    name: str,
+    pipeline: str,
+    env: Optional[str] = Query(
+        None, description="draft (default), staging, or prod"
+    ),
+):
+    """GET /projects/{name}/pipelines/{pipeline} — draft head, or env pointer."""
+    from app.core.pipeline_environments import get_environment_graph
     from app.core.project_pipelines import get_pipeline
 
     project_dir = _handle(_pm._require_project, name)
+    if env and env.strip().lower() != "draft":
+        return _handle(get_environment_graph, project_dir, pipeline, env.strip().lower())
     return _handle(get_pipeline, project_dir, pipeline)
 
 
 @router.put("/{name}/pipelines/{pipeline}", summary="Save a project pipeline")
 def put_project_pipeline(name: str, pipeline: str, payload: dict = Body(...)):
-    """PUT /projects/{name}/pipelines/{pipeline} — validate, stamp, write IR."""
+    """PUT /projects/{name}/pipelines/{pipeline} — validate, stamp, write IR (draft)."""
     from app.core.ir.secret_policy import InlineSecretError
     from app.core.project_pipelines import put_pipeline
 

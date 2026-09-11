@@ -14,11 +14,13 @@ export GRAPHYN_API_TOKEN=change-me
 
 Put the same token in the UI **Settings** dialog (Bearer) after `docker compose up`.
 
+Public honesty (no Bearer required): `GET /api/v1/system/auth-status`, `/system/health`, `/system/readiness` — so the console can show **Auth on** / Mode before you paste a token.
+
 ## Docker Compose (API :8001 + UI :5173)
 
 ```bash
-export GRAPHYN_API_TOKEN=change-me
-docker compose up --build
+cp .env.example .env    # set GRAPHYN_API_TOKEN
+docker compose up --build -d graphyn-api graphyn-ui
 ```
 
 - UI: `http://localhost:5173` (nginx; `/api`, `/files`, `/input-files`, `/run-files` proxy to the API)
@@ -27,6 +29,19 @@ docker compose up --build
 - `./workspace` is the project dir (`GRAPHYN_PROJECT_DIR`)
 - Pipeline outputs belong in `workspace/artifacts/<name>/runs/<run_id>/` on that bind-mount (not `examples/` inside the image). Successful runs also publish `workspace/artifacts/<name>/latest/` (symlink, or a `latest.json` pointer if the host cannot symlink) so later graphs can consume the production alias.
 
+### Prove the IDE loop (Server-99 / Docker)
+
+After the stack is healthy, run the smoke script (token is never printed):
+
+```bash
+export GRAPHYN_API_TOKEN="$(grep -E '^GRAPHYN_API_TOKEN=' .env | cut -d= -f2-)"
+chmod +x scripts/docker_ide_loop_smoke.sh
+./scripts/docker_ide_loop_smoke.sh
+# or via UI proxy:
+# GRAPHYN_BASE_URL=http://127.0.0.1:5173 ./scripts/docker_ide_loop_smoke.sh
+```
+
+Covers: public auth/mode → nodes → project → pipeline PUT → validate → run-async → Trace.
 
 Stop:
 

@@ -92,6 +92,19 @@ def patch_threads():
 
 # ── REST API client ───────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _isolate_api_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not inherit a developer/Docker GRAPHYN_API_TOKEN into unit tests.
+
+    Host shells that ``source .env`` would otherwise make every unauthenticated
+    TestClient call return 401. Auth-gate tests set their own token via fixtures.
+    """
+    monkeypatch.delenv("GRAPHYN_API_TOKEN", raising=False)
+    # Keep local defaults unless a test overrides.
+    if "GRAPHYN_AUTH_REQUIRED" not in __import__("os").environ:
+        monkeypatch.delenv("GRAPHYN_AUTH_REQUIRED", raising=False)
+
+
 @pytest.fixture
 def api_client():
     """Return a synchronous FastAPI TestClient."""

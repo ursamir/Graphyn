@@ -215,8 +215,13 @@ def _stamp_graph_project(graph, payload: dict):
 
 
 def _is_ir_payload(payload: dict) -> bool:
-    """Detect IR JSON format by presence of schema_version field (Req 4.7.5)."""
-    return "schema_version" in payload
+    """Detect IR JSON format by presence of schema_version (top-level or under graph)."""
+    if not isinstance(payload, dict):
+        return False
+    if "schema_version" in payload:
+        return True
+    nested = payload.get("graph")
+    return isinstance(nested, dict) and "schema_version" in nested
 
 
 def _build_graph_from_payload(payload: dict):
@@ -225,6 +230,7 @@ def _build_graph_from_payload(payload: dict):
     Returns (graph, deprecation_header) where deprecation_header is None
     for IR JSON and a warning string for YAML payloads.
 
+    Accepts either a bare Graph IR object or ``{"graph": <IR>, "project": …}``.
     Delegates to SDK (V1.md §3.1).
     """
     from app.core.ir.loader import load_ir
@@ -233,8 +239,11 @@ def _build_graph_from_payload(payload: dict):
     from app.core.workspace_paths import apply_output_rewire
 
     if _is_ir_payload(payload):
-        # IR JSON path (Req 4.7.1, 4.7.3)
-        graph = apply_output_rewire(load_ir(payload))
+        ir_body = payload
+        nested = payload.get("graph")
+        if isinstance(nested, dict) and "schema_version" in nested:
+            ir_body = nested
+        graph = apply_output_rewire(load_ir(ir_body))
         return graph, None
     else:
         # YAML path (Req 4.7.2, 4.7.4)
@@ -264,7 +273,11 @@ def validate_pipeline_config(payload: dict = Body(...)):
             from app.core.ir.loader import load_ir
             from app.core.ir.secret_policy import assert_no_inline_secrets
             from app.core.workspace_paths import apply_output_rewire
-            graph = apply_output_rewire(load_ir(payload))
+            ir_body = payload
+            nested = payload.get("graph")
+            if isinstance(nested, dict) and "schema_version" in nested:
+                ir_body = nested
+            graph = apply_output_rewire(load_ir(ir_body))
             assert_no_inline_secrets(graph)
             return {"valid": True, "node_count": len(graph.nodes)}
         except Exception as exc:

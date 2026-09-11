@@ -31,3 +31,5 @@ Requirement/
 .venv-test/
 .graphyn-e2e/
 *.egg-info/
+
+.env

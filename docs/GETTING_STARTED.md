@@ -5,6 +5,10 @@ Graphyn runs typed DAG pipelines (Graph IR) from a console, SDK, CLI, REST API, 
 **This guide owns:** install, first run, and how to operate Graphyn (single machine vs multi-machine).
 Deep design: [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md). Docker: [DEPLOYMENT.md](./DEPLOYMENT.md).
 
+**Server-99 / Docker:** after `docker compose up`, prove the IDE loop with
+`scripts/docker_ide_loop_smoke.sh` (see [DEPLOYMENT.md](./DEPLOYMENT.md#prove-the-ide-loop-server-99--docker)).
+Local uvicorn alone does not close the goal env gap.
+
 ## Choose an operating mode
 
 | Mode | When | Backend | Who runs nodes |

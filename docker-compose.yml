@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Production-ish local deploy: API + UI. Auth is fail-closed.
 # GPU (optional, does not evict other apps):
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d graphyn-api
@@ -8,12 +6,13 @@ version: "3.9"
 #
 # You MUST set GRAPHYN_API_TOKEN (API/MCP reject empty tokens when AUTH_REQUIRED=1).
 #
-#   export GRAPHYN_API_TOKEN=change-me
+#   cp .env.example .env   # edit token (Compose loads .env for ${GRAPHYN_API_TOKEN})
 #   docker compose up --build
 #
 # UI: http://localhost:5173  (nginx proxies /api to the API)
 # API: http://localhost:8001/api/v1/
 # Docker Compose only — this repo does not ship a Helm chart.
+# Prove IDE loop: scripts/docker_ide_loop_smoke.sh
 
 services:
   graphyn-api:

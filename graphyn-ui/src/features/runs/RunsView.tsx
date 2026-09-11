@@ -251,12 +251,29 @@ export default function RunsView() {
   const promote = async (alias: 'latest' | 'staging' | 'prod' = promoteAlias) => {
     if (!selected) return
     try {
-      const res = await apiJson<{ alias?: string }>(`/runs/${selected}/promote`, {
+      const res = await apiJson<{ alias?: string; slug?: string }>(`/runs/${selected}/promote`, {
         method: 'POST',
         body: JSON.stringify({ alias }),
       })
       const a = res?.alias || alias
       pushToast(`Promoted to ${a}`, 'success')
+      if (res?.slug && a === 'staging') {
+        const name = String(res.slug).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 48) || 'model'
+        try {
+          await apiJson('/models', {
+            method: 'POST',
+            body: JSON.stringify({
+              name,
+              run_id: selected,
+              slug: res.slug,
+              stage: 'staging',
+            }),
+          })
+          pushToast(`Registered model ${name} @ staging`, 'success')
+        } catch {
+          /* registry optional if alias-only */
+        }
+      }
       await load()
       await open(selected)
     } catch (err) {

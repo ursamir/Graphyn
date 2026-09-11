@@ -225,6 +225,7 @@ class ScheduleCreateBody(BaseModel):
     pipeline: str = Field(..., min_length=1, max_length=64)
     interval_minutes: int = Field(60, ge=1, le=43200)
     enabled: bool = True
+    env: str = Field("prod", description="draft | staging | prod")
 
 
 class ScheduleEnabledBody(BaseModel):
@@ -249,6 +250,7 @@ def post_schedule(body: ScheduleCreateBody, request: Request):
             pipeline=body.pipeline,
             interval_minutes=body.interval_minutes,
             enabled=body.enabled,
+            env=body.env,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
