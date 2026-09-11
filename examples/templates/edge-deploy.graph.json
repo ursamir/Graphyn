@@ -3,7 +3,7 @@
   "metadata": {
     "name": "edge-deploy",
     "seed": 42,
-    "description": "Edge deploy path: model path → edge_optimizer → deployment_packager. Point model_ref at a Keras SavedModel/.keras from trainer (workspace/artifacts/...). Outputs under workspace/artifacts/edge-deploy/.",
+    "description": "Edge deploy path: model path \u2192 edge_optimizer \u2192 deployment_packager. Point model_ref at a Keras SavedModel/.keras from trainer (workspace/artifacts/...). Outputs under workspace/artifacts/edge-deploy/.",
     "created_at": null,
     "tags": [
       "example",
@@ -35,7 +35,8 @@
         "output_path": "workspace/artifacts/edge-deploy/optimized",
         "representative_samples": 100,
         "prune": false,
-        "operator_fusion": true
+        "operator_fusion": true,
+        "model_path": "workspace/artifacts/models/saved_model"
       },
       "label": "Edge Optimizer",
       "capability_metadata": null,
@@ -75,9 +76,18 @@
   "parameters": {},
   "ui": {
     "positions": {
-      "model_ref": { "x": 80, "y": 160 },
-      "edge_optimizer_0": { "x": 360, "y": 160 },
-      "deployment_packager_0": { "x": 640, "y": 160 }
+      "model_ref": {
+        "x": 80,
+        "y": 160
+      },
+      "edge_optimizer_0": {
+        "x": 360,
+        "y": 160
+      },
+      "deployment_packager_0": {
+        "x": 640,
+        "y": 160
+      }
     }
   }
 }

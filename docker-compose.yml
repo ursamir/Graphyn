@@ -29,6 +29,8 @@ services:
       GRAPHYN_HOME: /data/graphyn-home
       GRAPHYN_PROJECT_DIR: /app/workspace
       GRAPHYN_AUTO_INSTALL_PLUGINS: "1"
+      # First boot may take several minutes while isolated plugin venvs install (TF etc).
+      # API port will reset until uvicorn finishes loading.
       CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
     volumes:
       - graphyn-home:/data/graphyn-home

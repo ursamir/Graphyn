@@ -16,9 +16,15 @@ import urllib.request
 from copy import deepcopy
 from pathlib import Path
 
-ROOT = Path("/workspace/Graphyn")
-API = os.environ.get("GRAPHYN_API", "http://127.0.0.1:8001")
-TOKEN = Path("/workspace/graphyn-api-token.txt").read_text().strip()
+ROOT = Path(__file__).resolve().parents[1]
+API = os.environ.get("GRAPHYN_API", "http://127.0.0.1:8001").rstrip("/")
+if not API.endswith("/api/v1"):
+    API = API + "/api/v1"
+TOKEN = __import__("os").environ.get("GRAPHYN_API_TOKEN") or (
+    Path("/home/meritech/Desktop/newAudio3-api-token.txt").read_text().strip()
+    if Path("/home/meritech/Desktop/newAudio3-api-token.txt").is_file()
+    else Path(".env").read_text().split("GRAPHYN_API_TOKEN=",1)[-1].splitlines()[0].strip()
+)
 EX_TEMPLATES = ROOT / "examples" / "templates"
 WS_TEMPLATES = ROOT / "workspace" / "configs" / "templates"
 EXAMPLES = ROOT / "examples"
@@ -80,10 +86,10 @@ def api(method: str, path: str, body=None, timeout=120):
 
 
 def ensure_project(name: str):
-    code, body = api("GET", f"/api/v1/projects/{name}")
+    code, body = api("GET", f"/projects/{name}")
     if code == 200:
         return True, "exists"
-    code, body = api("POST", "/api/v1/projects", {"name": name})
+    code, body = api("POST", "/projects", {"name": name})
     if code in (200, 201):
         return True, "created"
     detail = str(body.get("detail") if isinstance(body, dict) else body)
@@ -276,13 +282,13 @@ def run_graph(name: str, source: str = "template") -> dict:
     payload["project"] = project
     payload["version_tag"] = "v1"
 
-    code, vbody = api("POST", "/api/v1/pipelines/validate", payload)
+    code, vbody = api("POST", "/pipelines/validate", payload)
     if not (code == 200 and isinstance(vbody, dict) and vbody.get("valid")):
         row["status"] = "INVALID"
         row["notes"] = str(vbody)[:500]
         return row
 
-    code, rbody = api("POST", "/api/v1/pipelines/run-async", payload)
+    code, rbody = api("POST", "/pipelines/run-async", payload)
     if code not in (200, 201) or not isinstance(rbody, dict) or not rbody.get("run_id"):
         row["status"] = "ERROR_START"
         row["notes"] = str(rbody)[:500]
