@@ -89,12 +89,20 @@ class PipelineLogger:
     def error(self, msg):
         self.log("ERROR", msg)
 
-    def pipeline_start(self, total_nodes: int, partial: bool = False, included_nodes: list[str] | None = None):
+    def pipeline_start(
+        self,
+        total_nodes: int,
+        partial: bool = False,
+        included_nodes: list[str] | None = None,
+        run_id: str | None = None,
+    ):
         event = {
             "type": "pipeline_start",
             "total_nodes": total_nodes,
             "timestamp": self._timestamp(),
         }
+        if run_id:
+            event["run_id"] = run_id
         if partial:
             event["partial"] = True
         if included_nodes is not None:

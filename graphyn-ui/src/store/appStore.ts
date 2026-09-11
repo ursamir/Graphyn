@@ -76,7 +76,7 @@ interface AppState {
   openArtifacts: (opts?: { runId?: string; artifactId?: string; project?: string }) => void
   openExperiments: (opts?: { runIds?: string[] }) => void
   openProposals: (opts?: { id?: string }) => void
-  openEdge: (opts?: { project?: string; version?: string }) => void
+  openEdge: (opts?: { project?: string; version?: string; runId?: string }) => void
   openData: (opts?: {
     mode?: 'inputs' | 'outputs' | 'ingest' | 'merge'
     project?: string
@@ -118,6 +118,9 @@ interface AppState {
   bootError: string | null
   bootStatus: number | null
   setBootError: (message: string | null, status?: number | null) => void
+  /** Mode A local vs Mode B distributed — from GET /system/readiness. */
+  backendMode: 'local' | 'distributed' | null
+  setBackendMode: (mode: 'local' | 'distributed' | null) => void
   settingsOpen: boolean
   setSettingsOpen: (open: boolean) => void
   getCanvasGraph: (() => unknown) | null
@@ -159,7 +162,8 @@ function replaceHash(hash: string) {
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  view: 'builder',
+  // Cold start → Projects (workspace picker). Builder/Run hard-gate without a project.
+  view: readStoredActiveProject() ? 'builder' : 'projects',
   setView: (view) => set({ view }),
   focusRunId: null,
   focusArtifactId: null,
@@ -215,10 +219,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     replaceHash(qs ? `#/proposals?${qs}` : '#/proposals')
     set({ view: 'proposals' })
   },
-  openEdge: ({ project, version } = {}) => {
+  openEdge: ({ project, version, runId } = {}) => {
     const params = new URLSearchParams()
     if (project?.trim()) params.set('project', project.trim())
     if (version?.trim()) params.set('version', version.trim())
+    if (runId?.trim()) params.set('run_id', runId.trim())
     const qs = params.toString()
     replaceHash(qs ? `#/edge?${qs}` : '#/edge')
     set({ view: 'edge' })
@@ -332,6 +337,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   bootError: null,
   bootStatus: null,
   setBootError: (bootError, bootStatus = null) => set({ bootError, bootStatus: bootStatus ?? null }),
+  backendMode: null,
+  setBackendMode: (backendMode) => set({ backendMode }),
   settingsOpen: false,
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   getCanvasGraph: null,

@@ -28,18 +28,24 @@ EXPECTED_TOOL_NAMES = {
     "propose_graph",
     "list_proposals",
     "get_proposal",
+    "accept_proposal",
+    "reject_proposal",
+    "list_experiments",
+    "get_trace",
+    "list_projects",
+    "list_data_inputs",
 }
 
 
 def test_register_all_tools_calls_register_15_times():
-    """Req 25.6 — register_all_tools calls register_fn exactly 23 times."""
+    """Req 25.6 — register_all_tools calls register_fn exactly 29 times."""
     calls = []
     register_all_tools(lambda name, desc, schema, handler: calls.append(name))
-    assert len(calls) == 23, f"Expected 23 calls, got {len(calls)}: {calls}"
+    assert len(calls) == 29, f"Expected 29 calls, got {len(calls)}: {calls}"
 
 
 def test_register_all_tools_correct_names():
-    """Req 25.7 — registered tool names match the expected 23 names exactly."""
+    """Req 25.7 — registered tool names match the expected 29 names exactly."""
     registered = []
     register_all_tools(lambda name, desc, schema, handler: registered.append(name))
     assert set(registered) == EXPECTED_TOOL_NAMES, (

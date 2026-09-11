@@ -179,7 +179,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS", "DELETE", "PUT", "PATCH"],
     # Enumerate specific headers — allow_headers=["*"] is forbidden by the CORS
     # spec when allow_credentials=True and causes browsers to reject responses.
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept", "X-Actor"],
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
@@ -288,6 +288,31 @@ if not _skip_startup_reconcile:
             )
     except Exception as exc:
         _logger.warning("Startup reconcile of abandoned runs failed: %s", exc)
+
+# Background schedule ticker (always-on lite). Skipped under pytest.
+_skip_schedule_ticker = (
+    "pytest" in _sys.modules
+    or os.environ.get("GRAPHYN_SKIP_SCHEDULE_TICKER", "").strip().lower()
+    in ("1", "true", "yes")
+)
+if not _skip_schedule_ticker:
+    import threading as _threading
+    import time as _time
+
+    def _schedule_ticker_loop() -> None:
+        while True:
+            try:
+                from app.core.schedules import tick_due_schedules
+
+                fired = tick_due_schedules()
+                if fired:
+                    _logger.info("Schedule ticker fired %s job(s)", len(fired))
+            except Exception as exc:
+                _logger.debug("Schedule ticker tick failed: %s", exc)
+            _time.sleep(60)
+
+    _threading.Thread(target=_schedule_ticker_loop, name="graphyn-schedules", daemon=True).start()
+    _logger.info("Schedule ticker started (60s interval)")
 
 _logger.info(
     "Static mounts resolved — /files → %s | /input-files → %s | /run-files → %s",

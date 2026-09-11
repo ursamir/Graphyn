@@ -2,6 +2,7 @@ import React from 'react'
 import { RefreshCw, Copy, Pencil } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
+import type { GraphIR } from '../../types/graph'
 import {
   ConfirmButton,
   CollapsibleJson,
@@ -89,6 +90,9 @@ export default function ProjectsView() {
   const [diffResult, setDiffResult] = React.useState<unknown>(null)
   const [lineage, setLineage] = React.useState<unknown>(null)
   const [recentRuns, setRecentRuns] = React.useState<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>([])
+  const [projectPipelines, setProjectPipelines] = React.useState<
+    Array<{ name: string; updated_at?: string | null; node_count?: number; graph_name?: string | null }>
+  >([])
   const [links, setLinks] = React.useState<{ inputs: string[]; outputs: Array<{ version: string }> }>({ inputs: [], outputs: [] })
   const [inputLabels, setInputLabels] = React.useState<string[]>([])
   const [linkPick, setLinkPick] = React.useState('')
@@ -143,14 +147,18 @@ export default function ProjectsView() {
       setSnapshots(Array.isArray(snaps) ? snaps : [])
       setLineage(lin)
       try {
-        const [runs, linkData, inputs] = await Promise.all([
+        const [runs, linkData, inputs, pipes] = await Promise.all([
           apiJson<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>('/runs', {
             query: { limit: 8, offset: 0, project: name },
           }),
           apiJson<{ inputs?: string[]; outputs?: Array<{ version: string }> }>(`/projects/${encodeURIComponent(name)}/links`).catch(() => ({ inputs: [], outputs: [] })),
           apiJson<Array<{ label?: string } | string>>('/data/inputs').catch(() => []),
+          apiJson<Array<{ name: string; updated_at?: string | null; node_count?: number; graph_name?: string | null }>>(
+            `/projects/${encodeURIComponent(name)}/pipelines`,
+          ).catch(() => []),
         ])
         setRecentRuns(Array.isArray(runs) ? runs.slice(0, 8) : [])
+        setProjectPipelines(Array.isArray(pipes) ? pipes : [])
         setLinks({
           inputs: Array.isArray(linkData?.inputs) ? linkData.inputs : [],
           outputs: Array.isArray(linkData?.outputs) ? linkData.outputs : [],
@@ -162,6 +170,7 @@ export default function ProjectsView() {
         setLinkPick(labels.find((l) => !(linkData?.inputs || []).includes(l)) || labels[0] || '')
       } catch {
         setRecentRuns([])
+        setProjectPipelines([])
         setLinks({ inputs: [], outputs: [] })
       }
       const first =
@@ -196,7 +205,21 @@ export default function ProjectsView() {
     openEdge({
       project: selected || undefined,
       version: versionFocus || undefined,
+      runId: recentRuns[0]?.run_id || undefined,
     })
+  }
+
+  const openProjectPipeline = async (pipelineName: string) => {
+    if (!selected) return
+    try {
+      const graph = await apiJson<GraphIR>(
+        `/projects/${encodeURIComponent(selected)}/pipelines/${encodeURIComponent(pipelineName)}`,
+      )
+      useAppStore.getState().loadGraphIntoBuilder(graph)
+      pushToast(`Opened ${pipelineName} in Editor`, 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
   }
 
   const create = async () => {
@@ -619,10 +642,29 @@ export default function ProjectsView() {
               </div>
               <div className="editorial-card">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Pipelines</div>
-                <div className="mt-1 text-sm font-semibold text-ink-900">Stamp and run</div>
+                <div className="mt-1 text-sm font-semibold text-ink-900">
+                  {projectPipelines.length === 0 ? 'None yet' : `${projectPipelines.length} saved`}
+                </div>
                 <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  Start from a template into this workspace. Use the Editor sidebar to open the canvas.
+                  Project-owned Graph IR. Stamp from a template or Save to project in the Editor.
                 </p>
+                {projectPipelines.length > 0 ? (
+                  <ul className="mt-2 space-y-1">
+                    {projectPipelines.slice(0, 6).map((p) => (
+                      <li key={p.name}>
+                        <button
+                          type="button"
+                          className="text-left text-xs text-accent-800 hover:underline"
+                          onClick={() => void openProjectPipeline(p.name)}
+                        >
+                          {p.name}
+                          {p.node_count != null ? ` · ${p.node_count} nodes` : ''}
+                          {p.graph_name ? ` · ${p.graph_name}` : ''}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -810,19 +852,11 @@ export default function ProjectsView() {
                 {versions.length === 0 ? (
                   <EmptyState
                     title="No versions yet"
-                    description="A draft project has versions:[] until a pipeline or export writes workspace/datasets/output/{project}/{version}. Open Templates/Builder (audio-classification) or browse Data outputs — this is not “no data” in Data."
+                    description="Versions appear after a pipeline writes under workspace/datasets/output/{project}/{version}. Stamp a template, then run from the Editor sidebar."
                     action={
-                      <div className="flex flex-wrap justify-center gap-2">
-                        <button type="button" className="btn-primary" onClick={() => setView('templates')}>
-                          Open Templates
-                        </button>
-                        <button type="button" className="btn-secondary" onClick={() => setView('builder')}>
-                          Open Builder
-                        </button>
-                        <button type="button" className="btn-secondary" onClick={() => openData({ mode: 'outputs' })}>
-                          Open Data
-                        </button>
-                      </div>
+                      <button type="button" className="btn-primary" onClick={() => setView('templates')}>
+                        From template
+                      </button>
                     }
                   />
                 ) : (

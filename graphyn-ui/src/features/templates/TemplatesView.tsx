@@ -177,6 +177,20 @@ export default function TemplatesView() {
     const stamped = stampProjectOnGraph(data.graph, project)
     setActiveProject(project)
     setBuilderDataset({ project })
+    const pipelineName = name.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'pipeline'
+    try {
+      await apiJson(
+        `/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(pipelineName)}`,
+        { method: 'PUT', body: JSON.stringify(stamped) },
+      )
+    } catch (err) {
+      pushToast(
+        err instanceof Error
+          ? `Opened Editor but could not save project pipeline: ${err.message}`
+          : 'Opened Editor but could not save project pipeline',
+        'error',
+      )
+    }
     useAppStore.getState().loadGraphIntoBuilder(stamped)
     pushToast(
       `Loaded ${humanizeTemplateName(name)}${version ? ` @ ${version}` : ''} → project ${project}`,

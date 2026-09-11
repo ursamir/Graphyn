@@ -81,13 +81,36 @@ export default function SystemView() {
     }>
   >([])
   const [auditError, setAuditError] = React.useState<string | null>(null)
+  const [authStatus, setAuthStatus] = React.useState<{
+    auth_required?: boolean
+    token_configured?: boolean
+    env?: string
+    ok?: boolean
+  } | null>(null)
+  const [schedules, setSchedules] = React.useState<
+    Array<{
+      id?: string
+      name?: string
+      project?: string
+      pipeline?: string
+      interval_minutes?: number
+      enabled?: boolean
+      next_run_at?: string
+      last_run_id?: string
+      last_error?: string
+    }>
+  >([])
+  const [schedName, setSchedName] = React.useState('hourly')
+  const [schedProject, setSchedProject] = React.useState('')
+  const [schedPipeline, setSchedPipeline] = React.useState('')
+  const [schedInterval, setSchedInterval] = React.useState(60)
 
   const refresh = React.useCallback(async () => {
     setError(null)
     setAuditError(null)
     setLoading(true)
     try {
-      const [h, r, m, w, audit] = await Promise.all([
+      const [h, r, m, w, audit, auth, sched] = await Promise.all([
         apiJson('/system/health'),
         apiJson('/system/readiness'),
         apiJson('/system/metrics'),
@@ -96,12 +119,34 @@ export default function SystemView() {
           setAuditError(err instanceof Error ? err.message : String(err))
           return { events: [] }
         }),
+        apiJson<{
+          auth_required?: boolean
+          token_configured?: boolean
+          env?: string
+          ok?: boolean
+        }>('/system/auth-status').catch(() => null),
+        apiJson<{ schedules?: unknown[] }>('/system/schedules').catch(() => ({ schedules: [] })),
       ])
       setHealth(h)
       setReady(r)
       setMetrics(m)
       setWebhookUrl(w.url ?? '')
       setWebhookEvents(w.events ?? [])
+      setAuthStatus(auth)
+      const schedList = Array.isArray(sched?.schedules) ? sched.schedules : []
+      setSchedules(
+        schedList.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
+          id?: string
+          name?: string
+          project?: string
+          pipeline?: string
+          interval_minutes?: number
+          enabled?: boolean
+          next_run_at?: string
+          last_run_id?: string
+          last_error?: string
+        }>,
+      )
       const events = Array.isArray(audit?.events) ? audit.events : []
       setAuditEvents(
         events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
@@ -151,6 +196,20 @@ export default function SystemView() {
       />
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
       {loading && <LoadingBlock label="Loading system status…" />}
+
+      {authStatus && authStatus.auth_required && !authStatus.token_configured ? (
+        <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          Auth is required ({authStatus.env || 'production'}) but{' '}
+          <code className="font-mono text-xs">GRAPHYN_API_TOKEN</code> is not configured on the
+          server. Set the token and paste the same value in Settings.
+        </div>
+      ) : null}
+      {authStatus && authStatus.auth_required && authStatus.token_configured ? (
+        <div className="rounded-2xl border border-ink-200 bg-ink-50/80 px-4 py-2 text-xs text-ink-600">
+          Bearer auth required — send the same token as{' '}
+          <code className="font-mono">GRAPHYN_API_TOKEN</code> from Settings.
+        </div>
+      ) : null}
 
       {(backendLabel || Number.isFinite(workerCount)) && (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
@@ -314,6 +373,166 @@ export default function SystemView() {
         >
           Open Projects
         </button>
+      </section>
+
+      <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold">Schedules</h3>
+          <p className="text-xs text-ink-500">
+            Interval jobs that run a project pipeline while the API process is up (always-on lite).
+          </p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <input
+            className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
+            placeholder="Name"
+            value={schedName}
+            onChange={(e) => setSchedName(e.target.value)}
+          />
+          <input
+            className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
+            placeholder="Project"
+            value={schedProject}
+            onChange={(e) => setSchedProject(e.target.value)}
+          />
+          <input
+            className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
+            placeholder="Pipeline"
+            value={schedPipeline}
+            onChange={(e) => setSchedPipeline(e.target.value)}
+          />
+          <input
+            type="number"
+            min={1}
+            className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
+            placeholder="Interval (min)"
+            value={schedInterval}
+            onChange={(e) => setSchedInterval(Number(e.target.value) || 60)}
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => {
+              void apiJson('/system/schedules', {
+                method: 'POST',
+                body: JSON.stringify({
+                  name: schedName,
+                  project: schedProject,
+                  pipeline: schedPipeline,
+                  interval_minutes: schedInterval,
+                  enabled: true,
+                }),
+              })
+                .then(() => {
+                  pushToast('Schedule created', 'success')
+                  void refresh()
+                })
+                .catch((err) =>
+                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                )
+            }}
+          >
+            Add schedule
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              void apiJson('/system/schedules/tick', { method: 'POST' })
+                .then((res) => {
+                  const n = Number((res as { count?: number })?.count ?? 0)
+                  pushToast(n ? `Fired ${n} schedule(s)` : 'No schedules due', 'success')
+                  void refresh()
+                })
+                .catch((err) =>
+                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                )
+            }}
+          >
+            Tick due now
+          </button>
+        </div>
+        {schedules.length === 0 ? (
+          <p className="text-sm text-ink-500">No schedules yet.</p>
+        ) : (
+          <ul className="space-y-2">
+            {schedules.map((s) => (
+              <li
+                key={s.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink-100 px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <div className="font-medium text-ink-900">
+                    {s.name}{' '}
+                    <span className="font-mono text-[11px] text-ink-500">
+                      {s.project}/{s.pipeline}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-ink-500">
+                    every {s.interval_minutes}m · {s.enabled ? 'enabled' : 'disabled'}
+                    {s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
+                    {s.last_error ? ` · err: ${s.last_error}` : ''}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      void apiJson(`/system/schedules/${s.id}/run`, { method: 'POST' })
+                        .then((res) => {
+                          pushToast(
+                            `Started ${(res as { last_run_id?: string })?.last_run_id || 'run'}`,
+                            'success',
+                          )
+                          void refresh()
+                        })
+                        .catch((err) =>
+                          pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                        )
+                    }
+                  >
+                    Run now
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      void apiJson(`/system/schedules/${s.id}/enable`, {
+                        method: 'POST',
+                        body: JSON.stringify({ enabled: !s.enabled }),
+                      })
+                        .then(() => void refresh())
+                        .catch((err) =>
+                          pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                        )
+                    }
+                  >
+                    {s.enabled ? 'Disable' : 'Enable'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() =>
+                      void apiJson(`/system/schedules/${s.id}`, { method: 'DELETE' })
+                        .then(() => {
+                          pushToast('Schedule deleted', 'success')
+                          void refresh()
+                        })
+                        .catch((err) =>
+                          pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                        )
+                    }
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">

@@ -78,6 +78,17 @@ def extract_project_fields_from_payload(payload: dict[str, Any], graph: Any = No
         vt = normalize_version_tag(payload.get("version_tag"))
         if vt:
             out["version_tag"] = vt
+        # Optional train→package lineage (Edge wizard / accountable packaging)
+        src = payload.get("source_run_id")
+        if isinstance(src, str) and src.strip():
+            cleaned = src.strip()
+            if re.match(r"^[A-Za-z0-9_-]{4,128}$", cleaned):
+                out["source_run_id"] = cleaned
+        art = payload.get("source_artifact_id")
+        if isinstance(art, str) and art.strip():
+            cleaned_a = art.strip()
+            if re.match(r"^[A-Za-z0-9_-]{4,128}$", cleaned_a):
+                out["source_artifact_id"] = cleaned_a
         meta = payload.get("metadata")
         if isinstance(meta, dict):
             if "project" not in out:

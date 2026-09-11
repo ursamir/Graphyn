@@ -411,6 +411,9 @@ def validate_graph_handler(arguments: dict[str, Any]) -> Any:
 
     try:
         graph = load_ir(graph_dict)
+        from app.core.ir.secret_policy import assert_no_inline_secrets
+
+        assert_no_inline_secrets(graph)
         return {
             "valid": True,
             "node_count": len(graph.nodes),

@@ -8,9 +8,10 @@ Writes require the same shared Bearer gate as other ``/api/v1`` admin routes.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.api.actor import resolve_actor
 from app.core.secrets import (
     SecretError,
     delete_secret,
@@ -36,29 +37,65 @@ def list_secrets():
 
 
 @router.post("", summary="Store a named secret")
-def create_secret(body: SecretSetBody):
+def create_secret(body: SecretSetBody, request: Request):
     try:
         name = set_secret(body.name, body.value)
     except SecretError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="secret.set",
+            resource_type="secret",
+            resource_id=name,
+            meta={},
+        )
+    except Exception:
+        pass
     return {"ok": True, "name": name}
 
 
 @router.put("/{name}", summary="Store or replace a named secret")
-def put_secret(name: str, body: SecretValueBody):
+def put_secret(name: str, body: SecretValueBody, request: Request):
     try:
         stored = set_secret(name, body.value)
     except SecretError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="secret.set",
+            resource_type="secret",
+            resource_id=stored,
+            meta={},
+        )
+    except Exception:
+        pass
     return {"ok": True, "name": stored}
 
 
 @router.delete("/{name}", summary="Delete a named secret")
-def remove_secret(name: str):
+def remove_secret(name: str, request: Request):
     try:
         found = delete_secret(name)
     except SecretError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not found:
         raise HTTPException(status_code=404, detail=f"Secret {name!r} not found")
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="secret.delete",
+            resource_type="secret",
+            resource_id=name,
+            meta={},
+        )
+    except Exception:
+        pass
     return {"ok": True, "name": name}

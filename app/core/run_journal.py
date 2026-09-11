@@ -144,6 +144,17 @@ class RunManager:
                 **metadata,
             }
             self._write_meta_unlocked(full, meta_path, tmp)
+        try:
+            from app.core.run_notify import notify_run_terminal
+
+            notify_run_terminal(
+                "completed",
+                self.run_id,
+                graph_name=full.get("graph_name") if isinstance(full.get("graph_name"), str) else None,
+                project=full.get("project") if isinstance(full.get("project"), str) else None,
+            )
+        except Exception:
+            pass
 
     def save_graph_ir(self, graph_data: dict) -> None:
         """Write graph.json and compute self._graph_hash."""
@@ -176,6 +187,18 @@ class RunManager:
                 "error": error,
             })
             self._write_meta_unlocked(existing, meta_path, tmp)
+        try:
+            from app.core.run_notify import notify_run_terminal
+
+            notify_run_terminal(
+                "failed",
+                self.run_id,
+                error=error,
+                graph_name=existing.get("graph_name") if isinstance(existing.get("graph_name"), str) else None,
+                project=existing.get("project") if isinstance(existing.get("project"), str) else None,
+            )
+        except Exception:
+            pass
 
     def mark_cancelled(self) -> None:
         duration = time.time() - self._start_time

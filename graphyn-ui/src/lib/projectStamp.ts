@@ -69,14 +69,14 @@ export function runMatchesProject(
     const mp = String(meta.project ?? '').trim()
     if (mp && mp === p) return true
   }
-  // Soft legacy fallback (pre-Phase-2 journals without project stamp)
+  // Soft legacy fallback (pre-Phase-2 journals without project stamp):
+  // exact graph_name == project only — never substring (avoids project "ml" ↔ "html_pipeline").
   const pl = p.toLowerCase()
   const graphName = String(run.graph_name ?? '').toLowerCase()
-  if (graphName && (graphName === pl || graphName.includes(pl))) return true
-  if (direct && direct.toLowerCase().includes(pl)) return true
+  if (graphName && graphName === pl) return true
   if (meta) {
     const mg = String(meta.graph_name ?? '').toLowerCase()
-    if (mg && (mg === pl || mg.includes(pl))) return true
+    if (mg && mg === pl) return true
   }
   return false
 }

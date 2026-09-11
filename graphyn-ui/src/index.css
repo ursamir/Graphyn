@@ -20,7 +20,10 @@ body,
 body {
   margin: 0;
   font-family: Inter, system-ui, sans-serif;
-  background: #f3f5f8;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(21, 146, 136, 0.06), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(26, 33, 41, 0.04), transparent 50%),
+    #f3f5f8;
   color: #1a2129;
   -webkit-font-smoothing: antialiased;
   letter-spacing: -0.011em;

@@ -1,10 +1,11 @@
 import React from 'react'
-import { Archive, Database, FlaskConical, FolderKanban, GitBranch, Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
+import { Archive, FlaskConical, GitBranch, Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { runMatchesProject } from '../../lib/projectStamp'
+import { statusMatchesFilter } from '../../lib/runStatus'
 import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, NeedProjectPrompt, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
 import {
   formatExecutionLine,
@@ -89,7 +90,6 @@ export default function RunsView() {
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openExperiments = useAppStore((s) => s.openExperiments)
   const openProjects = useAppStore((s) => s.openProjects)
-  const openData = useAppStore((s) => s.openData)
   const activeProject = useAppStore((s) => s.activeProject)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const closeProject = useAppStore((s) => s.closeProject)
@@ -109,6 +109,7 @@ export default function RunsView() {
   const [error, setError] = React.useState<string | null>(null)
   const [statusFilter, setStatusFilter] = React.useState<string>('all')
   const [nameQuery, setNameQuery] = React.useState('')
+  const [promoteAlias, setPromoteAlias] = React.useState<'latest' | 'staging' | 'prod'>('latest')
   const limit = 50
 
   const load = React.useCallback(async () => {
@@ -247,11 +248,15 @@ export default function RunsView() {
     }
   }
 
-  const promote = async () => {
+  const promote = async (alias: 'latest' | 'staging' | 'prod' = promoteAlias) => {
     if (!selected) return
     try {
-      await apiJson(`/runs/${selected}/promote`, { method: 'POST' })
-      pushToast('This run is now latest', 'success')
+      const res = await apiJson<{ alias?: string }>(`/runs/${selected}/promote`, {
+        method: 'POST',
+        body: JSON.stringify({ alias }),
+      })
+      const a = res?.alias || alias
+      pushToast(`Promoted to ${a}`, 'success')
       await load()
       await open(selected)
     } catch (err) {
@@ -309,6 +314,11 @@ export default function RunsView() {
       detail?.project ??
       '',
   ).trim()
+  const sourceRunId = String(
+    (detail?.meta as { source_run_id?: string } | undefined)?.source_run_id ??
+      detail?.source_run_id ??
+      '',
+  ).trim()
   const graphName = String(
     selectedSummary?.graph_name ??
       (detail?.meta as { graph_name?: string } | undefined)?.graph_name ??
@@ -353,7 +363,7 @@ export default function RunsView() {
     const statusNeedle = statusFilter === 'all' ? '' : statusFilter.toLowerCase()
     return runs.filter((r) => {
       if (activeProject && !runMatchesProject(r, activeProject)) return false
-      if (statusNeedle && String(r.status ?? '').toLowerCase() !== statusNeedle) return false
+      if (statusNeedle && !statusMatchesFilter(r.status, statusNeedle)) return false
       if (!q) return true
       const rawName = String(r.graph_name ?? '')
       const hay = `${rawName} ${runDisplayName(r)} ${r.run_id}`.toLowerCase()
@@ -435,7 +445,7 @@ export default function RunsView() {
         ) : runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
-            description="Run a graph from Builder to create an execution session here. Trace is for lineage/provenance deep-dive; Experiments compares metrics."
+            description="Run a graph from the Editor to create an execution session here. Trace is for lineage; Experiments compares metrics."
             action={
               <div className="flex flex-wrap justify-center gap-2">
                 <button
@@ -446,7 +456,7 @@ export default function RunsView() {
                     window.history.replaceState(null, '', '#/builder')
                   }}
                 >
-                  Open Builder
+                  Open Editor
                 </button>
                 <button
                   type="button"
@@ -456,7 +466,7 @@ export default function RunsView() {
                     window.history.replaceState(null, '', '#/templates')
                   }}
                 >
-                  Browse Templates
+                  From template
                 </button>
               </div>
             }
@@ -528,7 +538,7 @@ export default function RunsView() {
             )})}
           </ul>
         )}
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex items-center gap-2">
           <button
             type="button"
             className="btn-secondary"
@@ -537,9 +547,19 @@ export default function RunsView() {
           >
             Prev
           </button>
-          <button type="button" className="btn-secondary" onClick={() => setOffset((o) => o + limit)}>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={!runs || runs.length < limit}
+            onClick={() => setOffset((o) => o + limit)}
+          >
             Next
           </button>
+          {runs && runs.length > 0 ? (
+            <span className="text-[11px] text-ink-400">
+              {offset + 1}–{offset + runs.length}
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -587,6 +607,18 @@ export default function RunsView() {
                   </span>
                 )}
               </div>
+              {sourceRunId ? (
+                <p className="mt-2 text-xs text-ink-500">
+                  Source run{' '}
+                  <button
+                    type="button"
+                    className="font-mono text-accent-800 underline-offset-2 hover:underline"
+                    onClick={() => openTrace({ runId: sourceRunId, project: runProject || undefined })}
+                  >
+                    {sourceRunId.slice(0, 12)}…
+                  </button>
+                </p>
+              ) : null}
               {(() => {
                 const place = (detail?.meta as { distributed_node_workers?: Record<string, string> } | undefined)
                   ?.distributed_node_workers
@@ -631,7 +663,7 @@ export default function RunsView() {
                   className="btn-secondary"
                   onClick={() => void openGraphInBuilder()}
                 >
-                  <Workflow className="h-3.5 w-3.5" /> Open in Builder
+                  <Workflow className="h-3.5 w-3.5" /> Open in Editor
                 </button>
               )}
               <button
@@ -641,24 +673,6 @@ export default function RunsView() {
               >
                 <FlaskConical className="h-3.5 w-3.5" /> Compare
               </button>
-              {!activeProject && (
-                <>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => openProjects()}
-                  >
-                    <FolderKanban className="h-3.5 w-3.5" /> Projects
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => openData({ mode: 'outputs' })}
-                  >
-                    <Database className="h-3.5 w-3.5" /> Data
-                  </button>
-                </>
-              )}
               {['running'].includes(runStatus.toLowerCase()) && (
                 <button type="button" className="btn-secondary" onClick={() => void control(selected, 'pause')}>
                   <Pause className="h-3.5 w-3.5" /> Pause
@@ -784,15 +798,27 @@ export default function RunsView() {
                         ) : null}
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        {!isLatest && (
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => void promote()}
+                        <label className="inline-flex items-center gap-1.5 text-[11px] text-ink-500">
+                          <span className="sr-only">Promote alias</span>
+                          <select
+                            className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                            value={promoteAlias}
+                            onChange={(e) =>
+                              setPromoteAlias(e.target.value as 'latest' | 'staging' | 'prod')
+                            }
                           >
-                            Use as latest
-                          </button>
-                        )}
+                            <option value="latest">latest</option>
+                            <option value="staging">staging</option>
+                            <option value="prod">prod</option>
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => void promote()}
+                        >
+                          Promote
+                        </button>
                         {outputFiles.length > 0 && (
                           <button type="button" className="btn-secondary" onClick={() => void downloadZip()}>
                             <Download className="h-3.5 w-3.5" /> Download all

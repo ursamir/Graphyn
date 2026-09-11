@@ -262,8 +262,10 @@ def validate_pipeline_config(payload: dict = Body(...)):
         # IR JSON validation (Req 4.8.1, 4.8.3, 4.8.4)
         try:
             from app.core.ir.loader import load_ir
+            from app.core.ir.secret_policy import assert_no_inline_secrets
             from app.core.workspace_paths import apply_output_rewire
             graph = apply_output_rewire(load_ir(payload))
+            assert_no_inline_secrets(graph)
             return {"valid": True, "node_count": len(graph.nodes)}
         except Exception as exc:
             return JSONResponse(
@@ -276,13 +278,19 @@ def validate_pipeline_config(payload: dict = Body(...)):
         try:
             config = yaml.safe_load(yaml_str)
         except yaml.YAMLError as exc:
-            return {"valid": False, "error": f"YAML parse error: {exc}"}
+            return JSONResponse(
+                status_code=422,
+                content={"valid": False, "error": f"YAML parse error: {exc}"},
+            )
 
         registry = get_registry()
         try:
             validate_pipeline(config, registry)
         except ValueError as exc:
-            return {"valid": False, "error": str(exc)}
+            return JSONResponse(
+                status_code=422,
+                content={"valid": False, "error": str(exc)},
+            )
 
         headers = {"X-Deprecation-Warning": "YAML pipeline input is deprecated. Use IR JSON format."}
         return JSONResponse(content={"valid": True, "node_count": len(config.get("pipeline", {}).get("nodes", []))}, headers=headers)
@@ -299,11 +307,21 @@ def run_pipeline_stream(payload: dict = Body(...)):
     """
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
-        graph, _project_fields = _stamp_graph_project(graph, payload)
+        graph, project_fields = _stamp_graph_project(graph, payload)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+    from app.core.run_journal import RunManager
+
+    # Same contract as /run-async: run_id known before the first NDJSON event
+    run_mgr = RunManager()
+    run_id = run_mgr.run_id
+    for key, value in project_fields.items():
+        run_mgr._write_meta_field(key, value)
+    if not _is_ir_payload(payload):
+        run_mgr.save_config(payload.get("yaml", ""))
 
     queue: Queue = Queue(maxsize=512)  # bounded — prevents memory leak on slow clients
     logger = PipelineLogger(queue=queue)
@@ -312,14 +330,16 @@ def run_pipeline_stream(payload: dict = Body(...)):
         from datetime import datetime, timezone
         from app.core.runtime_backend import get_backend  # noqa: PLC0415
         try:
-            get_backend().execute(graph, logger=logger)
-            queue.put({
-                "type": "done",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            get_backend().execute(graph, logger=logger, run_manager=run_mgr)
+            # Success terminal event comes from logger.pipeline_done (type=done + run_id).
         except Exception as exc:
+            try:
+                run_mgr.mark_failed(str(exc))
+            except Exception:
+                pass
             queue.put({
                 "type": "error",
+                "run_id": run_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "error_type": type(exc).__name__,
                 "message": str(exc),
@@ -330,19 +350,45 @@ def run_pipeline_stream(payload: dict = Body(...)):
     threading.Thread(target=_run, daemon=True).start()
 
     def stream():
+        # Emit run_id immediately so Observe deep-links work before first node
+        yield json.dumps({"type": "run_started", "run_id": run_id}) + "\n"
         while True:
             item = queue.get()
             if item is None:
                 break
             try:
+                if isinstance(item, dict) and "run_id" not in item:
+                    item = {**item, "run_id": run_id}
                 yield json.dumps(item) + "\n"
             except (TypeError, ValueError) as exc:
-                yield json.dumps({"type": "error", "message": f"Serialization error: {exc}"}) + "\n"
+                yield json.dumps({"type": "error", "run_id": run_id, "message": f"Serialization error: {exc}"}) + "\n"
                 break
 
-    headers = {}
+    headers = {"X-Run-Id": run_id}
     if deprecation_header:
         headers["X-Deprecation-Warning"] = deprecation_header
+
+    try:
+        from app.core.audit import record_audit
+
+        gname = None
+        try:
+            meta = getattr(graph, "metadata", None)
+            if isinstance(meta, dict):
+                gname = meta.get("name")
+            elif meta is not None:
+                gname = getattr(meta, "name", None)
+        except Exception:
+            gname = None
+        record_audit(
+            actor="api",
+            action="run.start",
+            resource_type="run",
+            resource_id=run_id,
+            meta={"graph_name": gname, "mode": "stream"},
+        )
+    except Exception:
+        pass
 
     return StreamingResponse(stream(), media_type="application/x-ndjson", headers=headers)
 

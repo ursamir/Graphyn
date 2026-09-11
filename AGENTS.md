@@ -51,7 +51,7 @@ User-facing steps: docs/GETTING_STARTED.md. Protocol details: docs/DISTRIBUTED_E
 ```
 app/api/          FastAPI routers
 app/cli/          argparse CLI
-app/mcp/          MCP stdio server (23 tools)
+app/mcp/          MCP stdio server (29 tools)
 app/core/         IR, nodes framework, orchestrator, plugins, artifacts,
                   distributed/, agentic/, trace, audit, experiments
 app/domain/       Ingestion, ProjectManager, QualityChecker

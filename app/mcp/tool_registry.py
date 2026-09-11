@@ -101,15 +101,35 @@ def register_all_tools(register: Callable) -> None:
     )
 
     from app.mcp.handlers.proposals import (
+        ACCEPT_PROPOSAL_DESCRIPTION,
+        ACCEPT_PROPOSAL_SCHEMA,
         GET_PROPOSAL_DESCRIPTION,
         GET_PROPOSAL_SCHEMA,
         LIST_PROPOSALS_DESCRIPTION,
         LIST_PROPOSALS_SCHEMA,
         PROPOSE_GRAPH_DESCRIPTION,
         PROPOSE_GRAPH_SCHEMA,
+        REJECT_PROPOSAL_DESCRIPTION,
+        REJECT_PROPOSAL_SCHEMA,
+        accept_proposal_handler,
         get_proposal_handler,
         list_proposals_handler,
         propose_graph_handler,
+        reject_proposal_handler,
+    )
+    from app.mcp.handlers.workspace import (
+        GET_TRACE_DESCRIPTION,
+        GET_TRACE_SCHEMA,
+        LIST_DATA_INPUTS_DESCRIPTION,
+        LIST_DATA_INPUTS_SCHEMA,
+        LIST_EXPERIMENTS_DESCRIPTION,
+        LIST_EXPERIMENTS_SCHEMA,
+        LIST_PROJECTS_DESCRIPTION,
+        LIST_PROJECTS_SCHEMA,
+        get_trace_handler,
+        list_data_inputs_handler,
+        list_experiments_handler,
+        list_projects_handler,
     )
 
     register("list_nodes", LIST_NODES_DESCRIPTION, LIST_NODES_SCHEMA, list_nodes_handler)
@@ -135,3 +155,9 @@ def register_all_tools(register: Callable) -> None:
     register("propose_graph", PROPOSE_GRAPH_DESCRIPTION, PROPOSE_GRAPH_SCHEMA, propose_graph_handler)
     register("list_proposals", LIST_PROPOSALS_DESCRIPTION, LIST_PROPOSALS_SCHEMA, list_proposals_handler)
     register("get_proposal", GET_PROPOSAL_DESCRIPTION, GET_PROPOSAL_SCHEMA, get_proposal_handler)
+    register("accept_proposal", ACCEPT_PROPOSAL_DESCRIPTION, ACCEPT_PROPOSAL_SCHEMA, accept_proposal_handler)
+    register("reject_proposal", REJECT_PROPOSAL_DESCRIPTION, REJECT_PROPOSAL_SCHEMA, reject_proposal_handler)
+    register("list_experiments", LIST_EXPERIMENTS_DESCRIPTION, LIST_EXPERIMENTS_SCHEMA, list_experiments_handler)
+    register("get_trace", GET_TRACE_DESCRIPTION, GET_TRACE_SCHEMA, get_trace_handler)
+    register("list_projects", LIST_PROJECTS_DESCRIPTION, LIST_PROJECTS_SCHEMA, list_projects_handler)
+    register("list_data_inputs", LIST_DATA_INPUTS_DESCRIPTION, LIST_DATA_INPUTS_SCHEMA, list_data_inputs_handler)

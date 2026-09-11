@@ -207,6 +207,7 @@ function BuilderInner() {
   const activeProject = useAppStore((s) => s.activeProject)
   const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
   const setGetCanvasGraph = useAppStore((s) => s.setGetCanvasGraph)
+  const backendMode = useAppStore((s) => s.backendMode)
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphynNodeData>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
@@ -621,6 +622,10 @@ function BuilderInner() {
         }
         throw new ApiError(detail, res.status, '/pipelines/run')
       }
+      const headerRunId = res.headers.get('X-Run-Id') || res.headers.get('x-run-id')
+      if (headerRunId?.trim()) {
+        setLastRunId(headerRunId.trim())
+      }
       if (!res.body) throw new Error('No response body')
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -628,7 +633,7 @@ function BuilderInner() {
       let hadError = false
       let wasCancelled = false
       let lastErrorDetail = ''
-      let runId: string | null = null
+      let runId: string | null = headerRunId?.trim() || null
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
@@ -824,6 +829,30 @@ function BuilderInner() {
       })
       setTemplateName(name)
       pushToast(`Template saved: ${res.name}${res.version ? ` @ ${res.version}` : ''}`, 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const saveToProject = async () => {
+    const project = (activeProject || '').trim()
+    if (!project) {
+      pushToast('Open a project workspace first', 'error')
+      return
+    }
+    const name = (templateName.trim() || graphName || 'main').replace(/[^A-Za-z0-9_-]/g, '_') || 'main'
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+      pushToast('Pipeline name must match [A-Za-z0-9_-]+', 'error')
+      return
+    }
+    try {
+      const graph = graphForRun()
+      await apiJson(`/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify(graph),
+      })
+      setTemplateName(name)
+      pushToast(`Saved to project ${project} · ${name}`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -1190,6 +1219,15 @@ function BuilderInner() {
           <button type="button" onClick={() => void handleValidate()} className="btn-secondary">
             <CheckCircle2 className="h-3.5 w-3.5" /> Validate
           </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={!activeProject}
+            title={activeProject ? `Save Graph IR to project ${activeProject}` : 'Open a project to save'}
+            onClick={() => void saveToProject()}
+          >
+            <BookmarkPlus className="h-3.5 w-3.5" /> Save
+          </button>
           <input
             value={graphName}
             onChange={(e) => setGraphName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '-'))}
@@ -1230,13 +1268,30 @@ function BuilderInner() {
                   <input
                     value={templateName}
                     onChange={(e) => setTemplateName(e.target.value)}
-                    placeholder="template-name"
+                    placeholder="pipeline-name"
                     className="field-control mt-0 text-xs"
-                    title="Name used when saving a template"
-                    aria-label="Template name"
+                    title="Name used when saving to the project or as a global template"
+                    aria-label="Pipeline name"
                   />
-                  <button type="button" className="btn-secondary w-full justify-start" onClick={() => { void saveTemplate(); setMoreOpen(false) }}>
-                    <BookmarkPlus className="h-3.5 w-3.5" /> Save template
+                  <button
+                    type="button"
+                    className="btn-primary w-full justify-start"
+                    onClick={() => {
+                      void saveToProject()
+                      setMoreOpen(false)
+                    }}
+                  >
+                    <BookmarkPlus className="h-3.5 w-3.5" /> Save to project
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary w-full justify-start"
+                    onClick={() => {
+                      void saveTemplate()
+                      setMoreOpen(false)
+                    }}
+                  >
+                    Save as template
                   </button>
                 </div>
                 <div className="flex flex-col items-stretch gap-0.5">
@@ -1535,18 +1590,21 @@ function BuilderInner() {
                         <div className="mb-3 rounded-lg border border-ink-200 bg-ink-50/70 p-2.5 space-y-2">
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                              Placement (Mode B)
+                              Placement {backendMode === 'distributed' ? '(Distributed)' : '(Local)'}
                             </div>
                             <button
                               type="button"
-                              className="text-[11px] text-accent-700 hover:underline"
+                              className="text-[11px] text-accent-700 hover:underline disabled:opacity-40"
+                              disabled={backendMode !== 'distributed'}
                               onClick={() => node.data.onChangePlacement?.(null)}
                             >
                               Reset auto
                             </button>
                           </div>
                           <p className="text-[10px] leading-snug text-ink-400">
-                            Local Mode A ignores these hints. Distributed Mode B routes by mode / tags / GPU / pool / worker.
+                            {backendMode === 'distributed'
+                              ? 'Distributed Mode B honors mode / tags / GPU / pool / worker.'
+                              : 'Ignored until Distributed — Local Mode A runs everything on this host.'}
                           </p>
                           {(() => {
                             const p = node.data.placement ?? { mode: 'auto' as const }
@@ -1554,6 +1612,7 @@ function BuilderInner() {
                               const next: NodePlacement = { ...p, ...patch }
                               node.data.onChangePlacement?.(next)
                             }
+                            const placementDisabled = backendMode !== 'distributed'
                             return (
                               <>
                                 <label className="block text-[12px] text-ink-700">
@@ -1561,6 +1620,7 @@ function BuilderInner() {
                                   <select
                                     className="field-control mt-1"
                                     value={p.mode ?? 'auto'}
+                                    disabled={placementDisabled}
                                     onChange={(e) =>
                                       setP({
                                         mode: e.target.value as NodePlacement['mode'],
@@ -1579,6 +1639,7 @@ function BuilderInner() {
                                     className="field-control mt-1 font-mono"
                                     placeholder="gpu,edge (comma-separated)"
                                     value={(p.tags ?? []).join(',')}
+                                    disabled={placementDisabled}
                                     onChange={(e) =>
                                       setP({
                                         tags: e.target.value
@@ -1593,6 +1654,7 @@ function BuilderInner() {
                                   <input
                                     type="checkbox"
                                     checked={Boolean(p.require_gpu)}
+                                    disabled={placementDisabled}
                                     onChange={(e) => setP({ require_gpu: e.target.checked })}
                                   />
                                   <span className="font-medium">Require GPU</span>
@@ -1603,6 +1665,7 @@ function BuilderInner() {
                                     className="field-control mt-1 font-mono"
                                     placeholder="gpu-lab"
                                     value={p.pool ?? ''}
+                                    disabled={placementDisabled}
                                     onChange={(e) => setP({ pool: e.target.value.trim() || null })}
                                   />
                                 </label>
@@ -1612,6 +1675,7 @@ function BuilderInner() {
                                     className="field-control mt-1 font-mono"
                                     placeholder="worker id"
                                     value={p.worker ?? ''}
+                                    disabled={placementDisabled}
                                     onChange={(e) => setP({ worker: e.target.value.trim() || null })}
                                   />
                                 </label>

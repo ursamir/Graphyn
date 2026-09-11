@@ -655,46 +655,55 @@ def _copy_key_files(src: Path, dest: Path) -> None:
             shutil.copy2(child, target)
 
 
-def publish_latest(slug: str, run_id: str) -> str:
-    """Point ``workspace/artifacts/<slug>/latest`` at ``runs/<run_id>``.
+def publish_alias(slug: str, run_id: str, alias: str = "latest") -> str:
+    """Point ``workspace/artifacts/<slug>/<alias>`` at ``runs/<run_id>``.
 
     Prefers a POSIX symlink replaced atomically. If the symlink cannot be
-    created (Windows, permissions), write ``latest.json`` and copy/symlink
-    key files into the ``latest/`` directory.
+    created (Windows, permissions), write ``<alias>.json`` and copy/symlink
+    key files into the ``<alias>/`` directory.
     """
+    alias_name = (alias or "latest").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", alias_name):
+        raise ValueError(
+            f"Invalid alias {alias!r}. Use lowercase letters, digits, hyphens "
+            "(e.g. latest, staging, prod)."
+        )
     layout = artifact_layout(slug, run_id)
-    latest_rel = layout["latest_dir"]
     run_rel = layout["run_dir"]
-    latest = artifact_fs_path(latest_rel)
+    alias_rel = f"{ARTIFACTS_PREFIX}/{artifact_slug(slug)}/{alias_name}"
+    # Prefer layout helper when alias is latest
+    if alias_name == "latest":
+        alias_rel = layout["latest_dir"]
+    alias_path = artifact_fs_path(alias_rel)
     run_path = artifact_fs_path(run_rel)
-    slug_dir = latest.parent
+    slug_dir = alias_path.parent
     slug_dir.mkdir(parents=True, exist_ok=True)
     run_path.mkdir(parents=True, exist_ok=True)
 
-    pointer = {"run_id": str(run_id), "path": run_rel}
-    tmp = slug_dir / f".latest-{run_id}.tmp"
+    pointer = {"run_id": str(run_id), "path": run_rel, "alias": alias_name}
+    tmp = slug_dir / f".{alias_name}-{run_id}.tmp"
     try:
         if tmp.exists() or tmp.is_symlink():
             tmp.unlink()
         os.symlink(f"runs/{run_id}", tmp, target_is_directory=True)
-        if latest.is_dir() and not latest.is_symlink():
-            bak = slug_dir / f".latest-old-{run_id}"
+        if alias_path.is_dir() and not alias_path.is_symlink():
+            bak = slug_dir / f".{alias_name}-old-{run_id}"
             if bak.exists() or bak.is_symlink():
                 if bak.is_dir() and not bak.is_symlink():
                     shutil.rmtree(bak)
                 else:
                     bak.unlink()
-            os.rename(latest, bak)
+            os.rename(alias_path, bak)
             try:
-                os.replace(tmp, latest)
+                os.replace(tmp, alias_path)
             finally:
                 shutil.rmtree(bak, ignore_errors=True)
         else:
-            os.replace(tmp, latest)
-        leftover = slug_dir / "latest.json"
+            os.replace(tmp, alias_path)
+        leftover = slug_dir / f"{alias_name}.json"
         if leftover.is_file():
             leftover.unlink()
-        return latest_rel
+        return alias_rel
     except OSError:
         if tmp.exists() or tmp.is_symlink():
             try:
@@ -702,13 +711,17 @@ def publish_latest(slug: str, run_id: str) -> str:
             except OSError:
                 pass
 
-    _atomic_write_json(slug_dir / "latest.json", pointer)
-    if latest.is_symlink():
-        latest.unlink()
-    _copy_key_files(run_path, latest)
-    _atomic_write_json(latest / "latest.json", pointer)
-    return latest_rel
+    _atomic_write_json(slug_dir / f"{alias_name}.json", pointer)
+    if alias_path.is_symlink():
+        alias_path.unlink()
+    _copy_key_files(run_path, alias_path)
+    _atomic_write_json(alias_path / f"{alias_name}.json", pointer)
+    return alias_rel
 
+
+def publish_latest(slug: str, run_id: str) -> str:
+    """Point ``workspace/artifacts/<slug>/latest`` at ``runs/<run_id>``."""
+    return publish_alias(slug, run_id, "latest")
 
 def _dir_has_ingest_files(path: Path) -> bool:
     """True when *path* is a directory that contains at least one file.

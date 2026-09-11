@@ -1,6 +1,6 @@
 # MCP Server
 
-The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 23 tools over stdio transport.
+The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 29 tools over stdio transport.
 
 **File:** `app/mcp/`  
 **Transport:** stdio (JSON-RPC on stdin/stdout, logs to stderr)  
@@ -24,7 +24,7 @@ python -m app.mcp.server
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — 23 tools
+├── tool_registry.py   # register_all_tools() — 29 tools
 ├── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
@@ -36,7 +36,7 @@ app/mcp/
     ├── optimization.py # optimize_execution
     ├── plugins.py      # install_plugin, list_plugins, manage_plugin
     ├── secrets.py      # secrets_list, secrets_set
-    └── proposals.py    # propose_graph, list_proposals, get_proposal
+    └── proposals.py    # propose_graph, list/get/accept/reject_proposal
 ```
 
 ---
@@ -74,6 +74,12 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 | `propose_graph` | `proposals.py` | `create_proposal` (agentic store) |
 | `list_proposals` | `proposals.py` | `list_proposals` |
 | `get_proposal` | `proposals.py` | `get_proposal` |
+| `accept_proposal` | `proposals.py` | `accept_proposal` (same as UI) |
+| `reject_proposal` | `proposals.py` | `reject_proposal` (same as UI) |
+| `list_experiments` | `workspace.py` | `experiments.list_experiments` |
+| `get_trace` | `workspace.py` | `trace.assemble_trace` |
+| `list_projects` | `workspace.py` | datasets/output folder listing |
+| `list_data_inputs` | `workspace.py` | datasets/input label listing |
 
 ---
 
@@ -274,11 +280,17 @@ Create a human-in-the-loop GraphIR proposal (does **not** mutate the live Builde
 
 **Arguments:** `summary` (required), `graph` (required GraphIR object), optional `actor`, `base_graph`, `base_graph_hash`.
 
-**Returns:** proposal id + status `pending`. Accept/reject via REST UI (`POST /api/v1/proposals/{id}/accept|reject`).
+**Returns:** proposal id + status `pending`. Accept/reject via MCP
+`accept_proposal` / `reject_proposal` or REST (`POST /api/v1/proposals/{id}/accept|reject`).
 
 ### `list_proposals` / `get_proposal`
 
 List (optional `status` filter) or fetch one proposal by id.
+
+### `accept_proposal` / `reject_proposal`
+
+Resolve a pending proposal (same core as the console). **Arguments:** `id` (required);
+optional `actor`; `reject_proposal` also accepts `reason`.
 
 ---
 

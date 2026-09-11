@@ -260,12 +260,28 @@ export class ErrorBoundary extends React.Component<
   render() {
     if (this.state.error) {
       return (
-        <div className="m-6 rounded-2xl border border-rose-200 bg-rose-50 p-6">
-          <h2 className="text-lg font-semibold text-rose-900">Something went wrong</h2>
-          <p className="mt-2 text-sm text-rose-800">{this.state.error.message}</p>
-          <button type="button" className="btn-secondary mt-4" onClick={() => this.setState({ error: null })}>
-            Try again
-          </button>
+        <div className="m-6 rounded-2xl border border-rose-200 bg-rose-50 p-6 shadow-sm">
+          <h2 className="text-lg font-semibold tracking-tight text-rose-900">Something went wrong</h2>
+          <p className="mt-2 text-sm leading-relaxed text-rose-800">{this.state.error.message}</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                this.setState({ error: null })
+                window.location.hash = '#/projects'
+                window.dispatchEvent(new HashChangeEvent('hashchange'))
+              }}
+            >
+              Back to Projects
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => this.setState({ error: null })}>
+              Try again
+            </button>
+          </div>
         </div>
       )
     }

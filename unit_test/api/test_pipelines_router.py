@@ -64,18 +64,54 @@ class TestValidatePipeline:
         assert "X-Deprecation-Warning" in resp.headers
 
     def test_malformed_yaml_returns_error(self, api_client):
-        """POST /api/v1/pipelines/validate with malformed YAML returns error."""
+        """POST /api/v1/pipelines/validate with malformed YAML returns 422."""
         yaml_payload = {"yaml": ": bad: yaml: ["}
         mock_registry = MagicMock()
         with patch("app.api.routers.pipelines.get_registry", return_value=mock_registry):
             resp = api_client.post("/api/v1/pipelines/validate", json=yaml_payload)
-        # Should return 200 with valid=False (YAML parse error)
-        assert resp.status_code == 200
+        # Same HTTP contract as invalid IR — 422 + valid=False
+        assert resp.status_code == 422
         body = resp.json()
         assert body["valid"] is False
 
 
-# ── Templates CRUD ────────────────────────────────────────────────────────────
+# ── Streaming run ─────────────────────────────────────────────────────────────
+
+class TestRunStream:
+    def test_run_stream_exposes_run_id_header_and_first_event(self, api_client):
+        """POST /pipelines/run returns X-Run-Id and run_started before node events."""
+        from app.core.ir.models import GraphIR, IRMetadata
+
+        mock_graph = MagicMock(spec=GraphIR)
+        mock_graph.nodes = []
+        mock_graph.edges = []
+        mock_graph.metadata = IRMetadata(name="test", seed=42)
+
+        def _fake_execute(graph, logger=None, run_manager=None, **kwargs):
+            if logger is not None:
+                logger.pipeline_start(0, run_id=getattr(run_manager, "run_id", None))
+                logger.pipeline_done(getattr(run_manager, "run_id", "x"), 0.01)
+            return {}
+
+        with (
+            patch("app.api.routers.pipelines._build_graph_from_payload", return_value=(mock_graph, None)),
+            patch("app.api.routers.pipelines._stamp_graph_project", return_value=(mock_graph, {})),
+            patch("app.core.runtime_backend.get_backend") as gb,
+        ):
+            backend = MagicMock()
+            backend.execute.side_effect = _fake_execute
+            gb.return_value = backend
+            resp = api_client.post("/api/v1/pipelines/run", json=_VALID_IR)
+
+        assert resp.status_code == 200
+        run_id = resp.headers.get("X-Run-Id")
+        assert run_id
+        lines = [ln for ln in resp.text.splitlines() if ln.strip()]
+        assert lines, "expected NDJSON body"
+        first = json.loads(lines[0])
+        assert first.get("type") == "run_started"
+        assert first.get("run_id") == run_id
+        assert any(json.loads(ln).get("run_id") == run_id for ln in lines)
 
 class TestTemplates:
     def test_list_templates_returns_list(self, api_client, tmp_path, monkeypatch):

@@ -185,6 +185,8 @@ export default function App() {
   const pushToast = useAppStore((s) => s.pushToast)
   const bootError = useAppStore((s) => s.bootError)
   const bootStatus = useAppStore((s) => s.bootStatus)
+  const backendMode = useAppStore((s) => s.backendMode)
+  const setBackendMode = useAppStore((s) => s.setBackendMode)
   const pendingProposalCount = useAppStore((s) => s.pendingProposalCount)
   const setPendingProposalCount = useAppStore((s) => s.setPendingProposalCount)
   const setBootError = useAppStore((s) => s.setBootError)
@@ -193,6 +195,10 @@ export default function App() {
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [tokenDraft, setTokenDraft] = React.useState('')
   const [tokenVisible, setTokenVisible] = React.useState(false)
+  const [authHonesty, setAuthHonesty] = React.useState<{
+    auth_required?: boolean
+    token_configured?: boolean
+  } | null>(null)
   const settingsPanelRef = React.useRef<HTMLDivElement>(null)
   const settingsTriggerRef = React.useRef<HTMLElement | null>(null)
   const tokenInputRef = React.useRef<HTMLInputElement>(null)
@@ -233,7 +239,22 @@ export default function App() {
         setSettingsOpen(true)
       }
     }
-  }, [setCatalog, setBootError, setSettingsOpen])
+    try {
+      const ready = await apiJson<{ backend_mode?: string }>('/system/readiness')
+      const mode = String(ready?.backend_mode || '').toLowerCase()
+      setBackendMode(mode === 'distributed' ? 'distributed' : mode === 'local' ? 'local' : null)
+    } catch {
+      /* readiness is optional for catalog boot */
+    }
+    try {
+      const auth = await apiJson<{ auth_required?: boolean; token_configured?: boolean }>(
+        '/system/auth-status',
+      )
+      setAuthHonesty(auth)
+    } catch {
+      /* optional */
+    }
+  }, [setCatalog, setBootError, setSettingsOpen, setBackendMode])
 
   React.useEffect(() => {
     setRefreshCatalog(refreshCatalog)
@@ -354,29 +375,40 @@ export default function App() {
 
   const go = (id: AppView) => {
     setView(id)
-    const PRESERVE_QUERY = new Set<AppView>([
-      'trace',
-      'edge',
-      'experiments',
-      'proposals',
-      'artifacts',
-      'data',
-      'projects',
-    ])
+    // Only carry query keys the destination understands (avoid #/trace?run_id= → #/edge?run_id=).
+    const ALLOWED_QUERY: Partial<Record<AppView, readonly string[]>> = {
+      trace: ['run_id', 'artifact_id'],
+      artifacts: ['run_id', 'artifact_id'],
+      experiments: ['run_id', 'run_ids'],
+      proposals: ['id'],
+      data: ['mode', 'manage', 'project', 'version', 'label'],
+      projects: ['project', 'tab'],
+      edge: ['project', 'version', 'run_id'],
+    }
     const raw = window.location.hash.replace(/^#\/?/, '')
     const qIdx = raw.indexOf('?')
-    const query = qIdx >= 0 ? raw.slice(qIdx) : ''
-    if (PRESERVE_QUERY.has(id) && PRESERVE_QUERY.has(view) && query) {
-      window.history.replaceState(null, '', `#/${id}${query}`)
-    } else if (id === 'projects') {
+    const prevParams = qIdx >= 0 ? new URLSearchParams(raw.slice(qIdx + 1)) : new URLSearchParams()
+    if (id === 'projects') {
       const ap = useAppStore.getState().activeProject
-      if (ap) {
-        window.history.replaceState(null, '', `#/projects?project=${encodeURIComponent(ap)}`)
-      } else {
-        window.history.replaceState(null, '', `#/projects`)
-      }
+      const params = new URLSearchParams()
+      const project = (prevParams.get('project') || ap || '').trim()
+      if (project) params.set('project', project)
+      const tab = (prevParams.get('tab') || '').trim()
+      if (tab && ALLOWED_QUERY.projects?.includes('tab')) params.set('tab', tab)
+      const qs = params.toString()
+      window.history.replaceState(null, '', qs ? `#/projects?${qs}` : '#/projects')
     } else {
-      window.history.replaceState(null, '', `#/${id}`)
+      const allowed = ALLOWED_QUERY[id]
+      const params = new URLSearchParams()
+      if (allowed) {
+        for (const key of allowed) {
+          for (const val of prevParams.getAll(key)) {
+            if (val.trim()) params.append(key, val)
+          }
+        }
+      }
+      const qs = params.toString()
+      window.history.replaceState(null, '', qs ? `#/${id}?${qs}` : `#/${id}`)
     }
     if (narrow) setNavOpen(false)
   }
@@ -478,6 +510,31 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {backendMode && (
+              <span
+                className={clsx(
+                  'hidden items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium sm:inline-flex',
+                  backendMode === 'distributed'
+                    ? 'border-accent-300 bg-accent-50 text-accent-950'
+                    : 'border-ink-200 bg-white text-ink-600',
+                )}
+                title={
+                  backendMode === 'distributed'
+                    ? 'Mode B — distributed workers; node placement is honored'
+                    : 'Mode A — single machine; node placement is ignored until Distributed'
+                }
+              >
+                {backendMode === 'distributed' ? 'Distributed' : 'Local'}
+              </span>
+            )}
+            {authHonesty?.auth_required ? (
+              <span
+                className="hidden items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium text-amber-900 sm:inline-flex"
+                title="Server requires Authorization: Bearer matching GRAPHYN_API_TOKEN"
+              >
+                Auth on
+              </span>
+            ) : null}
             {bootStatus === 401 ? (
               <span className="hidden text-[12px] font-medium text-amber-800 sm:inline">Sign in required</span>
             ) : bootError ? (
@@ -535,7 +592,7 @@ export default function App() {
               </button>
             )}
             {lastRunId && (
-              <div className="hidden items-center gap-1 sm:flex" title={`Observe loop for ${lastRunId}`}>
+              <div className="flex items-center gap-1" title={`Observe loop for ${lastRunId}`}>
                 <button
                   type="button"
                   className="rounded-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"

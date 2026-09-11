@@ -73,26 +73,33 @@ Global **Build** (Templates, Proposals), **Library** (Data), **Deploy**, **Admin
 
 ### 4.2 Project home (`ProjectsView`)
 
-Selected project shows workspace cards:
+Selected project shows workspace cards (no circular “Open Editor / Run / Experiments” that only duplicate the sidebar):
 
-- Linked / versions data (existing tabs condensed)
-- Pipelines / Open Builder
-- Recent runs (`GET /runs?project=` — Phase 2 hard filter)
-- Experiments entry
-- Empty CTAs: Link data (Data), Open Templates, Open Builder
-
-Status pills (active / archived / draft / ready) kept, less button-heavy where easy.
+- Linked data (link / unlink)
+- Pipelines — **list project-owned Graph IR** (`GET /projects/{name}/pipelines`) + open in Editor; **From template** creates/saves under `pipelines/`
+- Recent runs (`GET /runs?project=`) — open a run from the list
+- Experiments — copy only (“use Experiments sidebar”)
+- Empty versions CTA: **From template** (not Open Builder / Open Data triplication)
 
 ### 4.3 Templates
 
-Before **Open in Builder**: if no `activeProject`, prompt Create/select project → set active → stamp graph → load Builder. If active, stamp and open.
+Before **Open in Editor**: if no `activeProject`, prompt Create/select project → set active → stamp graph → **PUT project pipeline** → load Editor. If active, stamp, persist, and open.
 
 ### 4.4 Declutter chrome
 
-- **Runs detail:** primary Trace + Artifacts + Open in Builder; Projects/Data only when no active project context
-- **Header last-run strip:** when project active → Run + Lineage + Artifacts (drop duplicate Projects chip; Compare soft-pedaled when it duplicates sidebar Experiments)
-- **Artifacts detail:** keep Trace + Replay; soften Open run / Builder duplication without removing utility
+- **Cold start:** default hash view is **Projects** when `activeProject` is null (not Editor behind a gate).
+- **Mode honesty:** header chip **Local** / **Distributed** from `GET /system/readiness` (`backend_mode`).
+- **Hash `go()`:** only preserves query keys the destination understands (no `#/trace?run_id=` → `#/edge?run_id=` smear). Edge may keep `project`, `version`, `run_id`.
+- **Runs detail:** Trace + Artifacts + Open in Editor + Compare (no dead Projects/Data buttons — Run is project-gated).
+- **Header last-run strip:** Run + Lineage + Artifacts visible on mobile too (not `sm:`-only).
+- **Run status vocabulary:** UI normalizes `completed` / `succeeded` / `success` for filters and Edge poll.
+- **Edge:** require project + source `run_id` (and optional artifact pick) before optimize/package; persist `source_run_id` / `source_artifact_id` on the package run meta; train via Templates/Editor.
+- **Artifacts detail:** keep Trace + Replay; soften Open run / Editor duplication without removing utility
 
+### 4.5 Project pipelines (Wave 1)
+
+Durable graphs for a workspace: `workspace/datasets/output/{project}/pipelines/{name}.graph.json`.
+Editor **Save to project**; Overview lists and reopens them. Global templates remain a stamp source, not the system of record.
 ---
 
 ## 5. Phase 2 shipped (backend scoping)
@@ -103,7 +110,8 @@ Before **Open in Builder**: if no `activeProject`, prompt Create/select project 
 | Hard `GET /runs?project=` | Exact match on `meta.project`, with soft upgrade: if missing, infer from journal `graph.json` metadata / dataset node `config.project`. |
 | Experiments | `GET /experiments?project=` filters run rows by the same resolved project field. |
 | Project-linked datasets | `GET/POST/DELETE /projects/{name}/links` persists `{ inputs: string[], outputs?: {version}[] }` in `links.json` (mirrored on `project.json`). Project home: Link from Data picker + unlink; Browse files still opens Data with project context. |
-| Templates → project → Builder → Run | Active project required (Phase 1 gate); stamp on graph; run writes `meta.project`; project home recent runs uses `GET /runs?project=`. |
+| Templates → project → Builder → Run | Active project required (Phase 1 gate); stamp on graph; **persist under `pipelines/`**; run writes `meta.project`; project home recent runs uses `GET /runs?project=`. |
+| Project pipelines | `GET/PUT/DELETE /projects/{name}/pipelines[/{pipeline}]` — Graph IR system of record for the workspace. |
 
 Disk layout unchanged: projects live under `workspace/datasets/output/{project}/`.
 
@@ -158,6 +166,6 @@ Shipped after Phase 2 to make **global vs project** and **viewer vs editor** obv
 
 1. **Project open:** left strip **In project** (accent tint) — Overview, Editor, Run, Experiments, Explorer; below **Global** — Templates, Proposals, Data library, Deploy, Admin.
 2. **Header:** `Project · {name}` with Switch / Close; page titles use short IDE-ish labels + **Project** / **Global** scope badge.
-3. **No project:** calm prompt on Editor / Run / Experiments — “Open or create a project to start work”; Data library / Templates / Proposals remain.
+3. **No project:** land on Projects picker; calm prompt if deep-linked to Editor / Run / Experiments — “Open or create a project to start work”; Data library / Templates / Proposals remain.
 4. **Data:** segmented **Browse** (default from “Browse”) vs **Manage**; deep links `mode=inputs|outputs` → Browse, `mode=ingest|merge` → Manage.
-5. **Project home:** four cards (Linked data, Pipelines, Runs, Experiments); Rename/Clone/Delete under **Project settings** disclosure.
+5. **Project home:** four cards (Linked data, Pipelines, Runs, Experiments); Rename/Clone/Delete under **Project settings** disclosure. No sidebar-duplicating CTAs on Overview.

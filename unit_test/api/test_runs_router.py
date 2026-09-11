@@ -149,6 +149,35 @@ class TestPromoteRun:
         assert detail.json()["is_latest"] is True
         assert detail.json()["artifacts_dir"] == f"workspace/artifacts/speech-commands/runs/{run_id}"
 
+    def test_promote_staging_alias(self, api_client, tmp_path, monkeypatch):
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+        runs_dir = tmp_path / "runs"
+        run_id = "prom-stg"
+        run_dir = runs_dir / run_id
+        run_dir.mkdir(parents=True)
+        art = tmp_path / "artifacts" / "speech-commands" / "runs" / run_id
+        art.mkdir(parents=True)
+        (art / "metrics.json").write_text("{}", encoding="utf-8")
+        (run_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": "completed",
+                    "graph_name": "speech_commands_e2e_train_ml",
+                    "artifacts_dir": f"workspace/artifacts/speech-commands/runs/{run_id}",
+                }
+            )
+        )
+        with patch("app.api.routers.runs._get_runs_root", return_value=runs_dir):
+            resp = api_client.post(
+                f"/api/v1/runs/{run_id}/promote",
+                json={"alias": "staging"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["alias"] == "staging"
+        assert "staging" in body["path"]
+
     def test_promote_missing_run_404(self, api_client, tmp_path):
         runs_dir = tmp_path / "runs"
         runs_dir.mkdir()

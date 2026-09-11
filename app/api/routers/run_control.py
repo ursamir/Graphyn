@@ -15,7 +15,8 @@ Reason To Change: New run control action added, or run_id validation changes.
 
 Req 7.5, 7.6
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from app.api.actor import resolve_actor
 from app.core.run_control import get_active_run, is_active_on_another_worker
 from app.core.config import runs_dir as _runs_dir
 
@@ -106,7 +107,7 @@ def resume_run(run_id: str):
 
 
 @router.post("/{run_id}/cancel")
-def cancel_run(run_id: str):
+def cancel_run(run_id: str, request: Request):
     """Cancel an active (or paused) pipeline run after the current node completes.
 
     Declared as a sync handler so FastAPI runs it in a thread pool — avoids
@@ -122,4 +123,16 @@ def cancel_run(run_id: str):
         run.cancel()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to cancel run: {exc}") from exc
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="run.cancel",
+            resource_type="run",
+            resource_id=run_id,
+            meta={},
+        )
+    except Exception:
+        pass
     return {"run_id": run_id, "status": "cancelled"}

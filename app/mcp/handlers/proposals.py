@@ -1,8 +1,10 @@
 # app/mcp/handlers/proposals.py
 """
 Bounded Context:  Application Layer — MCP Interface
-Responsibility:   Agentic Builder MCP tools — agents propose GraphIR; humans approve in UI.
-Owns:             propose_graph, list_proposals, get_proposal handlers + schemas.
+Responsibility:   Agentic Builder MCP tools — agents propose GraphIR; humans or
+                  agents with approval can accept/reject via MCP (same core as UI).
+Owns:             propose_graph, list_proposals, get_proposal, accept_proposal,
+                  reject_proposal handlers + schemas.
 Public Surface:   Handler functions and SCHEMA/DESCRIPTION constants.
 Must NOT:         Accept or return secrets; auto-apply graphs without human approval.
 Dependencies:     app.core.agentic.proposals.
@@ -176,3 +178,116 @@ def get_proposal_handler(arguments: dict[str, Any] | None = None) -> dict[str, A
             "message": f"Proposal not found: {proposal_id}",
         }
     return data
+
+
+ACCEPT_PROPOSAL_DESCRIPTION = (
+    "Accept a pending GraphIR proposal (same as UI Accept). Marks the proposal "
+    "accepted and returns it including proposed_graph for the client to load."
+)
+
+ACCEPT_PROPOSAL_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "description": "Proposal id."},
+        "actor": {
+            "type": "string",
+            "description": "Who accepted (default: mcp).",
+        },
+        "_meta": {
+            "type": "object",
+            "properties": {"auth_token": {"type": "string"}},
+        },
+    },
+    "required": ["id"],
+    "additionalProperties": False,
+}
+
+REJECT_PROPOSAL_DESCRIPTION = (
+    "Reject a pending GraphIR proposal (same as UI Reject)."
+)
+
+REJECT_PROPOSAL_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "description": "Proposal id."},
+        "actor": {
+            "type": "string",
+            "description": "Who rejected (default: mcp).",
+        },
+        "reason": {
+            "type": "string",
+            "description": "Optional human-readable reject reason.",
+        },
+        "_meta": {
+            "type": "object",
+            "properties": {"auth_token": {"type": "string"}},
+        },
+    },
+    "required": ["id"],
+    "additionalProperties": False,
+}
+
+
+def accept_proposal_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    from app.core.agentic.proposals import accept_proposal
+
+    args = arguments or {}
+    proposal_id = args.get("id")
+    if not proposal_id or not isinstance(proposal_id, str):
+        return {
+            "error": True,
+            "error_type": "missing_argument",
+            "message": "accept_proposal requires 'id'.",
+        }
+    actor = args.get("actor") if isinstance(args.get("actor"), str) else "mcp"
+    try:
+        data = accept_proposal(proposal_id.strip(), actor=(actor or "mcp").strip() or "mcp")
+    except KeyError:
+        return {
+            "error": True,
+            "error_type": "not_found",
+            "message": f"Proposal not found: {proposal_id}",
+        }
+    except ValueError as exc:
+        return {
+            "error": True,
+            "error_type": "invalid_state",
+            "message": str(exc),
+        }
+    return {"ok": True, **data}
+
+
+def reject_proposal_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    from app.core.agentic.proposals import reject_proposal
+
+    args = arguments or {}
+    proposal_id = args.get("id")
+    if not proposal_id or not isinstance(proposal_id, str):
+        return {
+            "error": True,
+            "error_type": "missing_argument",
+            "message": "reject_proposal requires 'id'.",
+        }
+    actor = args.get("actor") if isinstance(args.get("actor"), str) else "mcp"
+    reason = args.get("reason") if isinstance(args.get("reason"), str) else None
+    try:
+        data = reject_proposal(
+            proposal_id.strip(),
+            actor=(actor or "mcp").strip() or "mcp",
+            reason=reason,
+        )
+    except KeyError:
+        return {
+            "error": True,
+            "error_type": "not_found",
+            "message": f"Proposal not found: {proposal_id}",
+        }
+    except ValueError as exc:
+        return {
+            "error": True,
+            "error_type": "invalid_state",
+            "message": str(exc),
+        }
+    return {"ok": True, **data}

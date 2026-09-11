@@ -154,22 +154,20 @@ Find nodes whose ports are compatible with a given port type.
 
 ### `POST /api/v1/pipelines/validate`
 
-Validate a pipeline YAML string without executing it.
+Validate a pipeline without executing it. Accepts IR JSON (`schema_version` present)
+or legacy `{"yaml": "..."}`.
 
-**Request body:**
+**Response (valid):** HTTP **200**
 ```json
-{"yaml": "pipeline:\n  seed: 42\n  nodes:\n    ..."}
+{"valid": true, "node_count": 3}
 ```
 
-**Response (valid):**
+**Response (invalid IR or YAML):** HTTP **422**
 ```json
-{"valid": true}
+{"valid": false, "error": "…"}
 ```
 
-**Response (invalid):**
-```json
-{"valid": false, "error": "Unknown node type 'foo'. Available types: augment, clean, ..."}
-```
+YAML success responses also include `X-Deprecation-Warning`.
 
 ---
 
@@ -177,10 +175,12 @@ Validate a pipeline YAML string without executing it.
 
 Execute a pipeline and stream NDJSON log events as they occur.
 
-**Request body:**
-```json
-{"yaml": "pipeline:\n  seed: 42\n  nodes:\n    ..."}
-```
+Creates a `RunManager` before the stream starts. Response headers include
+**`X-Run-Id`**. The first NDJSON line is `{"type":"run_started","run_id":"…"}`.
+Subsequent structured events (including `pipeline_start` / `done`) carry the same
+`run_id` so Observe deep-links work during streaming.
+
+**Request body:** Graph IR JSON (preferred) or `{"yaml": "…"}`.
 
 **Response:** `Content-Type: application/x-ndjson` — one JSON object per line.
 
@@ -195,16 +195,17 @@ Each line is a JSON object. Two types of objects are interleaved:
 
 **Structured events:**
 ```json
-{"type": "pipeline_start", "total_nodes": 5, "timestamp": "2024-01-01T00:00:00+00:00"}
-{"type": "node_start", "node_type": "dataset_ingest", "node_index": 0, "total_nodes": 5, "timestamp": "..."}
-{"type": "node_end", "node_type": "dataset_ingest", "node_index": 0, "duration_s": 0.123, "output_count": 42, "timestamp": "..."}
-{"type": "node_error", "node_type": "audio_conditioner", "node_index": 1, "error_message": "...", "error_type": "ValueError", "timestamp": "..."}
-{"type": "pipeline_summary", "timestamp": "..."}
-{"type": "done", "timestamp": "2024-01-01T00:00:01+00:00"}
-{"type": "error", "timestamp": "...", "error_type": "ValueError", "message": "..."}
+{"type": "run_started", "run_id": "…"}
+{"type": "pipeline_start", "total_nodes": 5, "run_id": "…", "timestamp": "2024-01-01T00:00:00+00:00"}
+{"type": "node_start", "node_type": "dataset_ingest", "node_index": 0, "total_nodes": 5, "run_id": "…", "timestamp": "..."}
+{"type": "node_end", "node_type": "dataset_ingest", "node_index": 0, "duration_s": 0.123, "output_count": 42, "run_id": "…", "timestamp": "..."}
+{"type": "node_error", "node_type": "audio_conditioner", "node_index": 1, "error_message": "...", "error_type": "ValueError", "run_id": "…", "timestamp": "..."}
+{"type": "pipeline_summary", "run_id": "…", "timestamp": "..."}
+{"type": "done", "run_id": "…", "duration_s": 1.23, "timestamp": "2024-01-01T00:00:01+00:00"}
+{"type": "error", "run_id": "…", "timestamp": "...", "error_type": "ValueError", "message": "..."}
 ```
 
-The stream always ends with either `{"type": "done"}` (success) or `{"type": "error"}` (failure), followed by the sentinel that closes the stream.
+The stream starts with `run_started` (and `X-Run-Id`). It ends with either `{"type": "done", "run_id": "…"}` (success) or `{"type": "error", "run_id": "…"}` (failure), then closes.
 
 All timestamps are UTC-aware ISO 8601 strings ending in `+00:00`.
 
@@ -513,6 +514,23 @@ Zip of the listed files as an attachment.
 
 ---
 
+### `POST /api/v1/runs/{run_id}/promote`
+
+Point `workspace/artifacts/<slug>/<alias>` at this run’s artifact tree.
+
+**Body (optional):**
+```json
+{ "alias": "latest" }
+```
+
+`alias` defaults to `latest`. Allowed form: lowercase letter, then letters/digits/hyphens (`staging`, `prod`, …). Audits as `run.promote` (actor from `X-Actor` or `api`).
+
+**Response:** `{ "slug", "run_id", "alias", "path", "latest" }` (`latest` mirrors `path` for backward compatibility).
+
+**Errors:** `404` missing run, `409` no slug/artifacts, `422` invalid alias.
+
+---
+
 ### `GET /api/v1/outputs/file`
 
 Download one file as an attachment. Query: `path`.
@@ -700,7 +718,28 @@ Readiness check with basic filesystem dependency validation.
 {
   "status": "ready",
   "timestamp": "2024-01-01T00:00:00+00:00",
+  "backend": "local_python",
+  "backend_mode": "local",
+  "worker_count": 0,
   "checks": {"runs_dir_exists": true, "cache_dir_exists": true}
+}
+```
+
+`backend_mode` is `local` (Mode A) or `distributed` (Mode B). The console header chip uses this field.
+
+---
+
+### `GET /api/v1/system/auth-status`
+
+Auth honesty for the console (no secrets). Reports whether Bearer auth is required and whether `GRAPHYN_API_TOKEN` is configured.
+
+**Response:**
+```json
+{
+  "auth_required": false,
+  "token_configured": true,
+  "env": "development",
+  "ok": true
 }
 ```
 
@@ -793,6 +832,28 @@ Fire a test event to the configured webhook URL.
 
 Returns `{"ok": false, "reason": "No webhook URL configured"}` if no URL is set.
 
+Terminal run statuses fire `pipeline_complete` / `pipeline_failed` via `app.core.run_notify` when configured.
+
+---
+
+### `GET /api/v1/system/schedules`
+
+List interval schedules that run project pipelines while the API process is up.
+
+**Response:** `{ "schedules": [ { "id", "name", "project", "pipeline", "interval_minutes", "enabled", "next_run_at", "last_run_id", … } ] }`
+
+### `POST /api/v1/system/schedules`
+
+Create a schedule. Body: `{ "name", "project", "pipeline", "interval_minutes", "enabled" }`.
+
+### `POST /api/v1/system/schedules/tick`
+
+Fire due schedules now (also runs on a 60s background ticker).
+
+### `POST /api/v1/system/schedules/{id}/run` · `…/enable` · `DELETE …/{id}`
+
+Run immediately, toggle enabled, or delete. Mutations audit with actor from `X-Actor` when present.
+
 ---
 
 ## Ingest — `/api/v1/ingest`
@@ -869,6 +930,26 @@ Stream progress events for a HuggingFace ingestion job (same SSE format as URL s
 ## Projects — `/api/v1/projects`
 
 Full project lifecycle management. See `app/api/routers/projects.py` for the complete endpoint list. Key operations include create, get, update, delete, clone, list versions, manage taxonomy, contract, spec, annotations, quality reports, and snapshots.
+
+### Project pipelines (Wave 1)
+
+Graph IR assets owned by a project live at
+`workspace/datasets/output/{project}/pipelines/{name}.graph.json`.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/v1/projects/{name}/pipelines` | List `{name, updated_at, node_count, graph_name}` |
+| GET | `/api/v1/projects/{name}/pipelines/{pipeline}` | Full Graph IR |
+| PUT | `/api/v1/projects/{name}/pipelines/{pipeline}` | Validate IR, reject inline secrets, stamp `metadata.project`, write atomically |
+| DELETE | `/api/v1/projects/{name}/pipelines/{pipeline}` | Delete pipeline file |
+
+**Errors:** `404` if project/pipeline missing; `422` for invalid name, IR, or inline secrets.
+
+### Validate secret policy
+
+`POST /api/v1/pipelines/validate` (IR) and MCP `validate_graph` fail closed when node
+`config` contains non-empty secret-shaped keys (`api_key`, `token`, `password`,
+`hmac_secret`, `*_secret`, …). Use the Secrets store or `*_env` fields instead.
 
 ---
 

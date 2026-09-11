@@ -503,3 +503,52 @@ def export_quality_report(
         media_type="application/json",
         headers={"Content-Disposition": "attachment; filename=quality_report.json"},
     )
+
+
+# ------------------------------------------------------------------ #
+# Project-owned pipelines (Graph IR assets)                            #
+# ------------------------------------------------------------------ #
+
+@router.get("/{name}/pipelines", summary="List project pipelines")
+def list_project_pipelines(name: str):
+    """GET /projects/{name}/pipelines — Graph IR files under pipelines/."""
+    from app.core.project_pipelines import list_pipelines
+
+    project_dir = _handle(_pm._require_project, name)
+    return list_pipelines(project_dir)
+
+
+@router.get("/{name}/pipelines/{pipeline}", summary="Get a project pipeline")
+def get_project_pipeline(name: str, pipeline: str):
+    """GET /projects/{name}/pipelines/{pipeline} — full Graph IR."""
+    from app.core.project_pipelines import get_pipeline
+
+    project_dir = _handle(_pm._require_project, name)
+    return _handle(get_pipeline, project_dir, pipeline)
+
+
+@router.put("/{name}/pipelines/{pipeline}", summary="Save a project pipeline")
+def put_project_pipeline(name: str, pipeline: str, payload: dict = Body(...)):
+    """PUT /projects/{name}/pipelines/{pipeline} — validate, stamp, write IR."""
+    from app.core.ir.secret_policy import InlineSecretError
+    from app.core.project_pipelines import put_pipeline
+
+    project_dir = _handle(_pm._require_project, name)
+    try:
+        return put_pipeline(project_dir, pipeline, payload, project_name=name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except InlineSecretError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.delete("/{name}/pipelines/{pipeline}", summary="Delete a project pipeline")
+def delete_project_pipeline(name: str, pipeline: str):
+    """DELETE /projects/{name}/pipelines/{pipeline}."""
+    from app.core.project_pipelines import delete_pipeline
+
+    project_dir = _handle(_pm._require_project, name)
+    _handle(delete_pipeline, project_dir, pipeline)
+    return {"deleted": True, "name": pipeline}

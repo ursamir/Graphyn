@@ -105,6 +105,9 @@ A user (or agent) can:
 | 2026-09-07 | **Agentic Builder proposals (Pillar C)** | `proposals/` store + `POST/GET /api/v1/proposals` (+ accept/reject); MCP `propose_graph` / `list_proposals` / `get_proposal`; Build → **Proposals** UI (`#/proposals`) with Accept → Builder via `loadGraphIntoBuilder`; audit on create/accept/reject. |
 | 2026-09-07 | **Console IA (vision-aligned nav)** | Restructured sidebar: **Build** (Builder, Templates, Proposals) · **Observe** (Runs, Trace, Experiments, Artifacts) · **Library** (Plugins, Data, Projects) · **Deploy** (Edge, Workers) · **Admin** (Secrets, System). Deep-link query preservation for Trace/Edge/Experiments/Proposals/Data/Projects. |
 | 2026-09-10 | **Data vs Projects loop** | Data = filesystem (inputs/outputs); Projects = dataset workspace UI over the same `workspace/datasets/output/{project}` (spec, taxonomy, contract, versions, snapshots, lineage). Shared key: project name (+ version). Loop: Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge. |
+| 2026-09-11 | **North-star Waves 1–6 (lite)** | Project-owned pipelines + secret fail-closed; Mode chip; MCP accept/reject + observe parity (29 tools); promote aliases (`latest`/`staging`/`prod`) + Edge promote; run webhooks fire on terminal; schedules CRUD + ticker; auth-status honesty + actor via `X-Actor` on mutations. |
+
+Still open from §3: full SSO/RBAC, device flash/OTA, full MLflow registry, OTel; deepen agentic auto-apply guardrails.
 
 ### Console map
 
@@ -123,6 +126,4 @@ A user (or agent) can:
 - **Projects** = dataset workspace UI over the **same** `workspace/datasets/output/{project}` (spec, taxonomy, contract, versions, snapshots, lineage) — not a second file browser.
 - Shared key: **project name** (+ version).
 - Product loop: **Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge**.
-
-Still open from §3: full RBAC, promotion, OTel; deepen agentic diffs / promotion approvals.
 

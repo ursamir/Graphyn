@@ -210,6 +210,7 @@ async def run_pipeline_ir_async(
         total_nodes=len(active_nodes),
         partial=is_partial,
         included_nodes=sorted(active_nodes) if is_partial else None,
+        run_id=run_id,
     )
 
     # ── Setup executors ────────────────────────────────────────────────────────
@@ -708,6 +709,10 @@ async def run_pipeline_ir_async(
                 **({"graph_name": graph_name} if graph_name else {}),
                 **_finalize_run_artifacts(run, graph),
             })
+            try:
+                logger.pipeline_done(run.run_id, time.time() - start_time)
+            except Exception:
+                log.debug("pipeline_done emit failed (event-driven)", exc_info=True)
             last_id = graph_obj.execution_order[-1]
             return node_outputs.get(last_id, {})
 
@@ -722,6 +727,10 @@ async def run_pipeline_ir_async(
 
     total_duration = time.time() - start_time
     logger.summary()
+    try:
+        logger.pipeline_done(run.run_id, total_duration)
+    except Exception:
+        log.debug("pipeline_done emit failed", exc_info=True)
     run.save_logs(logger.logs)
     run.save_metadata({
         "num_nodes": len(active_nodes),

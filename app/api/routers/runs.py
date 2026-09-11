@@ -26,7 +26,7 @@ import json
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response
 from app.core.config import runs_dir as _runs_dir
 
@@ -437,14 +437,18 @@ def download_run_outputs_zip(run_id: str):
     )
 
 
-@router.post("/{run_id}/promote", summary="Promote a run as the latest artifact alias")
-def promote_run(run_id: str):
-    """Point workspace/artifacts/<slug>/latest at this run's artifact folder."""
+@router.post("/{run_id}/promote", summary="Promote a run to an artifact alias")
+def promote_run(run_id: str, request: Request, body: dict | None = Body(None)):
+    """Point workspace/artifacts/<slug>/<alias> at this run (default alias=latest)."""
+    from app.api.actor import resolve_actor
     from app.core.workspace_paths import (
         artifact_fs_path,
         artifact_layout,
-        publish_latest,
+        publish_alias,
     )
+
+    payload = body if isinstance(body, dict) else {}
+    alias = str(payload.get("alias") or "latest").strip().lower() or "latest"
 
     run_path = _run_dir(run_id)
     meta = _enrich_run_summary(_load_meta(run_path), run_path)
@@ -467,8 +471,23 @@ def promote_run(run_id: str):
             has_files = False
     if not has_files:
         raise HTTPException(status_code=409, detail="Run has no artifacts to promote")
-    latest = publish_latest(slug, run_id)
-    return {"slug": slug, "run_id": run_id, "latest": latest}
+    try:
+        pointer = publish_alias(slug, run_id, alias)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="run.promote",
+            resource_type="run",
+            resource_id=run_id,
+            meta={"slug": slug, "alias": alias, "path": pointer},
+        )
+    except Exception:
+        pass
+    return {"slug": slug, "run_id": run_id, "alias": alias, "path": pointer, "latest": pointer}
 
 
 # ── Artifacts ─────────────────────────────────────────────────────────────────
