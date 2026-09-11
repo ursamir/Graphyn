@@ -35,8 +35,7 @@
         "output_path": "workspace/artifacts/edge-deploy/optimized",
         "representative_samples": 100,
         "prune": false,
-        "operator_fusion": true,
-        "model_path": "workspace/artifacts/models/saved_model"
+        "operator_fusion": true
       },
       "label": "Edge Optimizer",
       "capability_metadata": null,
