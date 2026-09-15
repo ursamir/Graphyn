@@ -1,5 +1,5 @@
 import React from 'react'
-import { RefreshCw, Copy, Pencil, Workflow, History, ChevronRight } from 'lucide-react'
+import { RefreshCw, Copy, Pencil, Workflow, History, ChevronRight, CalendarClock, Play } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
@@ -104,6 +104,19 @@ export default function ProjectsView() {
       }
     }>
   >([])
+  const [schedules, setSchedules] = React.useState<
+    Array<{
+      id?: string
+      name?: string
+      project?: string
+      pipeline?: string
+      interval_minutes?: number
+      enabled?: boolean
+      next_run_at?: string
+      last_run_id?: string
+      last_error?: string
+    }>
+  >([])
   const [links, setLinks] = React.useState<{ inputs: string[]; outputs: Array<{ version: string }> }>({ inputs: [], outputs: [] })
   const [inputLabels, setInputLabels] = React.useState<string[]>([])
   const [linkPick, setLinkPick] = React.useState('')
@@ -159,7 +172,7 @@ export default function ProjectsView() {
       setSnapshots(Array.isArray(snaps) ? snaps : [])
       setLineage(lin)
       try {
-        const [runs, linkData, inputs, pipes] = await Promise.all([
+        const [runs, linkData, inputs, pipes, sched] = await Promise.all([
           apiJson<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>('/runs', {
             query: { limit: 8, offset: 0, project: name },
           }),
@@ -181,9 +194,26 @@ export default function ProjectsView() {
               }
             }>
           >(`/projects/${encodeURIComponent(name)}/pipelines`).catch(() => []),
+          apiJson<{ schedules?: unknown[] }>('/system/schedules').catch(() => ({ schedules: [] })),
         ])
         setRecentRuns(Array.isArray(runs) ? runs.slice(0, 8) : [])
         setProjectPipelines(Array.isArray(pipes) ? pipes : [])
+        {
+          const schedList = Array.isArray(sched?.schedules) ? sched.schedules : []
+          const typed = schedList.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
+            id?: string
+            name?: string
+            project?: string
+            pipeline?: string
+            interval_minutes?: number
+            enabled?: boolean
+            next_run_at?: string
+            last_run_id?: string
+            last_error?: string
+          }>
+          const forProject = typed.filter((s) => String(s.project || '') === name)
+          setSchedules(forProject.length ? forProject : typed)
+        }
         setLinks({
           inputs: Array.isArray(linkData?.inputs) ? linkData.inputs : [],
           outputs: Array.isArray(linkData?.outputs) ? linkData.outputs : [],
@@ -196,6 +226,7 @@ export default function ProjectsView() {
       } catch {
         setRecentRuns([])
         setProjectPipelines([])
+        setSchedules([])
         setLinks({ inputs: [], outputs: [] })
       }
       const first =
@@ -305,6 +336,19 @@ export default function ProjectsView() {
         'success',
       )
       await open(selected)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const runSchedule = async (id: string) => {
+    try {
+      const res = await apiJson<{ last_run_id?: string }>(`/system/schedules/${encodeURIComponent(id)}/run`, {
+        method: 'POST',
+      })
+      pushToast(res?.last_run_id ? `Started ${res.last_run_id.slice(0, 10)}…` : 'Schedule fired', 'success')
+      if (selected) await open(selected)
+      if (res?.last_run_id) useAppStore.getState().openRun(res.last_run_id)
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -736,6 +780,10 @@ export default function ProjectsView() {
         <div className="mx-auto max-w-3xl space-y-6">
           {error && <ErrorBanner message={error} onRetry={() => void open(selected)} />}
 
+          <p className="text-[12px] text-ink-500">
+            <span className="font-medium text-ink-700">Pipelines:</span> Templates are starters · Project pipelines are the canonical saved graphs · Editor edits the active graph.
+          </p>
+
           {/* Layer 1 — continue work */}
           <section>
             <div className="ide-section-title mb-2">Continue</div>
@@ -817,7 +865,22 @@ export default function ProjectsView() {
                       </li>
                     )
                   })}
-                  {recentRuns.slice(0, 3).map((r) => (
+                </ul>
+              )}
+            </div>
+          </section>
+
+          {/* Activity feed */}
+          <section>
+            <div className="ide-section-title mb-2">Activity</div>
+            <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
+              {recentRuns.length === 0 && !schedules.some((s) => s.last_run_id) ? (
+                <div className="px-4 py-5 text-[13px] text-ink-600">
+                  No activity yet — run a pipeline from the Editor.
+                </div>
+              ) : (
+                <ul className="divide-y divide-ink-100">
+                  {recentRuns.slice(0, 8).map((r) => (
                     <li key={r.run_id}>
                       <button
                         type="button"
@@ -833,6 +896,82 @@ export default function ProjectsView() {
                       </button>
                     </li>
                   ))}
+                  {schedules
+                    .filter((s) => s.last_run_id)
+                    .slice(0, 3)
+                    .map((s) => (
+                      <li key={`sched-fire-${s.id}-${s.last_run_id}`}>
+                        <button
+                          type="button"
+                          className="ide-row w-full px-3"
+                          onClick={() => s.last_run_id && useAppStore.getState().openRun(String(s.last_run_id))}
+                        >
+                          <CalendarClock className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-700">
+                            Schedule {s.name || s.id} · last {String(s.last_run_id).slice(0, 8)}…
+                          </span>
+                          <span className="text-[11px] text-ink-400">{s.pipeline || ''}</span>
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          </section>
+
+          {/* Schedules (project-scoped when possible) */}
+          <section className="ide-section">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="ide-section-title">Schedules</div>
+              <button
+                type="button"
+                className="ide-quiet-btn text-[11px]"
+                onClick={() => {
+                  setView('system')
+                  window.history.replaceState(null, '', '#/system')
+                }}
+              >
+                Manage in System
+              </button>
+            </div>
+            <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
+              {schedules.length === 0 ? (
+                <div className="px-4 py-4 text-[13px] text-ink-500">
+                  No schedules for this workspace. Create them under System, or run on demand from the Editor.
+                </div>
+              ) : (
+                <ul className="divide-y divide-ink-100">
+                  {schedules.slice(0, 6).map((s) => {
+                    const scoped = String(s.project || '') === selected
+                    return (
+                      <li key={s.id || s.name} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                        <CalendarClock className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px] font-medium text-ink-900">
+                            {s.name || s.id}
+                            {!scoped ? (
+                              <span className="ml-1.5 font-normal text-ink-400">(global)</span>
+                            ) : null}
+                          </div>
+                          <div className="truncate text-[11px] text-ink-500">
+                            {s.project}/{s.pipeline}
+                            {s.interval_minutes != null ? ` · every ${s.interval_minutes}m` : ''}
+                            {s.enabled === false ? ' · disabled' : ''}
+                            {s.last_error ? ` · err: ${s.last_error}` : ''}
+                          </div>
+                        </div>
+                        {s.id ? (
+                          <button
+                            type="button"
+                            className="btn-secondary !px-2 !py-0.5 text-[11px]"
+                            onClick={() => void runSchedule(String(s.id))}
+                          >
+                            <Play className="h-3 w-3" /> Run now
+                          </button>
+                        ) : null}
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </div>
@@ -905,8 +1044,8 @@ export default function ProjectsView() {
           >
             <summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-medium text-ink-700 hover:text-ink-950">
               <ChevronRight className="h-4 w-4 text-ink-400 transition group-open:rotate-90" />
-              Versions & taxonomy
-              <span className="font-normal text-ink-400">output versions, spec, snapshots…</span>
+              Spec & metadata
+              <span className="font-normal text-ink-400">spec, taxonomy, contract, versions…</span>
             </summary>
             <div className="mt-3 space-y-3 pl-1">
               <div className="flex flex-wrap gap-1 border-b border-ink-100 pb-2">

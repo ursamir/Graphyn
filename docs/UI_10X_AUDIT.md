@@ -30,22 +30,22 @@ Deep UX audit of the Graphyn console (`graphyn-ui`) against project-first IA. Fi
   - Builder canvas empty → Open Templates (+ secondary Open Data)
   - Edge → primary Open Templates (+ secondary Projects)
 
-## Wave 2 — project activity & ops surfaces
+## Wave 2 — project activity & ops surfaces — **SHIPPED**
 
-- Project **Activity** feed on Overview (runs, promotes, schedule fires).
-- Promote + model-registry panel on Run detail (not buried).
-- Schedules section on Overview (link/manage project-scoped schedules; System stays admin-global).
+- Project **Activity** feed on Overview (recent runs + schedule last fires; rows open Run).
+- **Promote & models** panel on Run detail (above tabs); reuses `/runs/{id}/promote` + lists `GET /models` for this run_id.
+- Schedules card on Overview (`GET /system/schedules`, project filter when possible, Run-now → `POST /system/schedules/{id}/run`; Manage in System).
 
-## Wave 3 — command palette & honesty
+## Wave 3 — command palette & honesty — **SHIPPED**
 
-- Cmd-K jump (views, projects, recent runs).
-- Pipeline env UI in Editor (env vars / secrets binding without leaving canvas).
-- Honest **Mode A** placement (clear where agent/MCP propose flows live vs console create).
+- `CommandPalette` owns Cmd/Ctrl+K and `/` (views, projects, recent/last run); KeyboardHelp updated.
+- Pipeline env chips in Editor (draft / staging / prod) via project pipeline APIs; hint when none saved.
+- Mode A placement: read-only / “ignored until Mode B” with link to Workers when `backendMode !== distributed`.
 
-## Wave 4 — declutter & single source of truth
+## Wave 4 — declutter & single source of truth — **SHIPPED**
 
-- Apple-style declutter of Spec tabs on Overview.
-- Single pipeline source of truth (graph IR vs templates vs project pipelines — one canonical story in UI copy and nav).
+- Overview **Spec & metadata** Advanced disclosure (closed by default) for Spec / Taxonomy / Contract / Versions / Snapshots / Diff.
+- Unified SoT copy: Templates = starters; Project pipelines = canonical saved graphs; Editor = active graph — primers on Overview + Templates.
 
 ## Notes
 

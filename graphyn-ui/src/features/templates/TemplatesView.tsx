@@ -344,7 +344,7 @@ export default function TemplatesView() {
     <div className="h-full overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="New from template"
-        description="Creates or opens a workspace, then loads the graph in the Editor."
+        description="Templates are starters. Project pipelines are the canonical saved graphs; the Editor edits the active graph. Opening a template creates or opens a workspace first."
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button type="button" className="btn-quiet" onClick={() => void load()} title="Refresh templates">

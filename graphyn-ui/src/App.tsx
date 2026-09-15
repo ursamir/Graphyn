@@ -29,6 +29,7 @@ import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
 import { shortRunId } from './lib/format'
 import { KeyboardHelp } from './components/KeyboardHelp'
+import { CommandPalette } from './components/CommandPalette'
 import BuilderView from './features/builder/BuilderView'
 import RunsView from './features/runs/RunsView'
 import ArtifactsView from './features/artifacts/ArtifactsView'
@@ -290,6 +291,7 @@ export default function App() {
   const settingsOpen = useAppStore((s) => s.settingsOpen)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const [helpOpen, setHelpOpen] = React.useState(false)
+  const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [tokenDraft, setTokenDraft] = React.useState('')
   const [tokenVisible, setTokenVisible] = React.useState(false)
   const [authHonesty, setAuthHonesty] = React.useState<{
@@ -574,13 +576,15 @@ export default function App() {
         }
         return
       }
+      if (paletteOpen) {
+        return
+      }
+      // Cmd-K / "/" owned by CommandPalette (mounted below)
       const metaK = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k'
       const slash = e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey
       if (metaK || (slash && !typing)) {
-        if (view === 'builder') {
-          e.preventDefault()
-          document.getElementById('builder-catalog-search')?.focus()
-        }
+        e.preventDefault()
+        setPaletteOpen(true)
         return
       }
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return
@@ -611,7 +615,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [view, settingsOpen, helpOpen, narrow])
+  }, [view, settingsOpen, helpOpen, paletteOpen, narrow])
 
   const chipLabel = isRunning
     ? statusMessage && statusMessage !== 'Running…'
@@ -986,6 +990,7 @@ export default function App() {
           </main>
         </div>
 
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenChange={setPaletteOpen} />
         <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         <ToastHost toasts={toasts} onDismiss={dismissToast} onDismissAll={dismissAllToasts} />
 

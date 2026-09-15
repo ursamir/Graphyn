@@ -224,10 +224,58 @@ function BuilderInner() {
   const [runCancelled, setRunCancelled] = React.useState(false)
   const [inspectorId, setInspectorId] = React.useState<string | null>(null)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
+  const [projectPipelineList, setProjectPipelineList] = React.useState<
+    Array<{
+      name: string
+      environments?: {
+        draft?: string | null
+        staging?: string | null
+        prod?: string | null
+        pending_prod?: { version?: string } | null
+      }
+    }>
+  >([])
+  const [pipelinePick, setPipelinePick] = React.useState('')
+  const [pipelineEnv, setPipelineEnv] = React.useState<'draft' | 'staging' | 'prod'>('draft')
 
   React.useEffect(() => {
     setAdvancedOpen(false)
   }, [inspectorId])
+
+  // Fetch project pipelines for env chips
+
+  React.useEffect(() => {
+    if (!activeProject) {
+      setProjectPipelineList([])
+      setPipelinePick('')
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const pipes = await apiJson<
+          Array<{
+            name: string
+            environments?: {
+              draft?: string | null
+              staging?: string | null
+              prod?: string | null
+              pending_prod?: { version?: string } | null
+            }
+          }>
+        >(`/projects/${encodeURIComponent(activeProject)}/pipelines`)
+        if (cancelled) return
+        const list = Array.isArray(pipes) ? pipes : []
+        setProjectPipelineList(list)
+        setPipelinePick((prev) => prev || list[0]?.name || templateName || graphName || '')
+      } catch {
+        if (!cancelled) setProjectPipelineList([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeProject])
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null)
   const [actionError, setActionError] = React.useState<{ title: string; message: string; detail?: string } | null>(null)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
@@ -858,6 +906,52 @@ function BuilderInner() {
     }
   }
 
+
+  const openPipelineEnv = async (pipelineName: string, env?: 'draft' | 'staging' | 'prod') => {
+    const project = (activeProject || '').trim()
+    if (!project || !pipelineName) return
+    try {
+      const query = env && env !== 'draft' ? { env } : undefined
+      const graph = await apiJson<GraphIR>(
+        `/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(pipelineName)}`,
+        query ? { query } : undefined,
+      )
+      loadGraph(graph)
+      setTemplateName(pipelineName)
+      setPipelinePick(pipelineName)
+      if (env) setPipelineEnv(env)
+      pushToast(`Opened ${pipelineName}${env && env !== 'draft' ? ` (${env})` : ''} in Editor`, 'success')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const promoteProjectPipeline = async (
+    pipelineName: string,
+    opts: { to_env: 'staging' | 'prod'; from_env?: string; version?: string; approve?: boolean },
+  ) => {
+    const project = (activeProject || '').trim()
+    if (!project || !pipelineName) return
+    try {
+      const res = await apiJson<{ status?: string; version?: string }>(
+        `/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(pipelineName)}/promote`,
+        { method: 'POST', body: JSON.stringify(opts) },
+      )
+      pushToast(
+        res.status === 'pending_approval'
+          ? `Prod promotion pending approval (${res.version || opts.version || ''})`
+          : `Promoted to ${opts.to_env}`,
+        'success',
+      )
+      const pipes = await apiJson<typeof projectPipelineList>(
+        `/projects/${encodeURIComponent(project)}/pipelines`,
+      ).catch(() => projectPipelineList)
+      setProjectPipelineList(Array.isArray(pipes) ? pipes : projectPipelineList)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
   const categories = React.useMemo(() => {
     const set = new Set<string>()
     for (const n of catalog) {
@@ -1146,6 +1240,102 @@ function BuilderInner() {
           >
             Editor · {activeProject}
           </button>
+          {activeProject ? (
+            <div className="flex flex-wrap items-center gap-1.5 rounded-full border border-ink-200/80 bg-ink-50/70 px-2 py-0.5">
+              {projectPipelineList.length === 0 ? (
+                <span className="text-[10px] text-ink-500" title="Save the graph to create a project pipeline">
+                  No saved pipeline — Save to create
+                </span>
+              ) : (
+                <>
+                  <select
+                    className="max-w-[9rem] rounded border-0 bg-transparent py-0.5 text-[11px] font-medium text-ink-800 outline-none"
+                    value={pipelinePick}
+                    onChange={(e) => setPipelinePick(e.target.value)}
+                    aria-label="Project pipeline"
+                    title="Canonical project pipeline"
+                  >
+                    {projectPipelineList.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  {(['draft', 'staging', 'prod'] as const).map((env) => {
+                    const pipe = projectPipelineList.find((p) => p.name === pipelinePick)
+                    const has =
+                      env === 'draft'
+                        ? true
+                        : Boolean(pipe?.environments?.[env])
+                    return (
+                      <button
+                        key={env}
+                        type="button"
+                        disabled={!has && env !== 'draft'}
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          pipelineEnv === env
+                            ? 'bg-accent-600 text-white'
+                            : has
+                              ? 'bg-white text-ink-700 hover:bg-ink-100'
+                              : 'cursor-not-allowed text-ink-300'
+                        }`}
+                        title={
+                          env === 'draft'
+                            ? 'Open draft / working copy'
+                            : has
+                              ? `Open ${env} pointer`
+                              : `No ${env} pointer yet — publish/promote from Overview`
+                        }
+                        onClick={() => void openPipelineEnv(pipelinePick || pipe?.name || '', env)}
+                      >
+                        {env}
+                      </button>
+                    )
+                  })}
+                  {(() => {
+                    const pipe = projectPipelineList.find((p) => p.name === pipelinePick)
+                    const staging = pipe?.environments?.staging
+                    const pending = pipe?.environments?.pending_prod?.version
+                    if (!staging && !pending) return null
+                    return (
+                      <span className="ml-0.5 flex gap-1">
+                        {staging ? (
+                          <button
+                            type="button"
+                            className="text-[10px] font-medium text-accent-800 hover:underline"
+                            onClick={() =>
+                              void promoteProjectPipeline(pipelinePick, {
+                                to_env: 'prod',
+                                from_env: 'staging',
+                                approve: false,
+                              })
+                            }
+                          >
+                            Request prod
+                          </button>
+                        ) : null}
+                        {pending ? (
+                          <button
+                            type="button"
+                            className="text-[10px] font-semibold text-emerald-800 hover:underline"
+                            onClick={() =>
+                              void promoteProjectPipeline(pipelinePick, {
+                                to_env: 'prod',
+                                version: pending,
+                                approve: true,
+                              })
+                            }
+                          >
+                            Approve prod
+                          </button>
+                        ) : null}
+                      </span>
+                    )
+                  })()}
+                </>
+              )}
+            </div>
+          ) : null}
           {pendingProposalCount > 0 && (
             <button
               type="button"
@@ -1646,7 +1836,27 @@ function BuilderInner() {
                             )
                           })()}
                         </div>
-                        ) : null}
+                        ) : (
+                        <div className="mb-3 rounded-lg border border-dashed border-ink-200 bg-ink-50/40 p-2.5 space-y-1.5">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                            Placement (ignored in Mode A)
+                          </div>
+                          <p className="text-[10px] leading-snug text-ink-500">
+                            Local Mode A runs everything in-process. Placement tags are stored on the graph but ignored until Distributed Mode B.
+                          </p>
+                          <button
+                            type="button"
+                            className="text-[11px] font-medium text-accent-800 hover:underline"
+                            onClick={() => {
+                              useAppStore.getState().setView('workers')
+                              window.history.replaceState(null, '', '#/workers')
+                            }}
+                          >
+                            Open Workers
+                          </button>
+                        </div>
+                        )}
+
                         {(() => {
                           const entries = Object.entries(node.data.schemaProps ?? {}) as [string, Record<string, unknown>][]
                           if (entries.length === 0) return <div className="text-sm text-ink-400">No config fields</div>

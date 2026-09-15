@@ -24,7 +24,7 @@ const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: strin
   {
     title: 'Editor',
     rows: [
-      { keys: '/ or ⌘/Ctrl+K', action: 'Focus node catalog search' },
+      { keys: '/ or ⌘/Ctrl+K', action: 'Open command palette (views / projects / runs)' },
       { keys: 'Drag from handle', action: 'Connect nodes (ports show type on hover)' },
       { keys: 'Delete / Backspace', action: 'Remove selected node or edge' },
       { keys: 'Click canvas', action: 'Clear selection / show graph settings' },
@@ -34,6 +34,7 @@ const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: strin
   {
     title: 'General',
     rows: [
+      { keys: '⌘/Ctrl+K or /', action: 'Command palette' },
       { keys: '?', action: 'Show this keyboard help' },
       { keys: 'Esc', action: 'Close this overlay / Settings' },
     ],
