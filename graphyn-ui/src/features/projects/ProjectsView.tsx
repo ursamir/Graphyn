@@ -783,6 +783,7 @@ export default function ProjectsView() {
           {/* Activity feed */}
           <section>
             <div className="ide-section-title mb-2">Activity</div>
+            <p className="mb-2 text-[12px] text-ink-500">Recent runs — click a row to open it.</p>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
               {recentRuns.length === 0 && !schedules.some((s) => s.last_run_id) ? (
                 <div className="px-4 py-5 text-[13px] text-ink-600">
@@ -832,6 +833,7 @@ export default function ProjectsView() {
           {/* Layer 1 — continue work */}
           <section>
             <div className="ide-section-title mb-2">Continue</div>
+            <p className="mb-2 text-[12px] text-ink-500">Open a pipeline in the Editor to keep working.</p>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
               {projectPipelines.length === 0 && recentRuns.length === 0 ? (
                 <div className="px-4 py-5 text-[13px] text-ink-600">
@@ -1031,7 +1033,14 @@ export default function ProjectsView() {
               <ul className="mt-2 flex flex-wrap gap-1.5">
                 {links.inputs.map((label) => (
                   <li key={label} className="inline-flex items-center gap-1 rounded-md bg-ink-50 px-2 py-0.5 text-[11px] text-ink-700">
-                    {label}
+                    <button
+                      type="button"
+                      className="hover:text-accent-800 hover:underline"
+                      title="Open in Data library"
+                      onClick={() => openData({ mode: 'inputs', label })}
+                    >
+                      {label}
+                    </button>
                     <button type="button" className="text-ink-400 hover:text-rose-600" onClick={() => void unlinkInput(label)} aria-label={`Unlink ${label}`}>
                       ×
                     </button>

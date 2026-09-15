@@ -14,15 +14,15 @@ type PaletteItem = {
 }
 
 const VIEW_JUMPS: Array<{ id: AppView; label: string; keywords?: string }> = [
-  { id: 'projects', label: 'Overview / Projects', keywords: 'home workspace j' },
+  { id: 'projects', label: 'Open Overview', keywords: 'home workspace projects j overview' },
   { id: 'builder', label: 'Editor', keywords: 'builder canvas pipeline b' },
   { id: 'runs', label: 'Run history', keywords: 'runs history r' },
   { id: 'trace', label: 'Lineage', keywords: 'trace provenance o' },
   { id: 'experiments', label: 'Compare', keywords: 'experiments metrics e' },
   { id: 'templates', label: 'Templates', keywords: 'starter t' },
   { id: 'proposals', label: 'Proposals', keywords: 'pr agent p' },
-  { id: 'data', label: 'Data library', keywords: 'datasets inputs outputs d' },
-  { id: 'artifacts', label: 'Artifacts', keywords: 'files a' },
+  { id: 'data', label: 'Open Data library', keywords: 'datasets inputs outputs d library' },
+  { id: 'artifacts', label: 'Browse run files', keywords: 'artifacts files a browse' },
   { id: 'edge', label: 'Edge deploy', keywords: 'tflite g' },
   { id: 'workers', label: 'Workers', keywords: 'distributed gpu w' },
   { id: 'plugins', label: 'Plugins', keywords: 'catalog l' },
@@ -69,6 +69,7 @@ export function CommandPalette({
   const closeProject = useAppStore((s) => s.closeProject)
   const openRun = useAppStore((s) => s.openRun)
   const openProject = useAppStore((s) => s.openProject)
+  const openData = useAppStore((s) => s.openData)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openEdge = useAppStore((s) => s.openEdge)
   const lastRunId = useAppStore((s) => s.lastRunId)
@@ -163,11 +164,33 @@ export function CommandPalette({
         },
       })
       out.push({
-        id: 'workspace:files',
-        label: 'Files / Artifacts',
+        id: 'workspace:overview',
+        label: 'Open Overview',
         hint: activeProject,
         group: 'Workspace',
-        keywords: 'artifacts files',
+        keywords: 'overview home project',
+        run: () => {
+          openProject(activeProject)
+          setOpen(false)
+        },
+      })
+      out.push({
+        id: 'workspace:data',
+        label: 'Open Data library',
+        hint: activeProject,
+        group: 'Workspace',
+        keywords: 'data datasets library',
+        run: () => {
+          openData({ project: activeProject })
+          setOpen(false)
+        },
+      })
+      out.push({
+        id: 'workspace:files',
+        label: 'Browse run files',
+        hint: activeProject,
+        group: 'Workspace',
+        keywords: 'artifacts files browse',
         run: () => {
           openArtifacts({ project: activeProject })
           setOpen(false)

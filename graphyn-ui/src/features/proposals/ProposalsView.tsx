@@ -223,7 +223,7 @@ export default function ProposalsView() {
       if (!graph || typeof graph !== 'object') {
         throw new Error('Accepted proposal did not include a proposed_graph')
       }
-      pushToast('Proposal accepted — graph loaded into Editor', 'success')
+      pushToast('Applied to Editor — review the graph, then Run', 'success')
       loadGraphIntoBuilder(graph as GraphIR)
       void refresh()
     } catch (err) {
@@ -336,27 +336,16 @@ export default function ProposalsView() {
                 }
                 action={
                   filter === 'pending' ? (
-                    <div className="flex flex-col items-center gap-2">
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={() => {
-                          setView('builder')
-                          window.history.replaceState(null, '', '#/builder')
-                        }}
-                      >
-                        Open Editor
-                      </button>
-                      <a
-                        href={DOCS_MCP_PROPOSE}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-900"
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        MCP propose_graph docs
-                      </a>
-                    </div>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        setView('builder')
+                        window.history.replaceState(null, '', '#/builder')
+                      }}
+                    >
+                      Open Editor
+                    </button>
                   ) : undefined
                 }
               />

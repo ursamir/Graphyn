@@ -315,6 +315,35 @@ export default function App() {
     if (activeProject) setGlobalNavOpen(false)
   }, [activeProject])
 
+  /** Prefer project's latest run (same API as Overview) for header chip / Last-run menu. */
+  const [projectLatest, setProjectLatest] = React.useState<{
+    run_id: string
+    status?: string
+  } | null>(null)
+  React.useEffect(() => {
+    let cancelled = false
+    if (!activeProject) {
+      setProjectLatest(null)
+      return
+    }
+    const project = activeProject
+    ;(async () => {
+      try {
+        const runs = await apiJson<
+          Array<{ run_id: string; status?: string; created_at?: string }>
+        >('/runs', { query: { limit: 8, offset: 0, project } })
+        if (cancelled) return
+        const first = Array.isArray(runs) && runs.length > 0 ? runs[0] : null
+        setProjectLatest(first ? { run_id: first.run_id, status: first.status } : null)
+      } catch {
+        if (!cancelled) setProjectLatest(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeProject, lastRunId, isRunning])
+
   React.useEffect(() => {
     const mq = window.matchMedia('(min-width: 768px)')
     const apply = () => {
@@ -619,20 +648,55 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [view, settingsOpen, helpOpen, paletteOpen, narrow])
 
+  /** Prefer Overview-style project latest run when a workspace is open; keep lastRunProject scoping. */
+  const editorScoped =
+    Boolean(lastRunId) && (!activeProject || !lastRunProject || lastRunProject === activeProject)
+  const effectiveLastRunId = activeProject
+    ? projectLatest?.run_id || (editorScoped ? lastRunId : null)
+    : lastRunId
+  const projectStatus = (projectLatest?.status || '').toLowerCase()
+  const projectOutcome =
+    projectStatus === 'failed' || projectStatus === 'error'
+      ? 'failed'
+      : projectStatus === 'cancelled' || projectStatus === 'canceled'
+        ? 'cancelled'
+        : projectStatus === 'succeeded' ||
+            projectStatus === 'completed' ||
+            projectStatus === 'success'
+          ? 'succeeded'
+          : projectStatus === 'running' || projectStatus === 'queued' || projectStatus === 'paused'
+            ? 'running'
+            : null
+  const usingProjectLatest =
+    Boolean(activeProject && projectLatest?.run_id && effectiveLastRunId === projectLatest.run_id)
+  const effectiveOutcome = usingProjectLatest
+    ? projectOutcome || (editorScoped && lastRunId === effectiveLastRunId ? runOutcome : null)
+    : runOutcome
   const chipLabel = isRunning
     ? statusMessage && statusMessage !== 'Running…'
       ? statusMessage
       : 'Running'
-    : statusMessage
+    : statusMessage ||
+      (effectiveOutcome === 'failed'
+        ? 'Failed'
+        : effectiveOutcome === 'cancelled'
+          ? 'Cancelled'
+          : effectiveOutcome === 'succeeded'
+            ? 'Succeeded'
+            : effectiveOutcome === 'running'
+              ? 'Running'
+              : null)
   const chipTone = isRunning
     ? 'bg-amber-100 text-amber-900'
-    : runOutcome === 'failed'
+    : effectiveOutcome === 'failed'
       ? 'bg-rose-100 text-rose-800'
-      : runOutcome === 'cancelled'
+      : effectiveOutcome === 'cancelled'
         ? 'bg-ink-100 text-ink-600'
-        : runOutcome === 'succeeded'
+        : effectiveOutcome === 'succeeded'
           ? 'bg-emerald-100 text-emerald-800'
-          : 'bg-ink-100 text-ink-600'
+          : effectiveOutcome === 'running'
+            ? 'bg-amber-100 text-amber-900'
+            : 'bg-ink-100 text-ink-600'
 
   return (
     <ErrorBoundary>
@@ -700,9 +764,8 @@ export default function App() {
               ) : null}
             </span>
             {(() => {
-              const chipForThisWorkspace =
-                !activeProject || !lastRunProject || lastRunProject === activeProject
-              if (!chipForThisWorkspace) return null
+              const chipForThisWorkspace = Boolean(effectiveLastRunId) || isRunning
+              if (!chipForThisWorkspace && !chipLabel) return null
               if (isRunning) {
                 return (
                   <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
@@ -710,7 +773,7 @@ export default function App() {
                   </span>
                 )
               }
-              if (chipLabel) {
+              if (chipLabel && effectiveLastRunId) {
                 return (
                   <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
                     {chipLabel}
@@ -758,14 +821,20 @@ export default function App() {
                 Open workspace
               </button>
             )}
-            {lastRunId && (!activeProject || !lastRunProject || lastRunProject === activeProject) && (
+            {effectiveLastRunId && (
               <LastRunMenu
-                runId={lastRunId}
+                runId={effectiveLastRunId}
                 showCompare
-                onOpenRun={() => openRun(lastRunId, activeProject ? { project: activeProject } : undefined)}
-                onOpenTrace={() => openTrace({ runId: lastRunId, project: activeProject || undefined })}
-                onOpenArtifacts={() => openArtifacts({ runId: lastRunId, project: activeProject || undefined })}
-                onOpenCompare={() => openExperiments({ runIds: [lastRunId] })}
+                onOpenRun={() =>
+                  openRun(effectiveLastRunId, activeProject ? { project: activeProject } : undefined)
+                }
+                onOpenTrace={() =>
+                  openTrace({ runId: effectiveLastRunId, project: activeProject || undefined })
+                }
+                onOpenArtifacts={() =>
+                  openArtifacts({ runId: effectiveLastRunId, project: activeProject || undefined })
+                }
+                onOpenCompare={() => openExperiments({ runIds: [effectiveLastRunId] })}
               />
             )}
             <button

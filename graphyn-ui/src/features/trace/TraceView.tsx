@@ -335,7 +335,7 @@ export default function TraceView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Lineage"
-        description="Artifact-level provenance deep-link. For a run, prefer Run → Lineage (stays on that run)."
+        description="For a run, use Run → Lineage. This page is for artifact-id deep links."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -460,7 +460,7 @@ export default function TraceView() {
       {!loading && !error && !trace && (
         <EmptyState
           title="Open lineage from a run, or pick a recent run below."
-          description="Prefer Run → Lineage for run-scoped provenance. This page is for artifact IDs and advanced paste."
+          description="For a run, use Run → Lineage. This page is for artifact-id deep links."
           action={
             <button
               type="button"

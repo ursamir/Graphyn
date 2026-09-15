@@ -266,7 +266,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
                   Clear
                 </button>
               )}
-              <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+              <button type="button" className="btn-quiet" onClick={() => void refresh()}>
                 <RefreshCw className="h-3.5 w-3.5" /> Refresh
               </button>
             </div>
@@ -284,7 +284,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
               Clear
             </button>
           )}
-          <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+          <button type="button" className="btn-quiet" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
         </div>
@@ -308,6 +308,11 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
 
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
 
+      {selectedIds.length === 0 && tableRuns.length > 0 && !compare ? (
+        <div role="status" className="rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-sm text-ink-700">
+          Select two runs from History (or tick two rows below) to compare.
+        </div>
+      ) : null}
       {selectedIds.length === 1 ? (
         <div
           role="status"
@@ -321,8 +326,8 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
         <LoadingBlock label="Loading runs…" />
       ) : !blocks || blocks.length === 0 || tableRuns.length === 0 ? (
         <EmptyState
-          title="Nothing to compare yet"
-          description="Run a pipeline first, then select 2–5 runs here to compare params and metrics."
+          title="Select two runs from History"
+          description="Pick 2–5 runs in Run History, then return here to compare params and metrics."
           action={
             <button
               type="button"

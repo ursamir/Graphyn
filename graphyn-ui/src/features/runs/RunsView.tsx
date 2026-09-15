@@ -604,43 +604,30 @@ export default function RunsView() {
           <LoadingBlock />
         ) : runs.length === 0 ? (
           <EmptyState
-            title="No runs yet"
-            description="Run a graph from the Editor. Then use Files / Lineage on the run, or Compare to diff metrics."
+            title="No runs in this workspace yet"
+            description="Open the Editor and run a graph — History, Files, and Lineage will show up here."
             action={
-              <div className="flex flex-wrap justify-center gap-2">
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => {
-                    useAppStore.getState().setView('builder')
-                    window.history.replaceState(null, '', '#/builder')
-                    window.dispatchEvent(new HashChangeEvent('hashchange'))
-                  }}
-                >
-                  Open Editor
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    useAppStore.getState().setView('templates')
-                    window.history.replaceState(null, '', '#/templates')
-                    window.dispatchEvent(new HashChangeEvent('hashchange'))
-                  }}
-                >
-                  From template
-                </button>
-              </div>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  useAppStore.getState().setView('builder')
+                  window.history.replaceState(null, '', '#/builder')
+                  window.dispatchEvent(new HashChangeEvent('hashchange'))
+                }}
+              >
+                Open Editor
+              </button>
             }
           />
         ) : !filteredRuns || filteredRuns.length === 0 ? (
           <EmptyState
-            title="No runs match"
-            description="Try clearing the status filter or search query."
+            title="No runs match these filters"
+            description="Clear the status or search filter to see every run in this workspace."
             action={
               <button
                 type="button"
-                className="btn-secondary"
+                className="btn-primary"
                 onClick={() => {
                   setStatusFilter('all')
                   setNameQuery('')
@@ -665,8 +652,19 @@ export default function RunsView() {
                       : 'border-ink-200/70 bg-white hover:border-ink-300 hover:bg-ink-50/80'
                   }`}
                 >
-                  <div className="truncate text-sm font-medium text-ink-900" title={String(r.graph_name ?? '') || undefined}>
-                    {runDisplayName(r)}
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-ink-900" title={String(r.graph_name ?? '') || undefined}>
+                      {runDisplayName(r)}
+                    </div>
+                    {r.project && String(r.project) !== activeProject ? (
+                      <span className="mt-0.5 inline-flex rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-medium text-ink-600">
+                        {String(r.project)}
+                      </span>
+                    ) : activeProject ? (
+                      <span className="mt-0.5 inline-flex rounded-full bg-accent-50 px-1.5 py-0.5 text-[10px] font-medium text-accent-800">
+                        {activeProject}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-1.5 justify-self-end">
                     <StatusBadge status={String(r.status ?? 'unknown')} />
@@ -809,23 +807,46 @@ export default function RunsView() {
 
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Iterate</span>
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Bridges</span>
                 {canOpenGraph && (
                   <button
                     type="button"
-                    className="btn-secondary"
+                    className="btn-quiet"
                     onClick={() => void openGraphInBuilder()}
                   >
                     <Workflow className="h-3.5 w-3.5" /> Open in Editor
                   </button>
                 )}
+                <button type="button" className="btn-quiet" onClick={() => setPanel('lineage')}>
+                  Lineage
+                </button>
+                <button type="button" className="btn-quiet" onClick={() => setPanel('artifacts')}>
+                  Files
+                </button>
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className="btn-quiet"
                   onClick={() => openExperiments({ runIds: [selected] })}
                 >
-                  <FlaskConical className="h-3.5 w-3.5" /> Compare…
+                  <FlaskConical className="h-3.5 w-3.5" /> Compare
                 </button>
+                {(() => {
+                  const st = (runStatus || '').toLowerCase()
+                  const ok = st === 'succeeded' || st === 'completed' || st === 'success'
+                  if (!ok) return null
+                  return (
+                    <button
+                      type="button"
+                      className="btn-quiet"
+                      onClick={() => {
+                        const el = document.getElementById('run-promote-panel')
+                        el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                      }}
+                    >
+                      Promote
+                    </button>
+                  )
+                })()}
               </div>
               <details className="rounded-lg border border-ink-100 bg-ink-50/50">
                 <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
@@ -944,7 +965,7 @@ export default function RunsView() {
                 ) : null
               }
               return (
-                <div className="rounded-2xl border border-accent-200/70 bg-accent-50/40 px-4 py-3">
+                <div id="run-promote-panel" className="rounded-2xl border border-accent-200/70 bg-accent-50/40 px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 max-w-xl">
                       <div className="text-[13px] font-semibold text-ink-950">Promote & models</div>

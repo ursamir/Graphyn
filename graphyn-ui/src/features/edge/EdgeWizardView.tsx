@@ -457,6 +457,11 @@ export default function EdgeWizardView() {
           aria-label="Source run id"
         />
         {sourceRunId ? (
+          <button type="button" className="btn-secondary" onClick={() => openRun(sourceRunId)}>
+            Open source run
+          </button>
+        ) : null}
+        {sourceRunId ? (
           <button type="button" className="btn-quiet" onClick={() => openTrace({ runId: sourceRunId })}>
             <GitBranch className="h-3.5 w-3.5" /> Lineage
           </button>

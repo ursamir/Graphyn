@@ -720,7 +720,7 @@ export default function DataView() {
           <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-2">
             <h3 className="text-sm font-semibold">HuggingFace ingest</h3>
             <input value={hfRepo} onChange={(e) => setHfRepo(e.target.value)} placeholder="org/dataset" className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" />
-            <button type="button" className="btn-primary" onClick={() => void startHfIngest()}>Start HF ingest</button>
+            <button type="button" className="btn-secondary" onClick={() => void startHfIngest()}>Start HF ingest</button>
           </section>
           <pre className="max-h-48 overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
             {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') || 'No ingest events yet.'}
@@ -817,14 +817,38 @@ export default function DataView() {
                   {versions.map((v) => <option key={v} value={v}>{v}</option>)}
                 </select>
                 {project ? (
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => openProjects({ project })}
-                    title="Open dataset workspace (versions, snapshots, lineage)"
-                  >
-                    Open project
-                  </button>
+                  activeProject ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => {
+                          useAppStore.getState().setView('builder')
+                          window.history.replaceState(null, '', '#/builder')
+                          window.dispatchEvent(new HashChangeEvent('hashchange'))
+                        }}
+                        title="Open Editor with current workspace"
+                      >
+                        Open Editor
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-quiet text-[12px]"
+                        onClick={() => openProjects({ project: activeProject })}
+                      >
+                        Open Overview
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => openProjects({ project })}
+                      title="Open this dataset as a workspace"
+                    >
+                      Use in workspace
+                    </button>
+                  )
                 ) : null}
                 {uxMode === 'manage' && project && version ? (
                   <ConfirmButton
@@ -887,6 +911,25 @@ export default function DataView() {
                   onConfirm={() => void deleteInput()}
                 />
               ) : null}
+              {activeProject ? (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    useAppStore.getState().openProject(activeProject)
+                  }}
+                >
+                  Open Overview
+                </button>
+              ) : label ? (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => openProjects()}
+                >
+                  Use in workspace
+                </button>
+              ) : null}
               {uxMode === 'manage' ? (
                 <button type="button" className="btn-secondary" onClick={upload}>
                   <Upload className="h-3.5 w-3.5" /> Upload
@@ -894,7 +937,7 @@ export default function DataView() {
               ) : (
                 <button
                   type="button"
-                  className="btn-secondary text-[12px]"
+                  className="btn-quiet text-[12px]"
                   onClick={() => {
                     setUxMode('manage')
                     setManageTab('upload')

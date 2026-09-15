@@ -1235,11 +1235,20 @@ function BuilderInner() {
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950 hover:border-accent-400"
-            title="Open workspace Overview"
+            title="Workspace"
             onClick={() => activeProject && openProject(activeProject)}
           >
-            Editor · {activeProject}
+            {activeProject || 'Editor'}
           </button>
+          {activeProject ? (
+            <button
+              type="button"
+              className="btn-quiet !px-2 !py-0.5 text-[11px]"
+              onClick={() => openProject(activeProject)}
+            >
+              Open Overview
+            </button>
+          ) : null}
           {activeProject ? (
             <div className="flex flex-wrap items-center gap-1.5 rounded-full border border-ink-200/80 bg-ink-50/70 px-2 py-0.5">
               {projectPipelineList.length === 0 ? (
@@ -1839,10 +1848,10 @@ function BuilderInner() {
                         ) : (
                         <div className="mb-3 rounded-lg border border-dashed border-ink-200 bg-ink-50/40 p-2.5 space-y-1.5">
                           <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                            Placement (ignored in Mode A)
+                            Placement
                           </div>
                           <p className="text-[10px] leading-snug text-ink-500">
-                            Local Mode A runs everything in-process. Placement tags are stored on the graph but ignored until Distributed Mode B.
+                            Local mode ignores placement until you switch to Distributed.
                           </p>
                           <button
                             type="button"

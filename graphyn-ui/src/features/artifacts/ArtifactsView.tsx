@@ -414,29 +414,17 @@ export default function ArtifactsView() {
                   Clear filters
                 </button>
               ) : (
-                <div className="flex flex-wrap justify-center gap-2">
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    onClick={() => {
-                      useAppStore.getState().setView('runs')
-                      window.history.replaceState(null, '', '#/runs')
-                      window.dispatchEvent(new HashChangeEvent('hashchange'))
-                    }}
-                  >
-                    Open Run
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => {
-                      useAppStore.getState().setView('templates')
-                      window.history.replaceState(null, '', '#/templates')
-                    }}
-                  >
-                    From template
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    useAppStore.getState().setView('runs')
+                    window.history.replaceState(null, '', '#/runs')
+                    window.dispatchEvent(new HashChangeEvent('hashchange'))
+                  }}
+                >
+                  Open Run
+                </button>
               )
             }
           />

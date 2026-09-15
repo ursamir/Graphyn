@@ -201,7 +201,7 @@ export default function TemplatesView() {
     }
     useAppStore.getState().loadGraphIntoBuilder(stamped)
     pushToast(
-      `Loaded ${humanizeTemplateName(name)}${version ? ` @ ${version}` : ''} → project ${project}`,
+      `Template ready in Editor — save or Run when you are set.`,
       'success',
     )
   }

@@ -500,7 +500,7 @@ export default function PluginsView() {
               title="No plugins installed"
               description="Install a package, path, or git URL to add nodes to the Editor catalog."
               action={
-                <button type="button" className="btn-primary" onClick={() => setMainTab('install')}>
+                <button type="button" className="btn-secondary" onClick={() => setMainTab('install')}>
                   Go to Install / Search
                 </button>
               }
