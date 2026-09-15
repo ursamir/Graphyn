@@ -66,12 +66,24 @@ function persistActiveProject(name: string | null) {
   }
 }
 
+/** Detail panel on the Run page (Prefect-style tabs on one surface). */
+export type FocusRunPanel = 'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage'
+
+/** Top-level mode on the Run page — History vs Compare (W&B/MLflow pattern). */
+export type FocusRunsTab = 'history' | 'compare'
+
 interface AppState {
   view: AppView
   setView: (view: AppView) => void
   focusRunId: string | null
   focusArtifactId: string | null
-  openRun: (id: string, opts?: { project?: string }) => void
+  /** Consumed once by RunsView when opening a run into a specific panel. */
+  focusRunPanel: FocusRunPanel | null
+  clearFocusRunPanel: () => void
+  /** Consumed / owned by RunsView for History vs Compare. */
+  focusRunsTab: FocusRunsTab
+  setFocusRunsTab: (tab: FocusRunsTab) => void
+  openRun: (id: string, opts?: { project?: string; panel?: FocusRunPanel }) => void
   openTrace: (opts: { artifactId?: string; runId?: string; project?: string }) => void
   openArtifacts: (opts?: { runId?: string; artifactId?: string; project?: string }) => void
   openExperiments: (opts?: { runIds?: string[] }) => void
@@ -129,7 +141,7 @@ interface AppState {
   pendingGraph: GraphIR | null
   loadGraphIntoBuilder: (graph: GraphIR) => void
   consumePendingGraph: () => GraphIR | null
-  /** Active dataset project(+version) linked into Builder (Projects → Open in Builder). */
+  /** Active dataset project(+version) linked into Editor (Projects → Open in Editor). */
   builderDataset: { project: string; version?: string } | null
   setBuilderDataset: (ctx: { project: string; version?: string } | null) => void
 }
@@ -161,12 +173,40 @@ function replaceHash(hash: string) {
   window.dispatchEvent(new HashChangeEvent('hashchange'))
 }
 
+function readInitialView(): AppView {
+  if (typeof window === 'undefined') return 'projects'
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const pathOnly = (raw.split('?')[0] || '').split('/')[0]
+  const known: AppView[] = [
+    'builder',
+    'runs',
+    'artifacts',
+    'plugins',
+    'templates',
+    'data',
+    'projects',
+    'system',
+    'secrets',
+    'workers',
+    'trace',
+    'edge',
+    'experiments',
+    'proposals',
+  ]
+  if (known.includes(pathOnly as AppView)) return pathOnly as AppView
+  return readStoredActiveProject() ? 'builder' : 'projects'
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
-  // Cold start → Projects (workspace picker). Builder/Run hard-gate without a project.
-  view: readStoredActiveProject() ? 'builder' : 'projects',
+  // Prefer hash deep-link; else Builder if a workspace is open, else Projects picker.
+  view: readInitialView(),
   setView: (view) => set({ view }),
   focusRunId: null,
   focusArtifactId: null,
+  focusRunPanel: null,
+  clearFocusRunPanel: () => set({ focusRunPanel: null }),
+  focusRunsTab: 'history',
+  setFocusRunsTab: (focusRunsTab) => set({ focusRunsTab }),
   openRun: (id, opts) => {
     const proj = opts?.project?.trim() || ''
     if (proj) {
@@ -174,7 +214,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ activeProject: proj })
     }
     replaceHash(`#/runs/${id}`)
-    set({ view: 'runs', focusRunId: id, lastRunId: id })
+    set({
+      view: 'runs',
+      focusRunId: id,
+      lastRunId: id,
+      focusRunsTab: 'history',
+      focusRunPanel: opts?.panel ?? null,
+    })
   },
   openTrace: ({ artifactId, runId, project }) => {
     const proj = project?.trim() || ''
@@ -182,9 +228,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       persistActiveProject(proj)
       set({ activeProject: proj })
     }
+    const aid = artifactId?.trim() || ''
+    const rid = runId?.trim() || ''
+    // Run-scoped lineage stays on the Run page (no Trace app hop).
+    if (rid && !aid) {
+      replaceHash(`#/runs/${rid}`)
+      set({
+        view: 'runs',
+        focusRunId: rid,
+        lastRunId: rid,
+        focusRunsTab: 'history',
+        focusRunPanel: 'lineage',
+      })
+      return
+    }
     const params = new URLSearchParams()
-    if (artifactId?.trim()) params.set('artifact_id', artifactId.trim())
-    if (runId?.trim()) params.set('run_id', runId.trim())
+    if (aid) params.set('artifact_id', aid)
+    if (rid) params.set('run_id', rid)
     const qs = params.toString()
     replaceHash(qs ? `#/trace?${qs}` : '#/trace')
     set({ view: 'trace' })
@@ -195,9 +255,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       persistActiveProject(proj)
       set({ activeProject: proj })
     }
-    const params = new URLSearchParams()
-    if (runId?.trim()) params.set('run_id', runId.trim())
     const aid = artifactId?.trim() || ''
+    const rid = runId?.trim() || ''
+    // Run-scoped files stay on Run → Files (Artifacts library is for ids / cross-run).
+    if (rid && !aid) {
+      replaceHash(`#/runs/${rid}`)
+      set({
+        view: 'runs',
+        focusRunId: rid,
+        lastRunId: rid,
+        focusRunsTab: 'history',
+        focusRunPanel: 'artifacts',
+      })
+      return
+    }
+    const params = new URLSearchParams()
+    if (rid) params.set('run_id', rid)
     if (aid) params.set('artifact_id', aid)
     const qs = params.toString()
     replaceHash(qs ? `#/artifacts?${qs}` : '#/artifacts')
@@ -205,12 +278,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   openExperiments: ({ runIds } = {}) => {
     const params = new URLSearchParams()
+    params.set('tab', 'compare')
     const ids = (runIds ?? []).map((id) => id.trim()).filter(Boolean)
     if (ids.length === 1) params.set('run_id', ids[0])
     else if (ids.length > 1) params.set('run_id', ids.join(','))
-    const qs = params.toString()
-    replaceHash(qs ? `#/experiments?${qs}` : '#/experiments')
-    set({ view: 'experiments' })
+    replaceHash(`#/runs?${params.toString()}`)
+    set({ view: 'runs', focusRunsTab: 'compare' })
   },
   openProposals: ({ id } = {}) => {
     const params = new URLSearchParams()

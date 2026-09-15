@@ -1,5 +1,5 @@
 import React from 'react'
-import { RefreshCw, Download, MoreHorizontal, Upload } from 'lucide-react'
+import { RefreshCw, Download, MoreHorizontal, Search, Upload } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
@@ -89,6 +89,9 @@ export default function TemplatesView() {
   } | null>(null)
   const [syncing, setSyncing] = React.useState(false)
   const [filter, setFilter] = React.useState<'all' | 'examples' | 'saved'>('all')
+  const [search, setSearch] = React.useState('')
+  const [headerMoreOpen, setHeaderMoreOpen] = React.useState(false)
+  const headerMoreRef = React.useRef<HTMLDivElement | null>(null)
   const [menuFor, setMenuFor] = React.useState<string | null>(null)
   const menuRef = React.useRef<HTMLDivElement | null>(null)
   const [projectGate, setProjectGate] = React.useState<{ template: string } | null>(null)
@@ -133,13 +136,18 @@ export default function TemplatesView() {
   }, [load])
 
   React.useEffect(() => {
-    if (!menuFor) return
+    if (!menuFor && !headerMoreOpen) return
     const onDoc = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuFor(null)
+      if (menuFor && menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuFor(null)
+      }
+      if (headerMoreOpen && headerMoreRef.current && !headerMoreRef.current.contains(e.target as Node)) {
+        setHeaderMoreOpen(false)
+      }
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
-  }, [menuFor])
+  }, [menuFor, headerMoreOpen])
 
   const importExamples = async () => {
     setSyncing(true)
@@ -256,7 +264,7 @@ export default function TemplatesView() {
     }
     const graph = getCanvasGraph?.()
     if (!graph || typeof graph !== 'object') {
-      pushToast('Open Builder and build a graph first', 'error')
+      pushToast('Open Editor and build a graph first', 'error')
       return
     }
     try {
@@ -265,11 +273,12 @@ export default function TemplatesView() {
         body: JSON.stringify({
           name: saveName,
           yaml: JSON.stringify(graph),
-          description: 'Saved from Graphyn Builder canvas',
+          description: 'Saved from Graphyn Editor canvas',
         }),
       })
       pushToast(`Saved ${res.name}${res.version ? ` @ ${res.version}` : ''}`, 'success')
       setSaveOpen(false)
+      setHeaderMoreOpen(false)
       await load()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -296,6 +305,7 @@ export default function TemplatesView() {
         })
         pushToast(`Uploaded ${saveName}`, 'success')
         setSaveOpen(false)
+        setHeaderMoreOpen(false)
         await load()
       } catch (err) {
         pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -313,9 +323,20 @@ export default function TemplatesView() {
   ])
   const isExample = (name: string) => isExampleTemplate(name) || starters.has(name)
   const filtered = (items ?? []).filter((t) => {
-    if (filter === 'examples') return isExample(t.name)
-    if (filter === 'saved') return !isExample(t.name)
-    return true
+    if (filter === 'examples' && !isExample(t.name)) return false
+    if (filter === 'saved' && isExample(t.name)) return false
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    const blob = [
+      t.name,
+      humanizeTemplateName(t.name),
+      t.description ?? '',
+      ...(t.tags ?? []),
+      ...(t.node_types ?? []),
+    ]
+      .join(' ')
+      .toLowerCase()
+    return blob.includes(q)
   })
   const exampleCount = (items ?? []).filter((t) => isExample(t.name)).length
 
@@ -323,47 +344,77 @@ export default function TemplatesView() {
     <div className="h-full overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="New from template"
-        scope="global"
-        description="Wizard — opens or creates a workspace first, then loads the graph in the Editor."
+        description="Creates or opens a workspace, then loads the graph in the Editor."
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <button type="button" className="btn-secondary" onClick={() => void load()}>
+            <button type="button" className="btn-quiet" onClick={() => void load()} title="Refresh templates">
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={syncing}
-              onClick={() => void importExamples()}
-              title="Copy example graphs into templates"
-            >
-              <Download className="h-3.5 w-3.5" />
-              {syncing ? 'Syncing…' : 'Sync examples'}
-            </button>
-            {!saveOpen ? (
-              <button type="button" className="btn-primary" onClick={() => setSaveOpen(true)}>
-                Save from Builder
+            <div className="relative" ref={headerMoreRef}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setHeaderMoreOpen((o) => !o)}
+                aria-expanded={headerMoreOpen}
+                aria-haspopup="menu"
+                aria-label="More template actions"
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" /> More
               </button>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                  placeholder="template-name"
-                  className="field-control mt-0 w-44 text-sm"
-                  autoFocus
-                />
-                <button type="button" className="btn-primary" onClick={() => void saveFromCanvas()}>
-                  Save
-                </button>
-                <button type="button" className="btn-quiet" onClick={uploadFile}>
-                  <Upload className="h-3.5 w-3.5" /> Upload
-                </button>
-                <button type="button" className="btn-quiet" onClick={() => setSaveOpen(false)}>
-                  Cancel
-                </button>
-              </div>
-            )}
+              {headerMoreOpen && (
+                <div className="absolute right-0 z-20 mt-1 w-64 rounded-xl border border-ink-200 bg-white p-2 shadow-soft">
+                  <button
+                    type="button"
+                    className="btn-quiet w-full justify-start"
+                    disabled={syncing}
+                    onClick={() => {
+                      void importExamples()
+                      setHeaderMoreOpen(false)
+                    }}
+                    title="Copy example graphs into templates"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    {syncing ? 'Syncing…' : 'Sync examples'}
+                  </button>
+                  {!saveOpen ? (
+                    <button
+                      type="button"
+                      className="btn-quiet w-full justify-start"
+                      onClick={() => setSaveOpen(true)}
+                    >
+                      Save from Editor
+                    </button>
+                  ) : (
+                    <div className="mt-1 space-y-2 border-t border-ink-100 pt-2">
+                      <input
+                        value={saveName}
+                        onChange={(e) => setSaveName(e.target.value)}
+                        placeholder="template-name"
+                        className="field-control mt-0 w-full text-sm"
+                        autoFocus
+                      />
+                      <div className="flex flex-wrap gap-1">
+                        <button type="button" className="btn-primary" onClick={() => void saveFromCanvas()}>
+                          Save
+                        </button>
+                        <button type="button" className="btn-quiet" onClick={uploadFile}>
+                          <Upload className="h-3.5 w-3.5" /> Upload
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-quiet"
+                          onClick={() => {
+                            setSaveOpen(false)
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         }
       />
@@ -380,40 +431,62 @@ export default function TemplatesView() {
         />
       )}
 
-      <div className="flex flex-wrap gap-1.5">
-        {(
-          [
-            ['all', 'All', items?.length ?? 0],
-            ['examples', 'Examples', exampleCount],
-            ['saved', 'Saved', Math.max(0, (items?.length ?? 0) - exampleCount)],
-          ] as const
-        ).map(([id, label, count]) => (
-          <button
-            key={id}
-            type="button"
-            className={filter === id ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
-            onClick={() => setFilter(id)}
-          >
-            {label}
-            {items ? ` ${count}` : ''}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search templates…"
+            aria-label="Search templates"
+            className="field-control mt-0 w-full pl-8 text-sm"
+          />
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {(
+            [
+              ['all', 'All', items?.length ?? 0],
+              ['examples', 'Examples', exampleCount],
+              ['saved', 'Saved', Math.max(0, (items?.length ?? 0) - exampleCount)],
+            ] as const
+          ).map(([id, label, count]) => (
+            <button
+              key={id}
+              type="button"
+              className={filter === id ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+              onClick={() => setFilter(id)}
+            >
+              {label}
+              {items ? ` ${count}` : ''}
+            </button>
+          ))}
+        </div>
       </div>
 
       {items === null ? (
         <LoadingBlock />
       ) : filtered.length === 0 ? (
         <EmptyState
-          title={filter === 'examples' ? 'No example templates' : 'No templates'}
+          title={
+            search.trim()
+              ? 'No matching templates'
+              : filter === 'examples'
+                ? 'No example templates'
+                : 'No templates'
+          }
           description={
-            filter === 'examples'
-              ? 'Sync example graphs from the repo, then open one in Builder.'
-              : 'Sync examples, save from Builder, or upload a graph file.'
+            search.trim()
+              ? `Nothing matches “${search.trim()}”. Try another term or clear search.`
+              : filter === 'examples'
+                ? 'Sync example graphs from the repo, then open one in Editor.'
+                : 'Sync examples, save from Editor, or upload a graph file.'
           }
           action={
-            <button type="button" className="btn-secondary" onClick={() => void importExamples()}>
-              Sync examples
-            </button>
+            !search.trim() ? (
+              <button type="button" className="btn-secondary" onClick={() => void importExamples()}>
+                Sync examples
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -447,7 +520,7 @@ export default function TemplatesView() {
                     <p className="mt-1 line-clamp-2 text-type-secondary text-ink-600">
                       {tpl.description?.trim()
                         ? tpl.description
-                        : 'Open in Builder to inspect nodes and run this pipeline.'}
+                        : 'Open in Editor to inspect nodes and run this pipeline.'}
                     </p>
                   </div>
                   <div className="relative shrink-0" ref={menuFor === name ? menuRef : undefined}>
@@ -561,7 +634,7 @@ export default function TemplatesView() {
                     className="btn-primary ml-auto"
                     onClick={() => void loadIntoBuilder(name)}
                   >
-                    Open in Builder
+                    Open
                   </button>
                   {isDatasetRelatedTemplate(tpl) ? (
                     <button
@@ -595,10 +668,10 @@ export default function TemplatesView() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 id="project-gate-title" className="text-lg font-semibold text-ink-950">
-              Choose a project
+              Templates stamp into a project
             </h2>
             <p className="mt-2 text-sm text-ink-500">
-              Templates stamp and open Builder inside a project workspace. Create one or select an existing project.
+              Create or select a project workspace, then open the graph in the Editor.
             </p>
             <label className="mt-4 block text-sm text-ink-600">
               Existing project
@@ -643,7 +716,7 @@ export default function TemplatesView() {
                 disabled={projectGateBusy}
                 onClick={() => void confirmProjectGate()}
               >
-                {projectGateBusy ? 'Opening…' : 'Open in Builder'}
+                {projectGateBusy ? 'Opening…' : 'Open in Editor'}
               </button>
             </div>
           </div>

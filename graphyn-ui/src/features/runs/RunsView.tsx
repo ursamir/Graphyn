@@ -1,12 +1,12 @@
 import React from 'react'
-import { Archive, FlaskConical, GitBranch, Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
+import { Download, FlaskConical, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { runMatchesProject } from '../../lib/projectStamp'
 import { statusMatchesFilter } from '../../lib/runStatus'
-import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, KeyValue, LoadingBlock, NeedProjectPrompt, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
+import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, LoadingBlock, NeedProjectPrompt, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
 import {
   formatExecutionLine,
   formatLocaleDateTime,
@@ -17,6 +17,8 @@ import {
   shortRunId,
   skipConsecutiveByText,
 } from '../../lib/format'
+import { RunLineagePanel } from './RunLineagePanel'
+import ExperimentsView from '../experiments/ExperimentsView'
 
 interface RunSummary {
   run_id: string
@@ -42,13 +44,31 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function isPreviewPlot(file: OutputFile): boolean {
-  if (file.kind === "dir") return false
+function isPreviewImage(file: OutputFile): boolean {
+  if (file.kind === 'dir') return false
   const n = file.name.toLowerCase()
-  return (
-    n.endsWith(".png") &&
-    (n.includes("confusion_matrix") || n.includes("roc") || n.includes("training_curves"))
-  )
+  return n.endsWith('.png') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.webp') || n.endsWith('.gif')
+}
+
+function isPreviewJson(file: OutputFile): boolean {
+  if (file.kind === 'dir') return false
+  const n = file.name.toLowerCase()
+  return n.endsWith('.json') || n.endsWith('.jsonl')
+}
+
+function guessNodeFromPath(path: string, arts: RunArtifact[]): string {
+  const lower = path.toLowerCase()
+  for (const a of arts) {
+    const dp = String(a.data_path || a.path || '').toLowerCase()
+    if (dp && (lower.includes(dp) || dp.includes(lower) || lower.endsWith(dp.split('/').pop() || '___'))) {
+      return String(a.node_id || a.node_type || 'unknown')
+    }
+    const nid = String(a.node_id || '').toLowerCase()
+    if (nid && lower.includes(nid)) return String(a.node_id)
+  }
+  // Heuristic: .../nodes/<id>/... or .../<node_id>/...
+  const m = path.match(/nodes?\/([^/]+)/i) || path.match(/\/([a-zA-Z0-9_-]+)\/(?:out|output|artifacts)/i)
+  return m ? m[1] : 'run'
 }
 
 /** Runs stuck in RUNNING with no process heartbeat — warn after this age. */
@@ -75,24 +95,37 @@ function runDisplayName(r: Pick<RunSummary, 'graph_name'>): string {
 
 const PANEL_LABELS: Record<string, string> = {
   logs: 'Logs',
-  debug: 'Debug',
-  checkpoints: 'Checkpoints',
   artifacts: 'Files',
+  lineage: 'Lineage',
+  debug: 'Details',
+  checkpoints: 'Checkpoints',
+}
+
+interface RunArtifact {
+  artifact_id?: string
+  id?: string
+  node_id?: string
+  node_type?: string
+  artifact_type?: string
+  data_path?: string
+  path?: string
+  metadata?: Record<string, unknown>
 }
 
 
 
 export default function RunsView() {
   const focusRunId = useAppStore((s) => s.focusRunId)
+  const focusRunPanel = useAppStore((s) => s.focusRunPanel)
+  const clearFocusRunPanel = useAppStore((s) => s.clearFocusRunPanel)
+  const focusRunsTab = useAppStore((s) => s.focusRunsTab)
+  const setFocusRunsTab = useAppStore((s) => s.setFocusRunsTab)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const pushToast = useAppStore((s) => s.pushToast)
-  const openTrace = useAppStore((s) => s.openTrace)
-  const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openExperiments = useAppStore((s) => s.openExperiments)
   const openProjects = useAppStore((s) => s.openProjects)
   const activeProject = useAppStore((s) => s.activeProject)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
-  const closeProject = useAppStore((s) => s.closeProject)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
 
   const [runs, setRuns] = React.useState<RunSummary[] | null>(null)
@@ -104,13 +137,39 @@ export default function RunsView() {
   const [checkpoints, setCheckpoints] = React.useState<string[]>([])
   const [samples, setSamples] = React.useState<unknown>(null)
   const [outputFiles, setOutputFiles] = React.useState<OutputFile[]>([])
+  const [runArtifacts, setRunArtifacts] = React.useState<RunArtifact[]>([])
   const [previewUrls, setPreviewUrls] = React.useState<Record<string, string>>({})
-  const [panel, setPanel] = React.useState<'logs' | 'debug' | 'checkpoints' | 'artifacts'>('logs')
+  const [jsonPreviews, setJsonPreviews] = React.useState<Record<string, string>>({})
+  const [expandedFile, setExpandedFile] = React.useState<string | null>(null)
+  const [panel, setPanel] = React.useState<'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage'>('logs')
   const [error, setError] = React.useState<string | null>(null)
   const [statusFilter, setStatusFilter] = React.useState<string>('all')
   const [nameQuery, setNameQuery] = React.useState('')
   const [promoteAlias, setPromoteAlias] = React.useState<'latest' | 'staging' | 'prod'>('latest')
   const limit = 50
+  const pendingPanelRef = React.useRef<'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage' | null>(null)
+
+  // Deep-link / last-run: open History vs Compare from hash (?tab=compare).
+  React.useEffect(() => {
+    const apply = () => {
+      const raw = window.location.hash.replace(/^#\/?/, '')
+      const qIdx = raw.indexOf('?')
+      if (qIdx < 0) return
+      const params = new URLSearchParams(raw.slice(qIdx + 1))
+      if (params.get('tab') === 'compare') setFocusRunsTab('compare')
+    }
+    apply()
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+  }, [setFocusRunsTab])
+
+  React.useEffect(() => {
+    if (!focusRunPanel) return
+    pendingPanelRef.current = focusRunPanel
+    setPanel(focusRunPanel)
+    setFocusRunsTab('history')
+    clearFocusRunPanel()
+  }, [focusRunPanel, clearFocusRunPanel, setFocusRunsTab])
 
   const load = React.useCallback(async () => {
     setError(null)
@@ -140,24 +199,38 @@ export default function RunsView() {
     setDebug(null)
     setSamples(null)
     setOutputFiles([])
+    setRunArtifacts([])
+    setJsonPreviews({})
+    setExpandedFile(null)
     setError(null)
     try {
-      const [d, st, dbg, cps, outs] = await Promise.all([
+      const [d, st, dbg, cps, outs, arts] = await Promise.all([
         apiJson<Record<string, unknown>>(`/runs/${id}`),
         apiJson<Record<string, unknown>>(`/runs/${id}/status`).catch(() => null),
         apiJson<Record<string, unknown>>(`/runs/${id}/debug-report`).catch(() => null),
         apiJson<string[]>(`/runs/${id}/checkpoints`).catch(() => []),
         apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
+        apiJson<RunArtifact[]>(`/runs/${id}/artifacts`).catch(() => []),
       ])
       setDetail(d)
       setStatus(st)
       setDebug(dbg)
       setCheckpoints(Array.isArray(cps) ? cps : [])
       setOutputFiles(Array.isArray(outs) ? outs : [])
+      setRunArtifacts(Array.isArray(arts) ? arts : [])
       const meta = d?.meta && typeof d.meta === 'object' ? (d.meta as Record<string, unknown>) : null
       const proj = String(meta?.project ?? d?.project ?? '').trim()
       if (proj && useAppStore.getState().activeProject !== proj) {
         setActiveProject(proj)
+      }
+      const stStr = String(st?.status ?? meta?.status ?? d?.status ?? '').toLowerCase()
+      if (pendingPanelRef.current) {
+        setPanel(pendingPanelRef.current)
+        pendingPanelRef.current = null
+      } else if (stStr.includes('fail') || stStr === 'running' || stStr === 'paused' || stStr === 'cancelled') {
+        setPanel('logs')
+      } else {
+        setPanel('artifacts')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -178,12 +251,12 @@ export default function RunsView() {
   }, [selected, status?.status, detail])
 
   React.useEffect(() => {
-    const plots = outputFiles.filter(isPreviewPlot)
+    const plots = outputFiles.filter(isPreviewImage)
     let cancelled = false
     const created: string[] = []
     void (async () => {
       const next: Record<string, string> = {}
-      for (const file of plots) {
+      for (const file of plots.slice(0, 12)) {
         try {
           const url = await fetchOutputBlobUrl(file.path)
           created.push(url)
@@ -201,6 +274,29 @@ export default function RunsView() {
     return () => {
       cancelled = true
       created.forEach((u) => URL.revokeObjectURL(u))
+    }
+  }, [outputFiles])
+
+  React.useEffect(() => {
+    const jsons = outputFiles.filter(isPreviewJson).slice(0, 8)
+    let cancelled = false
+    void (async () => {
+      const next: Record<string, string> = {}
+      for (const file of jsons) {
+        try {
+          const url = await fetchOutputBlobUrl(file.path)
+          const text = await (await fetch(url)).text()
+          URL.revokeObjectURL(url)
+          if (cancelled) continue
+          next[file.path] = text.slice(0, 4000)
+        } catch {
+          /* optional */
+        }
+      }
+      if (!cancelled) setJsonPreviews(next)
+    })()
+    return () => {
+      cancelled = true
     }
   }, [outputFiles])
 
@@ -325,12 +421,6 @@ export default function RunsView() {
   )
 
   const selectedSummary = runs?.find((r) => r.run_id === selected)
-  const runProject = String(
-    (detail?.meta as { project?: string } | undefined)?.project ??
-      selectedSummary?.project ??
-      detail?.project ??
-      '',
-  ).trim()
   const sourceRunId = String(
     (detail?.meta as { source_run_id?: string } | undefined)?.source_run_id ??
       detail?.source_run_id ??
@@ -356,7 +446,7 @@ export default function RunsView() {
     try {
       if (embeddedGraph && Array.isArray(embeddedGraph.nodes) && Array.isArray(embeddedGraph.edges)) {
         loadGraphIntoBuilder(embeddedGraph)
-        pushToast('Opened graph in Builder', 'success')
+        pushToast('Opened graph in Editor', 'success')
         return
       }
       const graph = await fetchRunGraph(selected, graphName || null)
@@ -366,7 +456,7 @@ export default function RunsView() {
       }
       loadGraphIntoBuilder(graph)
       pushToast(
-        graphName ? `Opened ${humanizeTemplateName(graphName)} in Builder` : 'Opened graph in Builder',
+        graphName ? `Opened ${humanizeTemplateName(graphName)} in Editor` : 'Opened graph in Editor',
         'success',
       )
     } catch (err) {
@@ -398,35 +488,67 @@ export default function RunsView() {
     )
   }
 
+  if (focusRunsTab === 'compare') {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="shrink-0 border-b border-ink-200/70 bg-white/80 px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h1 className="text-type-page text-ink-950">Run</h1>
+              <p className="mt-0.5 text-type-meta text-ink-400">
+                Compare params and metrics for {activeProject}.
+              </p>
+            </div>
+            <div className="flex rounded-xl bg-ink-100/80 p-1">
+              <button
+                type="button"
+                className="tab-pill"
+                onClick={() => {
+                  setFocusRunsTab('history')
+                  window.history.replaceState(null, '', selected ? `#/runs/${selected}` : '#/runs')
+                }}
+              >
+                History
+              </button>
+              <button type="button" className="tab-pill tab-pill-on">
+                Compare
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <ExperimentsView embedded />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
           title="Run"
-          scope="project"
-          description={`Scoped to ${activeProject} — execution history and ops (like a Run/Debug panel). Trace and Artifacts open from a run.`}
+          description={`History for ${activeProject}. Files and Lineage stay on the selected run.`}
           actions={
-            <button type="button" onClick={() => void load()} className="btn-secondary">
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex rounded-xl bg-ink-100/80 p-1">
+                <button type="button" className="tab-pill tab-pill-on">
+                  History
+                </button>
+                <button
+                  type="button"
+                  className="tab-pill"
+                  onClick={() => openExperiments(selected ? { runIds: [selected] } : {})}
+                >
+                  Compare
+                </button>
+              </div>
+              <button type="button" onClick={() => void load()} className="btn-secondary">
+                <RefreshCw className="h-3.5 w-3.5" /> Refresh
+              </button>
+            </div>
           }
         />
-        <div
-          role="status"
-          className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent-200 bg-accent-50/80 px-3 py-2 text-[12px] text-accent-950"
-        >
-          <span>
-            Showing runs for project <strong>{activeProject}</strong>
-          </span>
-          <span className="flex gap-2">
-            <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => openProjects()}>
-              Switch
-            </button>
-            <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => closeProject()}>
-              Clear
-            </button>
-          </span>
-        </div>
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         {runs && runs.length > 0 ? (
           <div className="mb-3 flex flex-wrap items-end gap-2">
@@ -462,7 +584,7 @@ export default function RunsView() {
         ) : runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
-            description="Run a graph from the Editor to create an execution session here. Trace is for lineage; Experiments compares metrics."
+            description="Run a graph from the Editor. Then use Files / Lineage on the run, or Compare to diff metrics."
             action={
               <div className="flex flex-wrap justify-center gap-2">
                 <button
@@ -471,6 +593,7 @@ export default function RunsView() {
                   onClick={() => {
                     useAppStore.getState().setView('builder')
                     window.history.replaceState(null, '', '#/builder')
+                    window.dispatchEvent(new HashChangeEvent('hashchange'))
                   }}
                 >
                   Open Editor
@@ -481,6 +604,7 @@ export default function RunsView() {
                   onClick={() => {
                     useAppStore.getState().setView('templates')
                     window.history.replaceState(null, '', '#/templates')
+                    window.dispatchEvent(new HashChangeEvent('hashchange'))
                   }}
                 >
                   From template
@@ -584,7 +708,7 @@ export default function RunsView() {
         {!selected ? (
           <EmptyState
             title="Select a run"
-            description="This run's logs, files, and ops controls. Open View lineage for provenance deep-dive."
+            description="Select a run on the left to inspect Logs, Files, and Lineage."
             action={
               runs && runs.length > 0 ? (
                 <button type="button" className="btn-secondary" onClick={() => void open(runs[0].run_id)}>
@@ -599,7 +723,7 @@ export default function RunsView() {
                     window.history.replaceState(null, '', '#/builder')
                   }}
                 >
-                  Open Builder
+                  Open Editor
                 </button>
               )
             }
@@ -630,7 +754,10 @@ export default function RunsView() {
                   <button
                     type="button"
                     className="font-mono text-accent-800 underline-offset-2 hover:underline"
-                    onClick={() => openTrace({ runId: sourceRunId, project: runProject || undefined })}
+                    onClick={() => {
+                      pendingPanelRef.current = 'lineage'
+                      void open(sourceRunId)
+                    }}
                   >
                     {sourceRunId.slice(0, 12)}…
                   </button>
@@ -659,71 +786,67 @@ export default function RunsView() {
               })()}
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openTrace({ runId: selected, project: runProject || undefined })}
-              >
-                <GitBranch className="h-3.5 w-3.5" /> Trace
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openArtifacts({ runId: selected, project: runProject || undefined })}
-              >
-                <Archive className="h-3.5 w-3.5" /> Artifacts
-              </button>
-              {canOpenGraph && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Iterate</span>
+                {canOpenGraph && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => void openGraphInBuilder()}
+                  >
+                    <Workflow className="h-3.5 w-3.5" /> Open in Editor
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn-secondary"
-                  onClick={() => void openGraphInBuilder()}
+                  onClick={() => openExperiments({ runIds: [selected] })}
                 >
-                  <Workflow className="h-3.5 w-3.5" /> Open in Editor
+                  <FlaskConical className="h-3.5 w-3.5" /> Compare…
                 </button>
-              )}
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openExperiments({ runIds: [selected] })}
-              >
-                <FlaskConical className="h-3.5 w-3.5" /> Compare
-              </button>
-              {['running'].includes(runStatus.toLowerCase()) && (
-                <button type="button" className="btn-secondary" onClick={() => void control(selected, 'pause')}>
-                  <Pause className="h-3.5 w-3.5" /> Pause
-                </button>
-              )}
-              {['paused'].includes(runStatus.toLowerCase()) && (
-                <button type="button" className="btn-secondary" onClick={() => void control(selected, 'resume')}>
-                  <Play className="h-3.5 w-3.5" /> Resume
-                </button>
-              )}
-              {['running', 'paused'].includes(runStatus.toLowerCase()) && (
-                <ConfirmButton
-                  label={
-                    isStaleRunning(
-                      runStatus,
-                      selectedSummary?.created_at ??
-                        (detail?.meta as { created_at?: string } | undefined)?.created_at,
-                    )
-                      ? 'Cancel stale run'
-                      : 'Cancel run'
-                  }
-                  confirmLabel="Confirm cancel"
-                  danger
-                  onConfirm={() => void control(selected, 'cancel')}
-                />
-              )}
-              {!['running', 'paused'].includes(runStatus.toLowerCase()) && (
-                <ConfirmButton
-                  label="Delete run"
-                  confirmLabel={`Delete ${selected}?`}
-                  danger
-                  onConfirm={() => void deleteRun()}
-                />
-              )}
+              </div>
+              <details className="rounded-lg border border-ink-100 bg-ink-50/50">
+                <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  Ops
+                </summary>
+                <div className="flex flex-wrap gap-2 border-t border-ink-100 px-2.5 py-2">
+                  {['running'].includes(runStatus.toLowerCase()) && (
+                    <button type="button" className="btn-secondary" onClick={() => void control(selected, 'pause')}>
+                      <Pause className="h-3.5 w-3.5" /> Pause
+                    </button>
+                  )}
+                  {['paused'].includes(runStatus.toLowerCase()) && (
+                    <button type="button" className="btn-secondary" onClick={() => void control(selected, 'resume')}>
+                      <Play className="h-3.5 w-3.5" /> Resume
+                    </button>
+                  )}
+                  {['running', 'paused'].includes(runStatus.toLowerCase()) && (
+                    <ConfirmButton
+                      label={
+                        isStaleRunning(
+                          runStatus,
+                          selectedSummary?.created_at ??
+                            (detail?.meta as { created_at?: string } | undefined)?.created_at,
+                        )
+                          ? 'Cancel stale run'
+                          : 'Cancel run'
+                      }
+                      confirmLabel="Confirm cancel"
+                      danger
+                      onConfirm={() => void control(selected, 'cancel')}
+                    />
+                  )}
+                  {!['running', 'paused'].includes(runStatus.toLowerCase()) && (
+                    <ConfirmButton
+                      label="Delete run"
+                      confirmLabel={`Delete ${selected}?`}
+                      danger
+                      onConfirm={() => void deleteRun()}
+                    />
+                  )}
+                </div>
+              </details>
             </div>
             {isStaleRunning(
               runStatus,
@@ -742,7 +865,7 @@ export default function RunsView() {
               </div>
             )}
             <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1">
-              {(['logs', 'debug', 'checkpoints', 'artifacts'] as const).map((p) => (
+              {(['logs', 'artifacts', 'lineage', 'debug', 'checkpoints'] as const).map((p) => (
                 <button
                   key={p}
                   type="button"
@@ -754,26 +877,104 @@ export default function RunsView() {
               ))}
             </div>
             {panel === 'logs' && (
-              <div className="max-h-[28rem] overflow-auto rounded-2xl bg-ink-950 p-4 font-mono text-[11px] leading-5 text-ink-100 shadow-soft">
-                {logs.length === 0 ? (
-                  <div className="text-ink-500">No logs.</div>
+              <div className="space-y-2">
+                <p className="text-xs text-ink-500">
+                  Chronological execution log — what each step printed while the pipeline ran. Use Lineage for node order; Files for outputs.
+                </p>
+                <div className="max-h-[28rem] overflow-auto rounded-2xl bg-ink-950 p-4 font-mono text-[11px] leading-5 text-ink-100 shadow-soft">
+                  {logs.length === 0 ? (
+                    <div className="text-ink-500">No logs recorded for this run.</div>
+                  ) : (
+                    formattedLogs.map(({ i, l, line }) => {
+                      const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
+                      const msg = line.text
+                      const nodeHint = (() => {
+                        const m = msg.match(/\bnode[_\s]?id[=: ]+([A-Za-z0-9_.-]+)/i)
+                          || msg.match(/\b(?:executing|completed|failed)\s+([A-Za-z0-9_.-]+)/i)
+                        return m ? m[1] : null
+                      })()
+                      return (
+                        <div key={i} className={failed ? 'text-rose-300' : ''}>
+                          {nodeHint ? (
+                            <span className="mr-1.5 rounded bg-ink-800 px-1 text-[10px] text-accent-300">{humanNodeLabel(nodeHint)}</span>
+                          ) : null}
+                          {msg}
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+            {panel === 'debug' && (
+              <div className="space-y-3">
+                <p className="text-xs text-ink-500">
+                  Operator details: status, per-node stats, errors, and paths. Not a substitute for Logs or Lineage.
+                </p>
+                {!debug ? (
+                  <div className="text-sm text-ink-500">No details report.</div>
                 ) : (
-                  formattedLogs.map(({ i, l, line }) => {
-                    const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
-                    return (
-                      <div key={i} className={failed ? 'text-rose-300' : ''}>
-                        {line.text}
+                  <>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {(
+                        [
+                          ['Artifacts', debug.artifact_count],
+                          ['Provenance', debug.provenance_count],
+                          ['Checkpoints', debug.checkpoint_count],
+                          ['Errors', debug.error_count],
+                        ] as Array<[string, unknown]>
+                      ).map(([label, val]) => (
+                        <div key={label} className="rounded-xl border border-ink-100 bg-white px-3 py-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">{label}</div>
+                          <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink-900">{String(val ?? 0)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {Array.isArray(debug.recent_errors) && (debug.recent_errors as unknown[]).length > 0 && (
+                      <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Recent errors</div>
+                        <ul className="mt-1 space-y-1 font-mono text-[11px] text-rose-900">
+                          {(debug.recent_errors as Array<Record<string, unknown>>).slice(-5).map((e, i) => (
+                            <li key={i}>{String(e.message || JSON.stringify(e))}</li>
+                          ))}
+                        </ul>
                       </div>
-                    )
-                  })
+                    )}
+                    {Array.isArray(debug.node_stats) && (debug.node_stats as unknown[]).length > 0 && (
+                      <div className="overflow-hidden rounded-xl border border-ink-200">
+                        <div className="border-b border-ink-100 bg-ink-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                          Nodes executed
+                        </div>
+                        <ul className="divide-y divide-ink-100">
+                          {(debug.node_stats as Array<Record<string, unknown>>).map((n, i) => (
+                            <li key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                              <span className="font-medium text-ink-900">
+                                {humanNodeLabel(String(n.node_type || n.node_id || `node-${i}`))}
+                              </span>
+                              <span className="font-mono text-[11px] text-ink-400">{String(n.node_id || '')}</span>
+                              {n.duration_ms != null ? (
+                                <span className="tabular-nums text-[11px] text-ink-500">{String(n.duration_ms)} ms</span>
+                              ) : null}
+                              {n.cache_hit ? (
+                                <span className="rounded bg-amber-50 px-1.5 text-[10px] text-amber-800">cache</span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <CollapsibleJson value={debug} label="Raw details JSON" />
+                  </>
                 )}
               </div>
             )}
-            {panel === 'debug' && <KeyValue data={debug} empty="No debug report." />}
             {panel === 'checkpoints' && (
               <div className="space-y-2">
+                <p className="text-xs text-ink-500">
+                  Optional per-node snapshots when the graph ran with checkpointing. Closest thing to port-level I/O samples.
+                </p>
                 {checkpoints.length === 0 ? (
-                  <div className="text-sm text-ink-500">No checkpoints.</div>
+                  <div className="text-sm text-ink-500">No checkpoints for this run.</div>
                 ) : (
                   checkpoints.map((c) => (
                     <button
@@ -782,7 +983,7 @@ export default function RunsView() {
                       className="block w-full rounded-lg border border-ink-200 px-3 py-2 text-left text-sm hover:bg-ink-50"
                       onClick={() => void loadCheckpointSamples(c)}
                     >
-                      {c}
+                      {humanNodeLabel(c)}
                     </button>
                   ))
                 )}
@@ -792,7 +993,7 @@ export default function RunsView() {
             {panel === 'artifacts' && (
               <div className="space-y-3">
                 <p className="text-xs text-ink-500">
-                  This run&apos;s downloadable outputs. Browse the Artifacts library for cross-run search; open Trace for backtrack.
+                  Downloadable outputs for this run, grouped by producing node when known. Data library → Outputs is the shared dataset folder store — different from these files.
                 </p>
                 {(() => {
                   const artifactsDir =
@@ -802,98 +1003,127 @@ export default function RunsView() {
                     ? artifactsDir.replace(/^workspace\//, '')
                     : null
                   const isLatest = detail?.is_latest === true
+                  const groups = new Map<string, OutputFile[]>()
+                  for (const f of outputFiles) {
+                    const g = guessNodeFromPath(f.path, runArtifacts)
+                    const list = groups.get(g) || []
+                    list.push(f)
+                    groups.set(g, list)
+                  }
+                  const order: string[] = []
+                  for (const a of runArtifacts) {
+                    const nid = String(a.node_id || '').trim()
+                    if (nid && !order.includes(nid) && groups.has(nid)) order.push(nid)
+                  }
+                  for (const k of groups.keys()) {
+                    if (!order.includes(k)) order.push(k)
+                  }
                   return (
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        {displayPath ? (
-                          <div className="truncate font-mono text-[11px] text-ink-500">{displayPath}</div>
-                        ) : null}
-                        {isLatest ? (
-                          <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                            Latest
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <label className="inline-flex items-center gap-1.5 text-[11px] text-ink-500">
-                          <span className="sr-only">Promote alias</span>
-                          <select
-                            className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
-                            value={promoteAlias}
-                            onChange={(e) =>
-                              setPromoteAlias(e.target.value as 'latest' | 'staging' | 'prod')
-                            }
-                          >
-                            <option value="latest">latest</option>
-                            <option value="staging">staging</option>
-                            <option value="prod">prod</option>
-                          </select>
-                        </label>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => void promote()}
-                        >
-                          Promote
-                        </button>
-                        {outputFiles.length > 0 && (
-                          <button type="button" className="btn-secondary" onClick={() => void downloadZip()}>
-                            <Download className="h-3.5 w-3.5" /> Download all
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          {displayPath ? (
+                            <div className="truncate font-mono text-[11px] text-ink-500">{displayPath}</div>
+                          ) : null}
+                          {isLatest ? (
+                            <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                              Latest
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <label className="inline-flex items-center gap-1.5 text-[11px] text-ink-500">
+                            <span className="sr-only">Promote alias</span>
+                            <select
+                              className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                              value={promoteAlias}
+                              onChange={(e) =>
+                                setPromoteAlias(e.target.value as 'latest' | 'staging' | 'prod')
+                              }
+                            >
+                              <option value="latest">latest</option>
+                              <option value="staging">staging</option>
+                              <option value="prod">prod</option>
+                            </select>
+                          </label>
+                          <button type="button" className="btn-secondary" onClick={() => void promote()}>
+                            Promote
                           </button>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })()}
-                {outputFiles.length === 0 ? (
-                  <div className="text-sm text-ink-500">No downloadable files for this run.</div>
-                ) : (
-                  <ul className="space-y-2">
-                    {outputFiles.map((f) => (
-                      <li key={`${f.path}-${f.name}`} className="rounded-xl border border-ink-200 bg-white px-3 py-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-ink-900">{f.name}</div>
-                            <div className="truncate font-mono text-[10px] text-ink-400">{f.path}</div>
-                            <div className="text-[11px] text-ink-500">
-                              {f.kind} · {formatBytes(f.size)}
-                            </div>
-                          </div>
-                          {f.kind !== 'dir' && (
-                            <button type="button" className="btn-primary shrink-0" onClick={() => void downloadFile(f)}>
-                              <Download className="h-3.5 w-3.5" /> Download
+                          {outputFiles.length > 0 && (
+                            <button type="button" className="btn-secondary" onClick={() => void downloadZip()}>
+                              <Download className="h-3.5 w-3.5" /> Download all
                             </button>
                           )}
                         </div>
-                        {previewUrls[f.path] && (
-                          <img
-                            src={previewUrls[f.path]}
-                            alt={f.name}
-                            className="mt-2 max-h-64 w-full rounded-lg border border-ink-100 object-contain bg-ink-50"
-                          />
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <div className="flex flex-wrap gap-2 pt-1">
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => openArtifacts({ runId: selected, project: runProject || undefined })}
-                  >
-                    <Archive className="h-3.5 w-3.5" /> Open in Artifacts
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() => openTrace({ runId: selected, project: runProject || undefined })}
-                  >
-                    <GitBranch className="h-3.5 w-3.5" /> Trace lineage
-                  </button>
-                </div>
+                      </div>
+                      {outputFiles.length === 0 ? (
+                        <div className="text-sm text-ink-500">No downloadable files for this run.</div>
+                      ) : (
+                        <div className="space-y-4">
+                          {order.map((group) => (
+                            <div key={group}>
+                              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                                {group === 'run' ? 'Run-level files' : humanNodeLabel(group)}
+                              </div>
+                              <ul className="space-y-2">
+                                {(groups.get(group) || []).map((f) => {
+                                  const key = `${f.path}-${f.name}`
+                                  const open = expandedFile === key
+                                  return (
+                                    <li key={key} className="rounded-xl border border-ink-200 bg-white px-3 py-2">
+                                      <div className="flex items-start justify-between gap-2">
+                                        <button
+                                          type="button"
+                                          className="min-w-0 flex-1 text-left"
+                                          onClick={() => setExpandedFile(open ? null : key)}
+                                        >
+                                          <div className="truncate text-sm font-medium text-ink-900">{f.name}</div>
+                                          <div className="truncate font-mono text-[10px] text-ink-400">{f.path}</div>
+                                          <div className="text-[11px] text-ink-500">
+                                            {f.kind} · {formatBytes(f.size)}
+                                            {isPreviewJson(f) ? ' · JSON' : ''}
+                                            {isPreviewImage(f) ? ' · image' : ''}
+                                          </div>
+                                        </button>
+                                        {f.kind !== 'dir' && (
+                                          <button type="button" className="btn-primary shrink-0" onClick={() => void downloadFile(f)}>
+                                            <Download className="h-3.5 w-3.5" /> Download
+                                          </button>
+                                        )}
+                                      </div>
+                                      {(open || previewUrls[f.path] || jsonPreviews[f.path]) && (
+                                        <div className="mt-2">
+                                          {previewUrls[f.path] ? (
+                                            <img
+                                              src={previewUrls[f.path]}
+                                              alt={f.name}
+                                              className="max-h-64 w-full rounded-lg border border-ink-100 object-contain bg-ink-50"
+                                            />
+                                          ) : null}
+                                          {jsonPreviews[f.path] ? (
+                                            <pre className="max-h-48 overflow-auto rounded-lg bg-ink-950 p-3 font-mono text-[10px] text-ink-100">
+                                              {jsonPreviews[f.path]}
+                                            </pre>
+                                          ) : null}
+                                          {!previewUrls[f.path] && !jsonPreviews[f.path] && open ? (
+                                            <p className="text-[12px] text-ink-500">No inline preview for this type — download to open.</p>
+                                          ) : null}
+                                        </div>
+                                      )}
+                                    </li>
+                                  )
+                                })}
+                              </ul>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
             )}
+            {panel === 'lineage' && selected ? <RunLineagePanel runId={selected} /> : null}
           </>
         )}
       </div>

@@ -159,6 +159,24 @@ textarea:focus-visible {
   .empty-state-shell {
     @apply flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink-200/70 bg-gradient-to-b from-white to-[#f7f9fb] px-8 py-16 text-center;
   }
+  .ide-row {
+    @apply flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition;
+  }
+  .ide-row:hover {
+    @apply bg-ink-50/80;
+  }
+  .ide-row.is-active {
+    @apply bg-accent-50 text-accent-900;
+  }
+  .ide-section {
+    @apply border-t border-ink-100 pt-4;
+  }
+  .ide-section-title {
+    @apply text-[11px] font-semibold uppercase tracking-wide text-ink-400;
+  }
+  .ide-quiet-btn {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-ink-600 hover:bg-ink-50 hover:text-ink-900;
+  }
 }
 
 

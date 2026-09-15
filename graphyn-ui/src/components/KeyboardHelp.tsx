@@ -5,15 +5,15 @@ const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: strin
   {
     title: 'Navigation',
     rows: [
-      { keys: 'B', action: 'Builder' },
+      { keys: 'B', action: 'Editor' },
       { keys: 'T', action: 'Templates' },
       { keys: 'P', action: 'Proposals' },
-      { keys: 'R', action: 'Runs' },
-      { keys: 'O', action: 'Trace' },
-      { keys: 'E', action: 'Experiments' },
-      { keys: 'A', action: 'Artifacts' },
-      { keys: 'D', action: 'Data' },
-      { keys: 'J', action: 'Projects' },
+      { keys: 'R', action: 'Run (History)' },
+      { keys: 'O', action: 'Run → Lineage (last run)' },
+      { keys: 'E', action: 'Run → Compare' },
+      { keys: 'A', action: 'Artifacts (advanced)' },
+      { keys: 'D', action: 'Data library' },
+      { keys: 'J', action: 'Overview / Projects' },
       { keys: 'G', action: 'Edge deploy' },
       { keys: 'W', action: 'Workers' },
       { keys: 'L', action: 'Plugins' },
@@ -22,7 +22,7 @@ const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: strin
     ],
   },
   {
-    title: 'Builder',
+    title: 'Editor',
     rows: [
       { keys: '/ or ⌘/Ctrl+K', action: 'Focus node catalog search' },
       { keys: 'Drag from handle', action: 'Connect nodes (ports show type on hover)' },

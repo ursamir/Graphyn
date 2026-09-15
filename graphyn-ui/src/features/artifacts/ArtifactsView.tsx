@@ -15,6 +15,12 @@ interface Artifact {
   [key: string]: unknown
 }
 
+type RecentRun = {
+  run_id: string
+  status?: string
+  graph_name?: string
+  created_at?: string
+}
 
 function artifactHumanTitle(a: Artifact | Record<string, unknown>): string {
   const o = a as Record<string, unknown>
@@ -53,6 +59,13 @@ function findCopyablePath(data: unknown, depth = 0): string | null {
   return null
 }
 
+function formatBytes(n: unknown): string | null {
+  const num = typeof n === 'number' ? n : typeof n === 'string' && n.trim() ? Number(n) : NaN
+  if (!Number.isFinite(num) || num < 0) return null
+  if (num < 1024) return `${Math.round(num)} B`
+  if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`
+  return `${(num / (1024 * 1024)).toFixed(1)} MB`
+}
 
 function parseArtifactsHash(): { runId: string; artifactId: string } {
   const raw = window.location.hash.replace(/^#\/?/, '')
@@ -83,6 +96,7 @@ export default function ArtifactsView() {
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
   const focusArtifactId = useAppStore((s) => s.focusArtifactId)
+  const activeProject = useAppStore((s) => s.activeProject)
   const initialHash = React.useMemo(() => parseArtifactsHash(), [])
   const [items, setItems] = React.useState<Artifact[] | null>(null)
   const [selected, setSelected] = React.useState<string | null>(
@@ -94,21 +108,65 @@ export default function ArtifactsView() {
   const [artifactTypeFilter, setArtifactTypeFilter] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
+  const [recentRuns, setRecentRuns] = React.useState<RecentRun[]>([])
+  const [typeOptions, setTypeOptions] = React.useState<string[]>([])
 
   const idOf = (a: Artifact) => String(a.artifact_id ?? a.id ?? '')
+
+  const hasActiveFilters = Boolean(
+    runFilter.trim() || nodeTypeFilter.trim() || artifactTypeFilter.trim(),
+  )
+
+  const clearFilters = () => {
+    setRunFilter('')
+    setNodeTypeFilter('')
+    setArtifactTypeFilter('')
+    setSelected(null)
+    setDetail(null)
+  }
+
+  const loadRecentRuns = React.useCallback(async () => {
+    if (!activeProject) {
+      setRecentRuns([])
+      return
+    }
+    try {
+      const rows = await apiJson<RecentRun[]>('/runs', {
+        query: { limit: 20, project: activeProject },
+      })
+      setRecentRuns(Array.isArray(rows) ? rows : [])
+    } catch {
+      setRecentRuns([])
+    }
+  }, [activeProject])
+
+  React.useEffect(() => {
+    void loadRecentRuns()
+  }, [loadRecentRuns])
 
   const load = React.useCallback(async () => {
     setError(null)
     try {
-      setItems(
-        await apiJson<Artifact[]>('/artifacts', {
-          query: {
-            run_id: runFilter || undefined,
-            node_type: nodeTypeFilter || undefined,
-            artifact_type: artifactTypeFilter || undefined,
-          },
-        }),
-      )
+      const rows = await apiJson<Artifact[]>('/artifacts', {
+        query: {
+          run_id: runFilter || undefined,
+          node_type: nodeTypeFilter || undefined,
+          artifact_type: artifactTypeFilter || undefined,
+        },
+      })
+      setItems(rows)
+      const types = Array.from(
+        new Set(
+          rows
+            .map((a) => String(a.artifact_type ?? '').trim())
+            .filter(Boolean),
+        ),
+      ).sort()
+      setTypeOptions((prev) => {
+        const merged = new Set([...prev, ...types])
+        if (artifactTypeFilter.trim()) merged.add(artifactTypeFilter.trim())
+        return Array.from(merged).sort()
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setItems([])
@@ -140,7 +198,6 @@ export default function ArtifactsView() {
       cancelled = true
     }
   }, [runFilter, setActiveProject])
-
 
   const open = React.useCallback(async (id: string) => {
     const aid = id.trim()
@@ -182,7 +239,6 @@ export default function ArtifactsView() {
     void open(aid)
     useAppStore.setState({ focusArtifactId: null })
   }, [focusArtifactId, open])
-
 
   const replay = async (id: string) => {
     try {
@@ -236,79 +292,143 @@ export default function ArtifactsView() {
     }
   }
 
+  const runInPicker = recentRuns.some((r) => r.run_id === runFilter.trim())
+
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-300 bg-white p-4">
         <PageHeader
           title="Artifacts"
-          description="Browse pipeline outputs across runs."
+          description="Advanced cross-run file registry. For one run, stay on Run → Files."
         />
-        <div className="mb-3 flex flex-wrap items-end gap-2">
-          <label className="text-[11px] font-medium text-ink-500">
-            Run ID
-            <input
-              value={runFilter}
-              onChange={(e) => setRunFilter(e.target.value)}
-              placeholder="run id"
-              title={
-                initialHash.runId && runFilter === initialHash.runId
-                  ? 'Prefilled from Runs — edit to broaden filter'
-                  : undefined
-              }
-              className={`mt-0.5 block rounded-lg border border-ink-200 px-2 py-1 text-sm ${
-                initialHash.runId && runFilter === initialHash.runId
-                  ? 'bg-ink-50 font-mono text-[11px] text-ink-500'
-                  : ''
-              }`}
-            />
-          </label>
-          <label className="text-[11px] font-medium text-ink-500">
-            Node
-            <input
-              value={nodeTypeFilter}
-              onChange={(e) => setNodeTypeFilter(e.target.value)}
-              placeholder="node type"
-              className="mt-0.5 block rounded-lg border border-ink-200 px-2 py-1 text-sm"
-            />
-          </label>
-          <label className="text-[11px] font-medium text-ink-500">
-            Type
-            <input
-              value={artifactTypeFilter}
-              onChange={(e) => setArtifactTypeFilter(e.target.value)}
-              placeholder="artifact type"
-              className="mt-0.5 block rounded-lg border border-ink-200 px-2 py-1 text-sm"
-            />
-          </label>
-          <button type="button" onClick={() => void load()} className="btn-secondary">
-            <RefreshCw className="h-3.5 w-3.5" /> Apply
-          </button>
+        <div className="mb-3 space-y-2">
+          <div className="flex flex-wrap items-end gap-2">
+            {activeProject ? (
+              <label className="text-[11px] font-medium text-ink-500">
+                Run
+                <select
+                  value={runFilter.trim()}
+                  onChange={(e) => setRunFilter(e.target.value)}
+                  className="mt-0.5 block min-w-[12rem] rounded-lg border border-ink-200 px-2 py-1 text-sm"
+                >
+                  <option value="">Any run</option>
+                  {!runInPicker && runFilter.trim() ? (
+                    <option value={runFilter.trim()}>
+                      Current · {shortRunId(runFilter.trim())}
+                    </option>
+                  ) : null}
+                  {recentRuns.map((r) => (
+                    <option key={r.run_id} value={r.run_id}>
+                      {shortRunId(r.run_id)}
+                      {r.graph_name ? ` · ${humanizeTemplateName(r.graph_name)}` : ''}
+                      {r.status ? ` · ${r.status}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <p className="text-[12px] text-ink-400 self-center">
+                Open a project for a recent-run picker, or use advanced ID below.
+              </p>
+            )}
+            <label className="text-[11px] font-medium text-ink-500">
+              Type
+              <select
+                value={artifactTypeFilter}
+                onChange={(e) => setArtifactTypeFilter(e.target.value)}
+                className="mt-0.5 block min-w-[8rem] rounded-lg border border-ink-200 px-2 py-1 text-sm"
+              >
+                <option value="">All types</option>
+                {typeOptions.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={() => void load()} className="btn-secondary">
+              <RefreshCw className="h-3.5 w-3.5" /> Apply
+            </button>
+            {hasActiveFilters ? (
+              <button type="button" className="btn-quiet text-[12px]" onClick={clearFilters}>
+                Clear filters
+              </button>
+            ) : null}
+          </div>
+          <details className="rounded-lg border border-ink-100 bg-ink-50/60">
+            <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[12px] font-medium text-ink-600">
+              Advanced — free-text IDs / node type
+            </summary>
+            <div className="flex flex-wrap items-end gap-2 border-t border-ink-100 px-2.5 py-2">
+              <label className="text-[11px] font-medium text-ink-500">
+                Run ID
+                <input
+                  value={runFilter}
+                  onChange={(e) => setRunFilter(e.target.value)}
+                  placeholder="run id"
+                  title={
+                    initialHash.runId && runFilter === initialHash.runId
+                      ? 'Prefilled from Runs — edit to broaden filter'
+                      : undefined
+                  }
+                  className={`mt-0.5 block rounded-lg border border-ink-200 px-2 py-1 font-mono text-[11px] ${
+                    initialHash.runId && runFilter === initialHash.runId
+                      ? 'bg-ink-50 text-ink-500'
+                      : ''
+                  }`}
+                />
+              </label>
+              <label className="text-[11px] font-medium text-ink-500">
+                Node
+                <input
+                  value={nodeTypeFilter}
+                  onChange={(e) => setNodeTypeFilter(e.target.value)}
+                  placeholder="node type"
+                  className="mt-0.5 block rounded-lg border border-ink-200 px-2 py-1 text-sm"
+                />
+              </label>
+            </div>
+          </details>
+          <p className="text-[11px] leading-relaxed text-ink-400">
+            Run → Files shows outputs for one run. Use this registry only for cross-run search or a specific artifact id.
+          </p>
         </div>
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         {items === null ? (
           <LoadingBlock />
         ) : items.length === 0 ? (
           <EmptyState
-            title={runFilter.trim() ? 'This run produced no artifacts' : 'No artifacts yet'}
+            title={
+              hasActiveFilters
+                ? 'No artifacts match these filters'
+                : 'No artifacts yet'
+            }
             description={
-              runFilter.trim()
-                ? 'The filtered run has no stored artifacts (common for failed or cancelled runs). Open the run for logs, or recover in the Editor.'
-                : 'Run a pipeline from the Editor that produces node outputs, then refresh. Trace is the backtrack surface; this page is the library.'
+              hasActiveFilters
+                ? runFilter.trim()
+                  ? 'This filter produced no stored artifacts (common for failed or cancelled runs). Clear filters or open the run for logs.'
+                  : 'Nothing matches. Clear filters to browse the full library.'
+                : 'Run a pipeline that produces node outputs, then refresh. Prefer Run → Files for one run.'
             }
             action={
-              <div className="flex flex-wrap justify-center gap-2">
-                {runFilter.trim() ? (
+              hasActiveFilters ? (
+                <button type="button" className="btn-primary" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              ) : (
+                <div className="flex flex-wrap justify-center gap-2">
                   <button
                     type="button"
                     className="btn-primary"
-                    onClick={() => openRun(runFilter.trim())}
+                    onClick={() => {
+                      useAppStore.getState().setView('runs')
+                      window.history.replaceState(null, '', '#/runs')
+                      window.dispatchEvent(new HashChangeEvent('hashchange'))
+                    }}
                   >
-                    Open this run
+                    Open Run
                   </button>
-                ) : (
                   <button
                     type="button"
-                    className="btn-primary"
+                    className="btn-secondary"
                     onClick={() => {
                       useAppStore.getState().setView('templates')
                       window.history.replaceState(null, '', '#/templates')
@@ -316,8 +436,8 @@ export default function ArtifactsView() {
                   >
                     From template
                   </button>
-                )}
-              </div>
+                </div>
+              )
             }
           />
         ) : (
@@ -351,22 +471,27 @@ export default function ArtifactsView() {
         {!selected ? (
           <EmptyState
             title="Select an artifact"
-            description="Inspect this output, replay its run, or open Trace for the accountability chain."
+            description="Inspect this output, download it, open Lineage, or jump to its run."
             action={
               items && items.length > 0 ? (
                 <button type="button" className="btn-secondary" onClick={() => void open(idOf(items[0]))}>
                   Open first artifact
+                </button>
+              ) : hasActiveFilters ? (
+                <button type="button" className="btn-primary" onClick={clearFilters}>
+                  Clear filters
                 </button>
               ) : (
                 <button
                   type="button"
                   className="btn-primary"
                   onClick={() => {
-                    useAppStore.getState().setView('builder')
-                    window.history.replaceState(null, '', '#/builder')
+                    useAppStore.getState().setView('runs')
+                    window.history.replaceState(null, '', '#/runs')
+                    window.dispatchEvent(new HashChangeEvent('hashchange'))
                   }}
                 >
-                  Open Builder
+                  Open Run
                 </button>
               )
             }
@@ -379,6 +504,7 @@ export default function ArtifactsView() {
               const runId = String(rec.run_id ?? '').trim()
               const created = String(rec.created_at ?? rec.ts ?? '').trim()
               const graphName = String(rec.graph_name ?? '').trim()
+              const sizeLabel = formatBytes(rec.size ?? rec.byte_size ?? rec.bytes)
               return (
                 <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm space-y-1">
                   <div className="text-base font-semibold text-ink-900">
@@ -403,10 +529,14 @@ export default function ArtifactsView() {
                     {graphName ? (
                       <span className="text-xs text-ink-500">{humanizeTemplateName(graphName)}</span>
                     ) : null}
+                    {sizeLabel ? <span className="text-xs text-ink-400">{sizeLabel}</span> : null}
                     {created ? (
                       <span className="text-xs text-ink-400">{formatLocaleDateTime(created)}</span>
                     ) : null}
                   </div>
+                  {path ? (
+                    <div className="pt-1 font-mono text-[11px] text-ink-600 break-all">{path}</div>
+                  ) : null}
                   <div className="font-mono text-[11px] text-ink-400">{selected}</div>
                 </div>
               )
@@ -414,28 +544,39 @@ export default function ArtifactsView() {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                className="btn-secondary"
+                className="btn-primary"
                 onClick={() => {
                   const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
                   const runId = String(rec.run_id ?? '').trim()
-                  openTrace({ artifactId: selected, runId: runId || undefined, project: useAppStore.getState().activeProject || undefined })
+                  openTrace({
+                    artifactId: selected,
+                    runId: runId || undefined,
+                    project: useAppStore.getState().activeProject || undefined,
+                  })
                 }}
               >
-                <GitBranch className="h-3.5 w-3.5" /> Trace lineage
+                <GitBranch className="h-3.5 w-3.5" /> Lineage
               </button>
-              <button type="button" className="btn-primary" onClick={() => void replay(selected)}>
-                <Play className="h-3.5 w-3.5" /> Replay
-              </button>
+              {path ? (
+                <button type="button" className="btn-primary" onClick={() => void download(path)}>
+                  <Download className="h-3.5 w-3.5" /> Download
+                </button>
+              ) : null}
               {(() => {
                 const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
                 const runId = String(rec.run_id ?? '').trim()
                 if (!runId) return null
                 return (
-                  <button type="button" className="btn-secondary" onClick={() => openRun(runId)}>
+                  <button type="button" className="btn-primary" onClick={() => openRun(runId)}>
                     <History className="h-3.5 w-3.5" /> Open run
                   </button>
                 )
               })()}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-secondary" onClick={() => void replay(selected)}>
+                <Play className="h-3.5 w-3.5" /> Replay
+              </button>
               {(() => {
                 const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
                 const runId = String(rec.run_id ?? '').trim()
@@ -455,52 +596,32 @@ export default function ArtifactsView() {
                             return
                           }
                           loadGraphIntoBuilder(graph)
-                          pushToast('Opened graph in Builder', 'success')
+                          pushToast('Opened graph in Editor', 'success')
                         } catch (err) {
                           pushToast(err instanceof Error ? err.message : String(err), 'error')
                         }
                       })()
                     }}
                   >
-                    <Workflow className="h-3.5 w-3.5" /> Builder
+                    <Workflow className="h-3.5 w-3.5" /> Editor
                   </button>
                 )
               })()}
+              {path ? (
+                <button type="button" className="btn-secondary" onClick={() => void copyPath(path)}>
+                  <Copy className="h-3.5 w-3.5" /> Copy path
+                </button>
+              ) : null}
             </div>
-            {path && (
-              <div className="space-y-2">
-                <div className="flex items-start gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2">
-                  <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-ink-800">{path}</code>
-                  <button type="button" className="btn-secondary shrink-0" onClick={() => void copyPath(path)}>
-                    <Copy className="h-3.5 w-3.5" /> Copy path
-                  </button>
-                  <button type="button" className="btn-primary shrink-0" onClick={() => void download(path)}>
-                    <Download className="h-3.5 w-3.5" /> Download
-                  </button>
-                </div>
-                {previewUrl && (
-                  <img
-                    src={previewUrl}
-                    alt={path.split(/[\\/]/).pop() || 'preview'}
-                    className="max-h-80 w-full rounded-xl border border-ink-200 object-contain bg-white"
-                  />
-                )}
-              </div>
+            {path && previewUrl && (
+              <img
+                src={previewUrl}
+                alt={path.split(/[\\/]/).pop() || 'preview'}
+                className="max-h-80 w-full rounded-xl border border-ink-200 object-contain bg-white"
+              />
             )}
             <p className="rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-600">
-              Provenance and upstream inputs live in Trace — use{' '}
-              <button
-                type="button"
-                className="font-medium text-accent-700 hover:underline"
-                onClick={() => {
-                  const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
-                  const runId = String(rec.run_id ?? '').trim()
-                  openTrace({ artifactId: selected, runId: runId || undefined, project: useAppStore.getState().activeProject || undefined })
-                }}
-              >
-                Trace lineage
-              </button>{' '}
-              instead of dumping full metadata here.
+              Prefer Run → Files for one run. Provenance lives on Run → Lineage (or this Trace deep-link for artifact ids).
             </p>
           </>
         )}

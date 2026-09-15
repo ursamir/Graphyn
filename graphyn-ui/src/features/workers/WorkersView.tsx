@@ -1,5 +1,5 @@
 import React from 'react'
-import { ExternalLink, RefreshCw, Server } from 'lucide-react'
+import { ExternalLink, RefreshCw, Server, X } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { formatLocaleDateTime, formatRelativeTime } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
@@ -12,9 +12,9 @@ import {
   StatusBadge,
 } from '../../components/ui'
 
-/** Same-host smoke command from docs/GETTING_STARTED.md + docs/SDK_AND_CLI.md */
+/** Same-host smoke command — see docs/SDK_AND_CLI.md `graphyn worker start`. */
 const WORKER_START_CMD =
-  'venv/bin/python -m app.cli.main worker start --control-url http://127.0.0.1:8001/api/v1 --worker-id local-gpu --labels gpu --pool gpu-lab'
+  'graphyn worker start --control-url http://127.0.0.1:8001/api/v1 --worker-id local-gpu --labels gpu --pool gpu-lab'
 
 const DOCS_GETTING_STARTED_MODE_B =
   'https://github.com/ursamir/Graphyn/blob/main/docs/GETTING_STARTED.md#mode-b--multi-machine-control-plane--workers'
@@ -56,11 +56,22 @@ function gpuLabel(w: WorkerRow): string {
   return name
 }
 
+function effectiveStatus(w: WorkerRow): string {
+  if (isStale(w.heartbeat_at)) return 'stale'
+  return String(w.status ?? 'idle').toLowerCase()
+}
+
 export default function WorkersView() {
   const pushToast = useAppStore((s) => s.pushToast)
+  const backendMode = useAppStore((s) => s.backendMode)
   const [workers, setWorkers] = React.useState<WorkerRow[] | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const [lastRefresh, setLastRefresh] = React.useState<Date | null>(null)
+  const [filterLabel, setFilterLabel] = React.useState('')
+  const [filterPool, setFilterPool] = React.useState('')
+  const [filterStatus, setFilterStatus] = React.useState('')
+  const [selected, setSelected] = React.useState<WorkerRow | null>(null)
 
   const refresh = React.useCallback(async () => {
     setError(null)
@@ -70,6 +81,7 @@ export default function WorkersView() {
         query: { include_stale: true },
       })
       setWorkers(Array.isArray(rows) ? rows : [])
+      setLastRefresh(new Date())
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
@@ -85,56 +97,80 @@ export default function WorkersView() {
     return () => window.clearInterval(id)
   }, [refresh])
 
+  React.useEffect(() => {
+    if (!selected) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelected(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected])
+
+  const filtered = React.useMemo(() => {
+    if (!workers) return []
+    const lbl = filterLabel.trim().toLowerCase()
+    const pool = filterPool.trim().toLowerCase()
+    const st = filterStatus.trim().toLowerCase()
+    return workers.filter((w) => {
+      if (lbl && !(w.labels ?? []).some((x) => x.toLowerCase().includes(lbl))) return false
+      if (pool && !(w.pools ?? []).some((x) => x.toLowerCase().includes(pool))) return false
+      if (st && !effectiveStatus(w).includes(st)) return false
+      return true
+    })
+  }, [workers, filterLabel, filterPool, filterStatus])
+
+  const modeHint =
+    backendMode === 'distributed'
+      ? 'Mode B (distributed) — workers register with this control plane.'
+      : backendMode === 'local'
+        ? 'Mode A (local) — pipelines run in-process; workers are optional.'
+        : 'Set GRAPHYN_BACKEND=distributed on the control plane for Mode B.'
+
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-6">
+    <div className="h-full overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="Workers"
-        description="Distributed compute placement (Mode B) — registered workers, labels, GPU, and heartbeats. For packaging models onto devices, use Edge deploy."
+        description="Distributed compute placement (Mode B) — registered workers, labels, GPU, and heartbeats."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
         }
       />
+
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Summary</span>
+        <span className="font-medium text-ink-900">
+          {workers === null ? '…' : workers.length} {workers?.length === 1 ? 'worker' : 'workers'}
+        </span>
+        <span className="text-ink-500">{modeHint}</span>
+        <span className="ml-auto text-[11px] text-ink-400">
+          {lastRefresh ? `Refreshed ${formatRelativeTime(lastRefresh.toISOString())}` : 'Not refreshed yet'}
+        </span>
+        <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
+      </div>
+
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
+
       {loading && workers === null ? (
         <LoadingBlock label="Loading workers…" />
       ) : !workers || workers.length === 0 ? (
         <EmptyState
           title="No workers registered"
-          description="Local Mode A runs pipelines in-process and needs no workers. Mode B needs a distributed control plane plus at least one registered worker — set GRAPHYN_BACKEND=distributed, start a worker with the CLI, then refresh. Packaging models onto devices is Edge deploy — different from workers."
+          description="Mode A needs no workers. For Mode B, set GRAPHYN_BACKEND=distributed on the control plane, start a worker, then refresh."
           action={
             <div className="flex flex-col items-center gap-3">
               <div className="w-full max-w-xl rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-left">
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                  Control plane env
+                  Control plane
                 </div>
                 <CopyableMono value="GRAPHYN_BACKEND=distributed" />
                 <div className="mb-1 mt-2 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                  Worker start (same-host smoke)
+                  Worker start
                 </div>
                 <CopyableMono value={WORKER_START_CMD} />
-              </div>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => {
-                    useAppStore.getState().setView('system')
-                    window.history.replaceState(null, '', '#/system')
-                  }}
-                >
-                  Open System
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    useAppStore.getState().openEdge()
-                  }}
-                >
-                  Edge deploy instead
-                </button>
               </div>
               <a
                 href={DOCS_GETTING_STARTED_MODE_B}
@@ -149,77 +185,216 @@ export default function WorkersView() {
           }
         />
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-ink-100 bg-ink-50/80 text-[11px] uppercase tracking-wide text-ink-500">
-              <tr>
-                <th className="px-4 py-2.5 font-semibold">Worker</th>
-                <th className="px-4 py-2.5 font-semibold">Status</th>
-                <th className="px-4 py-2.5 font-semibold">Labels</th>
-                <th className="px-4 py-2.5 font-semibold">GPU / VRAM</th>
-                <th className="px-4 py-2.5 font-semibold">Last heartbeat</th>
-              </tr>
-            </thead>
-            <tbody>
-              {workers.map((w) => {
-                const stale = isStale(w.heartbeat_at)
-                return (
-                  <tr key={w.worker_id} className="border-b border-ink-100/80 last:border-0">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Server className="h-3.5 w-3.5 text-ink-400" />
-                        <span className="font-medium text-ink-900">{w.worker_id}</span>
-                        {stale && (
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
-                            Stale
-                          </span>
-                        )}
-                      </div>
-                      {w.plugins && w.plugins.length > 0 && (
-                        <div className="mt-1 text-[11px] text-ink-400">
-                          {w.plugins.slice(0, 6).join(', ')}
-                          {w.plugins.length > 6 ? ` +${w.plugins.length - 6}` : ''}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={String(w.status ?? (stale ? 'offline' : 'idle'))} />
-                      {typeof w.active_jobs === 'number' && w.active_jobs > 0 && (
-                        <div className="mt-1 text-[11px] text-ink-500">{w.active_jobs} active</div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        {(w.labels ?? []).map((lbl) => (
-                          <span
-                            key={lbl}
-                            className="rounded-md bg-ink-100 px-1.5 py-0.5 text-[11px] font-medium text-ink-700"
-                          >
-                            {lbl}
-                          </span>
-                        ))}
-                        {(w.pools ?? []).map((p) => (
-                          <span
-                            key={`pool-${p}`}
-                            className="rounded-md bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800"
-                          >
-                            pool:{p}
-                          </span>
-                        ))}
-                        {(w.labels ?? []).length === 0 && (w.pools ?? []).length === 0 && (
-                          <span className="text-ink-400">—</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-ink-700">{gpuLabel(w)}</td>
-                    <td className="px-4 py-3 text-ink-600" title={formatLocaleDateTime(w.heartbeat_at)}>
-                      {w.heartbeat_at ? formatRelativeTime(w.heartbeat_at) : '—'}
-                    </td>
+        <>
+          <div className="flex flex-wrap gap-2">
+            <input
+              value={filterLabel}
+              onChange={(e) => setFilterLabel(e.target.value)}
+              placeholder="Filter label"
+              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+            />
+            <input
+              value={filterPool}
+              onChange={(e) => setFilterPool(e.target.value)}
+              placeholder="Filter pool"
+              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+            />
+            <input
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              placeholder="Filter status"
+              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+            />
+            {(filterLabel || filterPool || filterStatus) && (
+              <button
+                type="button"
+                className="btn-quiet"
+                onClick={() => {
+                  setFilterLabel('')
+                  setFilterPool('')
+                  setFilterStatus('')
+                }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+
+          {filtered.length === 0 ? (
+            <p className="py-6 text-center text-sm text-ink-500">No workers match these filters.</p>
+          ) : (
+            <div className="overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-ink-100 bg-ink-50/80 text-[11px] uppercase tracking-wide text-ink-500">
+                  <tr>
+                    <th className="px-4 py-2.5 font-semibold">Worker</th>
+                    <th className="px-4 py-2.5 font-semibold">Status</th>
+                    <th className="px-4 py-2.5 font-semibold">Labels</th>
+                    <th className="px-4 py-2.5 font-semibold">GPU / VRAM</th>
+                    <th className="px-4 py-2.5 font-semibold">Last heartbeat</th>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {filtered.map((w) => {
+                    const stale = isStale(w.heartbeat_at)
+                    return (
+                      <tr
+                        key={w.worker_id}
+                        className="cursor-pointer border-b border-ink-100/80 last:border-0 hover:bg-ink-50/60"
+                        onClick={() => setSelected(w)}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <Server className="h-3.5 w-3.5 text-ink-400" />
+                            <span className="font-medium text-ink-900">{w.worker_id}</span>
+                            {stale && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                                Stale
+                              </span>
+                            )}
+                          </div>
+                          {w.plugins && w.plugins.length > 0 && (
+                            <div className="mt-1 text-[11px] text-ink-400">
+                              {w.plugins.slice(0, 6).join(', ')}
+                              {w.plugins.length > 6 ? ` +${w.plugins.length - 6}` : ''}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <StatusBadge status={String(w.status ?? (stale ? 'offline' : 'idle'))} />
+                          {typeof w.active_jobs === 'number' && w.active_jobs > 0 && (
+                            <div className="mt-1 text-[11px] text-ink-500">{w.active_jobs} active</div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-1">
+                            {(w.labels ?? []).map((lbl) => (
+                              <span
+                                key={lbl}
+                                className="rounded-md bg-ink-100 px-1.5 py-0.5 text-[11px] font-medium text-ink-700"
+                              >
+                                {lbl}
+                              </span>
+                            ))}
+                            {(w.pools ?? []).map((p) => (
+                              <span
+                                key={`pool-${p}`}
+                                className="rounded-md bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800"
+                              >
+                                pool:{p}
+                              </span>
+                            ))}
+                            {(w.labels ?? []).length === 0 && (w.pools ?? []).length === 0 && (
+                              <span className="text-ink-400">—</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-ink-700">{gpuLabel(w)}</td>
+                        <td className="px-4 py-3 text-ink-600" title={formatLocaleDateTime(w.heartbeat_at)}>
+                          {w.heartbeat_at ? formatRelativeTime(w.heartbeat_at) : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {selected && (
+        <div className="fixed inset-0 z-[100] flex justify-end bg-ink-950/30" onClick={() => setSelected(null)}>
+          <aside
+            className="flex h-full w-full max-w-md flex-col border-l border-ink-200 bg-white shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-label={`Worker ${selected.worker_id}`}
+          >
+            <div className="flex items-start justify-between gap-2 border-b border-ink-100 px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Worker</div>
+                <div className="mt-1">
+                  <CopyableMono value={selected.worker_id} />
+                </div>
+              </div>
+              <button type="button" className="btn-icon" aria-label="Close" onClick={() => setSelected(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm">
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Status</div>
+                <StatusBadge status={String(selected.status ?? (isStale(selected.heartbeat_at) ? 'offline' : 'idle'))} />
+                {typeof selected.active_jobs === 'number' && (
+                  <div className="mt-1 text-ink-600">{selected.active_jobs} active job(s)</div>
+                )}
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Labels</div>
+                <div className="flex flex-wrap gap-1">
+                  {(selected.labels ?? []).length === 0 ? (
+                    <span className="text-ink-400">—</span>
+                  ) : (
+                    (selected.labels ?? []).map((lbl) => (
+                      <span key={lbl} className="rounded-md bg-ink-100 px-1.5 py-0.5 text-[11px] font-medium text-ink-700">
+                        {lbl}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Pools</div>
+                <div className="flex flex-wrap gap-1">
+                  {(selected.pools ?? []).length === 0 ? (
+                    <span className="text-ink-400">—</span>
+                  ) : (
+                    (selected.pools ?? []).map((p) => (
+                      <span key={p} className="rounded-md bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800">
+                        {p}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Resources</div>
+                <dl className="space-y-1 text-ink-800">
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-ink-500">GPU</dt>
+                    <dd>{gpuLabel(selected)}</dd>
+                  </div>
+                  {selected.resources?.cpus != null && (
+                    <div className="flex justify-between gap-2">
+                      <dt className="text-ink-500">CPUs</dt>
+                      <dd>{selected.resources.cpus}</dd>
+                    </div>
+                  )}
+                </dl>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Heartbeat</div>
+                <div title={formatLocaleDateTime(selected.heartbeat_at)}>
+                  {selected.heartbeat_at ? formatRelativeTime(selected.heartbeat_at) : '—'}
+                  {isStale(selected.heartbeat_at) ? (
+                    <span className="ml-2 text-amber-800">stale</span>
+                  ) : null}
+                </div>
+                {selected.heartbeat_at && (
+                  <div className="mt-0.5 font-mono text-[11px] text-ink-400">
+                    {formatLocaleDateTime(selected.heartbeat_at)}
+                  </div>
+                )}
+              </div>
+              {selected.plugins && selected.plugins.length > 0 && (
+                <div>
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Plugins</div>
+                  <p className="text-ink-700">{selected.plugins.join(', ')}</p>
+                </div>
+              )}
+            </div>
+          </aside>
         </div>
       )}
     </div>

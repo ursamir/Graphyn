@@ -1,5 +1,5 @@
 import React from 'react'
-import { RefreshCw, Upload } from 'lucide-react'
+import { RefreshCw, Search, Upload } from 'lucide-react'
 import {
   apiFetch,
   apiJson,
@@ -9,7 +9,7 @@ import {
   getApiToken,
 } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { ConfirmButton, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
+import { ConfirmButton, CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
 import clsx from 'clsx'
 import { formatExecutionLine, formatMergeToast } from '../../lib/format'
 
@@ -22,8 +22,10 @@ interface InputLabel {
   file_count: number
 }
 
-
 type DataMode = 'outputs' | 'inputs' | 'ingest' | 'merge'
+type ManageTab = 'upload' | 'ingest' | 'merge'
+
+const LIST_CAP = 200
 
 function sanitizePathSeg(value: string | undefined | null): string | undefined {
   const v = (value || '').trim()
@@ -81,8 +83,16 @@ function humanizeDataError(err: unknown): { message: string; detail: string; inv
   return { message: detail, detail, invalidPath: false }
 }
 
-const DOCS_GETTING_STARTED_MODE_B =
-  'https://github.com/ursamir/Graphyn/blob/main/docs/GETTING_STARTED.md#mode-b--multi-machine-control-plane--workers'
+function manageTabFromMode(mode: DataMode): ManageTab {
+  if (mode === 'ingest') return 'ingest'
+  if (mode === 'merge') return 'merge'
+  return 'upload'
+}
+
+function matchesQuery(haystack: string, q: string): boolean {
+  if (!q.trim()) return true
+  return haystack.toLowerCase().includes(q.trim().toLowerCase())
+}
 
 export default function DataView() {
   const pushToast = useAppStore((s) => s.pushToast)
@@ -93,13 +103,16 @@ export default function DataView() {
   const initialHash = React.useMemo(() => parseDataHash(), [])
   const [outputs, setOutputs] = React.useState<OutputProject[]>([])
   const [inputs, setInputs] = React.useState<InputLabel[]>([])
-  const [mode, setMode] = React.useState<DataMode>(initialHash.mode ?? 'outputs')
+  const [mode, setMode] = React.useState<DataMode>(initialHash.mode ?? 'inputs')
   const [uxMode, setUxMode] = React.useState<'browse' | 'manage'>(() => {
     if (initialHash.manage === true) return 'manage'
     if (initialHash.manage === false) return 'browse'
     const m = initialHash.mode
     return m === 'ingest' || m === 'merge' ? 'manage' : 'browse'
   })
+  const [manageTab, setManageTab] = React.useState<ManageTab>(() =>
+    manageTabFromMode(initialHash.mode ?? 'inputs'),
+  )
   const [project, setProject] = React.useState(initialHash.project ?? '')
   const [version, setVersion] = React.useState(initialHash.version ?? '')
   const [label, setLabel] = React.useState(initialHash.label ?? '')
@@ -108,6 +121,7 @@ export default function DataView() {
   const [error, setError] = React.useState<string | null>(null)
   const [errorDetail, setErrorDetail] = React.useState<string | null>(null)
   const [pathRecovery, setPathRecovery] = React.useState(false)
+  const [listFilter, setListFilter] = React.useState('')
   const skippedOutputKey = React.useRef<string | null>(null)
   /** After closeProject: keep outputs dropdown empty; do not revive prior project via loadSources/hash-sync. */
   const libraryClearRef = React.useRef(false)
@@ -213,7 +227,10 @@ export default function DataView() {
   React.useEffect(() => {
     const apply = () => {
       const h = parseDataHash()
-      if (h.mode) setMode(h.mode)
+      if (h.mode) {
+        setMode(h.mode)
+        setManageTab(manageTabFromMode(h.mode))
+      }
       if (h.manage === true) setUxMode('manage')
       else if (h.manage === false) setUxMode('browse')
       else if (h.mode === 'ingest' || h.mode === 'merge') setUxMode('manage')
@@ -369,6 +386,7 @@ export default function DataView() {
         pushToast(`Uploaded ${body.filename ?? file.name}`, 'success')
         await loadSources()
         setUxMode('manage')
+        setManageTab('upload')
         setMode('inputs')
         setLabel('uploads')
       } catch (err) {
@@ -519,36 +537,89 @@ export default function DataView() {
   const browseTemplatesForDataPrep = () => {
     setView('templates')
     window.history.replaceState(null, '', '#/templates')
-    pushToast('Open a data-prep or ingest template in Builder', 'info')
+    pushToast('Open a data-prep or ingest template in Editor', 'info')
   }
 
   const versions = outputs.find((o) => o.project === project)?.versions ?? []
+
+  const filteredInputs = React.useMemo(
+    () => inputs.filter((i) => matchesQuery(`${i.label} ${i.file_count}`, listFilter)),
+    [inputs, listFilter],
+  )
+  const filteredOutputs = React.useMemo(
+    () =>
+      outputs.filter(
+        (o) =>
+          matchesQuery(o.project, listFilter) ||
+          o.versions.some((v) => matchesQuery(`${o.project}/${v}`, listFilter)),
+      ),
+    [outputs, listFilter],
+  )
+  const filteredRows = React.useMemo(
+    () =>
+      rows.filter((r) =>
+        matchesQuery(`${String(r.path ?? '')} ${String(r.split ?? r.label ?? '')}`, listFilter),
+      ),
+    [rows, listFilter],
+  )
+  const displayRows = filteredRows.slice(0, LIST_CAP)
+  const listTruncated = filteredRows.length > LIST_CAP
 
   const switchUxMode = (next: 'browse' | 'manage') => {
     setError(null)
     setErrorDetail(null)
     setPathRecovery(false)
+    setListFilter('')
     setUxMode(next)
     if (next === 'browse') {
-      setMode(mode === 'inputs' || mode === 'outputs' ? mode : 'outputs')
-    } else if (mode !== 'ingest' && mode !== 'merge' && mode !== 'inputs' && mode !== 'outputs') {
-      setMode('ingest')
-    } else if (mode === 'inputs' || mode === 'outputs') {
-      // Keep Upload/delete surface inside Manage
+      setMode(mode === 'inputs' || mode === 'outputs' ? mode : 'inputs')
+    } else if (mode === 'ingest') {
+      setManageTab('ingest')
+    } else if (mode === 'merge') {
+      setManageTab('merge')
     } else {
-      // ingest / merge already manage-native
+      setManageTab('upload')
+      setMode('inputs')
     }
   }
+
+  const setManage = (tab: ManageTab) => {
+    setError(null)
+    setErrorDetail(null)
+    setPathRecovery(false)
+    setListFilter('')
+    setManageTab(tab)
+    setUxMode('manage')
+    if (tab === 'upload') setMode('inputs')
+    else if (tab === 'ingest') setMode('ingest')
+    else setMode('merge')
+  }
+
+  const showFileBrowser = uxMode === 'browse' || (uxMode === 'manage' && manageTab === 'upload')
+  const showEmptyOutputs = mode === 'outputs' && (outputs.length === 0 || pathRecovery)
+  const showEmptyInputs = mode === 'inputs' && inputs.length === 0
+
+  const searchField = (
+    <label className="relative block min-w-[12rem] flex-1 max-w-sm">
+      <span className="sr-only">Filter lists</span>
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+      <input
+        value={listFilter}
+        onChange={(e) => setListFilter(e.target.value)}
+        placeholder={mode === 'inputs' ? 'Filter labels or files…' : 'Filter projects or files…'}
+        className="w-full rounded-lg border border-ink-200 py-1.5 pl-8 pr-2 text-sm"
+      />
+    </label>
+  )
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-4">
       <PageHeader
-        title="Explorer"
-        scope="global"
-        description="Shared library — link into a project from Project home. Browse files (viewer) or Manage uploads and transforms."
+        title="Data"
+        description="Shared dataset library (Inputs / Outputs folders). Not the same as Run → Files (per-run downloads). Link labels into a workspace from Overview."
         actions={
           <div className="flex gap-2">
-            {uxMode === 'manage' && (
+            {uxMode === 'manage' && manageTab === 'upload' && (
               <button type="button" className="btn-secondary" onClick={upload}>
                 <Upload className="h-3.5 w-3.5" /> Upload
               </button>
@@ -559,18 +630,6 @@ export default function DataView() {
           </div>
         }
       />
-      <p className="rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
-        Global file library (like an IDE explorer). Link labels into a workspace from Project home — Mode B workers need shared storage —{' '}
-        <a
-          href={DOCS_GETTING_STARTED_MODE_B}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium text-accent-700 hover:underline"
-        >
-          Getting Started · Mode B
-        </a>
-        .
-      </p>
       {error && <ErrorBanner message={error} title={errorDetail ?? undefined} onRetry={() => void loadSources()} />}
 
       <div
@@ -583,7 +642,7 @@ export default function DataView() {
             ['browse', 'Browse'],
             ['manage', 'Manage'],
           ] as const
-        ).map(([m, label]) => (
+        ).map(([m, tabLabel]) => (
           <button
             key={m}
             type="button"
@@ -597,7 +656,7 @@ export default function DataView() {
             )}
             onClick={() => switchUxMode(m)}
           >
-            {label}
+            {tabLabel}
           </button>
         ))}
       </div>
@@ -606,10 +665,10 @@ export default function DataView() {
         <div className="flex flex-wrap gap-2">
           {(
             [
-              ['outputs', 'Outputs'],
               ['inputs', 'Inputs'],
+              ['outputs', 'Outputs'],
             ] as const
-          ).map(([m, label]) => (
+          ).map(([m, tabLabel]) => (
             <button
               key={m}
               type="button"
@@ -618,80 +677,39 @@ export default function DataView() {
                 setError(null)
                 setErrorDetail(null)
                 setPathRecovery(false)
+                setListFilter('')
                 setMode(m)
               }}
             >
-              {label}
+              {tabLabel}
             </button>
           ))}
-          <span className="self-center text-[11px] text-ink-400">Read-only viewer — open / play files</span>
+          <span className="self-center text-[11px] text-ink-400">Read-only — open / play files</span>
         </div>
       ) : (
-        <div className="space-y-2">
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ['upload', 'Upload'],
+              ['ingest', 'Ingest'],
+              ['merge', 'Merge'],
+            ] as const
+          ).map(([tab, tabLabel]) => (
             <button
+              key={tab}
               type="button"
-              className={mode === 'ingest' ? 'btn-primary' : 'btn-secondary'}
-              onClick={() => {
-                setError(null)
-                setErrorDetail(null)
-                setPathRecovery(false)
-                setMode('ingest')
-              }}
+              className={manageTab === tab ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => setManage(tab)}
             >
-              Ingest
+              {tabLabel}
             </button>
-            <button
-              type="button"
-              className={mode === 'merge' ? 'btn-primary' : 'btn-secondary'}
-              onClick={() => {
-                setError(null)
-                setErrorDetail(null)
-                setPathRecovery(false)
-                setMode('merge')
-              }}
-            >
-              Merge
-            </button>
-            <button
-              type="button"
-              className={mode === 'inputs' || mode === 'outputs' ? 'btn-primary' : 'btn-secondary'}
-              onClick={() => {
-                setError(null)
-                setErrorDetail(null)
-                setPathRecovery(false)
-                setUxMode('manage')
-                setMode(mode === 'outputs' ? 'outputs' : 'inputs')
-              }}
-            >
-              Upload / delete
-            </button>
-            <span className="self-center text-[11px] text-ink-400">Secondary · destructive actions</span>
-          </div>
-          {(mode === 'inputs' || mode === 'outputs') && (
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className={mode === 'inputs' ? 'btn-primary' : 'btn-secondary'}
-                onClick={() => setMode('inputs')}
-              >
-                Inputs
-              </button>
-              <button
-                type="button"
-                className={mode === 'outputs' ? 'btn-primary' : 'btn-secondary'}
-                onClick={() => setMode('outputs')}
-              >
-                Outputs
-              </button>
-            </div>
-          )}
+          ))}
         </div>
       )}
 
       {loading ? (
         <LoadingBlock />
-      ) : mode === 'ingest' ? (
+      ) : uxMode === 'manage' && manageTab === 'ingest' ? (
         <div className="space-y-4">
           <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-2">
             <h3 className="text-sm font-semibold">URL ingest</h3>
@@ -708,7 +726,7 @@ export default function DataView() {
             {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') || 'No ingest events yet.'}
           </pre>
         </div>
-      ) : mode === 'merge' ? (
+      ) : uxMode === 'manage' && manageTab === 'merge' ? (
         <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-2">
           <h3 className="text-sm font-semibold">Merge datasets</h3>
           <p className="text-sm text-ink-500">Comma-separated project:version pairs combined into the target project version.</p>
@@ -717,19 +735,21 @@ export default function DataView() {
           <input value={mergeTargetVersion} onChange={(e) => setMergeTargetVersion(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="target version" />
           <button type="button" className="btn-primary" onClick={() => void doMerge()}>Merge</button>
         </section>
-      ) : (
+      ) : showFileBrowser ? (
         <>
           {mode === 'outputs' ? (
-            outputs.length === 0 || pathRecovery ? (
+            showEmptyOutputs ? (
               <EmptyState
                 title={pathRecovery ? 'Dataset path reset' : 'No output datasets yet'}
                 description={
                   pathRecovery
-                    ? 'The selected path was invalid or outside the workspace, so selection was cleared. Upload audio, create a project, or run a template to populate Outputs.'
-                    : 'Outputs list version folders (v1, v1.0.0, …) under your Graphyn workspace after a template or export runs. Inputs are files you upload; Projects are the named workspace — a draft project alone does not create versions here. Start with: Upload audio → Browse Templates → run → see results in Outputs / Projects.'
+                    ? 'The selected path was invalid or outside the workspace, so selection was cleared.'
+                    : uxMode === 'manage'
+                      ? 'Upload audio or ingest a dataset, then run a template to populate Outputs.'
+                      : 'Outputs appear after a template or export writes version folders. Link a project workspace, or browse templates to produce data.'
                 }
                 action={
-                  <div className="flex flex-wrap justify-center gap-2">
+                  pathRecovery && outputs.length > 0 ? (
                     <button
                       type="button"
                       className="btn-primary"
@@ -737,26 +757,31 @@ export default function DataView() {
                         setPathRecovery(false)
                         setError(null)
                         setErrorDetail(null)
-                        setUxMode('manage')
+                        skippedOutputKey.current = null
+                        const first = outputs.find((o) => o.versions.length > 0)
+                        setProject(first?.project ?? '')
+                        setVersion(first?.versions[0] ?? '')
+                      }}
+                    >
+                      Browse existing outputs
+                    </button>
+                  ) : uxMode === 'manage' ? (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        setPathRecovery(false)
+                        setManage('upload')
                         setMode('inputs')
                         upload()
                       }}
                     >
                       Upload audio
                     </button>
+                  ) : (
                     <button
                       type="button"
-                      className="btn-secondary"
-                      onClick={() => {
-                        setPathRecovery(false)
-                        openProjects()
-                      }}
-                    >
-                      Create project
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary"
+                      className="btn-primary"
                       onClick={() => {
                         setPathRecovery(false)
                         openProjects()
@@ -764,98 +789,96 @@ export default function DataView() {
                     >
                       Open Projects
                     </button>
-                    <button type="button" className="btn-secondary" onClick={browseTemplatesForDataPrep}>
-                      Browse Templates
-                    </button>
-                    {pathRecovery && outputs.length > 0 ? (
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => {
-                          setPathRecovery(false)
-                          setError(null)
-                          setErrorDetail(null)
-                          skippedOutputKey.current = null
-                          const first = outputs.find((o) => o.versions.length > 0)
-                          setProject(first?.project ?? '')
-                          setVersion(first?.versions[0] ?? '')
-                        }}
-                      >
-                        Browse existing outputs
-                      </button>
-                    ) : null}
-                  </div>
+                  )
                 }
               />
             ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={project}
-                onChange={(e) => {
-                  setError(null)
-                  setErrorDetail(null)
-                  libraryClearRef.current = false
-                  skipProjectHashRef.current = false
-                  const next = e.target.value
-                  setProject(next)
-                  setVersion(outputs.find((o) => o.project === next)?.versions[0] ?? '')
-                }}
-                className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-              >
-                <option value="">Select project…</option>
-                {outputs.map((o) => <option key={o.project} value={o.project}>{o.project}</option>)}
-              </select>
-              <select value={version} onChange={(e) => { setError(null); setErrorDetail(null); setVersion(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
-                {versions.map((v) => <option key={v} value={v}>{v}</option>)}
-              </select>
-              {project ? (
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => openProjects({ project })}
-                  title="Open dataset workspace (versions, snapshots, lineage)"
+              <div className="flex flex-wrap items-center gap-2">
+                {searchField}
+                <select
+                  value={project}
+                  onChange={(e) => {
+                    setError(null)
+                    setErrorDetail(null)
+                    libraryClearRef.current = false
+                    skipProjectHashRef.current = false
+                    const next = e.target.value
+                    setProject(next)
+                    setVersion(outputs.find((o) => o.project === next)?.versions[0] ?? '')
+                  }}
+                  className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
                 >
-                  Open project
-                </button>
-              ) : null}
-              {uxMode === 'manage' && project && version ? (
-                <ConfirmButton
-                  label="Delete"
-                  confirmLabel={`Delete ${project}/${version}?`}
-                  danger
-                  onConfirm={() => void deleteOutput()}
-                />
-              ) : null}
-              {uxMode === 'browse' && project ? (
+                  <option value="">Select project…</option>
+                  {(listFilter.trim() ? filteredOutputs : outputs).map((o) => (
+                    <option key={o.project} value={o.project}>{o.project}</option>
+                  ))}
+                </select>
+                <select value={version} onChange={(e) => { setError(null); setErrorDetail(null); setVersion(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
+                  {versions.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+                {project ? (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => openProjects({ project })}
+                    title="Open dataset workspace (versions, snapshots, lineage)"
+                  >
+                    Open project
+                  </button>
+                ) : null}
+                {uxMode === 'manage' && project && version ? (
+                  <ConfirmButton
+                    label="Delete"
+                    confirmLabel={`Delete ${project}/${version}?`}
+                    danger
+                    onConfirm={() => void deleteOutput()}
+                  />
+                ) : null}
+                {uxMode === 'browse' && project ? (
+                  <button
+                    type="button"
+                    className="btn-secondary text-[12px]"
+                    onClick={() => {
+                      setUxMode('manage')
+                      setManageTab('upload')
+                      setMode('inputs')
+                    }}
+                  >
+                    Manage…
+                  </button>
+                ) : null}
+              </div>
+            )
+          ) : showEmptyInputs ? (
+            <EmptyState
+              title="No input labels"
+              description="Upload audio or ingest URLs to create a label folder under workspace/datasets/input."
+              action={
                 <button
                   type="button"
-                  className="btn-secondary text-[12px]"
+                  className="btn-primary"
                   onClick={() => {
                     setUxMode('manage')
-                    // Stay on current outputs/inputs selection for delete workflow
+                    setManageTab('upload')
+                    upload()
                   }}
                 >
-                  Manage…
+                  Upload a file
                 </button>
-              ) : null}
-            </div>
-            )
+              }
+            />
           ) : (
-            inputs.length === 0 ? (
-              <EmptyState
-                title="No input labels"
-                description="Upload audio or ingest URLs to create a label folder under workspace/datasets/input."
-                action={
-                  <button type="button" className="btn-primary" onClick={upload}>
-                    Upload a file
-                  </button>
-                }
-              />
-            ) : (
             <div className="flex flex-wrap items-center gap-2">
-            <select value={label} onChange={(e) => { setError(null); setErrorDetail(null); setLabel(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
-              {inputs.map((i) => <option key={i.label} value={i.label}>{i.label} ({i.file_count})</option>)}
-            </select>
+              {searchField}
+              <select
+                value={label}
+                onChange={(e) => { setError(null); setErrorDetail(null); setLabel(e.target.value) }}
+                className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
+              >
+                {(listFilter.trim() ? filteredInputs : inputs).map((i) => (
+                  <option key={i.label} value={i.label}>{i.label} ({i.file_count})</option>
+                ))}
+              </select>
               {uxMode === 'manage' && label ? (
                 <ConfirmButton
                   label="Delete"
@@ -868,54 +891,126 @@ export default function DataView() {
                 <button type="button" className="btn-secondary" onClick={upload}>
                   <Upload className="h-3.5 w-3.5" /> Upload
                 </button>
-              ) : null}
+              ) : (
+                <button
+                  type="button"
+                  className="btn-secondary text-[12px]"
+                  onClick={() => {
+                    setUxMode('manage')
+                    setManageTab('upload')
+                  }}
+                >
+                  Manage…
+                </button>
+              )}
             </div>
-            )
           )}
-          {mode === 'outputs' && (outputs.length === 0 || pathRecovery) ? null : mode === 'inputs' && inputs.length === 0 ? null : stats != null && <KeyValue data={stats} />}
-          {mode === 'outputs' && (outputs.length === 0 || pathRecovery) ? null : mode === 'inputs' && inputs.length === 0 ? null : rows.length === 0 ? (
+
+          {uxMode === 'manage' && manageTab === 'upload' ? (
+            <details className="rounded-xl border border-ink-100 bg-ink-50/60">
+              <summary className="cursor-pointer select-none px-3 py-2 text-[12px] font-medium text-ink-600">
+                Delete an output version
+              </summary>
+              <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 px-3 py-2">
+                <select
+                  value={project}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    setProject(next)
+                    setVersion(outputs.find((o) => o.project === next)?.versions[0] ?? '')
+                  }}
+                  className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
+                >
+                  <option value="">Select project…</option>
+                  {outputs.map((o) => (
+                    <option key={o.project} value={o.project}>{o.project}</option>
+                  ))}
+                </select>
+                <select
+                  value={version}
+                  onChange={(e) => setVersion(e.target.value)}
+                  className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
+                >
+                  {versions.map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+                {project && version ? (
+                  <ConfirmButton
+                    label="Delete"
+                    confirmLabel={`Delete ${project}/${version}?`}
+                    danger
+                    onConfirm={() => void deleteOutput()}
+                  />
+                ) : null}
+              </div>
+            </details>
+          ) : null}
+
+          {showEmptyOutputs || showEmptyInputs ? null : stats != null && <KeyValue data={stats} />}
+          {showEmptyOutputs || showEmptyInputs ? null : filteredRows.length === 0 ? (
             <EmptyState
-              title="No rows"
+              title={listFilter.trim() ? 'No matches' : 'No rows'}
               description={
-                mode === 'outputs'
-                  ? 'This version has no files yet. Run a pipeline or merge datasets to populate it.'
-                  : 'Upload audio or ingest a dataset to see files here.'
+                listFilter.trim()
+                  ? 'Nothing matches this filter. Clear it to see the full list.'
+                  : mode === 'outputs'
+                    ? 'This version has no files yet. Run a pipeline or merge datasets to populate it.'
+                    : 'Upload audio or ingest a dataset to see files here.'
               }
               action={
-                mode === 'inputs' ? (
+                listFilter.trim() ? (
+                  <button type="button" className="btn-primary" onClick={() => setListFilter('')}>
+                    Clear filter
+                  </button>
+                ) : mode === 'inputs' ? (
                   <button type="button" className="btn-primary" onClick={upload}>
                     Upload a file
                   </button>
-                ) : undefined
+                ) : (
+                  <button type="button" className="btn-primary" onClick={browseTemplatesForDataPrep}>
+                    Browse Templates
+                  </button>
+                )
               }
             />
           ) : (
-            <div className="rounded-2xl border border-ink-200 bg-white">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-ink-100 text-[11px] uppercase text-ink-500">
-                  <tr><th className="px-3 py-2">Path</th><th className="px-3 py-2">Meta</th><th className="px-3 py-2">Open</th></tr>
-                </thead>
-                <tbody>
-                  {rows.slice(0, 200).map((r, i) => {
-                    const path = String(r.path ?? '')
-                    return (
-                      <tr key={i} className="border-b border-ink-50">
-                        <td className="px-3 py-2 font-mono text-[11px]">{path}</td>
-                        <td className="px-3 py-2 text-[11px] text-ink-500">{String(r.split ?? r.label ?? '')}</td>
-                        <td className="px-3 py-2">
-                          <button type="button" className="text-accent-700 underline" onClick={() => void openFile(path, mode === 'outputs' ? 'files' : 'input-files')}>
-                            open
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+            <div className="space-y-2">
+              {listTruncated ? (
+                <p className="text-[12px] text-ink-500">
+                  Showing first {LIST_CAP} of {filteredRows.length} files
+                  {listFilter.trim() ? ' matching this filter' : ''}. Refine the filter to narrow results.
+                </p>
+              ) : null}
+              <div className="rounded-2xl border border-ink-200 bg-white">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-ink-100 text-[11px] uppercase text-ink-500">
+                    <tr><th className="px-3 py-2">Path</th><th className="px-3 py-2">Meta</th><th className="px-3 py-2">Open</th></tr>
+                  </thead>
+                  <tbody>
+                    {displayRows.map((r, i) => {
+                      const path = String(r.path ?? '')
+                      return (
+                        <tr key={i} className="border-b border-ink-50">
+                          <td className="px-3 py-2 font-mono text-[11px]">
+                            {path ? <CopyableMono value={path} /> : '—'}
+                          </td>
+                          <td className="px-3 py-2 text-[11px] text-ink-500">{String(r.split ?? r.label ?? '')}</td>
+                          <td className="px-3 py-2">
+                            <button type="button" className="text-accent-700 underline" onClick={() => void openFile(path, mode === 'outputs' ? 'files' : 'input-files')}>
+                              open
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>
-      )}
+      ) : null}
     </div>
   )
 }

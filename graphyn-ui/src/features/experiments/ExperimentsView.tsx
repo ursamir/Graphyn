@@ -96,13 +96,11 @@ function parseExperimentsHash(): string[] {
   return collected
 }
 
-export default function ExperimentsView() {
+export default function ExperimentsView({ embedded = false }: { embedded?: boolean }) {
   const openRun = useAppStore((s) => s.openRun)
-  const openTrace = useAppStore((s) => s.openTrace)
-  const setView = useAppStore((s) => s.setView)
+  const setFocusRunsTab = useAppStore((s) => s.setFocusRunsTab)
   const pushToast = useAppStore((s) => s.pushToast)
   const activeProject = useAppStore((s) => s.activeProject)
-  const closeProject = useAppStore((s) => s.closeProject)
   const openProjects = useAppStore((s) => s.openProjects)
 
   const [blocks, setBlocks] = React.useState<ExperimentBlock[] | null>(null)
@@ -159,14 +157,21 @@ export default function ExperimentsView() {
   // Write selection into the hash without dispatching hashchange (avoid echo loops).
   React.useEffect(() => {
     const params = new URLSearchParams()
+    if (embedded) params.set('tab', 'compare')
     if (selectedIds.length === 1) params.set('run_id', selectedIds[0])
     else if (selectedIds.length > 1) params.set('run_id', selectedIds.join(','))
     const qs = params.toString()
-    const next = qs ? `#/experiments?${qs}` : '#/experiments'
+    const next = embedded
+      ? qs
+        ? `#/runs?${qs}`
+        : '#/runs?tab=compare'
+      : qs
+        ? `#/experiments?${qs}`
+        : '#/experiments'
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', next)
     }
-  }, [selectedIds])
+  }, [selectedIds, embedded])
 
   const active =
     blocks?.find((b) => b.experiment_name === selectedExp) ??
@@ -244,45 +249,62 @@ export default function ExperimentsView() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-6">
-      <PageHeader
-        title="Experiments"
-        scope="project"
-        description={`Scoped to ${activeProject} — compare params and metrics (IDE compare panel).`}
-        actions={
-          <div className="flex items-center gap-2">
-            {selectedIds.length >= 2 && (
-              <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
-                Compare ({selectedIds.length})
+    <div className={`relative h-full overflow-y-auto space-y-6 ${embedded ? 'p-5' : 'p-6'}`}>
+      {!embedded ? (
+        <PageHeader
+          title="Compare"
+          description={`Compare params and metrics for ${activeProject}. Prefer Run → Compare.`}
+          actions={
+            <div className="flex items-center gap-2">
+              {selectedIds.length >= 2 && (
+                <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
+                  Compare ({selectedIds.length})
+                </button>
+              )}
+              {compare && (
+                <button type="button" className="btn-secondary" onClick={clearCompare}>
+                  Clear
+                </button>
+              )}
+              <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+                <RefreshCw className="h-3.5 w-3.5" /> Refresh
               </button>
-            )}
-            {compare && (
-              <button type="button" className="btn-secondary" onClick={clearCompare}>
-                Clear
-              </button>
-            )}
-            <button type="button" className="btn-secondary" onClick={() => void refresh()}>
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </div>
+          }
+        />
+      ) : (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {selectedIds.length >= 2 && (
+            <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
+              Compare ({selectedIds.length})
+            </button>
+          )}
+          {compare && (
+            <button type="button" className="btn-secondary" onClick={clearCompare}>
+              Clear
+            </button>
+          )}
+          <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </div>
+      )}
+
+      {selectedIds.length >= 2 ? (
+        <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+          <span className="text-[13px] text-ink-700">
+            {selectedIds.length} runs selected
+          </span>
+          <div className="flex gap-2">
+            <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
+              {compareLoading ? 'Comparing…' : `Compare (${selectedIds.length})`}
+            </button>
+            <button type="button" className="btn-secondary" onClick={clearCompare}>
+              Clear
             </button>
           </div>
-        }
-      />
-      <div
-        role="status"
-        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent-200 bg-accent-50/80 px-3 py-2 text-[12px] text-accent-950"
-      >
-        <span>
-          Showing experiments for project <strong>{activeProject}</strong>
-        </span>
-        <span className="flex gap-2">
-          <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => openProjects()}>
-            Switch
-          </button>
-          <button type="button" className="font-medium text-accent-800 underline-offset-2 hover:underline" onClick={() => closeProject()}>
-            Clear
-          </button>
-        </span>
-      </div>
+        </div>
+      ) : null}
 
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
 
@@ -291,27 +313,27 @@ export default function ExperimentsView() {
           role="status"
           className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
         >
-          One run is preselected ({selectedIds[0].slice(0, 8)}…). Select a second run in the table, then
-          Compare — a single run is not enough for a side-by-side.
+          One run is preselected ({selectedIds[0].slice(0, 8)}…). Select a second run in the table, then Compare.
         </div>
       ) : null}
 
       {loading && blocks === null ? (
-        <LoadingBlock label="Loading experiments…" />
+        <LoadingBlock label="Loading runs…" />
       ) : !blocks || blocks.length === 0 || tableRuns.length === 0 ? (
         <EmptyState
-          title="No experiments yet"
-          description="Compare starts from Runs — execute a pipeline, then return here to pick runs and diff params/metrics."
+          title="Nothing to compare yet"
+          description="Run a pipeline first, then select 2–5 runs here to compare params and metrics."
           action={
             <button
               type="button"
               className="btn-primary"
               onClick={() => {
-                setView('runs')
+                setFocusRunsTab('history')
                 window.history.replaceState(null, '', '#/runs')
+                window.dispatchEvent(new HashChangeEvent('hashchange'))
               }}
             >
-              Pick runs to compare
+              Back to History
             </button>
           }
         />
@@ -320,7 +342,7 @@ export default function ExperimentsView() {
           {!flatFew && (
             <aside className="rounded-2xl border border-ink-200/80 bg-white shadow-sm overflow-hidden h-fit">
               <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-500 border-b border-ink-100">
-                Experiments
+                Groups
               </div>
               <ul className="py-1">
                 {blocks.map((b) => {
@@ -421,9 +443,9 @@ export default function ExperimentsView() {
                               <button
                                 type="button"
                                 className="btn-quiet !px-2 !py-1"
-                                onClick={() => openTrace({ runId: r.run_id })}
-                                title="Trace lineage"
-                                aria-label="Trace lineage"
+                                onClick={() => openRun(r.run_id, { panel: 'lineage' })}
+                                title="Open Lineage"
+                                aria-label="Open Lineage"
                               >
                                 <GitBranch className="h-3.5 w-3.5" />
                               </button>

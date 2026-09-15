@@ -1,17 +1,14 @@
 import React from 'react'
-import { RefreshCw, Copy, Pencil } from 'lucide-react'
+import { RefreshCw, Copy, Pencil, Workflow, History, ChevronRight } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import {
   ConfirmButton,
   CollapsibleJson,
-  EmptyState,
   ErrorBanner,
   KeyValue,
   LoadingBlock,
-  PageHeader,
-  StatusBadge,
 } from '../../components/ui'
 
 interface Project {
@@ -65,6 +62,7 @@ export default function ProjectsView() {
   const openEdge = useAppStore((s) => s.openEdge)
   const setView = useAppStore((s) => s.setView)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const initialHash = React.useMemo(() => parseProjectsHash(), [])
   const [projects, setProjects] = React.useState<Project[] | null>(null)
   const [selected, setSelected] = React.useState<string | null>(initialHash.project ?? null)
@@ -137,6 +135,7 @@ export default function ProjectsView() {
       const params = new URLSearchParams()
       params.set('project', name)
       if (tab && tab !== 'versions') params.set('tab', tab)
+      // Prefer replaceHash path in store for navigation; here we own selected state.
       window.history.replaceState(null, '', `#/projects?${params.toString()}`)
     }
     setVersionStats(null)
@@ -214,13 +213,25 @@ export default function ProjectsView() {
   React.useEffect(() => {
     const apply = () => {
       const h = parseProjectsHash()
-      if (h.tab) setTab(h.tab)
-      if (h.project && h.project !== selected) void open(h.project)
+      if (h.tab) {
+        setTab(h.tab)
+        setDatasetOpen(true)
+      }
+      setSelected((cur) => {
+        if (h.project) {
+          if (h.project !== cur) {
+            // Defer open so we do not nest setState updates incorrectly
+            queueMicrotask(() => void open(h.project!))
+          }
+          return cur
+        }
+        return null
+      })
     }
     window.addEventListener('hashchange', apply)
     return () => window.removeEventListener('hashchange', apply)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected])
+  }, [])
 
   React.useEffect(() => {
     if (initialHash.project) void open(initialHash.project)
@@ -312,6 +323,7 @@ export default function ProjectsView() {
       setActiveProject(created)
       setNewName('')
       await load()
+      await open(created)
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -518,631 +530,546 @@ export default function ProjectsView() {
     }
   }
 
+  const [datasetOpen, setDatasetOpen] = React.useState(() => Boolean(initialHash.tab))
+  const [projectFilter, setProjectFilter] = React.useState('')
+
   const versionOptions = versions.map((v) =>
     typeof v === 'string' ? v : String((v as { version?: string }).version ?? JSON.stringify(v)),
   )
 
-  return (
-    <div className="flex h-full flex-col">
-      <div className="page-shell-header">
-        <PageHeader
-          title={selected ? 'Workspace' : 'Workspaces'}
-          scope={selected ? 'project' : 'global'}
-          description={
-            selected
-              ? `Scoped to ${selected} — linked data, pipelines, runs, and experiments (like an opened IDE folder).`
-              : 'Open a workspace to edit pipelines, run, and explore linked data. Global Data library stays available anytime.'
-          }
-          actions={
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="btn-secondary" onClick={() => openData({ mode: 'outputs' })}>
-                Browse library
-              </button>
-              <button type="button" className="btn-secondary" onClick={() => void load()}>
-                <RefreshCw className="h-3.5 w-3.5" /> Refresh
+  const filteredProjects = React.useMemo(() => {
+    const q = projectFilter.trim().toLowerCase()
+    if (!projects) return []
+    if (!q) return projects
+    return projects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        String(p.status || '')
+          .toLowerCase()
+          .includes(q),
+    )
+  }, [projects, projectFilter])
+
+  const authBlocked = /unauthorized|401|api token/i.test(error || '')
+  const goEditor = () => {
+    setView('builder')
+    window.history.replaceState(null, '', '#/builder')
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
+  const goTemplates = () => {
+    setView('templates')
+    window.history.replaceState(null, '', '#/templates')
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
+  const openLastRun = () => {
+    const id = recentRuns[0]?.run_id
+    if (id) useAppStore.getState().openRun(id)
+  }
+
+  /* ── Picker: single explorer + welcome (no workspace chrome) ── */
+  if (!selected) {
+    return (
+      <div className="flex h-full min-h-0">
+        <aside className="flex w-[15.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-[#f7f7f8]">
+          <div className="border-b border-ink-200/60 px-3 py-2.5 space-y-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Projects</div>
+            <div className="flex gap-1.5">
+              <input
+                ref={nameRef}
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="New project…"
+                className="min-w-0 flex-1 rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px]"
+                onKeyDown={(e) => e.key === 'Enter' && void create()}
+              />
+              <button type="button" className="btn-primary !px-2 !py-1 text-[11px]" onClick={() => void create()}>
+                New
               </button>
             </div>
-          }
-        />
-      </div>
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[240px_1fr]">
-      <div className="overflow-y-auto border-r border-ink-200 p-3 space-y-2">
-        {error && <ErrorBanner message={error} onRetry={() => void load()} />}
-        <div className="flex gap-2">
-          <input
-            ref={nameRef}
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="new-project"
-            className="flex-1 rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-            onKeyDown={(e) => e.key === 'Enter' && void create()}
-          />
-          <button type="button" className="btn-primary" onClick={() => void create()}>
-            Create
-          </button>
-        </div>
-        {loading || projects == null ? (
-          <LoadingBlock />
-        ) : projects.length === 0 ? (
-          <EmptyState
-            title="No projects yet"
-            description="Create a workspace above, then open Templates (stamps the project) or link data under Data so versions appear under output/{project}."
-            action={
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openData({ mode: 'inputs' })}
-              >
-                Open Data
-              </button>
-            }
-          />
-        ) : (
-          <ul className="space-y-2">
-            {projects.map((p) => (
-              <li key={p.name}>
-                <button
-                  type="button"
-                  onClick={() => void open(p.name)}
-                  className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${
-                    selected === p.name ? 'border-accent-300/80 bg-accent-50/80 shadow-sm' : 'border-ink-200/70 bg-white hover:border-ink-300 hover:bg-ink-50/40'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{p.name}</span>
-                    {p.status && <StatusBadge status={normalizeProjectStatus(p.status)} />}
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="overflow-y-auto p-4 space-y-4">
-        {!selected ? (
-          <div className="mx-auto max-w-lg rounded-2xl border border-ink-200/50 bg-gradient-to-b from-white to-[#f7f9fb] px-8 py-10 shadow-sm">
-            <h3 className="text-lg font-semibold tracking-tight text-ink-950">Open or create a project to start work</h3>
-            <p className="mt-2.5 text-sm leading-relaxed text-ink-500">
-              Like opening a folder in an IDE — a project is the workspace for pipelines (Editor), runs, experiments, and linked data under{' '}
-              <code className="font-mono text-[12px] text-ink-700">{'workspace/datasets/output/{project}'}</code>.
-            </p>
-            <ol className="mt-4 list-decimal space-y-1.5 pl-5 text-sm text-ink-700">
-              <li>Create or open a workspace (header shows Project · name).</li>
-              <li>Use From template (or the Editor sidebar) to stamp pipelines.</li>
-              <li>Link data from the library, run from the Editor, then review in Run / Experiments.</li>
-            </ol>
+            <input
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
+              placeholder="Filter…"
+              aria-label="Filter projects"
+              className="w-full rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px]"
+            />
           </div>
-        ) : (
-          <>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 className="text-xl font-semibold tracking-tight text-ink-950">{selected}</h3>
-                <p className="mt-1.5 text-xs leading-relaxed text-ink-500">
-                  Opened workspace · key <code className="font-mono">{selected}</code>
-                  {versionFocus ? <> / <code className="font-mono">{versionFocus}</code></> : null}
-                </p>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <label className="flex items-center gap-1.5 text-xs text-ink-500">
-                    Status
-                    <select
-                      className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm text-ink-800"
-                      value={normalizeProjectStatus(projects?.find((p) => p.name === selected)?.status)}
-                      onChange={(e) => void setStatus(e.target.value)}
-                      aria-label="Project status"
-                    >
-                      {STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+            {error && (
+              <div className="mb-2 px-1">
+                <ErrorBanner
+                  message={error}
+                  onRetry={() => void load()}
+                  actions={
+                    authBlocked ? (
+                      <button type="button" className="btn-primary" onClick={() => setSettingsOpen(true)}>
+                        Settings
+                      </button>
+                    ) : undefined
+                  }
+                />
               </div>
-            </div>
-
-            <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="editorial-card border-accent-200/40 sm:col-span-2 xl:col-span-2">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Linked data</div>
-                <div className="mt-1 text-sm font-semibold text-ink-900">
-                  {links.inputs.length} input{links.inputs.length === 1 ? '' : 's'} · {versionOptions.length} version{versionOptions.length === 1 ? '' : 's'}
-                </div>
-                <p className="mt-1 text-xs text-ink-500">
-                  Explorer — link labels from the global library into this workspace.
-                </p>
-                <div className="mt-2 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <select
-                      className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-sm"
-                      value={linkPick}
-                      onChange={(e) => setLinkPick(e.target.value)}
-                      aria-label="Link input label from Data"
-                    >
-                      <option value="">Select input label…</option>
-                      {inputLabels.map((label) => (
-                        <option key={label} value={label} disabled={links.inputs.includes(label)}>
-                          {label}{links.inputs.includes(label) ? ' (already linked)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <ConfirmButton
-                      label={linkPick ? `Link “${linkPick}”` : 'Link from library'}
-                      confirmLabel={linkPick ? `Confirm link “${linkPick}”?` : 'Confirm link'}
-                      onConfirm={() => void linkInput()}
-                      disabled={!linkPick || links.inputs.includes(linkPick)}
-                    />
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => openData({ mode: 'outputs', project: selected, version: versionFocus || undefined })}
-                    >
-                      Browse
+            )}
+            {loading || projects == null ? (
+              <LoadingBlock label="Loading…" />
+            ) : projects.length === 0 ? (
+              <p className="px-2 py-4 text-[12px] text-ink-500">
+                {authBlocked ? 'Sign in via Settings to list projects.' : 'No projects yet — create one above.'}
+              </p>
+            ) : filteredProjects.length === 0 ? (
+              <p className="px-2 py-4 text-[12px] text-ink-500">No matches for “{projectFilter.trim()}”.</p>
+            ) : (
+              <ul className="space-y-0.5">
+                {filteredProjects.map((p) => (
+                  <li key={p.name}>
+                    <button type="button" onClick={() => void open(p.name)} className="ide-row w-full">
+                      <span className="min-w-0 flex-1 truncate font-medium text-ink-900">{p.name}</span>
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide text-ink-400">
+                        {normalizeProjectStatus(p.status)}
+                      </span>
                     </button>
-                  </div>
-                  {linkPick ? (
-                    <p className="text-[11px] text-ink-500">
-                      Selected to link:{' '}
-                      <span className="font-semibold text-ink-800">{linkPick}</span>
-                      {links.inputs.includes(linkPick) ? (
-                        <span className="text-amber-800"> · already linked</span>
-                      ) : links.inputs.length > 0 ? (
-                        <span>
-                          {' '}
-                          · currently linked:{' '}
-                          <span className="font-medium text-ink-700">{links.inputs.join(', ')}</span>
-                        </span>
-                      ) : (
-                        <span> · none linked yet</span>
-                      )}
-                    </p>
-                  ) : links.inputs.length > 0 ? (
-                    <p className="text-[11px] text-ink-500">
-                      Currently linked:{' '}
-                      <span className="font-medium text-ink-700">{links.inputs.join(', ')}</span>
-                    </p>
-                  ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="border-t border-ink-200/60 p-2">
+            <button type="button" className="ide-quiet-btn w-full justify-center" onClick={() => void load()}>
+              <RefreshCw className="h-3 w-3" /> Refresh
+            </button>
+          </div>
+        </aside>
+        <main className="flex min-w-0 flex-1 flex-col items-center justify-center px-8">
+          <div className="max-w-md text-center">
+            <h1 className="text-type-page text-ink-950">Open a workspace</h1>
+            <p className="mt-2 text-type-body text-ink-500">
+              Pick a project on the left. Editor, Run, and Experiments appear in the activity bar once a workspace is open.
+            </p>
+            <ol className="mt-6 space-y-2 text-left text-[13px] text-ink-600">
+              <li className="flex gap-2"><span className="font-mono text-ink-400">1</span> Open or create a project</li>
+              <li className="flex gap-2"><span className="font-mono text-ink-400">2</span> Stamp a template or build in Editor</li>
+              <li className="flex gap-2"><span className="font-mono text-ink-400">3</span> Run, then review lineage from the run</li>
+            </ol>
+            <button type="button" className="btn-secondary mt-6" onClick={() => openData({ mode: 'outputs' })}>
+              Browse data library
+            </button>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  /* ── Workspace home: full pane (no second project list) ── */
+  const statusVal = normalizeProjectStatus(projects?.find((p) => p.name === selected)?.status)
+  const lastRun = recentRuns[0]
+  const stagingHint = projectPipelines.find((p) => p.environments?.staging)?.environments?.staging
+  const prodHint = projectPipelines.find((p) => p.environments?.prod)?.environments?.prod
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b border-ink-200/60 bg-white/80 px-6 py-4 backdrop-blur-md">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="truncate text-type-page text-ink-950">{selected}</h1>
+            <p className="mt-0.5 text-type-meta text-ink-400">
+              Workspace · {statusVal}
+              {versionFocus ? ` · ${versionFocus}` : ''}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn-primary" onClick={goEditor}>
+              <Workflow className="h-3.5 w-3.5" /> Open Editor
+            </button>
+            <button type="button" className="btn-secondary" onClick={goTemplates}>
+              From template
+            </button>
+            {lastRun ? (
+              <button type="button" className="btn-secondary" onClick={openLastRun}>
+                <History className="h-3.5 w-3.5" /> Last run
+              </button>
+            ) : null}
+            <button type="button" className="btn-icon" aria-label="Refresh" onClick={() => void open(selected)}>
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        {/* L0 — situation strip */}
+        <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-600">
+          <div className="flex gap-1.5">
+            <dt className="text-ink-400">Status</dt>
+            <dd className="font-medium text-ink-800">{statusVal}</dd>
+          </div>
+          <div className="flex gap-1.5">
+            <dt className="text-ink-400">Pipelines</dt>
+            <dd className="font-medium text-ink-800">{projectPipelines.length}</dd>
+          </div>
+          <div className="flex gap-1.5">
+            <dt className="text-ink-400">Pinned</dt>
+            <dd className="font-medium text-ink-800">{links.inputs.length}</dd>
+          </div>
+          <div className="flex gap-1.5">
+            <dt className="text-ink-400">Last run</dt>
+            <dd>
+              {lastRun ? (
+                <button type="button" className="font-medium text-accent-800 hover:underline" onClick={openLastRun}>
+                  {lastRun.status || 'unknown'} · {lastRun.run_id.slice(0, 8)}…
+                </button>
+              ) : (
+                <span className="text-ink-400">—</span>
+              )}
+            </dd>
+          </div>
+          {(stagingHint || prodHint) && (
+            <div className="flex gap-1.5">
+              <dt className="text-ink-400">Envs</dt>
+              <dd className="font-medium text-ink-800">
+                {stagingHint ? `staging ${stagingHint}` : null}
+                {stagingHint && prodHint ? ' · ' : null}
+                {prodHint ? `prod ${prodHint}` : null}
+              </dd>
+            </div>
+          )}
+        </dl>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="mx-auto max-w-3xl space-y-6">
+          {error && <ErrorBanner message={error} onRetry={() => void open(selected)} />}
+
+          {/* Layer 1 — continue work */}
+          <section>
+            <div className="ide-section-title mb-2">Continue</div>
+            <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
+              {projectPipelines.length === 0 && recentRuns.length === 0 ? (
+                <div className="px-4 py-5 text-[13px] text-ink-600">
+                  No pipelines yet.{' '}
+                  <button type="button" className="font-medium text-accent-800 hover:underline" onClick={goTemplates}>
+                    Start from a template
+                  </button>{' '}
+                  or open the Editor and save a graph.
                 </div>
-                {links.inputs.length > 0 && (
-                  <ul className="mt-2 flex flex-wrap gap-1.5">
-                    {links.inputs.map((label) => (
-                      <li key={label} className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2 py-0.5 text-xs text-accent-950">
-                        <span className="font-medium">{label}</span>
-                        <span className="text-[10px] text-accent-700/80">linked</span>
-                        <button type="button" className="text-ink-400 hover:text-danger-600" onClick={() => void unlinkInput(label)} aria-label={`Unlink ${label}`}>
-                          ×
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <div className="editorial-card">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Pipelines</div>
-                <div className="mt-1 text-sm font-semibold text-ink-900">
-                  {projectPipelines.length === 0 ? 'None yet' : `${projectPipelines.length} saved`}
-                </div>
-                <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  Draft head in Editor; publish versions to staging, approve for prod.
-                </p>
-                {projectPipelines.length > 0 ? (
-                  <ul className="mt-2 space-y-2">
-                    {projectPipelines.slice(0, 6).map((p) => {
-                      const envs = p.environments || {}
-                      return (
-                        <li key={p.name} className="rounded-lg border border-ink-100 px-2 py-1.5">
+              ) : (
+                <ul className="divide-y divide-ink-100">
+                  {projectPipelines.slice(0, 5).map((p) => {
+                    const envs = p.environments || {}
+                    return (
+                      <li key={p.name} className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <button
                             type="button"
-                            className="text-left text-xs font-medium text-accent-800 hover:underline"
+                            className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-ink-900 hover:text-accent-800"
                             onClick={() => void openProjectPipeline(p.name)}
                           >
                             {p.name}
-                            {p.node_count != null ? ` · ${p.node_count} nodes` : ''}
-                            {p.latest_version ? ` · ${p.latest_version}` : ''}
+                            <span className="ml-2 font-normal text-ink-400">
+                              {p.node_count != null ? `${p.node_count} nodes` : 'pipeline'}
+                              {p.latest_version ? ` · ${p.latest_version}` : ''}
+                            </span>
                           </button>
-                          <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-ink-500">
-                            <span className="rounded bg-ink-50 px-1.5 py-0.5">draft</span>
-                            {envs.staging ? (
-                              <button
-                                type="button"
-                                className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-900 hover:underline"
-                                onClick={() => void openProjectPipeline(p.name, 'staging')}
-                              >
-                                staging:{envs.staging}
+                          <ChevronRight className="h-3.5 w-3.5 text-ink-300" />
+                        </div>
+                        {(envs.staging || envs.prod || envs.pending_prod) && (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer text-[11px] text-ink-400 hover:text-ink-700">
+                              Environments & promote
+                            </summary>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5 pb-1">
+                              <button type="button" className="btn-secondary !px-2 !py-0.5 text-[10px]" onClick={() => void publishPipeline(p.name, 'staging')}>
+                                Publish → staging
                               </button>
-                            ) : (
-                              <span className="rounded bg-ink-50 px-1.5 py-0.5">staging:—</span>
-                            )}
-                            {envs.prod ? (
-                              <button
-                                type="button"
-                                className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-900 hover:underline"
-                                onClick={() => void openProjectPipeline(p.name, 'prod')}
-                              >
-                                prod:{envs.prod}
-                              </button>
-                            ) : (
-                              <span className="rounded bg-ink-50 px-1.5 py-0.5">prod:—</span>
-                            )}
-                            {envs.pending_prod?.version ? (
-                              <span className="rounded bg-rose-50 px-1.5 py-0.5 text-rose-800">
-                                pending {envs.pending_prod.version}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="mt-1.5 flex flex-wrap gap-1">
-                            <button
-                              type="button"
-                              className="btn-secondary !px-2 !py-0.5 text-[10px]"
-                              onClick={() => void publishPipeline(p.name, 'staging')}
-                            >
-                              Publish → staging
-                            </button>
-                            {envs.staging ? (
-                              <button
-                                type="button"
-                                className="btn-secondary !px-2 !py-0.5 text-[10px]"
-                                onClick={() =>
-                                  void promotePipeline(p.name, {
-                                    to_env: 'prod',
-                                    from_env: 'staging',
-                                    approve: false,
-                                  })
-                                }
-                              >
-                                Request prod
-                              </button>
-                            ) : null}
-                            {envs.pending_prod?.version ? (
-                              <button
-                                type="button"
-                                className="btn-primary !px-2 !py-0.5 text-[10px]"
-                                onClick={() =>
-                                  void promotePipeline(p.name, {
-                                    to_env: 'prod',
-                                    version: envs.pending_prod?.version,
-                                    approve: true,
-                                  })
-                                }
-                              >
-                                Approve prod
-                              </button>
-                            ) : null}
-                          </div>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                ) : null}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    onClick={() => {
-                      setView('templates')
-                      window.history.replaceState(null, '', '#/templates')
-                    }}
-                  >
-                    From template
-                  </button>
-                </div>
-              </div>
-              <div className="editorial-card">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Recent runs</div>
-                <div className="mt-1 text-sm font-semibold text-ink-900">
-                  {recentRuns.length === 0 ? 'None yet' : `${recentRuns.length} matched`}
-                </div>
-                <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  {recentRuns.length === 0
-                    ? 'Stamp a template, then run from the Editor. The Run sidebar lists all workspace runs.'
-                    : 'Latest matches for this workspace — open one below.'}
-                </p>
-                {recentRuns.length === 0 ? (
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => {
-                        setView('templates')
-                        window.history.replaceState(null, '', '#/templates')
-                      }}
-                    >
-                      From template
-                    </button>
-                  </div>
-                ) : (
-                  <ul className="mt-2 space-y-1">
-                    {recentRuns.slice(0, 4).map((r) => (
-                      <li key={r.run_id}>
-                        <button
-                          type="button"
-                          className="text-left text-xs text-accent-800 hover:underline"
-                          onClick={() => useAppStore.getState().openRun(r.run_id)}
-                        >
-                          {r.run_id.slice(0, 8)}… {r.status || ''} {r.graph_name ? `· ${r.graph_name}` : ''}
-                        </button>
+                              {envs.staging ? (
+                                <button
+                                  type="button"
+                                  className="btn-secondary !px-2 !py-0.5 text-[10px]"
+                                  onClick={() => void promotePipeline(p.name, { to_env: 'prod', from_env: 'staging', approve: false })}
+                                >
+                                  Request prod
+                                </button>
+                              ) : null}
+                              {envs.pending_prod?.version ? (
+                                <button
+                                  type="button"
+                                  className="btn-primary !px-2 !py-0.5 text-[10px]"
+                                  onClick={() =>
+                                    void promotePipeline(p.name, {
+                                      to_env: 'prod',
+                                      version: envs.pending_prod?.version,
+                                      approve: true,
+                                    })
+                                  }
+                                >
+                                  Approve prod
+                                </button>
+                              ) : null}
+                              {envs.staging ? (
+                                <button type="button" className="ide-quiet-btn text-[10px]" onClick={() => void openProjectPipeline(p.name, 'staging')}>
+                                  Open staging
+                                </button>
+                              ) : null}
+                              {envs.prod ? (
+                                <button type="button" className="ide-quiet-btn text-[10px]" onClick={() => void openProjectPipeline(p.name, 'prod')}>
+                                  Open prod
+                                </button>
+                              ) : null}
+                            </div>
+                          </details>
+                        )}
                       </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <div className="editorial-card bg-[#fafbfc]">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-ink-400">Experiments</div>
-                <div className="mt-1 text-sm font-semibold text-ink-900">Compare quietly</div>
-                <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  Diff params and metrics across runs from the Experiments sidebar — no extra hop from here.
-                </p>
-              </div>
-            </div>
-
-            <details className="rounded-xl border border-ink-200 bg-white">
-              <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-ink-600 hover:text-ink-900">
-                Project settings
-              </summary>
-              <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 px-3 py-3">
-                <input
-                  value={renameTo}
-                  onChange={(e) => setRenameTo(e.target.value)}
-                  className="rounded-lg border border-ink-200 px-2 py-1 text-sm"
-                  aria-label="Rename to"
-                />
-                <button type="button" className="btn-secondary" onClick={() => void rename()}>
-                  <Pencil className="h-3.5 w-3.5" /> Rename
-                </button>
-                <input
-                  value={cloneTo}
-                  onChange={(e) => setCloneTo(e.target.value)}
-                  className="rounded-lg border border-ink-200 px-2 py-1 text-sm"
-                  aria-label="Clone as"
-                />
-                <button type="button" className="btn-secondary" onClick={() => void clone()}>
-                  <Copy className="h-3.5 w-3.5" /> Clone
-                </button>
-                <button type="button" className="btn-secondary" onClick={useInEdge}>
-                  Use in Edge
-                </button>
-                <ConfirmButton label="Delete project" confirmLabel={`Delete ${selected}?`} danger onConfirm={() => void remove()} />
-              </div>
-            </details>
-
-            <div className="flex flex-wrap gap-1">
-              {(
-                [
-                  ['versions', 'Versions'],
-                  ['spec', 'Spec'],
-                  ['taxonomy', 'Taxonomy'],
-                  ['contract', 'Contract'],
-                  ['snapshots', 'Snapshots'],
-                  ['diff', 'Diff / lineage'],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={tab === id ? 'btn-primary' : 'btn-secondary'}
-                  onClick={() => setTab(id)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            {tab === 'spec' && (
-              <section className="space-y-2">
-                <p className="text-sm text-ink-500">Markdown description of what this dataset is for. Saved as the project spec.</p>
-                <textarea
-                  value={spec}
-                  onChange={(e) => setSpec(e.target.value)}
-                  rows={16}
-                  placeholder={"# Project spec\n\nDescribe goals, labels, and quality bar…"}
-                  className="w-full rounded-xl border border-ink-200 p-3 font-mono text-sm"
-                />
-                <button type="button" className="btn-primary" onClick={() => void saveSpec()}>
-                  Save spec
-                </button>
-              </section>
-            )}
-
-            {tab === 'taxonomy' && (
-              <section className="space-y-2">
-                <p className="text-sm text-ink-500">JSON list of labels/classes (starter: one unlabeled node). Edit and save when ready.</p>
-                <textarea
-                  value={taxonomy}
-                  onChange={(e) => setTaxonomy(e.target.value)}
-                  rows={16}
-                  placeholder={'[\n  { "name": "unlabeled", "children": [] }\n]'}
-                  className="w-full rounded-xl border border-ink-200 p-3 font-mono text-sm"
-                />
-                <button type="button" className="btn-primary" onClick={() => void saveTaxonomy()}>
-                  Save taxonomy
-                </button>
-              </section>
-            )}
-
-            {tab === 'contract' && (
-              <section className="space-y-2">
-                <p className="text-sm text-ink-500">JSON data contract (duration bounds, sample rate, required fields). Empty object is fine until you need gates.</p>
-                <textarea
-                  value={contract}
-                  onChange={(e) => setContract(e.target.value)}
-                  rows={16}
-                  placeholder={'{\n  "_hint": "Optional data contract",\n  "required_fields": ["path", "label", "split"]\n}'}
-                  className="w-full rounded-xl border border-ink-200 p-3 font-mono text-sm"
-                />
-                <button type="button" className="btn-primary" onClick={() => void saveContract()}>
-                  Save contract
-                </button>
-              </section>
-            )}
-
-            {tab === 'versions' && (
-              <section className="space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <select
-                    value={versionFocus}
-                    onChange={(e) => setVersionFocus(e.target.value)}
-                    className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-                  >
-                    {versionOptions.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn-secondary" onClick={() => void loadVersionDetail()}>
-                    Load stats / samples
-                  </button>
-                  <ConfirmButton
-                    label="Restore version"
-                    confirmLabel={`Restore ${versionFocus}?`}
-                    onConfirm={() => void restoreVersion()}
-                  />
-                </div>
-                {versions.length === 0 ? (
-                  <EmptyState
-                    title="No versions yet"
-                    description="Versions appear after a pipeline writes under workspace/datasets/output/{project}/{version}. Stamp a template, then run from the Editor sidebar."
-                    action={
-                      <button type="button" className="btn-primary" onClick={() => setView('templates')}>
-                        From template
-                      </button>
-                    }
-                  />
-                ) : (
-                  <KeyValue data={versions} />
-                )}
-                {versionStats != null && <KeyValue data={versionStats} />}
-                {versionSamples != null && <CollapsibleJson value={versionSamples} label="Samples" />}
-              </section>
-            )}
-
-            {tab === 'snapshots' && (
-              <section className="space-y-3">
-                <div className="flex gap-2">
-                  <input
-                    id="snapshot-name"
-                    value={snapshotName}
-                    onChange={(e) => setSnapshotName(e.target.value)}
-                    placeholder="snapshot-name"
-                    className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-                  />
-                  <button type="button" className="btn-primary" onClick={() => void createSnapshot()}>
-                    Create snapshot
-                  </button>
-                </div>
-                {snapshots.length === 0 ? (
-                  <EmptyState
-                    title="No snapshots"
-                    description="Create a named snapshot to restore this project later."
-                    action={
+                    )
+                  })}
+                  {recentRuns.slice(0, 3).map((r) => (
+                    <li key={r.run_id}>
                       <button
                         type="button"
-                        className="btn-primary"
-                        onClick={() => document.getElementById('snapshot-name')?.focus()}
+                        className="ide-row w-full px-3"
+                        onClick={() => useAppStore.getState().openRun(r.run_id)}
                       >
-                        Name a snapshot
+                        <History className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-700">
+                          {r.run_id.slice(0, 10)}…
+                          {r.graph_name ? ` · ${r.graph_name}` : ''}
+                        </span>
+                        <span className="text-[11px] text-ink-400">{r.status || ''}</span>
                       </button>
-                    }
-                  />
-                ) : (
-                  <ul className="space-y-2">
-                    {snapshots.map((s, i) => {
-                      const name =
-                        typeof s === 'string'
-                          ? s
-                          : String(
-                              (s as { snapshot_name?: string; name?: string }).snapshot_name ??
-                                (s as { name?: string }).name ??
-                                `snapshot-${i}`,
-                            )
-                      return (
-                        <li
-                          key={name}
-                          className="flex items-center justify-between rounded-xl border border-ink-200 bg-white px-3 py-2"
-                        >
-                          <span className="font-mono text-sm">{name}</span>
-                          <ConfirmButton
-                            label="Restore"
-                            confirmLabel={`Restore ${name}?`}
-                            onConfirm={() => void restoreSnapshot(name)}
-                          />
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-              </section>
-            )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
 
-            {tab === 'diff' && (
-              <section className="space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <select
-                    value={diffA}
-                    onChange={(e) => setDiffA(e.target.value)}
-                    className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-                  >
-                    {versionOptions.map((v) => (
-                      <option key={`a-${v}`} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="self-center text-sm text-ink-500">vs</span>
-                  <select
-                    value={diffB}
-                    onChange={(e) => setDiffB(e.target.value)}
-                    className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-                  >
-                    {versionOptions.map((v) => (
-                      <option key={`b-${v}`} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn-primary" onClick={() => void runDiff()}>
-                    Diff
-                  </button>
-                </div>
-                {diffResult != null && <KeyValue data={diffResult} />}
-                <h4 className="text-sm font-semibold">Lineage</h4>
-                {(() => {
-                  const ids = lineageIds(lineage)
-                  if (!ids.runId && !ids.artifactId) return null
-                  return (
-                    <div className="flex flex-wrap gap-2">
-                      {ids.runId ? (
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => openTrace({ runId: ids.runId })}
-                        >
-                          Open Trace
-                        </button>
-                      ) : null}
-                      {ids.artifactId || ids.runId ? (
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() =>
-                            openArtifacts({
-                              runId: ids.runId,
-                              artifactId: ids.artifactId,
-                            })
-                          }
-                        >
-                          Open Artifacts
-                        </button>
-                      ) : null}
-                    </div>
-                  )
-                })()}
-                <KeyValue data={lineage} empty="No lineage." />
-              </section>
+          {/* Layer 2 — linked data (compact) */}
+          <section className="ide-section">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="ide-section-title">Linked inputs</div>
+              <span className="text-type-meta text-ink-400">
+                {links.inputs.length} pinned
+                {versionOptions.length ? ` · ${versionOptions.length} output version${versionOptions.length === 1 ? '' : 's'}` : ''}
+              </span>
+            </div>
+            <p className="mb-2 text-[12px] text-ink-500">
+              Pin Data-library input labels here so Editor runs know which folders to use. Completing a run does not auto-link.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px]"
+                value={linkPick}
+                onChange={(e) => setLinkPick(e.target.value)}
+                aria-label="Link input label"
+              >
+                <option value="">Select input…</option>
+                {inputLabels.map((label) => (
+                  <option key={label} value={label} disabled={links.inputs.includes(label)}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <ConfirmButton
+                label="Link"
+                confirmLabel={linkPick ? `Link “${linkPick}”?` : 'Confirm'}
+                onConfirm={() => void linkInput()}
+                disabled={!linkPick || links.inputs.includes(linkPick)}
+              />
+              <button
+                type="button"
+                className="ide-quiet-btn"
+                onClick={() => openData({ mode: 'inputs' })}
+              >
+                Browse library
+              </button>
+            </div>
+            {links.inputs.length === 0 && (
+              <p className="mt-2 rounded-lg border border-dashed border-ink-200 bg-ink-50/50 px-3 py-2 text-[12px] text-ink-600">
+                No inputs pinned yet. Pick a label above, or open the Data library and come back to Link.
+              </p>
             )}
-          </>
-        )}
-      </div>
+            {links.inputs.length > 0 && (
+              <ul className="mt-2 flex flex-wrap gap-1.5">
+                {links.inputs.map((label) => (
+                  <li key={label} className="inline-flex items-center gap-1 rounded-md bg-ink-50 px-2 py-0.5 text-[11px] text-ink-700">
+                    {label}
+                    <button type="button" className="text-ink-400 hover:text-rose-600" onClick={() => void unlinkInput(label)} aria-label={`Unlink ${label}`}>
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {/* Layer 3 — advanced (collapsed by default) */}
+          <details
+            className="ide-section group"
+            open={datasetOpen}
+            onToggle={(e) => setDatasetOpen((e.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-medium text-ink-700 hover:text-ink-950">
+              <ChevronRight className="h-4 w-4 text-ink-400 transition group-open:rotate-90" />
+              Versions & taxonomy
+              <span className="font-normal text-ink-400">output versions, spec, snapshots…</span>
+            </summary>
+            <div className="mt-3 space-y-3 pl-1">
+              <div className="flex flex-wrap gap-1 border-b border-ink-100 pb-2">
+                {(
+                  [
+                    ['versions', 'Versions'],
+                    ['spec', 'Spec'],
+                    ['taxonomy', 'Taxonomy'],
+                    ['contract', 'Contract'],
+                    ['snapshots', 'Snapshots'],
+                    ['diff', 'Diff'],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={tab === id ? 'tab-pill tab-pill-on' : 'tab-pill'}
+                    onClick={() => setTab(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {tab === 'spec' && (
+                <section className="space-y-2">
+                  <textarea value={spec} onChange={(e) => setSpec(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
+                  <button type="button" className="btn-primary" onClick={() => void saveSpec()}>Save spec</button>
+                </section>
+              )}
+              {tab === 'taxonomy' && (
+                <section className="space-y-2">
+                  <textarea value={taxonomy} onChange={(e) => setTaxonomy(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
+                  <button type="button" className="btn-primary" onClick={() => void saveTaxonomy()}>Save taxonomy</button>
+                </section>
+              )}
+              {tab === 'contract' && (
+                <section className="space-y-2">
+                  <textarea value={contract} onChange={(e) => setContract(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
+                  <button type="button" className="btn-primary" onClick={() => void saveContract()}>Save contract</button>
+                </section>
+              )}
+              {tab === 'versions' && (
+                <section className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <select value={versionFocus} onChange={(e) => setVersionFocus(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
+                      {versionOptions.map((v) => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                    <button type="button" className="btn-secondary" onClick={() => void loadVersionDetail()}>Load stats</button>
+                    <ConfirmButton label="Restore" confirmLabel={`Restore ${versionFocus}?`} onConfirm={() => void restoreVersion()} />
+                  </div>
+                  {versions.length === 0 ? (
+                    <p className="text-[13px] text-ink-500">No versions yet — run a pipeline that writes dataset output.</p>
+                  ) : (
+                    <KeyValue data={versions} />
+                  )}
+                  {versionStats != null && <KeyValue data={versionStats} />}
+                  {versionSamples != null && <CollapsibleJson value={versionSamples} label="Samples" />}
+                </section>
+              )}
+              {tab === 'snapshots' && (
+                <section className="space-y-3">
+                  <div className="flex gap-2">
+                    <input id="snapshot-name" value={snapshotName} onChange={(e) => setSnapshotName(e.target.value)} placeholder="snapshot-name" className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]" />
+                    <button type="button" className="btn-primary" onClick={() => void createSnapshot()}>Create</button>
+                  </div>
+                  {snapshots.length === 0 ? (
+                    <p className="text-[13px] text-ink-500">No snapshots.</p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {snapshots.map((s, i) => {
+                        const name =
+                          typeof s === 'string'
+                            ? s
+                            : String((s as { snapshot_name?: string; name?: string }).snapshot_name ?? (s as { name?: string }).name ?? `snapshot-${i}`)
+                        return (
+                          <li key={name} className="flex items-center justify-between rounded-md border border-ink-100 px-2 py-1.5">
+                            <span className="font-mono text-[12px]">{name}</span>
+                            <ConfirmButton label="Restore" confirmLabel={`Restore ${name}?`} onConfirm={() => void restoreSnapshot(name)} />
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </section>
+              )}
+              {tab === 'diff' && (
+                <section className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <select value={diffA} onChange={(e) => setDiffA(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
+                      {versionOptions.map((v) => (
+                        <option key={`a-${v}`} value={v}>{v}</option>
+                      ))}
+                    </select>
+                    <span className="self-center text-[12px] text-ink-400">vs</span>
+                    <select value={diffB} onChange={(e) => setDiffB(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
+                      {versionOptions.map((v) => (
+                        <option key={`b-${v}`} value={v}>{v}</option>
+                      ))}
+                    </select>
+                    <button type="button" className="btn-primary" onClick={() => void runDiff()}>Diff</button>
+                  </div>
+                  {diffResult != null && <KeyValue data={diffResult} />}
+                  {(() => {
+                    const ids = lineageIds(lineage)
+                    if (!ids.runId && !ids.artifactId) return null
+                    return (
+                      <div className="flex flex-wrap gap-2">
+                        {ids.runId ? (
+                          <button type="button" className="btn-secondary" onClick={() => openTrace({ runId: ids.runId })}>Open Lineage</button>
+                        ) : null}
+                        {ids.artifactId || ids.runId ? (
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => openArtifacts({ runId: ids.runId, artifactId: ids.artifactId })}
+                          >
+                            Open Artifacts
+                          </button>
+                        ) : null}
+                      </div>
+                    )
+                  })()}
+                  <CollapsibleJson value={lineage} label="Lineage JSON" />
+                </section>
+              )}
+            </div>
+          </details>
+
+          {/* Layer 4 — settings */}
+          <details className="ide-section group">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-medium text-ink-700 hover:text-ink-950">
+              <ChevronRight className="h-4 w-4 text-ink-400 transition group-open:rotate-90" />
+              Project settings
+            </summary>
+            <div className="mt-3 flex flex-wrap items-center gap-2 pl-1">
+              <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
+                Status
+                <select
+                  className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
+                  value={statusVal}
+                  onChange={(e) => void setStatus(e.target.value)}
+                >
+                  {STATUSES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </label>
+              <input value={renameTo} onChange={(e) => setRenameTo(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1 text-[12px]" aria-label="Rename to" />
+              <button type="button" className="btn-secondary" onClick={() => void rename()}>
+                <Pencil className="h-3.5 w-3.5" /> Rename
+              </button>
+              <input value={cloneTo} onChange={(e) => setCloneTo(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1 text-[12px]" aria-label="Clone as" />
+              <button type="button" className="btn-secondary" onClick={() => void clone()}>
+                <Copy className="h-3.5 w-3.5" /> Clone
+              </button>
+              <button type="button" className="btn-secondary" onClick={useInEdge}>Use in Edge</button>
+              <ConfirmButton label="Delete" confirmLabel={`Delete ${selected}?`} danger onConfirm={() => void remove()} />
+            </div>
+          </details>
+        </div>
       </div>
     </div>
   )

@@ -3,6 +3,7 @@ import {
   Check,
   ExternalLink,
   RefreshCw,
+  Search,
   X,
 } from 'lucide-react'
 import { apiJson } from '../../api/client'
@@ -21,6 +22,8 @@ import { formatLocaleDateTime } from '../../lib/format'
 /** MCP propose_graph docs — console has no create-proposal form (POST needs full GraphIR). */
 const DOCS_MCP_PROPOSE =
   'https://github.com/ursamir/Graphyn/blob/main/docs/MCP_SERVER.md#propose_graph'
+
+const BANNER_DISMISS_KEY = 'graphyn.proposals.bannerDismissed'
 
 type DiffSummary = {
   nodes_added?: string[]
@@ -75,6 +78,22 @@ function countLine(p: ProposalSummary): string {
   return parts.length ? parts.join(' · ') : 'No structural diff'
 }
 
+function readBannerDismissed(): boolean {
+  try {
+    const v = localStorage.getItem(BANNER_DISMISS_KEY)
+    return v === '1' || v === 'true'
+  } catch {
+    return false
+  }
+}
+
+function writeBannerDismissed() {
+  try {
+    localStorage.setItem(BANNER_DISMISS_KEY, '1')
+  } catch {
+    /* ignore */
+  }
+}
 
 function parseProposalsHash(): { id?: string } {
   const raw = window.location.hash.replace(/^#\/?/, '')
@@ -93,12 +112,14 @@ export default function ProposalsView() {
 
   const [items, setItems] = React.useState<ProposalSummary[] | null>(null)
   const [filter, setFilter] = React.useState<'pending' | 'all' | 'accepted' | 'rejected'>('pending')
+  const [search, setSearch] = React.useState('')
   const [selectedId, setSelectedId] = React.useState<string | null>(() => parseProposalsHash().id ?? null)
   const [detail, setDetail] = React.useState<ProposalDetail | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [detailLoading, setDetailLoading] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
+  const [bannerDismissed, setBannerDismissed] = React.useState(() => readBannerDismissed())
 
   const refresh = React.useCallback(async () => {
     setError(null)
@@ -175,6 +196,21 @@ export default function ProposalsView() {
     }
   }, [selectedId])
 
+  const visibleItems = React.useMemo(() => {
+    if (!items) return []
+    const q = search.trim().toLowerCase()
+    if (!q) return items
+    return items.filter((p) => {
+      const blob = [p.id, p.summary ?? '', p.actor ?? '', p.status].join(' ').toLowerCase()
+      return blob.includes(q)
+    })
+  }, [items, search])
+
+  const dismissBanner = () => {
+    writeBannerDismissed()
+    setBannerDismissed(true)
+  }
+
   const onAccept = async () => {
     if (!detail?.id || busy) return
     setBusy(true)
@@ -187,7 +223,7 @@ export default function ProposalsView() {
       if (!graph || typeof graph !== 'object') {
         throw new Error('Accepted proposal did not include a proposed_graph')
       }
-      pushToast('Proposal accepted — opening Builder', 'success')
+      pushToast('Proposal accepted — graph loaded into Editor', 'success')
       loadGraphIntoBuilder(graph as GraphIR)
       void refresh()
     } catch (err) {
@@ -221,33 +257,62 @@ export default function ProposalsView() {
       <div className="shrink-0 border-b border-ink-100 px-4 py-4 sm:px-6">
         <PageHeader
           title="Proposals"
-          scope="global"
-          description="PR-like review — agents propose GraphIR; you approve before it enters the Editor. Secrets never belong in IR."
+          description="Review agent GraphIR proposals before they enter the Editor."
           actions={
             <>
-              <div className="flex rounded-lg border border-ink-200 bg-white p-0.5 text-[12px]">
-                {(['pending', 'all', 'accepted', 'rejected'] as const).map((f) => (
-                  <button
-                    key={f}
-                    type="button"
-                    className={
-                      filter === f
-                        ? 'rounded-md bg-ink-900 px-2.5 py-1 font-medium text-white'
-                        : 'rounded-md px-2.5 py-1 text-ink-600 hover:bg-ink-50'
-                    }
-                    onClick={() => setFilter(f)}
-                  >
-                    {f === 'all' ? 'All' : f[0].toUpperCase() + f.slice(1)}
-                  </button>
-                ))}
-              </div>
-              <button type="button" className="btn-secondary" onClick={() => void refresh()} disabled={loading}>
+              <button type="button" className="btn-quiet" onClick={() => void refresh()} disabled={loading}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                 Refresh
               </button>
             </>
           }
         />
+        {!bannerDismissed && (
+          <div className="mt-3 flex flex-wrap items-start gap-3 rounded-xl border border-accent-200 bg-accent-50/60 px-3 py-2.5 text-sm text-ink-800">
+            <p className="min-w-0 flex-1">
+              Create proposals via MCP <code className="font-mono text-[12px]">propose_graph</code> or{' '}
+              <code className="font-mono text-[12px]">POST /api/v1/proposals</code>; review and accept them here.
+            </p>
+            <div className="flex shrink-0 items-center gap-2">
+              <a
+                href={DOCS_MCP_PROPOSE}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-900"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Docs
+              </a>
+              <button type="button" className="btn-quiet" onClick={dismissBanner} aria-label="Dismiss banner">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search actor, summary, id…"
+              aria-label="Search proposals"
+              className="field-control mt-0 w-full pl-8 text-sm"
+            />
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(['pending', 'all', 'accepted', 'rejected'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                className={filter === f ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+                onClick={() => setFilter(f)}
+              >
+                {f === 'all' ? 'All' : f[0].toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -266,7 +331,7 @@ export default function ProposalsView() {
                 title="No proposals yet"
                 description={
                   filter === 'pending'
-                    ? 'Proposals are submitted by agents (MCP propose_graph) or POST /api/v1/proposals with a full GraphIR — the console reviews and accepts them into Builder; it does not create proposals from this page.'
+                    ? 'Proposals are submitted by agents (MCP propose_graph) or POST /api/v1/proposals with a full GraphIR — the console reviews and accepts them into the Editor; it does not create proposals from this page.'
                     : 'Nothing matches this filter.'
                 }
                 action={
@@ -280,7 +345,7 @@ export default function ProposalsView() {
                           window.history.replaceState(null, '', '#/builder')
                         }}
                       >
-                        Open Builder
+                        Open Editor
                       </button>
                       <a
                         href={DOCS_MCP_PROPOSE}
@@ -296,9 +361,16 @@ export default function ProposalsView() {
                 }
               />
             </div>
+          ) : visibleItems.length === 0 ? (
+            <div className="p-4">
+              <EmptyState
+                title="No matching proposals"
+                description={`Nothing matches “${search.trim()}”. Try another actor, summary, or id.`}
+              />
+            </div>
           ) : (
             <ul className="divide-y divide-ink-100">
-              {items.map((p) => {
+              {visibleItems.map((p) => {
                 const active = p.id === selectedId
                 return (
                   <li key={p.id}>
@@ -333,7 +405,7 @@ export default function ProposalsView() {
           {!selectedId ? (
             <EmptyState
               title="Select a proposal"
-              description="Review the diff summary, then Accept to load into Builder or Reject."
+              description="Review the diff summary, then Accept to load into Editor or Reject."
             />
           ) : detailLoading && !detail ? (
             <LoadingBlock label="Loading proposal…" />
@@ -344,7 +416,7 @@ export default function ProposalsView() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-lg font-semibold text-ink-950">{detail.summary}</h3>
+                    <h3 className="text-lg font-semibold text-ink-950">{detail.summary || detail.id}</h3>
                     <StatusBadge status={detail.status} />
                   </div>
                   <p className="mt-1 text-sm text-ink-500">
@@ -352,6 +424,9 @@ export default function ProposalsView() {
                     {detail.created_at ? ` · ${formatLocaleDateTime(detail.created_at)}` : ''}
                     <span className="ml-2 font-mono text-[11px] text-ink-400">{detail.id}</span>
                   </p>
+                  {detail.reject_reason ? (
+                    <p className="mt-1 text-sm text-rose-700">Rejected: {detail.reject_reason}</p>
+                  ) : null}
                 </div>
                 {detail.status === 'pending' && (
                   <div className="flex gap-2">
@@ -361,7 +436,7 @@ export default function ProposalsView() {
                     </button>
                     <button type="button" className="btn-primary" onClick={() => void onAccept()} disabled={busy}>
                       <Check className="h-3.5 w-3.5" />
-                      Accept → Builder
+                      Accept → Editor
                     </button>
                   </div>
                 )}

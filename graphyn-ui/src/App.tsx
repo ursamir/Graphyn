@@ -15,8 +15,8 @@ import {
   Server,
   GitBranch,
   Cpu,
-  FlaskConical,
   GitPullRequest,
+  FlaskConical,
   X,
   Menu,
   PanelLeftClose,
@@ -58,7 +58,6 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'templates', label: 'Templates', icon: BookOpen },
       { id: 'proposals', label: 'Proposals', icon: GitPullRequest },
-      { id: 'builder', label: 'Builder', icon: Workflow },
     ],
   },
   {
@@ -82,18 +81,18 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
   },
 ]
 
-/** Project-local strip when activeProject is set. Trace/Artifacts demoted to detail + last-run. */
+/** Project-local strip when activeProject is set. Artifacts stay secondary (Run / Lineage deep links). */
 const PROJECT_NAV_ITEMS: NavItem[] = [
   { id: 'projects', label: 'Overview', icon: FolderKanban },
   { id: 'builder', label: 'Editor', icon: Workflow },
   { id: 'runs', label: 'Run', icon: History },
-  { id: 'experiments', label: 'Experiments', icon: FlaskConical },
+  { id: 'trace', label: 'Lineage', icon: GitBranch },
+  { id: 'experiments', label: 'Compare', icon: FlaskConical },
 ]
 
 const ALL_NAV_ITEMS: NavItem[] = [
   ...GLOBAL_NAV_GROUPS.flatMap((g) => g.items),
   ...PROJECT_NAV_ITEMS,
-  { id: 'trace', label: 'Trace', icon: GitBranch },
   { id: 'artifacts', label: 'Artifacts', icon: Archive },
 ]
 
@@ -104,13 +103,13 @@ const VIEW_LABEL: Record<AppView, string> = {
   templates: 'Templates',
   runs: 'Run',
   plugins: 'Plugins',
-  data: 'Explorer',
+  data: 'Data library',
   artifacts: 'Artifacts',
-  trace: 'Trace',
+  trace: 'Lineage',
   edge: 'Edge deploy',
-  experiments: 'Experiments',
+  experiments: 'Compare',
   proposals: 'Proposals',
-  projects: 'Workspace',
+  projects: 'Overview',
   secrets: 'Secrets',
   system: 'System',
   workers: 'Workers',
@@ -121,15 +120,15 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   builder: 'Editor — design Graph IR pipelines on the canvas',
   templates: 'New from template — opens or creates a workspace first',
   proposals: 'PR-like review of agent-proposed graphs',
-  runs: 'Run panel — execution history and ops for this workspace',
-  trace: 'Lineage panel — provenance across artifact, run, graph, worker',
-  experiments: 'Compare panel — params and metrics across runs',
-  artifacts: 'Output panel — pipeline files across runs',
+  runs: 'Run — history, files, lineage, and compare for this workspace',
+  trace: 'Lineage — artifact provenance for this workspace (or deep-link a run)',
+  experiments: 'Compare — params and metrics across runs in this workspace',
+  artifacts: 'Artifacts — cross-run file search; prefer Run → Files for one run',
   plugins: 'Extensions — install node packs for the Editor catalog',
-  data: 'Global library / Explorer — browse files; link into a project from Workspace home',
+  data: 'Shared library — dataset Inputs/Outputs; link from Overview',
   edge: 'Deploy target — package models for on-device runtimes',
   workers: 'Deploy targets — distributed workers, GPU, heartbeats',
-  projects: 'Workspace home — linked data, pipelines, runs, experiments',
+  projects: 'Workspace home — status, pipelines, linked data, runs',
   secrets: 'Settings — named credentials for runs',
   system: 'Settings — health, cleanup, webhooks, audit trail',
 }
@@ -139,8 +138,8 @@ const JUMP_KEYS: Record<string, AppView> = {
   t: 'templates',
   p: 'proposals',
   r: 'runs',
-  o: 'trace',
-  e: 'experiments',
+  o: 'runs',
+  e: 'runs',
   a: 'artifacts',
   d: 'data',
   j: 'projects',
@@ -161,6 +160,104 @@ function parseHash(): { view?: AppView; runId?: string } {
   return { view }
 }
 
+/** Compact last-run observe control — Trace / Artifacts / Compare live in a menu. (ux-pass) */
+function LastRunMenu({
+  runId,
+  showCompare,
+  onOpenRun,
+  onOpenTrace,
+  onOpenArtifacts,
+  onOpenCompare,
+}: {
+  runId: string
+  showCompare: boolean
+  onOpenRun: () => void
+  onOpenTrace: () => void
+  onOpenArtifacts: () => void
+  onOpenCompare: () => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <div ref={rootRef} className="relative flex items-center gap-0.5" title={`Last run ${runId}`}>
+      <button
+        type="button"
+        className="rounded-l-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"
+        onClick={onOpenRun}
+      >
+        Run {shortRunId(runId)}
+      </button>
+      <button
+        type="button"
+        className="rounded-r-full border border-l-0 border-ink-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label="Last run actions"
+        onClick={() => setOpen((o) => !o)}
+      >
+        ▾
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-40 mt-1 min-w-[9.5rem] rounded-xl border border-ink-200 bg-white py-1 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="block w-full px-3 py-1.5 text-left text-[12px] text-ink-800 hover:bg-ink-50"
+            onClick={() => {
+              setOpen(false)
+              onOpenTrace()
+            }}
+          >
+            Lineage
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="block w-full px-3 py-1.5 text-left text-[12px] text-ink-800 hover:bg-ink-50"
+            onClick={() => {
+              setOpen(false)
+              onOpenArtifacts()
+            }}
+          >
+            Files
+          </button>
+          {showCompare && (
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full px-3 py-1.5 text-left text-[12px] text-ink-800 hover:bg-ink-50"
+              onClick={() => {
+                setOpen(false)
+                onOpenCompare()
+              }}
+            >
+              Compare…
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   const view = useAppStore((s) => s.view)
   const setView = useAppStore((s) => s.setView)
@@ -170,7 +267,7 @@ export default function App() {
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openExperiments = useAppStore((s) => s.openExperiments)
-  const openProjects = useAppStore((s) => s.openProjects)
+  const openData = useAppStore((s) => s.openData)
   const activeProject = useAppStore((s) => s.activeProject)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const closeProject = useAppStore((s) => s.closeProject)
@@ -284,6 +381,18 @@ export default function App() {
   React.useEffect(() => {
     const apply = () => {
       const { view: v, runId } = parseHash()
+      // Legacy #/experiments → Run Compare tab (unified surface).
+      if (v === 'experiments') {
+        const raw = window.location.hash.replace(/^#\/?/, '')
+        const qIdx = raw.indexOf('?')
+        const params = qIdx >= 0 ? new URLSearchParams(raw.slice(qIdx + 1)) : new URLSearchParams()
+        const runParam = (params.get('run_id') || params.get('run_ids') || '').trim()
+        const ids = runParam
+          ? runParam.split(',').map((s) => s.trim()).filter(Boolean)
+          : []
+        openExperiments(ids.length ? { runIds: ids } : {})
+        return
+      }
       if (runId) openRun(runId)
       else if (v) setView(v)
       // Sync active project from #/projects?project= without breaking other deep links.
@@ -301,24 +410,35 @@ export default function App() {
     apply()
     window.addEventListener('hashchange', apply)
     return () => window.removeEventListener('hashchange', apply)
-  }, [openRun, setView, setActiveProject])
+  }, [openRun, openExperiments, setView, setActiveProject])
 
   React.useEffect(() => {
-    // Preserve query strings for deep links (#/trace?run_id=, #/edge?…, etc.)
+    // Keep hash in sync with view — but never stomp a deep-link that names another view
+    // (cold start often has view=builder while URL is still #/projects?project=…).
     const PRESERVE_QUERY = new Set<AppView>(['trace', 'edge', 'experiments', 'proposals', 'artifacts', 'data', 'projects'])
     const focus = useAppStore.getState().focusRunId
     const raw = window.location.hash.replace(/^#\/?/, '')
     const pathOnly = raw.split('?')[0] || ''
+    const hashView = pathOnly.split('/')[0]
+    const hashClaimsOtherView =
+      !!hashView && VIEW_IDS.has(hashView as AppView) && hashView !== view
+
+    if (view === 'runs' && (raw.includes('tab=compare') || useAppStore.getState().focusRunsTab === 'compare')) {
+      return
+    }
     if (PRESERVE_QUERY.has(view)) {
-      if (pathOnly !== view && !pathOnly.startsWith(`${view}/`)) {
-        window.history.replaceState(null, '', `#/${view}`)
-      }
+      if (pathOnly === view || pathOnly.startsWith(`${view}/`)) return
+      if (hashClaimsOtherView) return
+      window.history.replaceState(null, '', `#/${view}`)
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
       return
     }
     const next = view === 'runs' && focus ? `#/runs/${focus}` : `#/${view}`
-    if (window.location.hash !== next) {
-      window.history.replaceState(null, '', next)
-    }
+    if (window.location.hash === next) return
+    if (pathOnly === view || pathOnly.startsWith(`${view}/`)) return
+    if (hashClaimsOtherView) return
+    window.history.replaceState(null, '', next)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
   }, [view])
 
   React.useEffect(() => {
@@ -388,6 +508,11 @@ export default function App() {
     const raw = window.location.hash.replace(/^#\/?/, '')
     const qIdx = raw.indexOf('?')
     const prevParams = qIdx >= 0 ? new URLSearchParams(raw.slice(qIdx + 1)) : new URLSearchParams()
+    // replaceState does not fire hashchange — notify views (ProjectsView, etc.).
+    const setHash = (hash: string) => {
+      window.history.replaceState(null, '', hash)
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    }
     if (id === 'projects') {
       const ap = useAppStore.getState().activeProject
       const params = new URLSearchParams()
@@ -396,7 +521,7 @@ export default function App() {
       const tab = (prevParams.get('tab') || '').trim()
       if (tab && ALLOWED_QUERY.projects?.includes('tab')) params.set('tab', tab)
       const qs = params.toString()
-      window.history.replaceState(null, '', qs ? `#/projects?${qs}` : '#/projects')
+      setHash(qs ? `#/projects?${qs}` : '#/projects')
     } else {
       const allowed = ALLOWED_QUERY[id]
       const params = new URLSearchParams()
@@ -408,17 +533,26 @@ export default function App() {
         }
       }
       const qs = params.toString()
-      window.history.replaceState(null, '', qs ? `#/${id}?${qs}` : `#/${id}`)
+      setHash(qs ? `#/${id}?${qs}` : `#/${id}`)
     }
+    if (narrow) setNavOpen(false)
+  }
+
+  /** Switch workspace: show Projects picker without forcing the active project open. */
+  const switchProject = () => {
+    setView('projects')
+    window.history.replaceState(null, '', '#/projects')
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
     if (narrow) setNavOpen(false)
   }
 
   const goLinkedData = () => {
     const ap = useAppStore.getState().activeProject
     if (ap) {
-      openProjects({ project: ap, tab: 'versions' })
+      // Distinct from Overview: shared library Outputs for this project (not Overview facets).
+      openData({ mode: 'outputs', project: ap })
     } else {
-      go('projects')
+      go('data')
     }
     if (narrow) setNavOpen(false)
   }
@@ -455,7 +589,21 @@ export default function App() {
         setHelpOpen(true)
         return
       }
-      const dest = JUMP_KEYS[e.key.toLowerCase()]
+      const key = e.key.toLowerCase()
+      if (key === 'o') {
+        e.preventDefault()
+        const rid = useAppStore.getState().lastRunId
+        if (rid) openTrace({ runId: rid })
+        else go('runs')
+        return
+      }
+      if (key === 'e') {
+        e.preventDefault()
+        const rid = useAppStore.getState().lastRunId
+        openExperiments(rid ? { runIds: [rid] } : {})
+        return
+      }
+      const dest = JUMP_KEYS[key]
       if (dest) {
         e.preventDefault()
         go(dest)
@@ -506,75 +654,78 @@ export default function App() {
             </div>
             <div className="min-w-0 leading-tight">
               <div className="text-[15px] font-semibold text-ink-950">Graphyn</div>
-              <div className="truncate text-[11px] text-ink-500">{VIEW_LABEL[view]}</div>
+              <div className="truncate text-[11px] text-ink-500">
+                {view === 'projects' && activeProject ? 'Overview' : VIEW_LABEL[view]}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {backendMode && (
-              <span
-                className={clsx(
-                  'hidden items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium sm:inline-flex',
-                  backendMode === 'distributed'
-                    ? 'border-accent-300 bg-accent-50 text-accent-950'
-                    : 'border-ink-200 bg-white text-ink-600',
-                )}
-                title={
-                  backendMode === 'distributed'
-                    ? 'Mode B — distributed workers; node placement is honored'
-                    : 'Mode A — single machine; node placement is ignored until Distributed'
-                }
-              >
-                {backendMode === 'distributed' ? 'Distributed' : 'Local'}
-              </span>
-            )}
-            {authHonesty?.auth_required ? (
-              <span
-                className="hidden items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium text-amber-900 sm:inline-flex"
-                title="Server requires Authorization: Bearer matching GRAPHYN_API_TOKEN"
-              >
-                Auth on
-              </span>
-            ) : null}
-            {bootStatus === 401 ? (
-              <span className="hidden text-[12px] font-medium text-amber-800 sm:inline">Sign in required</span>
-            ) : bootError ? (
-              <span className="hidden text-[12px] font-medium text-rose-700 sm:inline">Can't reach the API</span>
-            ) : (
-              <span className="hidden text-[12px] text-ink-400 sm:inline">Connected</span>
-            )}
+            {/* Single status chip: mode + connection (Auth banner handles 401 CTA) */}
+            <span
+              className={clsx(
+                'hidden items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium sm:inline-flex',
+                bootStatus === 401
+                  ? 'border-amber-200 bg-amber-50 text-amber-900'
+                  : bootError
+                    ? 'border-rose-200 bg-rose-50 text-rose-800'
+                    : backendMode === 'distributed'
+                      ? 'border-accent-300 bg-accent-50 text-accent-950'
+                      : 'border-ink-200 bg-white text-ink-600',
+              )}
+              title={
+                bootStatus === 401
+                  ? 'Paste API token in Settings'
+                  : bootError
+                    ? bootError
+                    : backendMode === 'distributed'
+                      ? 'Mode B — distributed workers; node placement is honored'
+                      : 'Mode A — single machine; placement ignored until Distributed'
+              }
+            >
+              {bootStatus === 401
+                ? 'Sign in'
+                : bootError
+                  ? 'Offline'
+                  : backendMode === 'distributed'
+                    ? 'Distributed'
+                    : 'Local'}
+              {authHonesty?.auth_required && !bootError && bootStatus !== 401 ? (
+                <span className="text-ink-400">· Auth</span>
+              ) : null}
+            </span>
             {isRunning && (
               <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
                 {chipLabel}
               </span>
             )}
             {!isRunning && chipLabel && (
-              <span className={clsx('hidden max-w-[14rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium sm:inline', chipTone)}>
+              <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
                 {chipLabel}
               </span>
             )}
             {activeProject && (
-              <div className="hidden max-w-[16rem] items-center gap-0.5 sm:inline-flex">
+              <div className="inline-flex max-w-[15rem] items-center gap-0.5">
                 <button
                   type="button"
-                  className="inline-flex max-w-[14rem] items-center gap-1 truncate rounded-l-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400"
-                  title="Open workspace home"
+                  className="inline-flex max-w-[12rem] items-center gap-1 truncate rounded-l-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400"
+                  title="Open workspace Overview"
                   onClick={() => openProject(activeProject)}
                 >
                   <FolderKanban className="h-3 w-3 shrink-0" />
-                  <span className="truncate">Project · {activeProject}</span>
+                  <span className="truncate">{activeProject}</span>
                 </button>
                 <button
                   type="button"
                   className="rounded-r-full border border-l-0 border-accent-300 bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800 hover:bg-accent-100"
-                  title="Switch or clear workspace"
-                  onClick={() => go('projects')}
+                  title="Switch workspace — show project picker"
+                  onClick={switchProject}
                 >
                   Switch
                 </button>
                 <button
                   type="button"
                   className="ml-0.5 rounded-full border border-ink-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-500 hover:border-ink-300 hover:text-ink-800"
-                  title="Close workspace"
+                  title="Close workspace — clear active project"
                   aria-label="Close workspace"
                   onClick={() => closeProject()}
                 >
@@ -585,56 +736,21 @@ export default function App() {
             {!activeProject && (
               <button
                 type="button"
-                className="hidden items-center rounded-full border border-dashed border-ink-300 bg-white/80 px-2.5 py-0.5 text-[11px] text-ink-500 hover:border-accent-300 hover:text-accent-800 sm:inline-flex"
+                className="inline-flex items-center rounded-full border border-dashed border-ink-300 bg-white/80 px-2.5 py-0.5 text-[11px] text-ink-500 hover:border-accent-300 hover:text-accent-800"
                 onClick={() => go('projects')}
               >
                 Open workspace
               </button>
             )}
             {lastRunId && (
-              <div className="flex items-center gap-1" title={`Observe loop for ${lastRunId}`}>
-                <button
-                  type="button"
-                  className="rounded-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"
-                  onClick={() => openRun(lastRunId)}
-                  title={lastRunId}
-                >
-                  Run {shortRunId(lastRunId)}
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
-                  onClick={() => openTrace({ runId: lastRunId })}
-                >
-                  Lineage
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
-                  onClick={() => openArtifacts({ runId: lastRunId })}
-                >
-                  Artifacts
-                </button>
-                {!activeProject && (
-                  <>
-                    <button
-                      type="button"
-                      className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
-                      title="Opens Experiments with this run preselected — pick a second run to Compare"
-                      onClick={() => openExperiments({ runIds: [lastRunId] })}
-                    >
-                      Compare…
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-full border border-ink-100 bg-white/80 px-2 py-0.5 text-[11px] text-ink-600 hover:border-accent-300 hover:text-accent-800"
-                      onClick={() => openProjects()}
-                    >
-                      Projects
-                    </button>
-                  </>
-                )}
-              </div>
+              <LastRunMenu
+                runId={lastRunId}
+                showCompare
+                onOpenRun={() => openRun(lastRunId)}
+                onOpenTrace={() => openTrace({ runId: lastRunId })}
+                onOpenArtifacts={() => openArtifacts({ runId: lastRunId })}
+                onOpenCompare={() => openExperiments({ runIds: [lastRunId] })}
+              />
             )}
             <button
               type="button"
@@ -685,22 +801,19 @@ export default function App() {
             >
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
                 {activeProject && (
-                  <div className="mb-3 rounded-xl border-2 border-accent-300 bg-accent-50/80 p-1.5 shadow-md ring-1 ring-accent-200/50">
-                    <div className="flex items-center justify-between px-2 pb-1 pt-0.5">
-                      <div className="text-[10px] font-semibold uppercase tracking-wide text-accent-800">
-                        In project
+                  <div className="mb-3 space-y-0.5">
+                    <div className="flex items-center justify-between px-2.5 pb-1">
+                      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-ink-400" title={activeProject}>
+                        {activeProject}
                       </div>
                       <button
                         type="button"
-                        className="text-[10px] font-medium text-accent-700/80 hover:text-accent-950"
+                        className="text-[10px] font-medium text-ink-400 hover:text-ink-800"
                         title="Close workspace"
                         onClick={() => closeProject()}
                       >
                         Close
                       </button>
-                    </div>
-                    <div className="mb-1 truncate px-2 text-[12px] font-semibold text-accent-950" title={activeProject}>
-                      {activeProject}
                     </div>
                     <div className="space-y-0.5">
                       {PROJECT_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
@@ -714,8 +827,8 @@ export default function App() {
                             className={clsx(
                               'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
                               active
-                                ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-accent-300/70'
-                                : 'text-ink-700 hover:bg-white/80 hover:text-ink-950',
+                                ? 'bg-white font-medium text-ink-950 shadow-sm'
+                                : 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
                             )}
                             aria-current={active ? 'page' : undefined}
                           >
@@ -726,12 +839,18 @@ export default function App() {
                       })}
                       <button
                         type="button"
-                        title="Explorer — linked data, versions, snapshots for this workspace"
+                        title="Data — shared library Outputs for this project (not Overview)"
                         onClick={goLinkedData}
-                        className="relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] text-ink-700 transition hover:bg-white/80 hover:text-ink-950"
+                        className={clsx(
+                          'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                          view === 'data'
+                            ? 'bg-white font-medium text-ink-950 shadow-sm'
+                            : 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
+                        )}
+                        aria-current={view === 'data' ? 'page' : undefined}
                       >
-                        <Database className="h-4 w-4 text-ink-400" />
-                        <span className="flex-1 truncate">Explorer</span>
+                        <Database className={clsx('h-4 w-4', view === 'data' ? 'text-accent-800' : 'text-ink-400')} />
+                        <span className="flex-1 truncate">Data</span>
                       </button>
                     </div>
                   </div>
@@ -746,6 +865,11 @@ export default function App() {
                     >
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
                         Global / Settings
+                        {!globalNavOpen && pendingProposalCount > 0 ? (
+                          <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                            {pendingProposalCount}
+                          </span>
+                        ) : null}
                       </span>
                       <span className="text-[10px] font-medium text-ink-400">
                         {globalNavOpen ? 'Hide' : 'Show'}

@@ -13,6 +13,7 @@ import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { fetchRunGraph } from '../../lib/runGraph'
 import {
+  CollapsibleJson,
   CopyableMono,
   EmptyState,
   ErrorBanner,
@@ -20,7 +21,7 @@ import {
   PageHeader,
   StatusBadge,
 } from '../../components/ui'
-import { humanNodeLabel, shortRunId } from '../../lib/format'
+import { formatLocaleDateTime, humanNodeLabel, humanizeTemplateName, shortRunId } from '../../lib/format'
 
 type TraceChainStep = {
   step: string
@@ -56,6 +57,13 @@ type TracePayload = {
   }
   chain?: TraceChainStep[]
   warnings?: string[]
+}
+
+type RecentRun = {
+  run_id: string
+  status?: string
+  graph_name?: string
+  created_at?: string
 }
 
 function parseTraceHash(): { artifactId: string; runId: string } {
@@ -94,6 +102,7 @@ export default function TraceView() {
   const setView = useAppStore((s) => s.setView)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
+  const activeProject = useAppStore((s) => s.activeProject)
 
   const initial = parseTraceHash()
   const [artifactId, setArtifactId] = React.useState(initial.artifactId)
@@ -105,8 +114,27 @@ export default function TraceView() {
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [selectedHop, setSelectedHop] = React.useState<number>(0)
+  const [recentRuns, setRecentRuns] = React.useState<RecentRun[]>([])
+  const [recentError, setRecentError] = React.useState<string | null>(null)
   const hasPrefill = Boolean(artifactId.trim() || runId.trim())
   const showRawIdPaste = idsUnlocked || !hasPrefill
+
+  const loadRecentRuns = React.useCallback(async () => {
+    setRecentError(null)
+    try {
+      const query: Record<string, string | number> = { limit: 20 }
+      if (activeProject) query.project = activeProject
+      const rows = await apiJson<RecentRun[]>('/runs', { query })
+      setRecentRuns(Array.isArray(rows) ? rows : [])
+    } catch (err) {
+      setRecentRuns([])
+      setRecentError(err instanceof Error ? err.message : String(err))
+    }
+  }, [activeProject])
+
+  React.useEffect(() => {
+    void loadRecentRuns()
+  }, [loadRecentRuns])
 
   const load = React.useCallback(
     async (aid?: string, rid?: string) => {
@@ -140,7 +168,7 @@ export default function TraceView() {
         setLoading(false)
       }
     },
-    [artifactId, runId, pushToast],
+    [artifactId, runId],
   )
 
   React.useEffect(() => {
@@ -155,6 +183,15 @@ export default function TraceView() {
     return () => window.removeEventListener('hashchange', apply)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const pickRecentRun = (id: string) => {
+    const rid = id.trim()
+    if (!rid) return
+    setRunId(rid)
+    setArtifactId('')
+    setIdsUnlocked(false)
+    void load('', rid)
+  }
 
   const browseArtifacts = (opts?: { artifactId?: string; runId?: string }) => {
     const linkedRun = (opts?.runId || trace?.run?.run_id || '').toString().trim() || runId.trim()
@@ -171,7 +208,7 @@ export default function TraceView() {
       const graph = await fetchRunGraph(rid, graphName || null)
       if (graph) {
         loadGraphIntoBuilder(graph)
-        pushToast(graphName ? `Opened ${graphName} in Builder` : 'Opened graph in Builder', 'success')
+        pushToast(graphName ? `Opened ${graphName} in Editor` : 'Opened graph in Editor', 'success')
         return
       }
     } catch (err) {
@@ -180,17 +217,125 @@ export default function TraceView() {
     }
     setView('builder')
     window.history.replaceState(null, '', '#/builder')
-    pushToast(graphName ? `Builder opened — graph ${graphName} not found on disk` : 'Opened Builder', 'info')
+    pushToast(graphName ? `Editor opened — graph ${graphName} not found on disk` : 'Opened Editor', 'info')
   }
 
   const chain = trace?.chain ?? []
   const inputs = Array.isArray(trace?.lineage?.inputs) ? trace!.lineage!.inputs! : []
+  const selected = chain[selectedHop]
+
+  const hopActions = (hop: TraceChainStep | undefined) => {
+    if (!hop) return null
+    const buttons: React.ReactNode[] = []
+    if (hop.step === 'run' && hop.id) {
+      buttons.push(
+        <button
+          key="open-run"
+          type="button"
+          className="btn-primary !px-2.5 !py-1 text-[12px]"
+          onClick={() => openRun(String(hop.id))}
+        >
+          Open run {shortRunId(String(hop.id))}
+        </button>,
+        <button
+          key="artifacts"
+          type="button"
+          className="btn-secondary !px-2.5 !py-1 text-[12px]"
+          onClick={() => browseArtifacts({ runId: String(hop.id) })}
+        >
+          Artifacts
+        </button>,
+      )
+    }
+    if (hop.step === 'artifact' && hop.id) {
+      buttons.push(
+        <button
+          key="artifacts"
+          type="button"
+          className="btn-primary !px-2.5 !py-1 text-[12px]"
+          onClick={() =>
+            browseArtifacts({
+              artifactId: String(hop.id),
+              runId: trace?.run?.run_id,
+            })
+          }
+        >
+          Artifacts
+        </button>,
+        <button
+          key="retrace"
+          type="button"
+          className="btn-secondary !px-2.5 !py-1 text-[12px]"
+          onClick={() => {
+            setArtifactId(String(hop.id))
+            setRunId('')
+            void load(String(hop.id), '')
+          }}
+        >
+          Trace this
+        </button>,
+      )
+      if (trace?.run?.run_id) {
+        buttons.push(
+          <button
+            key="open-run"
+            type="button"
+            className="btn-secondary !px-2.5 !py-1 text-[12px]"
+            onClick={() => openRun(String(trace.run!.run_id))}
+          >
+            Open run
+          </button>,
+        )
+      }
+    }
+    if (hop.step === 'graph') {
+      buttons.push(
+        <button
+          key="builder"
+          type="button"
+          className="btn-primary !px-2.5 !py-1 text-[12px]"
+          onClick={() => void openGraphHop(hop.label || trace?.graph?.name)}
+        >
+          Editor
+        </button>,
+      )
+    }
+    if (hop.step === 'node') {
+      buttons.push(
+        <button
+          key="builder"
+          type="button"
+          className="btn-primary !px-2.5 !py-1 text-[12px]"
+          onClick={() => void openGraphHop(trace?.graph?.name)}
+        >
+          Editor
+        </button>,
+      )
+    }
+    if (hop.step === 'worker') {
+      buttons.push(
+        <button
+          key="workers"
+          type="button"
+          className="btn-primary !px-2.5 !py-1 text-[12px]"
+          onClick={() => {
+            setView('workers')
+            window.history.replaceState(null, '', '#/workers')
+          }}
+        >
+          Workers
+        </button>,
+      )
+    }
+    if (buttons.length === 0) return null
+    return <div className="flex flex-wrap gap-1.5">{buttons}</div>
+  }
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
-        title="Trace"
-        description="Provenance chain: artifact → node → run → graph → worker."
+        title="Lineage"
+        description="Artifact-level provenance deep-link. For a run, prefer Run → Lineage (stays on that run)."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -199,6 +344,40 @@ export default function TraceView() {
       />
 
       <div className="rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm space-y-3">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <label className="block min-w-[14rem] flex-1 text-sm">
+              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                Recent runs{activeProject ? ` · ${activeProject}` : ''}
+              </span>
+              <select
+                className="field-control mt-0 w-full text-sm"
+                value={recentRuns.some((r) => r.run_id === runId.trim()) ? runId.trim() : ''}
+                onChange={(e) => pickRecentRun(e.target.value)}
+              >
+                <option value="">Pick a recent run…</option>
+                {recentRuns.map((r) => (
+                  <option key={r.run_id} value={r.run_id}>
+                    {shortRunId(r.run_id)}
+                    {r.graph_name ? ` · ${humanizeTemplateName(r.graph_name)}` : ''}
+                    {r.status ? ` · ${r.status}` : ''}
+                    {r.created_at ? ` · ${formatLocaleDateTime(r.created_at)}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="btn-quiet text-[11px]" onClick={() => void loadRecentRuns()}>
+              Refresh list
+            </button>
+          </div>
+          {recentError ? <p className="text-[12px] text-rose-700">{recentError}</p> : null}
+          {!recentError && recentRuns.length === 0 ? (
+            <p className="text-[12px] text-ink-400">
+              No recent runs{activeProject ? ' in this project' : ''}. Open a run from Runs, or paste an ID below.
+            </p>
+          ) : null}
+        </div>
+
         {hasPrefill && !showRawIdPaste ? (
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-sm text-ink-700">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Context</span>
@@ -218,36 +397,41 @@ export default function TraceView() {
             </button>
           </div>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                Artifact ID
-              </span>
-              <input
-                className="field-control mt-0 w-full font-mono text-xs"
-                value={artifactId}
-                placeholder="artifact uuid / id"
-                onChange={(e) => setArtifactId(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void load()
-                }}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                Run ID
-              </span>
-              <input
-                className="field-control mt-0 w-full font-mono text-xs"
-                value={runId}
-                placeholder="run id"
-                onChange={(e) => setRunId(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void load()
-                }}
-              />
-            </label>
-          </div>
+          <details className="rounded-xl border border-ink-100 bg-ink-50/50" open={!hasPrefill}>
+            <summary className="cursor-pointer select-none px-3 py-2 text-[12px] font-medium text-ink-600">
+              Advanced — paste artifact / run IDs
+            </summary>
+            <div className="grid gap-3 border-t border-ink-100 px-3 py-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  Artifact ID
+                </span>
+                <input
+                  className="field-control mt-0 w-full font-mono text-xs"
+                  value={artifactId}
+                  placeholder="artifact uuid / id"
+                  onChange={(e) => setArtifactId(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void load()
+                  }}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  Run ID
+                </span>
+                <input
+                  className="field-control mt-0 w-full font-mono text-xs"
+                  value={runId}
+                  placeholder="run id"
+                  onChange={(e) => setRunId(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void load()
+                  }}
+                />
+              </label>
+            </div>
+          </details>
         )}
         <div className="flex flex-wrap gap-2">
           <button type="button" className="btn-primary" onClick={() => void load()}>
@@ -275,43 +459,35 @@ export default function TraceView() {
 
       {!loading && !error && !trace && (
         <EmptyState
-          title="Start a backtrack"
-          description="Open View lineage from Runs / Artifacts (IDs arrive prefilled), or paste an id below."
+          title="Open lineage from a run, or pick a recent run below."
+          description="Prefer Run → Lineage for run-scoped provenance. This page is for artifact IDs and advanced paste."
           action={
-            <div className="flex flex-wrap justify-center gap-2">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setView('runs')
-                  window.history.replaceState(null, '', '#/runs')
-                }}
-              >
-                Open Runs
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => openArtifacts()}
-              >
-                Open Artifacts
-              </button>
-            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => {
+                setView('runs')
+                window.history.replaceState(null, '', '#/runs')
+              }}
+            >
+              Open Run
+            </button>
           }
         />
       )}
 
       {trace && !loading && (
-        <div className="space-y-6">
+        <div className="space-y-4">
           {Array.isArray(trace.warnings) && trace.warnings.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               Partial chain — {trace.warnings.join(' · ')}
             </div>
           )}
 
-          {/* Visual chain */}
-          <div className="rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
-            <h3 className="mb-3 text-sm font-semibold text-ink-800">Chain</h3>
+          {/* Hero hop chain */}
+          <div className="rounded-2xl border border-accent-200/60 bg-gradient-to-b from-white to-accent-50/30 p-5 shadow-sm">
+            <h3 className="mb-1 text-base font-semibold tracking-tight text-ink-900">Hop chain</h3>
+            <p className="mb-4 text-[12px] text-ink-500">Select a hop for details and actions.</p>
             {chain.length === 0 ? (
               <p className="text-sm text-ink-500">No chain steps available.</p>
             ) : (
@@ -329,104 +505,27 @@ export default function TraceView() {
                         <button
                           type="button"
                           onClick={() => setSelectedHop(idx)}
-                          className={`w-full rounded-xl border px-3 py-2.5 text-left transition ${
+                          className={`w-full rounded-xl border px-3 py-3 text-left transition ${
                             selectedHop === idx
-                              ? 'border-accent-300 bg-accent-50/80 shadow-sm'
-                              : 'border-ink-100 bg-ink-50/70 hover:border-ink-200'
+                              ? 'border-accent-400 bg-white shadow-md ring-1 ring-accent-200'
+                              : 'border-ink-100 bg-white/80 hover:border-ink-200'
                           }`}
                         >
-                        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-500">
-                          <Icon className="h-3 w-3" />
-                          {step.step}
-                        </div>
-                        <div className="mt-1 truncate text-sm font-medium text-ink-900" title={step.label}>
-                          {step.step === 'node' && step.node_type
-                            ? humanNodeLabel(String(step.node_type))
-                            : step.label}
-                        </div>
-                        {step.status && (
-                          <div className="mt-1">
-                            <StatusBadge status={String(step.status)} />
+                          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-500">
+                            <Icon className="h-3 w-3" />
+                            {step.step}
                           </div>
-                        )}
+                          <div className="mt-1 truncate text-sm font-medium text-ink-900" title={step.label}>
+                            {step.step === 'node' && step.node_type
+                              ? humanNodeLabel(String(step.node_type))
+                              : step.label}
+                          </div>
+                          {step.status && (
+                            <div className="mt-1">
+                              <StatusBadge status={String(step.status)} />
+                            </div>
+                          )}
                         </button>
-                        {step.id && (
-                          <div className="mt-1.5 px-1">
-                            <CopyableMono value={String(step.id)} />
-                          </div>
-                        )}
-                        {selectedHop === idx && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {step.step === 'run' && step.id && (
-                            <>
-                              <button
-                                type="button"
-                                className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                                onClick={() => browseArtifacts({ runId: String(step.id) })}
-                              >
-                                Artifacts
-                              </button>
-                            </>
-                          )}
-                          {step.step === 'artifact' && step.id && (
-                            <>
-                              <button
-                                type="button"
-                                className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                                onClick={() =>
-                                  browseArtifacts({
-                                    artifactId: String(step.id),
-                                    runId: trace?.run?.run_id,
-                                  })
-                                }
-                              >
-                                Artifacts
-                              </button>
-                              <button
-                                type="button"
-                                className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                                onClick={() => {
-                                  setArtifactId(String(step.id))
-                                  setRunId('')
-                                  void load(String(step.id), '')
-                                }}
-                              >
-                                Trace
-                              </button>
-                            </>
-                          )}
-                          {step.step === 'graph' && (
-                            <button
-                              type="button"
-                              className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                              onClick={() => void openGraphHop(step.label || trace?.graph?.name)}
-                            >
-                              Builder
-                            </button>
-                          )}
-                          {step.step === 'worker' && (
-                            <button
-                              type="button"
-                              className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                              onClick={() => {
-                                setView('workers')
-                                window.history.replaceState(null, '', '#/workers')
-                              }}
-                            >
-                              Workers
-                            </button>
-                          )}
-                          {step.step === 'node' && (
-                            <button
-                              type="button"
-                              className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                              onClick={() => void openGraphHop(trace?.graph?.name)}
-                            >
-                              Builder
-                            </button>
-                          )}
-                        </div>
-                        )}
                       </li>
                     </React.Fragment>
                   )
@@ -435,8 +534,9 @@ export default function TraceView() {
             )}
           </div>
 
+          {/* Secondary hop detail + contextual actions */}
           {(() => {
-            const hop = chain[selectedHop]
+            const hop = selected
             if (!hop) return null
             const pick = (src: Record<string, unknown> | null | undefined, keys: string[]) => {
               if (!src) return [] as Array<[string, string]>
@@ -497,67 +597,23 @@ export default function TraceView() {
                 if (v != null && v !== '') fields.push([k, String(v)])
               }
             }
-            const runIdForOpen =
-              hop.step === 'run' && hop.id
-                ? String(hop.id)
-                : ''
             return (
               <div className="rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-ink-800">
                     {hop.step.charAt(0).toUpperCase() + hop.step.slice(1)} detail
                   </h3>
-                  <div className="flex flex-wrap gap-1">
-                    {hop.step === 'run' && runIdForOpen ? (
-                      <button
-                        type="button"
-                        className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                        onClick={() => openRun(runIdForOpen)}
-                      >
-                        Open Run {shortRunId(runIdForOpen)}
-                      </button>
-                    ) : null}
-                    {hop.step === 'graph' ? (
-                      <button
-                        type="button"
-                        className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                        onClick={() => void openGraphHop(hop.label || trace?.graph?.name)}
-                      >
-                        Builder
-                      </button>
-                    ) : null}
-                    {hop.step === 'worker' ? (
-                      <button
-                        type="button"
-                        className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                        onClick={() => {
-                          setView('workers')
-                          window.history.replaceState(null, '', '#/workers')
-                        }}
-                      >
-                        Workers
-                      </button>
-                    ) : null}
-                    {hop.step === 'artifact' && hop.id ? (
-                      <button
-                        type="button"
-                        className="btn-secondary !px-2 !py-0.5 text-[11px]"
-                        onClick={() =>
-                          browseArtifacts({
-                            artifactId: String(hop.id),
-                            runId: trace?.run?.run_id,
-                          })
-                        }
-                      >
-                        Artifacts
-                      </button>
-                    ) : null}
-                  </div>
+                  {hop.status ? <StatusBadge status={String(hop.status)} /> : null}
                 </div>
-                {hop.status ? <StatusBadge status={String(hop.status)} /> : null}
+                {hop.id ? (
+                  <div>
+                    <CopyableMono value={String(hop.id)} />
+                  </div>
+                ) : null}
+                {hopActions(hop)}
                 {fields.length > 0 ? (
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
-                    {fields.slice(0, 5).map(([k, v]) => (
+                    {fields.slice(0, 6).map(([k, v]) => (
                       <React.Fragment key={k}>
                         <dt className="text-ink-500">{k}</dt>
                         <dd className="min-w-0 truncate font-mono text-[12px] text-ink-800" title={v}>
@@ -619,6 +675,7 @@ export default function TraceView() {
             )}
           </div>
 
+          <CollapsibleJson value={trace} label="Raw trace JSON" />
         </div>
       )}
     </div>

@@ -32,7 +32,6 @@ import {
   ExternalLink,
   X,
   Database,
-  FolderKanban,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -203,6 +202,7 @@ function BuilderInner() {
   const openRun = useAppStore((s) => s.openRun)
   const openData = useAppStore((s) => s.openData)
   const openProjects = useAppStore((s) => s.openProjects)
+  const openProject = useAppStore((s) => s.openProject)
   const builderDataset = useAppStore((s) => s.builderDataset)
   const activeProject = useAppStore((s) => s.activeProject)
   const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
@@ -1048,7 +1048,7 @@ function BuilderInner() {
                 description={
                   bootStatus === 401 || !getApiToken()
                     ? 'Paste your API token in Settings to load the node catalog.'
-                    : 'Install a plugin to populate the catalog, then add nodes here — or browse Data / Projects while you wait.'
+                    : 'Install a plugin to populate the node catalog, then add nodes here.'
                 }
                 action={
                   bootStatus === 401 || !getApiToken() ? (
@@ -1056,28 +1056,16 @@ function BuilderInner() {
                       Open Settings
                     </button>
                   ) : (
-                    <div className="flex flex-wrap justify-center gap-2">
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={() => {
-                          setView('plugins')
-                          window.history.replaceState(null, '', '#/plugins')
-                        }}
-                      >
-                        Open Plugins
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => openData({ mode: 'inputs' })}
-                      >
-                        <Database className="h-3.5 w-3.5" /> Open Data
-                      </button>
-                      <button type="button" className="btn-secondary" onClick={() => openProjects()}>
-                        <FolderKanban className="h-3.5 w-3.5" /> Open Projects
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        setView('plugins')
+                        window.history.replaceState(null, '', '#/plugins')
+                      }}
+                    >
+                      Open Plugins
+                    </button>
                   )
                 }
               />
@@ -1150,12 +1138,14 @@ function BuilderInner() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200/50 bg-white/80 px-3 py-1.5 backdrop-blur-md">
-          <span
-            className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950"
-            title="Editor scoped to open workspace"
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950 hover:border-accent-400"
+            title="Open workspace Overview"
+            onClick={() => activeProject && openProject(activeProject)}
           >
             Editor · {activeProject}
-          </span>
+          </button>
           {pendingProposalCount > 0 && (
             <button
               type="button"
@@ -1270,19 +1260,9 @@ function BuilderInner() {
                     onChange={(e) => setTemplateName(e.target.value)}
                     placeholder="pipeline-name"
                     className="field-control mt-0 text-xs"
-                    title="Name used when saving to the project or as a global template"
+                    title="Name used when saving as a global template"
                     aria-label="Pipeline name"
                   />
-                  <button
-                    type="button"
-                    className="btn-primary w-full justify-start"
-                    onClick={() => {
-                      void saveToProject()
-                      setMoreOpen(false)
-                    }}
-                  >
-                    <BookmarkPlus className="h-3.5 w-3.5" /> Save to project
-                  </button>
                   <button
                     type="button"
                     className="btn-secondary w-full justify-start"
@@ -1373,7 +1353,7 @@ function BuilderInner() {
               <div className="pointer-events-auto max-w-sm rounded-3xl border border-ink-200/80 bg-white/90 px-8 py-7 text-center shadow-soft backdrop-blur">
                 <div className="text-lg font-semibold text-ink-950">Start a pipeline</div>
                 <p className="mt-2 text-sm leading-relaxed text-ink-500">
-                  Pick a node from the left, open a template, or pull files / a dataset workspace into the loop.
+                  Pick a node from the left catalog, or open a template to start a pipeline.
                 </p>
                 <div className="mt-3 flex flex-wrap justify-center gap-2">
                   <button
@@ -1398,15 +1378,6 @@ function BuilderInner() {
                     }
                   >
                     <Database className="h-3.5 w-3.5" /> Open Data
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() =>
-                      openProjects({ project: builderDataset?.project })
-                    }
-                  >
-                    <FolderKanban className="h-3.5 w-3.5" /> Open Projects
                   </button>
                 </div>
               </div>
@@ -1587,24 +1558,22 @@ function BuilderInner() {
                             </div>
                           </div>
                         )}
+                        {backendMode === 'distributed' ? (
                         <div className="mb-3 rounded-lg border border-ink-200 bg-ink-50/70 p-2.5 space-y-2">
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                              Placement {backendMode === 'distributed' ? '(Distributed)' : '(Local)'}
+                              Placement (Distributed)
                             </div>
                             <button
                               type="button"
-                              className="text-[11px] text-accent-700 hover:underline disabled:opacity-40"
-                              disabled={backendMode !== 'distributed'}
+                              className="text-[11px] text-accent-700 hover:underline"
                               onClick={() => node.data.onChangePlacement?.(null)}
                             >
                               Reset auto
                             </button>
                           </div>
                           <p className="text-[10px] leading-snug text-ink-400">
-                            {backendMode === 'distributed'
-                              ? 'Distributed Mode B honors mode / tags / GPU / pool / worker.'
-                              : 'Ignored until Distributed — Local Mode A runs everything on this host.'}
+                            Distributed Mode B honors mode / tags / GPU / pool / worker.
                           </p>
                           {(() => {
                             const p = node.data.placement ?? { mode: 'auto' as const }
@@ -1612,7 +1581,6 @@ function BuilderInner() {
                               const next: NodePlacement = { ...p, ...patch }
                               node.data.onChangePlacement?.(next)
                             }
-                            const placementDisabled = backendMode !== 'distributed'
                             return (
                               <>
                                 <label className="block text-[12px] text-ink-700">
@@ -1620,7 +1588,6 @@ function BuilderInner() {
                                   <select
                                     className="field-control mt-1"
                                     value={p.mode ?? 'auto'}
-                                    disabled={placementDisabled}
                                     onChange={(e) =>
                                       setP({
                                         mode: e.target.value as NodePlacement['mode'],
@@ -1639,7 +1606,6 @@ function BuilderInner() {
                                     className="field-control mt-1 font-mono"
                                     placeholder="gpu,edge (comma-separated)"
                                     value={(p.tags ?? []).join(',')}
-                                    disabled={placementDisabled}
                                     onChange={(e) =>
                                       setP({
                                         tags: e.target.value
@@ -1654,7 +1620,6 @@ function BuilderInner() {
                                   <input
                                     type="checkbox"
                                     checked={Boolean(p.require_gpu)}
-                                    disabled={placementDisabled}
                                     onChange={(e) => setP({ require_gpu: e.target.checked })}
                                   />
                                   <span className="font-medium">Require GPU</span>
@@ -1665,7 +1630,6 @@ function BuilderInner() {
                                     className="field-control mt-1 font-mono"
                                     placeholder="gpu-lab"
                                     value={p.pool ?? ''}
-                                    disabled={placementDisabled}
                                     onChange={(e) => setP({ pool: e.target.value.trim() || null })}
                                   />
                                 </label>
@@ -1675,7 +1639,6 @@ function BuilderInner() {
                                     className="field-control mt-1 font-mono"
                                     placeholder="worker id"
                                     value={p.worker ?? ''}
-                                    disabled={placementDisabled}
                                     onChange={(e) => setP({ worker: e.target.value.trim() || null })}
                                   />
                                 </label>
@@ -1683,6 +1646,7 @@ function BuilderInner() {
                             )
                           })()}
                         </div>
+                        ) : null}
                         {(() => {
                           const entries = Object.entries(node.data.schemaProps ?? {}) as [string, Record<string, unknown>][]
                           if (entries.length === 0) return <div className="text-sm text-ink-400">No config fields</div>
@@ -1763,7 +1727,15 @@ function BuilderInner() {
               </button>
             )}
             <div className="ml-auto flex items-center gap-2">
-              {lastRunId && (
+              {runHadErrors && !isRunning && lastRunId ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded bg-rose-500/25 px-2 py-0.5 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/40"
+                  onClick={() => openRun(lastRunId)}
+                >
+                  <ExternalLink className="h-3 w-3" /> Open failed run
+                </button>
+              ) : lastRunId ? (
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 text-[11px] font-medium text-accent-300 hover:text-accent-200"
@@ -1771,7 +1743,7 @@ function BuilderInner() {
                 >
                   <ExternalLink className="h-3 w-3" /> Open run
                 </button>
-              )}
+              ) : null}
               <button
                 type="button"
                 className="text-[11px] font-medium text-ink-400 hover:text-ink-100"

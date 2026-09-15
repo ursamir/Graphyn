@@ -314,12 +314,12 @@ export function NeedProjectPrompt({
 }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <div className="mx-auto max-w-md rounded-2xl border border-ink-200/50 bg-gradient-to-b from-white to-[#f7f9fb] px-8 py-12 text-center shadow-sm">
-        <p className="text-base font-semibold tracking-tight text-ink-950">Open or create a project to start work</p>
-        <p className="mt-2.5 text-sm leading-relaxed text-ink-500">
-          Editor, Runs, and Experiments stay scoped to a workspace. Global Data, Templates, and Proposals remain in the sidebar.
+      <div className="mx-auto max-w-sm empty-state-shell py-10">
+        <p className="text-base font-semibold tracking-tight text-ink-950">Open a project first</p>
+        <p className="mt-2 text-sm leading-relaxed text-ink-500">
+          Editor, Runs, and Experiments need an active workspace.
         </p>
-        <button type="button" className="btn-primary mt-6" onClick={onOpenProjects}>
+        <button type="button" className="btn-primary mt-5" onClick={onOpenProjects}>
           Open Projects
         </button>
       </div>
@@ -336,16 +336,17 @@ export function PageHeader({
   title: string
   description?: string
   actions?: React.ReactNode
+  /** Prefer omitting — scope is already clear from the activity bar / project chip. */
   scope?: 'project' | 'global'
 }) {
   return (
-    <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 max-w-3xl">
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-baseline gap-2">
           <h1 className="text-type-page tracking-tight text-ink-950">{title}</h1>
-          {scope ? <ScopeBadge scope={scope} /> : null}
+          {scope ? <span className="sr-only">{scope === 'project' ? 'Project scope' : 'Global scope'}</span> : null}
         </div>
-        {description && <p className="mt-1.5 max-w-2xl text-type-body leading-relaxed text-ink-500">{description}</p>}
+        {description && <p className="mt-1 max-w-xl text-type-secondary leading-relaxed text-ink-500">{description}</p>}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
