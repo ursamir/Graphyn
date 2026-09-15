@@ -129,8 +129,12 @@ export default function WorkersView() {
   return (
     <div className="h-full overflow-y-auto p-6 space-y-5">
       <PageHeader
-        title="Workers"
-        description="Distributed compute placement (Mode B) — registered workers, labels, GPU, and heartbeats."
+        title="Worker fleet"
+        description={
+          backendMode === 'distributed'
+            ? 'Deploy — Mode B worker registry, labels, GPU, and heartbeats.'
+            : 'Deploy — only needed when Mode is Distributed; local Mode A runs pipelines in-process.'
+        }
         actions={
           <button type="button" className="btn-secondary" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh

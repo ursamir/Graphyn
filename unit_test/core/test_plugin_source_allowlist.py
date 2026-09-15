@@ -28,7 +28,16 @@ def allow_host(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_unset_allowlist_allows_all(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GRAPHYN_PLUGIN_ALLOWED_SOURCES", raising=False)
+    monkeypatch.delenv("GRAPHYN_AUTH_REQUIRED", raising=False)
+    monkeypatch.setenv("GRAPHYN_ENV", "development")
     assert plugin_source_is_allowed("https://evil.example/x.zip") is True
+
+
+def test_unset_allowlist_denied_when_auth_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GRAPHYN_PLUGIN_ALLOWED_SOURCES", raising=False)
+    monkeypatch.setenv("GRAPHYN_AUTH_REQUIRED", "1")
+    assert plugin_source_is_allowed("https://evil.example/x.zip") is False
+    assert plugin_source_is_allowed("/tmp/local-plugin") is True
 
 
 def test_local_paths_always_allowed(allow_repo: None) -> None:

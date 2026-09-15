@@ -60,7 +60,7 @@ Every pipeline run stores its `GraphIR` as `workspace/runs/{run_id}/graph.json`.
 ```python
 import json
 from app.core.ir.loader import load_ir
-from app.core.pipeline import run_pipeline_ir
+from app.core.runtime_backend import get_backend
 from app.core.run_manager import RunManager
 
 # Load the stored graph
@@ -69,7 +69,7 @@ with open(f"workspace/runs/{run_id}/graph.json") as f:
 
 ir = load_ir(graph_dict)
 new_run_mgr = RunManager()
-run_pipeline_ir(ir, run_manager=new_run_mgr)
+get_backend().execute(ir, run_manager=new_run_mgr)
 print(f"Replay run_id: {new_run_mgr.run_id}")
 ```
 

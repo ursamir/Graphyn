@@ -109,13 +109,14 @@ def worker_heartbeat(worker_id: str, body: HeartbeatBody = HeartbeatBody()):
     try:
         get_job_queue().renew_leases_for_worker(worker_id)
     except Exception as exc:
-        # Do not fail the heartbeat (registry update already succeeded), but
-        # never swallow lease-renew errors as silent success — operators need
-        # the log line when reclaim storms follow missed renewals.
         log.warning(
             "workers.heartbeat: lease renew failed for worker %s: %s",
             worker_id,
             exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Lease renew failed for worker {worker_id}: {exc}",
         )
     return stored.model_dump(mode="json")
 

@@ -27,6 +27,8 @@ optional_dependencies = [
     "pyloudnorm>=0.1",
 ]
 
+node_types = ["audio_conditioner"]
+
 [config_schema.audio_conditioner]
 target_sample_rate = { type = "integer", title = "Target sample rate", default = 16000, description = "Resample audio to this rate (Hz).", ui = { group = "Basic" } }
 mono = { type = "boolean", title = "Mono", default = true, description = "Downmix to a single channel (On/Off).", ui = { group = "Basic" } }

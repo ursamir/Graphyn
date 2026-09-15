@@ -14,20 +14,18 @@ type PaletteItem = {
 }
 
 const VIEW_JUMPS: Array<{ id: AppView; label: string; keywords?: string }> = [
-  { id: 'projects', label: 'Open Overview', keywords: 'home workspace projects j overview' },
+  { id: 'projects', label: 'Home', keywords: 'home workspace projects j overview' },
   { id: 'builder', label: 'Editor', keywords: 'builder canvas pipeline b' },
-  { id: 'runs', label: 'Run history', keywords: 'runs history r' },
-  { id: 'trace', label: 'Lineage', keywords: 'trace provenance o' },
-  { id: 'experiments', label: 'Compare', keywords: 'experiments metrics e' },
-  { id: 'templates', label: 'Templates', keywords: 'starter t' },
+  { id: 'runs', label: 'Runs', keywords: 'runs history r' },
+  { id: 'data', label: 'Datasets', keywords: 'datasets inputs outputs d library' },
+  { id: 'artifacts', label: 'Artifacts', keywords: 'artifacts files a browse registry' },
+  { id: 'templates', label: 'Templates', keywords: 'starter build t' },
   { id: 'proposals', label: 'Proposals', keywords: 'pr agent p' },
-  { id: 'data', label: 'Open Data library', keywords: 'datasets inputs outputs d library' },
-  { id: 'artifacts', label: 'Browse run files', keywords: 'artifacts files a browse' },
-  { id: 'edge', label: 'Edge deploy', keywords: 'tflite g' },
-  { id: 'workers', label: 'Workers', keywords: 'distributed gpu w' },
-  { id: 'plugins', label: 'Plugins', keywords: 'catalog l' },
+  { id: 'plugins', label: 'Library · Plugins', keywords: 'catalog library plugins l' },
+  { id: 'edge', label: 'Edge package', keywords: 'tflite deploy g edge' },
+  { id: 'workers', label: 'Worker fleet', keywords: 'distributed gpu w workers fleet' },
   { id: 'secrets', label: 'Secrets', keywords: 'credentials k' },
-  { id: 'system', label: 'System', keywords: 'health schedules admin s' },
+  { id: 'system', label: 'Ops', keywords: 'health schedules admin s system ops' },
 ]
 
 function fuzzyScore(query: string, text: string): number {
@@ -65,6 +63,7 @@ export function CommandPalette({
   onOpenChange?: (open: boolean) => void
 }) {
   const setView = useAppStore((s) => s.setView)
+  const setFocusRunsTab = useAppStore((s) => s.setFocusRunsTab)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const closeProject = useAppStore((s) => s.closeProject)
   const openRun = useAppStore((s) => s.openRun)
@@ -165,7 +164,7 @@ export function CommandPalette({
       })
       out.push({
         id: 'workspace:overview',
-        label: 'Open Overview',
+        label: 'Home',
         hint: activeProject,
         group: 'Workspace',
         keywords: 'overview home project',
@@ -176,7 +175,7 @@ export function CommandPalette({
       })
       out.push({
         id: 'workspace:data',
-        label: 'Open Data library',
+        label: 'Datasets',
         hint: activeProject,
         group: 'Workspace',
         keywords: 'data datasets library',
@@ -187,7 +186,7 @@ export function CommandPalette({
       })
       out.push({
         id: 'workspace:files',
-        label: 'Browse run files',
+        label: 'Artifacts',
         hint: activeProject,
         group: 'Workspace',
         keywords: 'artifacts files browse',
@@ -198,16 +197,36 @@ export function CommandPalette({
       })
       out.push({
         id: 'workspace:edge',
-        label: 'Edge deploy',
+        label: 'Edge package',
         hint: activeProject,
         group: 'Workspace',
-        keywords: 'edge tflite deploy',
+        keywords: 'edge tflite deploy package',
         run: () => {
           openEdge({ project: activeProject })
           setOpen(false)
         },
       })
     }
+    out.push({
+      id: 'runs:lineage',
+      label: 'Runs → Lineage',
+      hint: '#/trace',
+      group: 'Runs panels',
+      keywords: 'lineage trace provenance deep link o',
+      run: () => goView('trace'),
+    })
+    out.push({
+      id: 'runs:compare',
+      label: 'Runs → Compare runs',
+      hint: '#/runs?tab=compare',
+      group: 'Runs panels',
+      keywords: 'compare experiments metrics e',
+      run: () => {
+        setFocusRunsTab('compare')
+        goView('runs')
+        window.history.replaceState(null, '', '#/runs?tab=compare')
+      },
+    })
     for (const v of VIEW_JUMPS) {
       out.push({
         id: `view:${v.id}`,
@@ -259,7 +278,7 @@ export function CommandPalette({
       })
     }
     return out
-  }, [goView, lastRunId, recentRuns, projects, openRun, openProject, setActiveProject, setOpen, activeProject, closeProject, setView, openArtifacts, openEdge])
+  }, [goView, lastRunId, recentRuns, projects, openRun, openProject, setActiveProject, setOpen, activeProject, closeProject, setView, openArtifacts, openEdge, setFocusRunsTab])
 
   const filtered = React.useMemo(() => {
     const scored = items

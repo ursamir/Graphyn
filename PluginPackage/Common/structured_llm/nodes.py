@@ -9,6 +9,7 @@ import re
 from typing import Any, ClassVar, Literal
 from pydantic import Field
 
+from app.core.egress import validate_http_egress_url
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
@@ -301,6 +302,7 @@ class StructuredLlmNode(Node):
             },
         }
         # Groq may not support json_schema response_format on all models — fall back to json_object
+        validate_http_egress_url(url)
         resp = httpx.post(
             url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -315,6 +317,7 @@ class StructuredLlmNode(Node):
                 + " Schema: "
                 + json.dumps(schema)
             )
+            validate_http_egress_url(url)
             resp = httpx.post(
                 url,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},

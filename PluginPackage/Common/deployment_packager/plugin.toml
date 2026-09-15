@@ -13,6 +13,8 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+node_types = ["deployment_packager"]
+
 [config_schema.deployment_packager]
 target = {  type = "string", title = "Target", default = "mobile", description = "Deployment target package format. One of: mobile, mcu, docker, edge.", enum = ["mobile", "mcu", "docker", "edge"]  }
 output_path = { type = "string", title = "Output path", default = "workspace/artifacts/packages", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }

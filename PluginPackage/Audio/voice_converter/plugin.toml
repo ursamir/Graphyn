@@ -28,6 +28,8 @@ optional_dependencies = [
     "soundfile>=0.12",
 ]
 
+node_types = ["voice_converter"]
+
 [config_schema.voice_converter]
 backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: speechbrain, knnvc, auto.", enum = ["speechbrain", "knnvc", "auto"]  }
 conversion_type = { type = "string", title = "Conversion Type", default = "timbre", description = "Conversion Type. One of: timbre, accent, gender, style.", enum = ["timbre", "accent", "gender", "style"] }

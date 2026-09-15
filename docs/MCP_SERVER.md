@@ -47,7 +47,7 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 
 ---
 
-## All 23 Tools
+## All 29 Tools
 
 | Tool | Handler | Delegates to |
 |---|---|---|
@@ -80,6 +80,12 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 | `get_trace` | `workspace.py` | `trace.assemble_trace` |
 | `list_projects` | `workspace.py` | datasets/output folder listing |
 | `list_data_inputs` | `workspace.py` | datasets/input label listing |
+
+---
+
+## Intentional omissions
+
+Schedules, worker pool management, and document ingest are **REST-only** (see `API_REFERENCE.md`). They are not exposed as MCP tools — agents should call the HTTP API for those surfaces.
 
 ---
 

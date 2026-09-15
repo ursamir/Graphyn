@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "metadata": {
     "name": "doc-rag-ingest",
     "seed": 42,

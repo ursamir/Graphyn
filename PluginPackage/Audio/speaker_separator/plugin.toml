@@ -27,6 +27,8 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+node_types = ["speaker_separator"]
+
 [config_schema.speaker_separator]
 backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: pyannote, speechbrain, auto.", enum = ["pyannote", "speechbrain", "auto"]  }
 num_speakers = { type = "integer", title = "Num speakers", default = 0, description = "Exact speaker count when known (0 = auto / use min–max range)." }

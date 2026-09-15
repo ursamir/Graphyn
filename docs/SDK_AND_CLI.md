@@ -631,7 +631,7 @@ GRAPHYN_API_TOKEN=secret graphyn mcp   # with auth
 python -m app.mcp.server               # equivalent direct invocation
 ```
 
-The server starts in-process, sharing the already-populated `NodeRegistry` singleton. All 23 MCP tools are registered at startup. See [MCP_SERVER.md](./MCP_SERVER.md) for the full tool reference.
+The server starts in-process, sharing the already-populated `NodeRegistry` singleton. All 29 MCP tools are registered at startup. See [MCP_SERVER.md](./MCP_SERVER.md) for the full tool reference.
 
 ---
 

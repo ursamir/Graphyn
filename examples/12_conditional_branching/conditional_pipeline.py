@@ -5,10 +5,10 @@ Example 12 — Conditional Branching Pipeline (Priority 6 — A4)
 Demonstrates IREdge.condition — edges that are only traversed when a
 boolean expression evaluates to True against the source node's output.
 
-Pipeline: file_input → trim → [branch A: silence_detector → export_short]
+Pipeline: dataset_ingest → segmenter → [branch A: audio_quality_gate → export_short]
                                 [branch B: augment → export_long]
 
-The trim node's output is routed to branch A (silence_detector) when
+The segmenter's output is routed to branch A (audio_quality_gate) when
 clips are short, and to branch B (augment) when clips are long.
 Both branches always receive the full list; the condition gates which
 branch actually processes data.
@@ -35,7 +35,7 @@ if WORKSPACE_ROOT not in sys.path:
 
 from app.core.ir.loader import CURRENT_IR_VERSION, dump_ir_to_file  # noqa: E402
 from app.core.ir.models import GraphIR, IREdge, IRMetadata, IRNode  # noqa: E402
-from app.core.pipeline import run_pipeline_ir  # noqa: E402
+from app.core.runtime_backend import get_backend  # noqa: E402
 from app.core.plugins.manager import PluginManager  # noqa: E402
 
 # ── Install required plugins ──────────────────────────────────────────────────
@@ -140,14 +140,14 @@ def run_and_report(label: str, condition_true: bool) -> None:
 
     print(f"\n{_h('Run: ' + label)}")
     condition_expr = "len(output) > 0" if condition_true else "len(output) > 9999"
-    print(f"  Condition on trim→silence_detector edge: {_BOLD}{condition_expr!r}{_RESET}")
+    print(f"  Condition on segmenter→audio_quality_gate edge: {_BOLD}{condition_expr!r}{_RESET}")
     print(f"  Expected: Branch A {'RUNS' if condition_true else 'SKIPPED'}, "
           f"Branch B always RUNS")
 
     graph = build_conditional_graph(condition_true)
     logger = PipelineLogger()
     try:
-        run_pipeline_ir(graph, logger=logger, use_cache=False)
+        get_backend().execute(graph, logger=logger, use_cache=False)
     except Exception as exc:
         # When condition is False, downstream nodes of the skipped branch
         # receive None input. Nodes that don't handle None will raise.
@@ -197,8 +197,8 @@ def main() -> None:
     print(f"\n  Graph topology:")
     print(f"    dataset_ingest → segmenter ─[condition]─► audio_quality_gate → dataset_versioner_a")
     print(f"                               └────────────► augmentation_pipeline → dataset_versioner_b")
-    print(f"\n  The condition is evaluated against trim's output dict.")
-    print(f"  If True: silence_detector runs. If False: it is skipped.")
+    print(f"\n  The condition is evaluated against the segmenter's output dict.")
+    print(f"  If True: audio_quality_gate runs. If False, it is skipped.")
 
     # Save graph.json for inspection
     graph = build_conditional_graph(condition_true=True)

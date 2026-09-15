@@ -609,6 +609,14 @@ export default function ProjectsView() {
     const id = recentRuns[0]?.run_id
     if (id) useAppStore.getState().openRun(id)
   }
+  const goLinkDataset = () => {
+    if (!selected) return
+    setView('data')
+    const params = new URLSearchParams({ mode: 'inputs', manage: '1', project: selected })
+    window.history.replaceState(null, '', `#/data?${params.toString()}`)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
+  const workspaceEmpty = projectPipelines.length === 0 && recentRuns.length === 0
 
   /* ── Picker: single explorer + welcome (no workspace chrome) ── */
   if (!selected) {
@@ -687,15 +695,15 @@ export default function ProjectsView() {
           <div className="max-w-md text-center">
             <h1 className="text-type-page text-ink-950">Open a workspace</h1>
             <p className="mt-2 text-type-body text-ink-500">
-              Pick a project on the left. Editor, Run, and Compare appear in the activity bar once a workspace is open.
+              Pick a project on the left. Home, Editor, and Runs appear in the activity bar once a workspace is open.
             </p>
             <ol className="mt-6 space-y-2 text-left text-[13px] text-ink-600">
               <li className="flex gap-2"><span className="font-mono text-ink-400">1</span> Open or create a project</li>
-              <li className="flex gap-2"><span className="font-mono text-ink-400">2</span> Stamp a template or build in Editor</li>
-              <li className="flex gap-2"><span className="font-mono text-ink-400">3</span> Run, then review lineage from the run</li>
+              <li className="flex gap-2"><span className="font-mono text-ink-400">2</span> Start from a template or build in Editor</li>
+              <li className="flex gap-2"><span className="font-mono text-ink-400">3</span> Run from Editor, then inspect Files and Lineage under Runs</li>
             </ol>
-            <button type="button" className="btn-secondary mt-6" onClick={() => openData({ mode: 'outputs' })}>
-              Browse data library
+            <button type="button" className="btn-secondary mt-6" onClick={() => openData({ mode: 'inputs' })}>
+              Browse Datasets
             </button>
           </div>
         </main>
@@ -775,6 +783,38 @@ export default function ProjectsView() {
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-3xl space-y-6">
           {error && <ErrorBanner message={error} onRetry={() => void open(selected)} />}
+
+          {workspaceEmpty ? (
+            <section className="grid gap-3 sm:grid-cols-3">
+              <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
+                <h2 className="text-sm font-semibold text-ink-950">Open Editor</h2>
+                <p className="mt-1 flex-1 text-[12px] leading-relaxed text-ink-500">
+                  Design a graph in the canvas, validate, and run from the workspace toolbar.
+                </p>
+                <button type="button" className="btn-primary mt-3 w-full" onClick={goEditor}>
+                  <Workflow className="h-3.5 w-3.5" /> Open Editor
+                </button>
+              </div>
+              <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
+                <h2 className="text-sm font-semibold text-ink-950">Start from template</h2>
+                <p className="mt-1 flex-1 text-[12px] leading-relaxed text-ink-500">
+                  Stamp starter GraphIR into this workspace, then edit and run in the Editor.
+                </p>
+                <button type="button" className="btn-secondary mt-3 w-full" onClick={goTemplates}>
+                  Open Templates
+                </button>
+              </div>
+              <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
+                <h2 className="text-sm font-semibold text-ink-950">Link dataset</h2>
+                <p className="mt-1 flex-1 text-[12px] leading-relaxed text-ink-500">
+                  Upload or ingest shared Inputs under Datasets, then pin labels here for pipelines.
+                </p>
+                <button type="button" className="btn-secondary mt-3 w-full" onClick={goLinkDataset}>
+                  Open Datasets
+                </button>
+              </div>
+            </section>
+          ) : null}
 
           <p className="text-[12px] text-ink-500">
             <span className="font-medium text-ink-700">Pipelines:</span> Templates are starters · Project pipelines are the canonical saved graphs · Editor edits the active graph.
@@ -869,6 +909,9 @@ export default function ProjectsView() {
                               Environments & promote
                             </summary>
                             <div className="mt-1.5 flex flex-wrap gap-1.5 pb-1">
+                              <p className="w-full text-[10px] text-ink-500">
+                                Model prod approval is API-only (POST /models/.../request-prod | approve-prod).
+                              </p>
                               <button type="button" className="btn-secondary !px-2 !py-0.5 text-[10px]" onClick={() => void publishPipeline(p.name, 'staging')}>
                                 Publish → staging
                               </button>
@@ -1026,7 +1069,7 @@ export default function ProjectsView() {
             </div>
             {links.inputs.length === 0 && (
               <p className="mt-2 rounded-lg border border-dashed border-ink-200 bg-ink-50/50 px-3 py-2 text-[12px] text-ink-600">
-                No inputs pinned yet. Pick a label above, or open the Data library and come back to Link.
+                No inputs pinned yet. Pick a label above, or open Datasets and come back to Link.
               </p>
             )}
             {links.inputs.length > 0 && (
@@ -1036,7 +1079,7 @@ export default function ProjectsView() {
                     <button
                       type="button"
                       className="hover:text-accent-800 hover:underline"
-                      title="Open in Data library"
+                      title="Open in Datasets"
                       onClick={() => openData({ mode: 'inputs', label })}
                     >
                       {label}

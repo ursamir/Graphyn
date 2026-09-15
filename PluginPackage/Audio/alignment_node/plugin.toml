@@ -29,6 +29,8 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+node_types = ["alignment_node"]
+
 [config_schema.alignment_node]
 backend = {  type = "string", title = "Backend", default = "ctc", description = "Implementation backend. One of: ctc, mfa, auto.", enum = ["ctc", "mfa", "auto"]  }
 language = { type = "string", title = "Language", default = "en", description = "BCP-47 / ISO language code (e.g. en)." }

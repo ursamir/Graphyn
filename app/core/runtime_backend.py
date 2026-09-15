@@ -128,7 +128,10 @@ class LocalPythonBackend(RuntimeBackend):
         run_manager: "RunManager | None" = None,
     ) -> dict[str, Any]:
         """Execute via the local ``run_pipeline_ir`` function."""
+        from app.core.ir.secret_policy import assert_no_inline_secrets
         from app.core.orchestrator import run_pipeline_ir  # lazy — avoids circular import
+
+        assert_no_inline_secrets(graph)
 
         return run_pipeline_ir(
             graph,

@@ -23,9 +23,11 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 | [NODE_CATALOGUE.md](./NODE_CATALOGUE.md) | Built-in plugin nodes (ports and config) |
 | [API_REFERENCE.md](./API_REFERENCE.md) | REST /api/v1/ |
 | [SDK_AND_CLI.md](./SDK_AND_CLI.md) | Python SDK and CLI |
-| [MCP_SERVER.md](./MCP_SERVER.md) | MCP tools (23) and auth |
+| [MCP_SERVER.md](./MCP_SERVER.md) | MCP tools (29) and auth |
 | [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port types, workspace layout, artifacts |
 | [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Current limitations |
+| [UI_UX_REVIEW.md](./UI_UX_REVIEW.md) | 2026-09-15 console UX / IA justification review |
+| [PROJECT_REVIEW.md](../PROJECT_REVIEW.md) | 2026-09-15 deep review — prioritized fix pack for agents/devs |
 | [TRUST_MODEL.md](./TRUST_MODEL.md) | Auth modes, resource authorization matrix, secrets, python_code + HTTP egress |
 
 ## Concepts

@@ -26,6 +26,8 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+node_types = ["multimodal_fusion"]
+
 [config_schema.multimodal_fusion]
 fusion_type = { type = "string", title = "Fusion Type", default = "concat", description = "Fusion Type. One of: concat, attention, late, cross_attention.", enum = ["concat", "attention", "late", "cross_attention"] }
 audio_dim = { type = "integer", title = "Audio dim", default = 768, description = "Expected audio embedding dimensionality." }

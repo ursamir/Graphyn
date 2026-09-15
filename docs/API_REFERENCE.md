@@ -955,7 +955,7 @@ Versions: `pipelines/{name}/versions/vN.graph.json`. Envs: `pipelines/{name}/env
 
 ### Model registry (lite)
 
-`workspace/artifacts/_registry/models.json` — name → stages (`staging`/`prod`/`latest`) with source `run_id` + artifact slug. Prod uses request/approve.
+`workspace/artifacts/_registry/models.json` — name → stages (`staging`/`prod`/`latest`) with source `run_id` + artifact slug. Prod uses request/approve. **The console does not manage model prod approval** — use `POST /api/v1/models/{name}/request-prod` and `POST /api/v1/models/{name}/approve-prod` (API-only).
 
 | Method | Path |
 |---|---|
@@ -1092,7 +1092,7 @@ Control-plane surfaces for `GRAPHYN_BACKEND=distributed`. See [DISTRIBUTED_EXECU
 | Method | Path | Description |
 |---|---|---|
 | POST | `/api/v1/workers/register` | Register / refresh a worker |
-| POST | `/api/v1/workers/{id}/heartbeat` | Heartbeat + resource snapshot |
+| POST | `/api/v1/workers/{id}/heartbeat` | Heartbeat + resource snapshot; **503** when lease renew fails |
 | GET | `/api/v1/workers` | List workers |
 | DELETE | `/api/v1/workers/{id}` | Deregister |
 | POST | `/api/v1/jobs/claim` | Claim next eligible job |

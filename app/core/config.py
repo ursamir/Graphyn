@@ -334,8 +334,11 @@ def _plugin_source_matches_allowed(source: str, allowed_entry: str) -> bool:
 def plugin_source_is_allowed(source: str) -> bool:
     """Return True if *source* is permitted by GRAPHYN_PLUGIN_ALLOWED_SOURCES.
 
-    Empty allowlist (unset env) → allow all. Local paths without a remote
-    scheme are always allowed.
+    Empty allowlist (unset env) → allow all **only** when auth is not required
+    (unauthenticated-dev). When :func:`auth_required` is true (production /
+    staging / ``GRAPHYN_AUTH_REQUIRED``), remote sources require a non-empty
+    allowlist — fail closed. Local paths without a remote scheme are always
+    allowed.
 
     Matching is structural (``urllib.parse``), not ``str.startswith``:
     hosts must match (with GitHub/GitLab CDN host aliases), and paths must be
@@ -355,6 +358,9 @@ def plugin_source_is_allowed(source: str) -> bool:
         return True
     allowed = plugin_allowed_sources()
     if not allowed:
+        # Fail closed for remote installs when the deployment requires auth.
+        if auth_required():
+            return False
         return True
     return any(_plugin_source_matches_allowed(source, entry) for entry in allowed)
 

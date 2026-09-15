@@ -139,8 +139,14 @@ class FileWatcherSource(EventSource):
         self._closed = True
         if self._stop_event is not None:
             self._stop_event.set()
-        # Give watchfiles' background thread time to wind down cleanly
-        await asyncio.sleep(0.3)
+        # Give watchfiles' background thread time to wind down cleanly.
+        # Cap wait so demos/CI do not hang if the backend is slow to exit.
+        for _ in range(10):
+            if self._stop_event is None or self._stop_event.is_set():
+                await asyncio.sleep(0.05)
+            else:
+                break
+        await asyncio.sleep(0.05)
 
 
 class TimerSource(EventSource):

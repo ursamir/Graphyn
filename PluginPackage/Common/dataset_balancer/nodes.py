@@ -33,8 +33,8 @@ class DatasetBalancerNode(Node):
     Config:
         strategy (str): "oversample" | "undersample" | "weighted" | "synthetic"
         target_count (int): target samples per class; 0 = match majority class
-        balance_by (str): "class" | "speaker" | "duration"
-        speaker_key (str): metadata key for speaker ID (balance_by="speaker")
+        balance_by (str): "class" (only supported mode)
+        speaker_key (str): reserved metadata key for future speaker balancing
         jitter_std (float): Gaussian jitter std for oversample (0 = exact copy)
         random_seed (int): RNG seed for reproducibility
     """
@@ -81,7 +81,7 @@ class DatasetBalancerNode(Node):
     class Config(NodeConfig):
         strategy: Literal["oversample", "undersample", "weighted", "synthetic"] = Field(default='oversample', title="Strategy", description="Resampling / balancing strategy. One of: oversample, undersample, weighted, synthetic.")
         target_count: int = Field(default=0, title="Target count", description="Desired count per class/speaker after balancing.")
-        balance_by: Literal["class", "speaker", "duration"] = Field(default='class', title="Balance By", description="Balance By. One of: class, speaker, duration.")
+        balance_by: Literal["class"] = Field(default='class', title="Balance By", description="Grouping key for balancing. Currently only class balancing is supported.")
         speaker_key: str = Field(default='speaker_id', title="Speaker key", description="Metadata key used to identify speakers when balancing.")
         jitter_std: float = Field(default=0.0, title="Jitter std", description="Gaussian jitter std-dev applied during oversampling.")
         random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible splits and sampling.")
@@ -91,13 +91,6 @@ class DatasetBalancerNode(Node):
     def process(self, dataset):
         rng = np.random.default_rng(self.config.random_seed)
         strategy = self.config.strategy
-
-        # Validate balance_by — speaker and duration balancing not yet implemented
-        if self.config.balance_by != "class":
-            raise NotImplementedError(
-                f"DatasetBalancerNode: balance_by='{self.config.balance_by}' is not yet "
-                "implemented. Only balance_by='class' is currently supported."
-            )
 
         # Validate target_count — negative values would silently skip all balancing
         if self.config.target_count < 0:

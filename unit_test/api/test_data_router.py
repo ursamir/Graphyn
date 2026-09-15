@@ -271,12 +271,9 @@ class TestSafeChildLexicalJail:
         assert resp.status_code == 400
         assert resp.json()['detail'] in ('Invalid path segment', 'Path is outside workspace')
 
-    def test_symlink_version_dir_outside_root_still_gettable(self, api_client, tmp_path):
-        """Symlink under datasets/output/proj/v1 pointing outside root must not 400.
-
-        Mirrors Docker: GRAPHYN_PROJECT_DIR volume with a version dir that
-        symlinks to a host path; listdir shows it, but resolve() escapes.
-        """
+    def test_symlink_version_dir_outside_root_still_gettable(self, api_client, tmp_path, monkeypatch):
+        """With GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1, Docker-style escapes work."""
+        monkeypatch.setenv("GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS", "1")
         patcher, output_root = _patch_output(tmp_path)
         outside = tmp_path / 'host-outside'
         outside.mkdir()
@@ -302,9 +299,29 @@ class TestSafeChildLexicalJail:
         assert isinstance(rows, list)
         assert len(rows) >= 1
 
-    def test_safe_child_returns_logical_path_for_symlink(self, tmp_path):
+    def test_symlink_escape_rejected_by_default(self, tmp_path, monkeypatch):
+        """Default: symlink target outside root is rejected (passwd-style escape)."""
+        import pytest
+        from fastapi import HTTPException
         from app.api.routers.data import _safe_child
 
+        monkeypatch.delenv("GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS", raising=False)
+        output_root = tmp_path / 'datasets' / 'output'
+        output_root.mkdir(parents=True)
+        outside = tmp_path / 'elsewhere'
+        outside.mkdir()
+        (output_root / 'proj').mkdir()
+        (output_root / 'proj' / 'v1').symlink_to(outside)
+
+        with pytest.raises(HTTPException) as ei:
+            _safe_child(output_root, 'proj', 'v1')
+        assert ei.value.status_code == 400
+        assert ei.value.detail == 'Path is outside workspace'
+
+    def test_safe_child_returns_logical_path_for_symlink(self, tmp_path, monkeypatch):
+        from app.api.routers.data import _safe_child
+
+        monkeypatch.setenv("GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS", "1")
         output_root = tmp_path / 'datasets' / 'output'
         output_root.mkdir(parents=True)
         outside = tmp_path / 'elsewhere'

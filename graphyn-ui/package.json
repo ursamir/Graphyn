@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test": "npx --yes vitest@3.2.4 run --config vitest.config.ts",
     "preview": "vite preview"
   },
   "dependencies": {

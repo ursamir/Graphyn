@@ -29,7 +29,7 @@
 │                                                                     │
 │  app/api/          app/core/sdk.py    app/cli/      app/mcp/        │
 │  FastAPI REST       Pipeline class    argparse CLI  stdio JSON-RPC  │
-│  16 routers         PipelineNode      CLI + worker  23 tools        │
+│  17 routers         PipelineNode      CLI + worker  29 tools        │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │ intended: get_backend().execute()
                                │ (see docs/KNOWN_ISSUES for exceptions)
@@ -83,8 +83,8 @@
 │  app/core/nodes/errors.py     Exception hierarchy                   │
 │  app/core/registry_runtime.py get_registry(), resolve_capability()  │
 │                                                                     │
-│  PluginPackage/Audio/         18 audio plugin nodes                 │
-│  PluginPackage/Common/        12 common plugin nodes                │
+│  PluginPackage/Audio/         19 audio plugin nodes                 │
+│  PluginPackage/Common/        29 common plugin nodes                │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -512,7 +512,7 @@ get_backend().execute(graph, ...)
 | Checkpoint node IDs | Null byte rejection + path traversal guard via `os.path.abspath` prefix check |
 | Webhook DNS | Resolves once, connects to IP directly with `Host` header (DNS rebinding fix) |
 | `python_code` | Trusted-operator `exec` with AST filters (defense-in-depth, **not** a sandbox); see `docs/TRUST_MODEL.md` |
-| Workflow HTTP egress | `GRAPHYN_HTTP_EGRESS_MODE=trusted\|restricted` + optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST` on `http_request` / `http_webhook` (`app/core/egress.py`) |
+| Workflow HTTP egress | `GRAPHYN_HTTP_EGRESS_MODE=trusted\|restricted` + optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST` on `http_request`, `http_webhook`, `asr_transcribe`, `structured_llm` (`app/core/egress.py`) |
 
 ---
 
@@ -525,7 +525,7 @@ get_backend().execute(graph, ...)
 | Phase 3 | Parallel executor (wave-based), streaming nodes, event-driven execution, conditional edges, partial execution, resumable pipelines, runtime control (pause/resume/cancel) |
 | Phase 4 | ArtifactStore (content-addressed), ProvenanceStore (lineage), ArtifactCollection, artifact replay |
 | Phase 5 | Plugin ecosystem: PluginManager, PluginInstaller, PluginLoader, PluginStore, PluginIndexClient, manifest-based packages, `plugin.toml` schema |
-| Phase 6–8 | 30 plugin nodes across `PluginPackage/Audio/` (18) and `PluginPackage/Common/` (12) — all phases complete |
+| Phase 6–8 | 48 plugin packages / 49 node types across `PluginPackage/Audio/` (19) and `PluginPackage/Common/` (29) — all phases complete |
 | Phase 9 | Post-review fix pass — architecture splits (`pipeline.py` / `run_manager.py` shims; domain → `app/domain/`; `ArtifactSerializerRegistry`; `RuntimeBackend`). Open defects after later audits: see `docs/KNOWN_ISSUES.md`. |
 | Phase 10 | Distributed execution P0–P2 + harden — IR 1.2 `placement`, `DistributedBackend`, workers API, `graphyn worker`, durable store, cancel/lease, wave scheduler (`docs/DISTRIBUTED_EXECUTION.md`) |
 | Phase 11 | Product pillars A–E — Trace+audit, Experiments, Proposals (MCP `propose_graph`), Edge wizard, Workers UI; console IA Build/Observe/Library/Deploy/Admin (`docs/PRODUCT_VISION.md`) |

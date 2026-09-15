@@ -77,6 +77,23 @@ def test_api_double_cancel_is_idempotent(api_client, isolated_queue):
     assert status.json()["result"]["status"] == "cancelled"
 
 
+def test_worker_heartbeat_renew_failure_returns_503(api_client, isolated_queue, monkeypatch):
+    reg = get_worker_registry()
+    reg.register(WorkerInfo(worker_id="hb-w1", plugins=["x"]))
+
+    def boom(_worker_id: str) -> int:
+        raise RuntimeError("lease store unavailable")
+
+    monkeypatch.setattr(
+        "app.api.routers.workers.get_job_queue",
+        lambda: type("Q", (), {"renew_leases_for_worker": boom})(),
+    )
+
+    resp = api_client.post("/api/v1/workers/hb-w1/heartbeat", json={})
+    assert resp.status_code == 503
+    assert "Lease renew failed" in resp.json()["detail"]
+
+
 def test_api_concurrent_cancel_and_status(api_client, isolated_queue):
     """Optional lightweight: cancel then status stay consistent via TestClient."""
     q = isolated_queue

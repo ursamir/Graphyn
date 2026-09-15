@@ -5,7 +5,7 @@ Example 15 — Event-Driven Pipeline (Priority 9 — A5)
 Demonstrates event_driven=True with FileWatcherSource and TimerSource.
 
 A pipeline watches a directory for new WAV files and processes each one
-through clean → trim → silence_detector. Runs for a fixed duration then
+through audio_conditioner → segmenter → audio_exporter. Runs for a fixed duration then
 cancels gracefully.
 
 What this shows:
@@ -99,7 +99,7 @@ def demo_file_watcher() -> None:
 
     from app.core.ir.loader import CURRENT_IR_VERSION
     from app.core.ir.models import GraphIR, IREdge, IRMetadata, IRNode
-    from app.core.pipeline import run_pipeline_ir
+    from app.core.runtime_backend import get_backend
     from app.core.logger import PipelineLogger
 
     # Build a simple pipeline: dataset_ingest → audio_conditioner → segmenter → audio_exporter
@@ -143,8 +143,8 @@ def demo_file_watcher() -> None:
         run_manager_ref[0] = run_mgr
         try:
             # Pipeline.run() supports event_driven=True — here we use the
-            # lower-level run_pipeline_ir to pass a shared logger for inspection
-            run_pipeline_ir(graph, logger=logger, event_driven=True,
+            # lower-level get_backend().execute() to pass a shared logger for inspection
+            get_backend().execute(graph, logger=logger, event_driven=True,
                             run_manager=run_mgr, use_cache=False)
         except Exception:
             pass

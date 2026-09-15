@@ -115,12 +115,12 @@ graph = GraphIR(
 )
 
 # Pipeline.run() supports event_driven=True directly
-from app.core.pipeline import run_pipeline_ir
+from app.core.runtime_backend import get_backend
 
 run_mgr = RunManager()
 
 def _run():
-    run_pipeline_ir(graph, event_driven=True, run_manager=run_mgr)
+    get_backend().execute(graph, event_driven=True, run_manager=run_mgr)
 
 thread = threading.Thread(target=_run, daemon=True)
 thread.start()

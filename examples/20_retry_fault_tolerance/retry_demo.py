@@ -118,7 +118,7 @@ class RetryObserver(NodeObserver):
 def main() -> None:
     from app.core.registry_runtime import get_registry
     from app.core.nodes.metadata import NodeMetadata
-    from app.core.pipeline import NodeExecutor
+    from app.core.node_executor import NodeExecutor
 
     registry = get_registry()
     if "_flaky_node_demo" not in registry:

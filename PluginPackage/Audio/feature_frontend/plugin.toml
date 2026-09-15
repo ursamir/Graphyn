@@ -25,6 +25,8 @@ dependencies = [
     "librosa>=0.10",
 ]
 
+node_types = ["feature_frontend"]
+
 [config_schema.feature_frontend]
 feature_type = {  type = "string", title = "Feature type", default = "log_mel", description = "Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw.", enum = ["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"]  }
 sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz." }

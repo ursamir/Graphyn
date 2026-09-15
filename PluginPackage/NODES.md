@@ -1,10 +1,10 @@
 # Plugin Nodes — Complete Reference
 
-**48 node types** across Audio + Common packages (`model_builder` ships inside the `trainer` plugin). For architecture, data types, and install patterns → `ARCHITECTURE.md`. Fresh-install gaps: see `docs/KNOWN_ISSUES.md` (PLUGIN-LOAD-1).
+**49 node types** across Audio + Common packages (`model_builder` ships inside the `trainer` plugin). For architecture, data types, and install patterns → `ARCHITECTURE.md`. Fresh-install gaps: see `docs/KNOWN_ISSUES.md` (PLUGIN-LOAD-1).
 
 ---
 
-## Audio Plugins — `PluginPackage/Audio/` (18 nodes)
+## Audio Plugins — `PluginPackage/Audio/` (19 nodes)
 
 ### `dataset_ingest` — Universal Audio Ingestion
 **Category:** Input | **Version:** v1.1.0
@@ -319,7 +319,27 @@ guidance_scale: float = 3.0
 
 ---
 
-## Common Plugins — `PluginPackage/Common/` (12 node types; 11 packages)
+### `audio_exporter` — WAV Export
+**Category:** Audio | **Version:** v1.1.0
+
+```python
+output_dir: str = "workspace/datasets/output/audio_export"
+project: str = ""
+format: str = "wav"            # currently wav only
+split_ratios: dict = {"train": 0.7, "val": 0.15, "test": 0.15}
+version_tag: str = "v1"
+random_seed: int = 42
+append: bool = False
+```
+
+**Ports:** `input: list[AudioSample]` → `output: list[AudioSample]` (pass-through)
+**Capabilities:** `requires_gpu=False`, `supports_edge=False`, `cacheable=False`
+
+Writes WAV files under `{output_dir}/{version_tag}/{split}/{label}/`, plus `labels.csv`, `metadata.json`, and `lineage.json`.
+
+---
+
+## Common Plugins — `PluginPackage/Common/` (29 packages)
 
 ### `dataset_builder` — ML Dataset Assembly
 **Category:** ML | **Version:** v1.0.0
@@ -427,7 +447,7 @@ adaptive_skip_ratio: float = 0.0
 ```python
 strategy: str = "oversample"   # "oversample" | "undersample" | "weighted" | "synthetic"
 target_count: int = 0          # 0 = match majority class
-balance_by: str = "class"      # "class" | "speaker" | "duration"
+balance_by: str = "class"      # class balancing only (speaker/duration reserved)
 speaker_key: str = "speaker_id"
 ```
 
@@ -793,6 +813,7 @@ path: str = ""
 | `speech_synthesizer` | Optional | No | No | Yes | No | No |
 | `voice_converter` | Optional | No | No | Yes | No | No |
 | `audio_generator` | Yes | No | No | No | No | No |
+| `audio_exporter` | No | No | No | No | Yes | No |
 | `dataset_builder` | No | No | No | No | Yes | Yes |
 | `model_builder` | Optional | No | No | No | No | No |
 | `trainer` | Optional | No | No | No | No | No |

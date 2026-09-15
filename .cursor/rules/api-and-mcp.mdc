@@ -10,5 +10,5 @@ alwaysApply: false
 - Execute via `get_backend().execute()` or SDK `Pipeline` — not private orchestrator APIs.
 - Path safety: `_safe_child()`, run-id / artifact-id regexes, workspace sandbox for input/export.
 - Auth: optional `GRAPHYN_API_TOKEN`; MCP token in `arguments._meta.auth_token`.
-- MCP: 15 tools via `tool_registry` + handlers; logs on stderr, JSON-RPC on stdio.
+- MCP: 29 tools via `tool_registry` + handlers; logs on stderr, JSON-RPC on stdio.
 - Docs: `docs/API_REFERENCE.md`, `docs/MCP_SERVER.md`, `.kiro/steering/api-*.md`, `mcp-server.md`, `sdk-cli.md`.

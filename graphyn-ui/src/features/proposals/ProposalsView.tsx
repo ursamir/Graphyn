@@ -106,7 +106,6 @@ function parseProposalsHash(): { id?: string } {
 
 export default function ProposalsView() {
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
-  const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
   const setPendingProposalCount = useAppStore((s) => s.setPendingProposalCount)
 
@@ -257,7 +256,7 @@ export default function ProposalsView() {
       <div className="shrink-0 border-b border-ink-100 px-4 py-4 sm:px-6">
         <PageHeader
           title="Proposals"
-          description="Review agent GraphIR proposals before they enter the Editor."
+          description="Review agent GraphIR here — agents create proposals via MCP; this console only reviews and accepts."
           actions={
             <>
               <button type="button" className="btn-quiet" onClick={() => void refresh()} disabled={loading}>
@@ -331,21 +330,20 @@ export default function ProposalsView() {
                 title="No proposals yet"
                 description={
                   filter === 'pending'
-                    ? 'Proposals are submitted by agents (MCP propose_graph) or POST /api/v1/proposals with a full GraphIR — the console reviews and accepts them into the Editor; it does not create proposals from this page.'
+                    ? 'Agents create proposals via MCP propose_graph or POST /api/v1/proposals. This console only reviews and accepts them into the Editor — it does not create proposals here.'
                     : 'Nothing matches this filter.'
                 }
                 action={
                   filter === 'pending' ? (
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={() => {
-                        setView('builder')
-                        window.history.replaceState(null, '', '#/builder')
-                      }}
+                    <a
+                      href={DOCS_MCP_PROPOSE}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-primary inline-flex items-center gap-1"
                     >
-                      Open Editor
-                    </button>
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      MCP propose_graph docs
+                    </a>
                   ) : undefined
                 }
               />

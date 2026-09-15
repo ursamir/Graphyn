@@ -48,7 +48,6 @@ from app.core.checkpoint import (
 from app.core.orchestrator import (
     run_pipeline_ir_async,
     run_pipeline_ir,
-    _resolve_capability,
 )
 
 # SA-O5: _collect_stream was extracted to app.core.utils.collect_stream.
@@ -59,50 +58,8 @@ from app.core.utils import collect_stream as _collect_stream
 from app.core.nodes.errors import ResumeError
 
 
-# ── Deprecated run_pipeline (YAML path) ───────────────────────────────────────
-
-def run_pipeline(
-    config_path: str,
-    logger=None,
-    use_cache: bool = True,
-    checkpoint: bool = False,
-    streaming: bool = False,
-    observer=None,
-    run_manager=None,
-):
-    """Execute a pipeline from a YAML config file.
-
-    Deprecated: use run_pipeline_ir() with a GraphIR object, or Pipeline.run() via the SDK.
-    """
-    import warnings
-    from app.core.ir.yaml_shim import load_yaml_with_deprecation
-    from app.core.run_manager import RunManager
-
-    warnings.warn(
-        "run_pipeline() with a YAML config path is deprecated. "
-        "Use run_pipeline_ir() with a GraphIR object, or Pipeline.run() via the SDK.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-    if run_manager is None:
-        run_manager = RunManager()
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        config_yaml = f.read()
-    run_manager.save_config(config_yaml)
-
-    graph = load_yaml_with_deprecation(config_path)
-
-    return run_pipeline_ir(
-        graph,
-        logger=logger,
-        use_cache=use_cache,
-        checkpoint=checkpoint,
-        streaming=streaming,
-        observer=observer,
-        run_manager=run_manager,
-    )
+# ── Deprecated run_pipeline (YAML path) — re-export only ───────────────────────
+from app.core.ir.yaml_shim import run_pipeline_from_yaml as run_pipeline
 
 
 __all__ = [
@@ -115,7 +72,7 @@ __all__ = [
     "_write_checkpoint", "_load_checkpoint_outputs",
     # orchestrator
     "run_pipeline_ir_async", "run_pipeline_ir",
-    "_resolve_capability", "_collect_stream",
+    "_collect_stream",
     # errors
     "ResumeError",
     # deprecated

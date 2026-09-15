@@ -7,14 +7,14 @@ Phase 3 partial execution features.
 
 Use case: a developer wants to re-run only the augment and split nodes
 of an existing pipeline, injecting pre-computed audio samples as input
-rather than re-running the expensive file_input → clean → trim chain.
+rather than re-running the expensive dataset_ingest → audio_conditioner → segmenter chain.
 
 What this shows:
   - include_nodes — execute only a subset of the graph
   - exclude_nodes — skip specific nodes
   - input_overrides — inject data at a specific node's input port
   - How partial execution interacts with the cache
-  - graphyn run --graph ... --include-nodes clean_0,split_0
+  - graphyn run --graph ... --include-nodes audio_conditioner_1,segmenter_2
 
 Usage:
   venv/bin/python examples/17_partial_execution/partial_demo.py
@@ -141,7 +141,7 @@ def main() -> None:
     print(f"  {_dim('Re-run only augmentation_pipeline→feature_frontend→dataset_builder→dataset_versioner, injecting pre-computed samples')}")
 
     # First, get the output of trim from the full run (simulate pre-computed data)
-    from app.core.pipeline import run_pipeline_ir
+    from app.core.runtime_backend import get_backend
     from app.core.ir.loader import load_ir, dump_ir
     from app.core.run_manager import RunManager
     from app.models.audio_sample import AudioSample
@@ -162,7 +162,7 @@ def main() -> None:
 
     t0 = time.perf_counter()
     run_mgr3 = RunManager()
-    run_pipeline_ir(
+    get_backend().execute(
         ir,
         include_nodes=["augmentation_pipeline_4", "feature_frontend_5", "dataset_builder_6", "dataset_versioner_7"],
         input_overrides={"augmentation_pipeline_4": {"input": pre_computed}},

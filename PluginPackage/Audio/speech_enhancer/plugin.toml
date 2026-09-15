@@ -28,6 +28,8 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+node_types = ["speech_enhancer"]
+
 [config_schema.speech_enhancer]
 backend = {  type = "string", title = "Backend", default = "spectral", description = "Implementation backend. One of: spectral, deepfilter, auto.", enum = ["spectral", "deepfilter", "auto"]  }
 denoise = {  type = "boolean", title = "Denoise", default = true, description = "Apply noise reduction / spectral gating (On/Off)."  }

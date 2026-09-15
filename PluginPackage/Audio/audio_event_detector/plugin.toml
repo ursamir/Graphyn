@@ -29,6 +29,8 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+node_types = ["audio_event_detector"]
+
 [config_schema.audio_event_detector]
 model_path = { type = "string", title = "Model path", default = "", description = "Model file under workspace/artifacts (or empty for built-in)." }
 backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: yamnet, tflite, pytorch, auto.", enum = ["yamnet", "tflite", "pytorch", "auto"]  }

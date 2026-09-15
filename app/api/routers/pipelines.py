@@ -298,8 +298,18 @@ def validate_pipeline_config(payload: dict = Body(...)):
 
         registry = get_registry()
         try:
+            from app.core.ir.secret_policy import assert_no_inline_secrets
+            from app.core.ir.yaml_shim import yaml_config_to_ir
+
             validate_pipeline(config, registry)
+            graph = yaml_config_to_ir(config)
+            assert_no_inline_secrets(graph)
         except ValueError as exc:
+            return JSONResponse(
+                status_code=422,
+                content={"valid": False, "error": str(exc)},
+            )
+        except Exception as exc:
             return JSONResponse(
                 status_code=422,
                 content={"valid": False, "error": str(exc)},

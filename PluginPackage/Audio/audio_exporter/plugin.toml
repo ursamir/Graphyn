@@ -14,6 +14,8 @@ dependencies = [
     "soundfile>=0.12",
 ]
 
+node_types = ["audio_exporter"]
+
 [config_schema.audio_exporter]
 output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/output/audio_export", description = "Project root under workspace/datasets/output/{project}; version_tag is appended." }
 project = { type = "string", title = "Project", default = "", description = "Optional project name; when set, output_dir becomes workspace/datasets/output/{project}." }

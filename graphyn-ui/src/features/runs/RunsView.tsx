@@ -515,9 +515,9 @@ export default function RunsView() {
         <div className="shrink-0 border-b border-ink-200/70 bg-white/80 px-5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-type-page text-ink-950">Run</h1>
+              <h1 className="text-type-page text-ink-950">Runs</h1>
               <p className="mt-0.5 text-type-meta text-ink-400">
-                Compare params and metrics for {activeProject}.
+                Compare params and metrics for {activeProject}. Prefer Runs → Compare when a workspace is open.
               </p>
             </div>
             <div className="flex rounded-xl bg-ink-100/80 p-1">
@@ -548,8 +548,8 @@ export default function RunsView() {
     <div className="grid h-full grid-cols-1 lg:grid-cols-2">
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
-          title="Run"
-          description={`History for ${activeProject}. Files and Lineage stay on the selected run.`}
+          title="Runs"
+          description={`History for ${activeProject}. One hub for History, per-run Files, Lineage, and Compare — not a separate Lineage tab.`}
           actions={
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex rounded-xl bg-ink-100/80 p-1">
@@ -605,7 +605,7 @@ export default function RunsView() {
         ) : runs.length === 0 ? (
           <EmptyState
             title="No runs in this workspace yet"
-            description="Open the Editor and run a graph — History, Files, and Lineage will show up here."
+            description="Open the Editor and run a graph — History, Files, Lineage, and Compare live here."
             action={
               <button
                 type="button"
@@ -727,7 +727,7 @@ export default function RunsView() {
         {!selected ? (
           <EmptyState
             title="Select a run"
-            description="Select a run on the left to inspect Logs, Files, and Lineage."
+            description="Select a run on the left to inspect Logs, Files, Lineage, or Compare."
             action={
               runs && runs.length > 0 ? (
                 <button type="button" className="btn-secondary" onClick={() => void open(runs[0].run_id)}>
@@ -971,6 +971,8 @@ export default function RunsView() {
                       <div className="text-[13px] font-semibold text-ink-950">Promote & models</div>
                       <p className="mt-0.5 text-[12px] text-ink-600">
                         Promote this successful train run into the model registry (latest / staging / prod).
+                        Model prod approval is API-only (<code className="text-[11px]">POST /models/.../request-prod</code> |{' '}
+                        <code className="text-[11px]">approve-prod</code>).
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -1149,7 +1151,7 @@ export default function RunsView() {
             {panel === 'artifacts' && (
               <div className="space-y-3">
                 <p className="text-xs text-ink-500">
-                  Downloadable outputs for this run, grouped by producing node when known. Data library → Outputs is the shared dataset folder store — different from these files.
+                  Downloadable outputs for this run, grouped by producing node when known. Datasets → Outputs is the shared library — different from these per-run Files.
                 </p>
                 {(() => {
                   const artifactsDir =

@@ -98,6 +98,7 @@ function parseExperimentsHash(): string[] {
 
 export default function ExperimentsView({ embedded = false }: { embedded?: boolean }) {
   const openRun = useAppStore((s) => s.openRun)
+  const setView = useAppStore((s) => s.setView)
   const setFocusRunsTab = useAppStore((s) => s.setFocusRunsTab)
   const pushToast = useAppStore((s) => s.pushToast)
   const activeProject = useAppStore((s) => s.activeProject)
@@ -251,27 +252,45 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
   return (
     <div className={`relative h-full overflow-y-auto space-y-6 ${embedded ? 'p-5' : 'p-6'}`}>
       {!embedded ? (
-        <PageHeader
-          title="Compare"
-          description={`Compare params and metrics for ${activeProject}. Prefer Run → Compare.`}
-          actions={
-            <div className="flex items-center gap-2">
-              {selectedIds.length >= 2 && (
-                <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
-                  Compare ({selectedIds.length})
+        <>
+          <PageHeader
+            title="Compare runs"
+            description="Deep link for cross-run metrics. Prefer Runs → Compare tab when a workspace is open."
+            actions={
+              <div className="flex items-center gap-2">
+                {selectedIds.length >= 2 && (
+                  <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
+                    Compare ({selectedIds.length})
+                  </button>
+                )}
+                {compare && (
+                  <button type="button" className="btn-secondary" onClick={clearCompare}>
+                    Clear
+                  </button>
+                )}
+                <button type="button" className="btn-quiet" onClick={() => void refresh()}>
+                  <RefreshCw className="h-3.5 w-3.5" /> Refresh
                 </button>
-              )}
-              {compare && (
-                <button type="button" className="btn-secondary" onClick={clearCompare}>
-                  Clear
-                </button>
-              )}
-              <button type="button" className="btn-quiet" onClick={() => void refresh()}>
-                <RefreshCw className="h-3.5 w-3.5" /> Refresh
-              </button>
-            </div>
-          }
-        />
+              </div>
+            }
+          />
+          <div role="status" className="rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-sm text-ink-700">
+            This view is a deep link. For day-to-day work, use{' '}
+            <button
+              type="button"
+              className="font-medium text-accent-800 hover:underline"
+              onClick={() => {
+                setFocusRunsTab('compare')
+                setView('runs')
+                window.history.replaceState(null, '', '#/runs?tab=compare')
+                window.dispatchEvent(new HashChangeEvent('hashchange'))
+              }}
+            >
+              Runs → Compare
+            </button>
+            .
+          </div>
+        </>
       ) : (
         <div className="flex flex-wrap items-center justify-end gap-2">
           {selectedIds.length >= 2 && (
@@ -310,7 +329,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
 
       {selectedIds.length === 0 && tableRuns.length > 0 && !compare ? (
         <div role="status" className="rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-sm text-ink-700">
-          Select two runs from History (or tick two rows below) to compare.
+          Select two runs from Runs → History (or tick two rows below) to compare.
         </div>
       ) : null}
       {selectedIds.length === 1 ? (
@@ -327,18 +346,20 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
       ) : !blocks || blocks.length === 0 || tableRuns.length === 0 ? (
         <EmptyState
           title="Select two runs from History"
-          description="Pick 2–5 runs in Run History, then return here to compare params and metrics."
+          description="Pick 2–5 runs in Runs → History, then compare params and metrics."
           action={
             <button
               type="button"
               className="btn-primary"
               onClick={() => {
+                clearCompare()
                 setFocusRunsTab('history')
+                setView('runs')
                 window.history.replaceState(null, '', '#/runs')
                 window.dispatchEvent(new HashChangeEvent('hashchange'))
               }}
             >
-              Back to History
+              Open Runs history
             </button>
           }
         />
@@ -463,7 +484,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
                 </table>
               </div>
               <div className="px-3 py-2 text-[11px] text-ink-400 border-t border-ink-50">
-                Select 2–5 runs to Compare. Open goes to Runs; Trace is secondary.
+                Select 2–5 runs to Compare. Open goes to Runs; Lineage opens from Runs panels.
               </div>
             </div>
 

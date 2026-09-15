@@ -116,7 +116,7 @@ def replay_artifact(artifact_id: str):
     1. Load provenance record to find the original run_id.
     2. Load workspace/runs/{run_id}/graph.json via load_ir_from_file().
     3. Create a new RunManager (new run_id).
-    4. Submit run_pipeline_ir() to a ThreadPoolExecutor (non-blocking).
+    4. Submit get_backend().execute() to a ThreadPoolExecutor (non-blocking).
     5. Return {"run_id": new_run_id, "status": "started"}.
 
     Returns HTTP 404 if artifact_id is not found.

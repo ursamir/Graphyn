@@ -13,10 +13,12 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+node_types = ["dataset_balancer"]
+
 [config_schema.dataset_balancer]
 strategy = { type = "string", title = "Strategy", default = "oversample", description = "Resampling / balancing strategy. One of: oversample, undersample, weighted, synthetic.", enum = ["oversample", "undersample", "weighted", "synthetic"] }
 target_count = { type = "integer", title = "Target count", default = 0, description = "Desired count per class/speaker after balancing." }
-balance_by = { type = "string", title = "Balance By", default = "class", description = "Balance By. One of: class, speaker, duration.", enum = ["class", "speaker", "duration"] }
+balance_by = { type = "string", title = "Balance By", default = "class", description = "Grouping key for balancing. Currently only class balancing is supported.", enum = ["class"] }
 speaker_key = { type = "string", title = "Speaker key", default = "speaker_id", description = "Metadata key used to identify speakers when balancing." }
 jitter_std = { type = "number", title = "Jitter std", default = 0.0, description = "Gaussian jitter std-dev applied during oversampling." }
 random_seed = { type = "integer", title = "Random seed", default = 42, description = "RNG seed for reproducible splits and sampling." }

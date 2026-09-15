@@ -29,6 +29,8 @@ optional_dependencies = [
     "onnxruntime>=1.16",
 ]
 
+node_types = ["audio_classifier"]
+
 [config_schema.audio_classifier]
 model_path = { type = "string", title = "Model path", default = "", description = "Model file under workspace/artifacts (or empty for built-in).", ui = { group = "Basic" } }
 backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: yamnet, tflite, pytorch, auto.", enum = ["yamnet", "tflite", "pytorch", "auto"], ui = { group = "Basic" } }

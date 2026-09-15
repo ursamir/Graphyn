@@ -9,7 +9,7 @@ Must NOT:         Perform the HTTP request itself; only validate destinations.
                   Must not cache env reads at import time (token/mode rotation).
 Dependencies:     stdlib (ipaddress, socket, urllib.parse), app.core.config.
 Reason To Change: Egress policy expands (pin-IP connect, IPv6 getaddrinfo),
-                  or additional callers (ASR/LLM providers) opt in.
+                  or additional workflow HTTP callers opt in.
 
 Trust model (Option A): default GRAPHYN_HTTP_EGRESS_MODE=trusted preserves
 current behaviour for single-tenant / shared-bearer deployments. Restricted

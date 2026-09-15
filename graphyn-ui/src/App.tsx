@@ -13,10 +13,8 @@ import {
   Settings,
   KeyRound,
   Server,
-  GitBranch,
-  Cpu,
   GitPullRequest,
-  FlaskConical,
+  Cpu,
   X,
   Menu,
   PanelLeftClose,
@@ -48,7 +46,7 @@ import ProposalsView from './features/proposals/ProposalsView'
 type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }
 type NavGroup = { title: string; items: NavItem[] }
 
-/** Global shell when no project is open (project-first IA Phase 1). */
+/** Global shell when no project is open (project-first IA). */
 const GLOBAL_NAV_GROUPS: NavGroup[] = [
   {
     title: 'Projects',
@@ -63,32 +61,35 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
   },
   {
     title: 'Library',
-    items: [{ id: 'data', label: 'Data library', icon: Database }],
+    items: [
+      { id: 'data', label: 'Datasets', icon: Database },
+      { id: 'plugins', label: 'Plugins', icon: Package },
+    ],
   },
   {
     title: 'Deploy',
     items: [
-      { id: 'edge', label: 'Edge deploy', icon: Cpu },
-      { id: 'workers', label: 'Workers', icon: Server },
+      { id: 'edge', label: 'Edge package', icon: Cpu },
+      { id: 'workers', label: 'Worker fleet', icon: Server },
     ],
   },
   {
     title: 'Admin',
     items: [
-      { id: 'plugins', label: 'Plugins', icon: Package },
       { id: 'secrets', label: 'Secrets', icon: KeyRound },
-      { id: 'system', label: 'System', icon: Activity },
+      { id: 'system', label: 'Ops', icon: Activity },
     ],
   },
 ]
 
-/** Project-local strip when activeProject is set. Artifacts stay secondary (Run / Lineage deep links). */
+/**
+ * Project activity strip. Lineage / Compare live under Runs (tabs + deep links);
+ * `#/trace` and `#/experiments` remain valid routes.
+ */
 const PROJECT_NAV_ITEMS: NavItem[] = [
-  { id: 'projects', label: 'Overview', icon: FolderKanban },
+  { id: 'projects', label: 'Home', icon: FolderKanban },
   { id: 'builder', label: 'Editor', icon: Workflow },
-  { id: 'runs', label: 'Run', icon: History },
-  { id: 'trace', label: 'Lineage', icon: GitBranch },
-  { id: 'experiments', label: 'Compare', icon: FlaskConical },
+  { id: 'runs', label: 'Runs', icon: History },
 ]
 
 const ALL_NAV_ITEMS: NavItem[] = [
@@ -97,41 +98,46 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { id: 'artifacts', label: 'Artifacts', icon: Archive },
 ]
 
-const VIEW_IDS = new Set(ALL_NAV_ITEMS.map((n) => n.id))
+/** Deep-link-only views (not in the primary activity strip). */
+const DEEP_LINK_VIEWS: AppView[] = ['trace', 'experiments']
+
+const VIEW_IDS = new Set<AppView>([
+  ...ALL_NAV_ITEMS.map((n) => n.id),
+  ...DEEP_LINK_VIEWS,
+])
 
 const VIEW_LABEL: Record<AppView, string> = {
   builder: 'Editor',
   templates: 'Templates',
-  runs: 'Run',
+  runs: 'Runs',
   plugins: 'Plugins',
-  data: 'Data library',
+  data: 'Datasets',
   artifacts: 'Artifacts',
   trace: 'Lineage',
-  edge: 'Edge deploy',
-  experiments: 'Compare',
+  edge: 'Edge package',
+  experiments: 'Compare runs',
   proposals: 'Proposals',
-  projects: 'Overview',
+  projects: 'Home',
   secrets: 'Secrets',
-  system: 'System',
-  workers: 'Workers',
+  system: 'Ops',
+  workers: 'Worker fleet',
 }
-
 
 const NAV_HINTS: Partial<Record<AppView, string>> = {
   builder: 'Editor — design Graph IR pipelines on the canvas',
-  templates: 'New from template — opens or creates a workspace first',
-  proposals: 'PR-like review of agent-proposed graphs',
-  runs: 'Run — history, files, lineage, and compare for this workspace',
-  trace: 'Lineage — artifact provenance for this workspace (or deep-link a run)',
-  experiments: 'Compare — params and metrics across runs in this workspace',
-  artifacts: 'Artifacts — cross-run file search; prefer Run → Files for one run',
-  plugins: 'Extensions — install node packs for the Editor catalog',
-  data: 'Shared library — dataset Inputs/Outputs; link from Overview',
-  edge: 'Deploy target — package models for on-device runtimes',
-  workers: 'Deploy targets — distributed workers, GPU, heartbeats',
-  projects: 'Workspace home — status, pipelines, linked data, runs',
-  secrets: 'Settings — named credentials for runs',
-  system: 'Settings — health, cleanup, webhooks, audit trail',
+  templates: 'Templates — stamp a starter graph into a workspace',
+  proposals: 'Proposals — review agent GraphIR before it enters the Editor',
+  runs: 'Runs — history; open a run for Files, Lineage, and Compare',
+  trace: 'Lineage — artifact deep links; for a run use Runs → Lineage',
+  experiments: 'Compare runs — prefer Runs → Compare when a workspace is open',
+  artifacts: 'Artifacts — cross-run registry; for one run use Runs → Files',
+  plugins: 'Plugins — install node packs for the Editor catalog',
+  data: 'Datasets — shared Inputs/Outputs library (not run downloads)',
+  edge: 'Edge package — optimize and download an on-device package',
+  workers: 'Worker fleet — distributed workers (Mode B only)',
+  projects: 'Home — workspace status, pipelines, linked data, runs',
+  secrets: 'Secrets — named credentials for graphs',
+  system: 'Ops — health, schedules, webhooks, cleanup, audit',
 }
 
 const JUMP_KEYS: Record<string, AppView> = {
@@ -238,7 +244,7 @@ function LastRunMenu({
               onOpenArtifacts()
             }}
           >
-            Files
+            Artifacts
           </button>
           {showCompare && (
             <button
@@ -250,7 +256,7 @@ function LastRunMenu({
                 onOpenCompare()
               }}
             >
-              Compare…
+              Compare runs…
             </button>
           )}
         </div>
@@ -277,7 +283,6 @@ export default function App() {
   const runOutcome = useAppStore((s) => s.runOutcome)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const lastRunProject = useAppStore((s) => s.lastRunProject)
-  const focusRunsTab = useAppStore((s) => s.focusRunsTab)
   const isRunning = useAppStore((s) => s.isRunning)
   const toasts = useAppStore((s) => s.toasts)
   const dismissToast = useAppStore((s) => s.dismissToast)
@@ -294,6 +299,7 @@ export default function App() {
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [paletteOpen, setPaletteOpen] = React.useState(false)
+  const [modeExplainerOpen, setModeExplainerOpen] = React.useState(false)
   const [tokenDraft, setTokenDraft] = React.useState('')
   const [tokenVisible, setTokenVisible] = React.useState(false)
   const [authHonesty, setAuthHonesty] = React.useState<{
@@ -607,6 +613,13 @@ export default function App() {
         }
         return
       }
+      if (modeExplainerOpen) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setModeExplainerOpen(false)
+        }
+        return
+      }
       if (paletteOpen) {
         return
       }
@@ -646,7 +659,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [view, settingsOpen, helpOpen, paletteOpen, narrow])
+  }, [view, settingsOpen, helpOpen, paletteOpen, modeExplainerOpen, narrow])
 
   /** Prefer Overview-style project latest run when a workspace is open; keep lastRunProject scoping. */
   const editorScoped =
@@ -731,7 +744,12 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             {/* Single status chip: mode + connection (Auth banner handles 401 CTA) */}
-            <span
+            <button
+              type="button"
+              onClick={() => {
+                if (bootStatus === 401) openSettings()
+                else if (!bootError) setModeExplainerOpen(true)
+              }}
               className={clsx(
                 'hidden items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium sm:inline-flex',
                 bootStatus === 401
@@ -740,16 +758,14 @@ export default function App() {
                     ? 'border-rose-200 bg-rose-50 text-rose-800'
                     : backendMode === 'distributed'
                       ? 'border-accent-300 bg-accent-50 text-accent-950'
-                      : 'border-ink-200 bg-white text-ink-600',
+                      : 'border-ink-200 bg-white text-ink-600 hover:border-ink-300',
               )}
               title={
                 bootStatus === 401
                   ? 'Paste API token in Settings'
                   : bootError
                     ? bootError
-                    : backendMode === 'distributed'
-                      ? 'Mode B — distributed workers; node placement is honored'
-                      : 'Mode A — single machine; placement ignored until Distributed'
+                    : 'Click for Mode A vs Mode B'
               }
             >
               {bootStatus === 401
@@ -762,7 +778,7 @@ export default function App() {
               {authHonesty?.auth_required && !bootError && bootStatus !== 401 ? (
                 <span className="text-ink-400">· Auth</span>
               ) : null}
-            </span>
+            </button>
             {(() => {
               const chipForThisWorkspace = Boolean(effectiveLastRunId) || isRunning
               if (!chipForThisWorkspace && !chipLabel) return null
@@ -902,12 +918,7 @@ export default function App() {
                     </div>
                     <div className="space-y-0.5">
                       {PROJECT_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-                        const active =
-                          id === 'experiments'
-                            ? view === 'runs' && focusRunsTab === 'compare'
-                            : id === 'runs'
-                              ? view === 'runs' && focusRunsTab !== 'compare'
-                              : view === id
+                        const active = view === id
                         return (
                           <button
                             key={`proj-${id}`}
@@ -915,7 +926,6 @@ export default function App() {
                             title={NAV_HINTS[id]}
                             onClick={() => {
                               if (id === 'projects') openProject(activeProject)
-                              else if (id === 'experiments') openExperiments()
                               else go(id)
                             }}
                             className={clsx(
@@ -928,12 +938,20 @@ export default function App() {
                           >
                             <Icon className={clsx('h-4 w-4', active ? 'text-accent-800' : 'text-ink-400')} />
                             <span className="flex-1 truncate">{label}</span>
+                            {id === 'builder' && pendingProposalCount > 0 && (
+                              <span
+                                className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900"
+                                title={`${pendingProposalCount} pending proposal${pendingProposalCount === 1 ? '' : 's'}`}
+                              >
+                                {pendingProposalCount}
+                              </span>
+                            )}
                           </button>
                         )
                       })}
                       <button
                         type="button"
-                        title="Artifacts — cross-run files for this workspace"
+                        title={NAV_HINTS.artifacts}
                         onClick={() => openArtifacts({ project: activeProject })}
                         className={clsx(
                           'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
@@ -944,11 +962,11 @@ export default function App() {
                         aria-current={view === 'artifacts' ? 'page' : undefined}
                       >
                         <Archive className={clsx('h-4 w-4', view === 'artifacts' ? 'text-accent-800' : 'text-ink-400')} />
-                        <span className="flex-1 truncate">Files</span>
+                        <span className="flex-1 truncate">Artifacts</span>
                       </button>
                       <button
                         type="button"
-                        title="Data — shared library Outputs for this project (not Overview)"
+                        title={NAV_HINTS.data}
                         onClick={goLinkedData}
                         className={clsx(
                           'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
@@ -959,7 +977,7 @@ export default function App() {
                         aria-current={view === 'data' ? 'page' : undefined}
                       >
                         <Database className={clsx('h-4 w-4', view === 'data' ? 'text-accent-800' : 'text-ink-400')} />
-                        <span className="flex-1 truncate">Data</span>
+                        <span className="flex-1 truncate">Datasets</span>
                       </button>
                     </div>
                   </div>
@@ -973,7 +991,7 @@ export default function App() {
                       onClick={() => setGlobalNavOpen((o) => !o)}
                     >
                       <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                        Global / Settings
+                        Library &amp; admin
                         {!globalNavOpen && pendingProposalCount > 0 ? (
                           <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
                             {pendingProposalCount}
@@ -990,14 +1008,21 @@ export default function App() {
                         [
                           { id: 'templates' as AppView, label: 'Templates', icon: BookOpen },
                           { id: 'proposals' as AppView, label: 'Proposals', icon: GitPullRequest },
-                          { id: 'data' as AppView, label: 'Data library', icon: Database },
-                          { id: 'edge' as AppView, label: 'Edge deploy', icon: Cpu },
-                          { id: 'workers' as AppView, label: 'Workers', icon: Server },
+                          { id: 'data' as AppView, label: 'Datasets', icon: Database },
                           { id: 'plugins' as AppView, label: 'Plugins', icon: Package },
+                          { id: 'edge' as AppView, label: 'Edge package', icon: Cpu },
+                          { id: 'workers' as AppView, label: 'Worker fleet', icon: Server },
                           { id: 'secrets' as AppView, label: 'Secrets', icon: KeyRound },
-                          { id: 'system' as AppView, label: 'System', icon: Activity },
-                        ]
-                      ).map(({ id, label, icon: Icon }) => {
+                          { id: 'system' as AppView, label: 'Ops', icon: Activity },
+                        ] as const
+                      )
+                        .filter(
+                          (item) =>
+                            item.id !== 'proposals' ||
+                            pendingProposalCount > 0 ||
+                            view === 'proposals',
+                        )
+                        .map(({ id, label, icon: Icon }) => {
                         const active = view === id
                         return (
                           <button
@@ -1097,6 +1122,64 @@ export default function App() {
 
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenChange={setPaletteOpen} />
         <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+        {modeExplainerOpen && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-950/30 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mode-explainer-title"
+            onClick={() => setModeExplainerOpen(false)}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-ink-200 bg-white p-5 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <h2 id="mode-explainer-title" className="text-base font-semibold text-ink-950">
+                  Execution mode
+                </h2>
+                <button
+                  type="button"
+                  className="rounded-lg p-1 text-ink-400 hover:bg-ink-50 hover:text-ink-700"
+                  aria-label="Close"
+                  onClick={() => setModeExplainerOpen(false)}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="mt-2 text-sm leading-relaxed text-ink-600">
+                {backendMode === 'distributed' ? (
+                  <>
+                    <strong className="font-medium text-ink-900">Mode B — Distributed.</strong> The
+                    control plane schedules nodes onto registered workers. Placement and labels in
+                    the graph are honored.
+                  </>
+                ) : (
+                  <>
+                    <strong className="font-medium text-ink-900">Mode A — Local.</strong> This API
+                    host runs every node in-process. Graph placement is ignored until you switch to
+                    Distributed.
+                  </>
+                )}
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setModeExplainerOpen(false)
+                    go('workers')
+                  }}
+                >
+                  Open Worker fleet
+                </button>
+                <button type="button" className="btn-primary" onClick={() => setModeExplainerOpen(false)}>
+                  Got it
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <ToastHost toasts={toasts} onDismiss={dismissToast} onDismissAll={dismissAllToasts} />
 
         {settingsOpen && (

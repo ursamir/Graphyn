@@ -18,6 +18,8 @@ optional_dependencies = [
     "webrtcvad>=2.0",
 ]
 
+node_types = ["segmenter"]
+
 [config_schema.segmenter]
 mode = {  type = "string", title = "Mode", default = "fixed", description = "Operating mode. One of: fixed, silence, vad, event, speaker_turn.", enum = ["fixed", "silence", "vad", "event", "speaker_turn"]  }
 window_ms = { type = "integer", title = "Window (ms)", default = 1000, description = "Segment/window length in milliseconds." }

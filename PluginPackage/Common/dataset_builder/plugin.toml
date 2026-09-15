@@ -19,6 +19,8 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+node_types = ["dataset_builder"]
+
 [config_schema.dataset_builder]
 split_ratios = {  type = "object", title = "Split ratios", default = { }, description = "Train/val/test ratios as a JSON object that should sum to ~1.0.", widget = "json", train = 0.7, val = 0.15, test = 0.15  }
 shuffle = { type = "boolean", title = "Shuffle", default = true, description = "Shuffle samples before splitting." }

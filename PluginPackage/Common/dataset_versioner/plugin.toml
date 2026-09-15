@@ -13,6 +13,8 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+node_types = ["dataset_versioner"]
+
 [config_schema.dataset_versioner]
 output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/versioned", description = "Directory under workspace/artifacts for written files." }
 version_tag = { type = "string", title = "Version tag", default = "", description = "Dataset/export version label (e.g. v1, 2026-09-08)." }

@@ -26,6 +26,8 @@ optional_dependencies = [
     "soundfile>=0.12",
 ]
 
+node_types = ["audio_generator"]
+
 [config_schema.audio_generator]
 backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: musicgen, audiogen, auto.", enum = ["musicgen", "audiogen", "auto"]  }
 model_size = { type = "string", title = "Model Size", default = "small", description = "Model Size. One of: small, medium, large.", enum = ["small", "medium", "large"] }

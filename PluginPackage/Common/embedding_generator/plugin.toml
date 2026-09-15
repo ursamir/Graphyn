@@ -32,6 +32,8 @@ optional_dependencies = [
     "openl3>=0.4",
 ]
 
+node_types = ["embedding_generator"]
+
 [config_schema.embedding_generator]
 model = {  type = "string", title = "Model", default = "wav2vec2", description = "Provider model id (e.g. gpt-4o-mini, whisper-1). Empty = provider default. One of: wav2vec2, hubert, clap, yamnet, xvector, openl3.", enum = ["wav2vec2", "hubert", "clap", "yamnet", "xvector", "openl3"]  }
 model_name_or_path = { type = "string", title = "Model name or path", default = "", description = "HF model id or local path under workspace/artifacts." }

@@ -17,6 +17,8 @@ optional_dependencies = [
     "mlflow>=2.0",
 ]
 
+node_types = ["experiment_tracker"]
+
 [config_schema.experiment_tracker]
 backend = {  type = "string", title = "Backend", default = "json", description = "Implementation backend. One of: json, mlflow.", enum = ["json", "mlflow"]  }
 experiment_name = { type = "string", title = "Experiment name", default = "default", description = "Name recorded in the experiment tracker / run metadata." }

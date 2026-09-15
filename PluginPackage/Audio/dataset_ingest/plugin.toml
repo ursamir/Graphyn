@@ -20,6 +20,8 @@ optional_dependencies = [
     "boto3>=1.28",
 ]
 
+node_types = ["dataset_ingest"]
+
 [config_schema.dataset_ingest]
 source_type = {  type = "string", title = "Source type", default = "filesystem", description = "Where to load the dataset from. One of: filesystem, huggingface, s3, zip, tar, manifest.", enum = ["filesystem", "huggingface", "s3", "zip", "tar", "manifest"]  }
 path = { type = "string", title = "Path", default = "", description = "Dataset path under workspace/ (relative path preferred)." }

@@ -359,7 +359,7 @@ export default function PluginsView() {
     <div className="h-full overflow-y-auto p-8 space-y-6">
       <PageHeader
         title="Plugins"
-        description="Install node packs, manage dependencies, and enable isolated runtimes."
+        description="Library — install node packs for the Editor catalog."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh

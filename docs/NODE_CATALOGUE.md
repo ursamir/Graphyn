@@ -7,7 +7,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 
 ---
 
-## Audio Plugins — `PluginPackage/Audio/` (18 nodes)
+## Audio Plugins — `PluginPackage/Audio/` (19 nodes)
 
 | node_type | Category | Key Dependencies |
 |---|---|---|
@@ -29,8 +29,9 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `speech_synthesizer` | Generation | optional: TTS (Coqui), espeak-ng |
 | `voice_converter` | Generation | optional: speechbrain, torch |
 | `audio_generator` | Generation | optional: audiocraft, torch |
+| `audio_exporter` | Output | soundfile, numpy |
 
-## Common Plugins — `PluginPackage/Common/` (30 nodes)
+## Common Plugins — `PluginPackage/Common/` (29 nodes)
 
 | node_type | Category | Key Dependencies |
 |---|---|---|

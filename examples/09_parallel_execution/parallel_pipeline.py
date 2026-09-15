@@ -9,13 +9,13 @@ different audio label classes concurrently in the same pipeline execution.
 Compares wall-clock time against sequential execution to show the speedup.
 
 Pipeline shape (fan-out DAG):
-                    ┌─ clean → trim → augment → split → file_export (yes)
-  file_input(yes)  ─┤
+                    ┌─ audio_conditioner → segmenter → augment → audio_exporter (yes)
+  dataset_ingest(yes)  ─┤
                     └─ (sequential: same nodes, different seed)
 
-  file_input(no)   ─┬─ clean → trim → augment → audio_exporter (no)
-  file_input(up)   ─┬─ clean → trim → augment → audio_exporter (up)
-  file_input(down) ─┘─ clean → trim → augment → audio_exporter (down)
+  dataset_ingest(no)   ─┬─ audio_conditioner → segmenter → augment → audio_exporter (no)
+  dataset_ingest(up)   ─┬─ audio_conditioner → segmenter → augment → audio_exporter (up)
+  dataset_ingest(down) ─┘─ audio_conditioner → segmenter → augment → audio_exporter (down)
 
 In parallel mode, all four branches execute concurrently in Wave 1.
 In sequential mode, they execute one after another.
@@ -179,11 +179,11 @@ class WaveLogger(PipelineLogger):
 
 def run_pipeline(graph: GraphIR, parallel: bool, label: str) -> float:
     """Run the pipeline in the given mode and return wall-clock seconds."""
-    from app.core.pipeline import run_pipeline_ir
+    from app.core.runtime_backend import get_backend
 
     logger = WaveLogger() if parallel else PipelineLogger()
     t0 = time.perf_counter()
-    run_pipeline_ir(graph, logger=logger, parallel=parallel, use_cache=False)
+    get_backend().execute(graph, logger=logger, parallel=parallel, use_cache=False)
     return time.perf_counter() - t0
 
 
@@ -216,7 +216,7 @@ def main() -> None:
     print(f"  Shape: {len(LABELS)} independent branches (fan-out DAG)")
 
     # Show the execution waves
-    from app.core.pipeline import PipelineGraph, _ir_to_pipeline_config
+    from app.core.planner import PipelineGraph, _ir_to_pipeline_config
     cfg = _ir_to_pipeline_config(graph)
     pg  = PipelineGraph(cfg)
     waves = pg.execution_waves

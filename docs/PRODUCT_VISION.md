@@ -40,7 +40,7 @@ These are **one product**, not five products glued together. GraphIR is the shar
 ### Thin or missing (must build for the vision)
 | Gap | Why it matters |
 |---|---|
-| **Promotion / environments** | Dev → staging → prod graph+model versions with approval |
+| **Promotion / environments** | Dev → staging → prod graph+model versions with approval; model registry prod (`request-prod` / `approve-prod`) is **API-only** — not in the console |
 | **RBAC / tenants** | Multi-user accountability (Bearer-only today) |
 | **Full Edge device loop** | Wizard + packager exist; flash/device feedback still thin |
 | **Agentic diffs depth** | Proposals MCP/UI shipped; richer diff UX / auto-apply guardrails next |
@@ -113,19 +113,27 @@ Still open from §3: full SSO/RBAC, device flash/OTA, full MLflow registry, dura
 
 ### Console map
 
+Project-first Web IDE (activity bar when a workspace is open):
+
 | Group | Views | Role |
 |---|---|---|
-| **Build** | Builder, Templates, Proposals | Design graphs, review agent proposals |
-| **Observe** | Runs, Trace, Experiments, Artifacts | Execution history, accountability backtrack, compare metrics, artifact library |
-| **Library** | Plugins, Data, Projects | Extension surface, files, dataset workspaces |
-| **Deploy** | Edge, Workers | Edge package loop & distributed placement |
-| **Admin** | Secrets, System | Secrets, health + audit |
+| **Home** | Overview (`#/projects?project=…`) | Workspace home, pipelines, linked data |
+| **Editor** | Builder | Design Graph IR, run, validate, save |
+| **Runs** | Runs (`#/runs`) | History; per-run **Files**, **Lineage**, and **Compare** panels |
+| **Datasets** | Data (`#/data`) | Shared Inputs/Outputs under `workspace/datasets` |
+| **Artifacts** | Artifacts (`#/artifacts`) | Cross-run artifact registry (deep links) |
+
+**Global / Settings** (collapsed): Templates, Proposals (when pending), **Library · Plugins**, **Edge package**, **Worker fleet**, Secrets, **Ops** (`#/system`).
+
+Deep links preserved: `#/trace` (Lineage), `#/experiments` (Compare runs) — prefer Runs panels when a workspace is open.
+
+**Removed as primary map:** flat **Build / Observe / Library / Deploy / Admin** peer list (Lineage and Compare are not activity-bar peers; they live under Runs or as hash deep links).
 
 
 ### Data vs Projects
 
-- **Data** = filesystem: upload inputs + browse/merge outputs under `workspace/datasets/`.
+- **Data** = filesystem: upload inputs + browse/merge outputs under `workspace/datasets/` (UI label **Datasets**).
 - **Projects** = dataset workspace UI over the **same** `workspace/datasets/output/{project}` (spec, taxonomy, contract, versions, snapshots, lineage) — not a second file browser.
 - Shared key: **project name** (+ version).
-- Product loop: **Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge**.
+- Product loop: **Upload in Datasets → Build in Editor → Runs (Files / Lineage / Compare) → manage on Home → package in Edge package**.
 

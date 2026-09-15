@@ -20,6 +20,8 @@ dependencies = [
     "numpy>=1.24",
 ]
 
+node_types = ["audio_annotator"]
+
 [config_schema.audio_annotator]
 annotation_mode = { type = "string", title = "Annotation Mode", default = "passthrough", description = "Annotation Mode. One of: passthrough, auto, taxonomy, weak.", enum = ["passthrough", "auto", "taxonomy", "weak"] }
 taxonomy = {  type = "object", title = "Taxonomy", default = { }, description = "Label taxonomy map or hierarchy used for annotation.", widget = "json"  }

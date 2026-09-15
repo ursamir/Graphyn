@@ -343,8 +343,8 @@ export default function TemplatesView() {
   return (
     <div className="h-full overflow-y-auto p-6 space-y-5">
       <PageHeader
-        title="New from template"
-        description="Templates are starters. Project pipelines are the canonical saved graphs; the Editor edits the active graph. Opening a template creates or opens a workspace first."
+        title="Templates"
+        description="Build entry — starter graphs that stamp GraphIR into a workspace. Open one in the Editor, then save or run."
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button type="button" className="btn-quiet" onClick={() => void load()} title="Refresh templates">
@@ -642,10 +642,10 @@ export default function TemplatesView() {
                       className="btn-secondary"
                       onClick={() => {
                         openData({ mode: 'inputs' })
-                        pushToast('Data — upload or browse files for this template', 'info')
+                        pushToast('Datasets — upload or browse files for this template', 'info')
                       }}
                     >
-                      Open Data
+                      Open Datasets
                     </button>
                   ) : null}
                 </div>

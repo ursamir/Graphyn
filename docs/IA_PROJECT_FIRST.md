@@ -38,7 +38,7 @@ Header shows an **active project chip** (switch / clear). Sidebar prefers:
 
 | Item | Destination | Role |
 |---|---|---|
-| Overview | `#/projects?project={name}` | Project home |
+| **Home** | `#/projects?project={name}` | Project home |
 | Linked data | `#/projects?project={name}&tab=versions` | Versions / snapshots facets |
 | Builder | `#/builder` | Pipelines for this workspace |
 | Runs | `#/runs` | `GET /runs?project=` hard filter when active project set |
@@ -163,11 +163,12 @@ Shipped after Phase 2 to make **global vs project** and **viewer vs editor** obv
 | Graphyn surface | IDE analogue |
 |---|---|
 | **Project (active)** | Opened folder / workspace |
-| **Overview** | Workspace home / welcome |
+| **Home** | Workspace home / welcome |
 | **Editor (Builder)** | Main editor (center stage) |
 | **Explorer (Linked data + Data Browse)** | File explorer (viewer) |
 | **Data Manage** | Explorer actions (upload / delete / ingest) — secondary |
-| **Run** | History + Files + Lineage + Compare (one surface; Prefect/W&B pattern) |
+| **Runs** | History + Files + Lineage + Compare (one surface; Prefect/W&B pattern) |
+| **Lineage / Compare runs** | Deep-link only (`#/trace`, `#/experiments`) or Runs panels — not activity-bar peers |
 | **Trace / Artifacts** | Deep-link only (artifact ids / cross-run registry) — not sidebar peers |
 | **Templates** | New from template wizard (creates/opens workspace first) |
 | **Proposals** | PR review (global) |
@@ -178,16 +179,16 @@ Shipped after Phase 2 to make **global vs project** and **viewer vs editor** obv
 
 Modeled on VS Code + Prefect run tabs + W&B/MLflow compare-in-runs:
 
-1. **Activity bar (project open):** Overview / Editor / **Run** / **Data** (library Outputs for this project — *not* Overview). Global/Settings collapsed.
-2. **Header:** project chip + Switch / Close; last-run menu: **Lineage** | **Files** | **Compare…** (land on Run panels).
+1. **Activity bar (project open):** **Home** / Editor / **Runs** / **Datasets** / **Artifacts** (optional). **Lineage** and **Compare runs** are Runs detail panels or deep links (`#/trace`, `#/experiments`) — not activity-bar peers. Global/Settings collapsed.
+2. **Header:** project chip + Switch / Close; last-run menu: **Artifacts** | **Compare runs…** (land on Runs panels).
 3. **Projects picker** (`#/projects`): dense explorer + filter; welcome pane only.
 4. **Workspace Overview** (`#/projects?project=`): situation strip + Open Editor / From template / Last run; **Pinned inputs** are manual links (runs do not auto-link); Versions & taxonomy collapsed.
 5. **Editor:** Run | Validate | Save; placement only in Distributed mode.
-6. **Run (unified observe):**
+6. **Runs (unified observe):**
    - Top: **History | Compare**.
    - Detail panels: **Logs** (execution printout) | **Files** (downloadable outputs, type previews, grouped by node) | **Lineage** (executed nodes + provenance — enriched `/trace?run_id=`) | **Details** (counts, node_stats, errors) | **Checkpoints**.
-   - `openTrace({ runId })` → Run → Lineage; `openArtifacts({ runId })` → Run → Files.
-7. **Data vs Overview:** sidebar **Data** = Data library Outputs for the project; Overview keeps workspace home only.
+   - `openTrace({ runId })` → Runs → Lineage; `openArtifacts({ runId })` → Runs → Files.
+7. **Datasets vs Home:** sidebar **Datasets** = shared Inputs/Outputs library for the project; Home keeps workspace overview only.
 8. **Hash sync:** `replaceHash` / `go` dispatch `hashchange`; Switch clears `?project=`.
 9. **Auth:** 401 → Settings CTA.
 
@@ -195,9 +196,9 @@ Modeled on VS Code + Prefect run tabs + W&B/MLflow compare-in-runs:
 
 | Surface | Primary job | IA notes |
 |---|---|---|
-| **Data** | Shared dataset library | Browse\|Manage; honesty: Outputs ≠ Run Files |
-| **Trace** | Artifact-id lineage deep-link | Prefer Run → Lineage for runs |
-| **Artifacts** | Cross-run file registry | Prefer Run → Files for one run; Lineage for provenance |
+| **Datasets** | Shared Inputs/Outputs library | Browse\|Manage; honesty: Outputs ≠ Runs → Files |
+| **Lineage** | Artifact-id deep-link (`#/trace`) | Prefer Runs → Lineage for runs |
+| **Artifacts** | Cross-run file registry | Prefer Runs → Files for one run; Runs → Lineage for provenance |
 | **Templates** | Stamp into project → Editor | Search + pills; quieter header; gate copy |
 | **Proposals** | Approve agent GraphIR | MCP discovery banner; search; diff first |
 | **Edge** | Package for device | Step-owned actions; openRun for fail/lineage |
@@ -206,7 +207,7 @@ Modeled on VS Code + Prefect run tabs + W&B/MLflow compare-in-runs:
 
 | Surface | Primary job | IA notes |
 |---|---|---|
-| **Plugins** | Install packs; fix deps so Builder catalog works | Tabs **Installed** (default) / **Install / Search**; status filter (ok / missing deps / disabled); one dep CTA per row; empty → Install tab |
-| **Workers** | Monitor Mode B workers | Summary strip (count, mode hint, refresh); client filter by label/pool/status; row → detail drawer; empty = short Mode B + copyable `graphyn worker start` |
+| **Plugins** | Library — install packs for Editor catalog | Tabs **Installed** (default) / **Install / Search**; status filter (ok / missing deps / disabled); one dep CTA per row; empty → Install tab |
+| **Worker fleet** | Monitor Mode B workers | Summary strip (count, mode hint, refresh); client filter by label/pool/status; row → detail drawer; empty = short Mode B + copyable `graphyn worker start` |
 | **Secrets** | Create / rotate / delete named credentials | Searchable name list (values never shown); POST same name → **Replace value** confirm; note that usage index is not available yet |
-| **System** | Health, schedules, webhooks, cleanup, audit | Status: facts first, Raw JSON collapsed, no filler Projects card, Workers link when distributed; Schedules: project/pipeline selects from `/projects` + `/projects/{name}/pipelines` (text fallback); denser Audit table; shorter Cleanup prose + CLEANUP confirm |
+| **Ops** | Health, schedules, webhooks, cleanup, audit | Status: facts first, Raw JSON collapsed, no filler Projects card, Worker fleet link when distributed; Schedules: project/pipeline selects from `/projects` + `/projects/{name}/pipelines` (text fallback); denser Audit table; shorter Cleanup prose + CLEANUP confirm |

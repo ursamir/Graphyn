@@ -615,8 +615,8 @@ export default function DataView() {
   return (
     <div className="h-full overflow-y-auto p-6 space-y-4">
       <PageHeader
-        title="Data"
-        description="Shared dataset library (Inputs / Outputs folders). Not the same as Run → Files (per-run downloads). Link labels into a workspace from Overview."
+        title="Datasets"
+        description="Shared Inputs/Outputs under workspace/datasets. Not the same as Runs → Files (per-run downloads)."
         actions={
           <div className="flex gap-2">
             {uxMode === 'manage' && manageTab === 'upload' && (
@@ -745,7 +745,7 @@ export default function DataView() {
                   pathRecovery
                     ? 'The selected path was invalid or outside the workspace, so selection was cleared.'
                     : uxMode === 'manage'
-                      ? 'Upload audio or ingest a dataset, then run a template to populate Outputs.'
+                      ? 'Upload files or ingest URLs, then run a template to populate Outputs.'
                       : 'Outputs appear after a template or export writes version folders. Link a project workspace, or browse templates to produce data.'
                 }
                 action={
@@ -776,7 +776,7 @@ export default function DataView() {
                         upload()
                       }}
                     >
-                      Upload audio
+                      Upload files or ingest URLs…
                     </button>
                   ) : (
                     <button
@@ -836,7 +836,7 @@ export default function DataView() {
                         className="btn-quiet text-[12px]"
                         onClick={() => openProjects({ project: activeProject })}
                       >
-                        Open Overview
+                        Open Home
                       </button>
                     </>
                   ) : (
@@ -876,7 +876,7 @@ export default function DataView() {
           ) : showEmptyInputs ? (
             <EmptyState
               title="No input labels"
-              description="Upload audio or ingest URLs to create a label folder under workspace/datasets/input."
+              description="Upload files or ingest URLs to create a label folder under workspace/datasets/input."
               action={
                 <button
                   type="button"
@@ -919,7 +919,7 @@ export default function DataView() {
                     useAppStore.getState().openProject(activeProject)
                   }}
                 >
-                  Open Overview
+                  Open Home
                 </button>
               ) : label ? (
                 <button
@@ -999,7 +999,7 @@ export default function DataView() {
                   ? 'Nothing matches this filter. Clear it to see the full list.'
                   : mode === 'outputs'
                     ? 'This version has no files yet. Run a pipeline or merge datasets to populate it.'
-                    : 'Upload audio or ingest a dataset to see files here.'
+                    : 'Upload files or ingest URLs to see files here.'
               }
               action={
                 listFilter.trim() ? (

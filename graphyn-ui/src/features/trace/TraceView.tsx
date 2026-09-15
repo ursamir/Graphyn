@@ -335,7 +335,7 @@ export default function TraceView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Lineage"
-        description="For a run, use Run → Lineage. This page is for artifact-id deep links."
+        description="Deep-link and advanced provenance (`#/trace`). Open lineage from Runs → Lineage for a selected run."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -373,7 +373,7 @@ export default function TraceView() {
           {recentError ? <p className="text-[12px] text-rose-700">{recentError}</p> : null}
           {!recentError && recentRuns.length === 0 ? (
             <p className="text-[12px] text-ink-400">
-              No recent runs{activeProject ? ' in this project' : ''}. Open a run from Runs, or paste an ID below.
+              No recent runs{activeProject ? ' in this project' : ''}. Open Runs and select a run, or paste an artifact id below.
             </p>
           ) : null}
         </div>
@@ -460,7 +460,7 @@ export default function TraceView() {
       {!loading && !error && !trace && (
         <EmptyState
           title="Open lineage from a run, or pick a recent run below."
-          description="For a run, use Run → Lineage. This page is for artifact-id deep links."
+          description="Prefer Runs → Lineage for a selected run. Use this page for artifact-id deep links only."
           action={
             <button
               type="button"
@@ -468,9 +468,10 @@ export default function TraceView() {
               onClick={() => {
                 setView('runs')
                 window.history.replaceState(null, '', '#/runs')
+                window.dispatchEvent(new HashChangeEvent('hashchange'))
               }}
             >
-              Open Run
+              Open Runs
             </button>
           }
         />

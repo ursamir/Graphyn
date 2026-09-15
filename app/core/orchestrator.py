@@ -112,9 +112,16 @@ def _resolve_capability(ir_node: Any, registry: Any) -> Any:
     Delegates to registry_runtime.resolve_capability — canonical implementation
     lives in BC3 (Node Catalog) since it only depends on IR models and the registry.
 
-    Kept here as a backward-compatible alias. New callers should import
-    resolve_capability from app.core.registry_runtime directly.
+    Deprecated: import ``resolve_capability`` from ``app.core.registry_runtime``.
     """
+    import warnings
+
+    warnings.warn(
+        "_resolve_capability from app.core.orchestrator is deprecated; "
+        "import resolve_capability from app.core.registry_runtime instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _resolve_capability_impl(ir_node, registry)
 
 

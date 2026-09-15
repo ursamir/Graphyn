@@ -87,6 +87,7 @@ def _call_process(node, items):
     return node.process({"input": items})
 
 
+@pytest.mark.backend
 def test_process_smoke(installed_cls, make_audio_sample):
     """Smoke test: process returns a list of PredictionResult objects."""
     node = installed_cls(config={}, seed=0)
@@ -99,6 +100,7 @@ def test_process_smoke(installed_cls, make_audio_sample):
     assert len(result["output"]) == 1
 
 
+@pytest.mark.backend
 def test_process_empty_input(installed_cls):
     """Empty input list produces empty output."""
     node = installed_cls(config={}, seed=0)
@@ -109,6 +111,7 @@ def test_process_empty_input(installed_cls):
     assert result["output"] == []
 
 
+@pytest.mark.backend
 def test_process_output_has_predicted_label(installed_cls, make_audio_sample):
     """Each PredictionResult has a predicted_label attribute."""
     node = installed_cls(config={}, seed=0)

@@ -77,7 +77,7 @@ Once multi-user identity exists, **cross-project access must be prevented by def
 |---|---|---|---|
 | `python_code` | Graph authors are trusted operators | AST import/call filters; `allow_network=False` by default; `open()` needs explicit `allowed_paths` | Process/container sandbox |
 | `http_request` / `http_webhook` | Same; arbitrary HTTP is intentional | Optional `GRAPHYN_HTTP_EGRESS_MODE=restricted` + allowlist | Full SSRF-proof pin-IP client (TOCTOU remains) |
-| ASR / `structured_llm` HTTP | Calls vendor / configured provider URLs | Provider-specific clients | Does **not** yet share the workflow egress helper (document only; wire later if needed) |
+| ASR / `structured_llm` HTTP | Calls vendor / configured provider URLs | `validate_http_egress_url` before every `httpx` call (same helper as `http_request` / `http_webhook`) | Pin-IP connect (TOCTOU remains) |
 | Platform webhooks (`WebhookService`) | Admin-configured callback | Always blocks private/loopback at save/send; pin-IP connect | — |
 
 ### `python_code` (SEC-002)
@@ -98,6 +98,8 @@ Env knobs (read live from the environment — no import-time cache):
 |---|---|---|
 | `GRAPHYN_HTTP_EGRESS_MODE` | `trusted` | `trusted` = current behaviour (any http(s) URL). `restricted` = block private/link-local/loopback/metadata ranges and enforce optional allowlist. |
 | `GRAPHYN_HTTP_EGRESS_ALLOWLIST` | empty | Comma-separated hosts/domains. When non-empty **and** mode is `restricted`, the URL hostname must match (exact or subdomain). |
+| `GRAPHYN_PLUGIN_ALLOWED_SOURCES` | empty | Empty = allow all remotes **only** in unauthenticated-dev. When `auth_required()` (prod/staging/`GRAPHYN_AUTH_REQUIRED`), empty allowlist **denies** remote installs (fail closed). Local paths always allowed. |
+| `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS` | unset | When unset, dataset path jail resolves symlink targets and rejects escapes. Set `1` for Docker layouts that intentionally symlink datasets outside `GRAPHYN_PROJECT_DIR`. `/input-files` StaticFiles uses `follow_symlink=False`. |
 
 Enable restricted mode:
 
@@ -106,7 +108,7 @@ export GRAPHYN_HTTP_EGRESS_MODE=restricted
 export GRAPHYN_HTTP_EGRESS_ALLOWLIST="api.github.com,hooks.example.com"
 ```
 
-In restricted mode the shared helper (`app/core/egress.py`) used by `http_request` and `http_webhook`:
+In restricted mode the shared helper (`app/core/egress.py`) used by `http_request`, `http_webhook`, `asr_transcribe`, and `structured_llm`:
 
 1. Allows only `http` / `https`
 2. Blocks known metadata hostnames (`metadata.google.internal`, …)

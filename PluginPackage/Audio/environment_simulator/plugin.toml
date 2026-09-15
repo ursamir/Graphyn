@@ -24,6 +24,8 @@ optional_dependencies = [
     "pyroomacoustics>=0.7",
 ]
 
+node_types = ["environment_simulator"]
+
 [config_schema.environment_simulator]
 preset = { type = "string", title = "Preset", default = "room", description = "Preset. One of: room, car, office, outdoor, custom.", enum = ["room", "car", "office", "outdoor", "custom"] }
 room_dimensions = { type = "array", title = "Room dimensions", default = ["5.0", "4.0", "3.0"], description = "Room size as [length, width, height] in meters.", widget = "json" }

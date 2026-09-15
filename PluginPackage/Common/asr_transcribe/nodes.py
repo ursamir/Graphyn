@@ -18,6 +18,7 @@ from pydantic import Field
 
 import numpy as np
 
+from app.core.egress import validate_http_egress_url
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
@@ -264,6 +265,7 @@ class AsrTranscribeNode(Node):
                 "AsrTranscribeNode: HTTP providers require the 'httpx' package. "
                 "Install httpx (e.g. pip install httpx)."
             ) from exc
+        validate_http_egress_url(url)
         resp = httpx.post(
             url,
             headers=headers,
@@ -283,6 +285,7 @@ class AsrTranscribeNode(Node):
                 "AsrTranscribeNode: HTTP providers require the 'httpx' package. "
                 "Install httpx (e.g. pip install httpx)."
             ) from exc
+        validate_http_egress_url(url)
         resp = httpx.get(url, headers=headers, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
@@ -406,6 +409,7 @@ class AsrTranscribeNode(Node):
             ) from exc
         model = self.config.model or "nova-2"
         url = f"https://api.deepgram.com/v1/listen?model={model}&punctuate=true"
+        validate_http_egress_url(url)
         resp = httpx.post(url, headers=headers, content=raw, timeout=self.config.timeout_s)
         resp.raise_for_status()
         body = resp.json()

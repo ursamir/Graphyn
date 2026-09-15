@@ -83,7 +83,16 @@ def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
     # Step 1: Validate graph (Req 4.11)
     # FIX (HIGH): return standard MCP error envelope, not {"valid": False, ...}
     try:
+        from app.core.ir.secret_policy import InlineSecretError, assert_no_inline_secrets
+
         graph = load_ir(graph_dict)
+        assert_no_inline_secrets(graph)
+    except InlineSecretError as exc:
+        return {
+            "error": True,
+            "error_type": "inline_secret_error",
+            "message": str(exc),
+        }
     except Exception as exc:
         return {
             "valid": False,

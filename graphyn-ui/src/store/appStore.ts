@@ -262,7 +262,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const aid = artifactId?.trim() || ''
     const rid = runId?.trim() || ''
-    // Run-scoped files stay on Run → Files (Artifacts library is for ids / cross-run).
+    // Run-scoped files stay on Runs → Files (Artifacts library is for ids / cross-run).
     if (rid && !aid) {
       replaceHash(`#/runs/${rid}`)
       set({

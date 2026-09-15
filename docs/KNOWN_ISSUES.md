@@ -6,16 +6,18 @@
 
 ## Open — Fix This Sprint
 
+> Historical fix pack: repo-root [`PROJECT_REVIEW.md`](../PROJECT_REVIEW.md) (2026-09-15). Items below are still open.
+
 ### PLUGIN-LOAD-1 — Plugin startup can fail with stale installed bytecode / vanished paths — mitigated
 
 **Detail:** After loader module-naming changes, old `__pycache__` entries under `~/.graphyn/plugins/installed/` can cause startup warnings such as: `Plugin 'feature-frontend' declared 1 entry point(s) but no node types were registered`. Separately, pytest runs can leave `registry.json` entries pointing at vanished `/tmp/pytest-of-*/...` paths; previously those enabled-but-missing records blocked bundled auto-install and left `GET /api/v1/nodes` empty.  
 **Mitigation (2026-09):** `PluginManager.load_enabled_plugins()` heals records when `{GRAPHYN_HOME}/plugins/installed/<name>` still has a manifest, otherwise prunes the stale record. `maybe_auto_install_and_load()` treats non-loadable enabled records as empty and installs bundled `PluginPackage` plugins. `initialize_registry()` falls back to AutoDiscovery on `plugins_home` when the manager leaves the registry empty.  
 **Workaround (bytecode only):** Clear stale plugin caches (`~/.graphyn/plugins/installed/**/__pycache__`) and rerun plugin load/install. Do **not** set `GRAPHYN_SKIP_PLUGIN_LOAD=1` when starting the API/UI catalog.
 
-### EVENT-DRIVEN-EXIT-1 — Event-driven demos may not terminate promptly
+### EVENT-DRIVEN-EXIT-1 — Event-driven demos may not terminate promptly — partially mitigated
 
 **Files:** `examples/15_event_driven_pipeline/event_driven_demo.py`, `app/core/events.py`  
-**Detail:** On some Linux environments, file-watcher event loops may continue running briefly after cancel, causing long waits in scripted full-suite runs.  
+**Detail:** File-watcher shutdown is shorter/capped; on some Linux environments loops may still linger briefly after cancel.  
 **Workaround:** Run with a process timeout in CI/sweeps; treat output artifacts and completion logs as pass criteria.
 
 ### TF-GPU-CC12-1 — Keras training unsupported on compute capability ≥12
@@ -32,7 +34,7 @@
 
 **Files:** `app/core/node_executor.py`, `app/core/distributed/backend.py`, worker CLI  
 **Detail:** Isolated plugin subprocesses honour cancel via process-group terminate; cooperative cancel runs between retries / before `process`. Non-isolated in-process `process()` is observed only before/after the call, between retries, or when it returns.  
-**Workaround:** Prefer `runtime=isolated` for long GPU/training nodes; use job cancel + worker cancel-watch for remote jobs.
+**Workaround:** Prefer `runtime=isolated` for long GPU/training nodes (`trainer`, `evaluator`, `edge_optimizer`, `realtime_inference` already default isolated); use job cancel + worker cancel-watch for remote jobs. Full mid-call interrupt for in-process remains deferred.
 
 ### DIST-CANCEL-2 — Streaming `execute_stream` cancel is cooperative only (partial)
 
@@ -47,7 +49,7 @@
 **Remaining edge cases (still open):**
 - Very short lease TTL under network partition / clock skew can cause reclaim storms (job flip-flops pending↔claimed).
 - A dead worker that still holds a process may finish after reclaim; fencing rejects that complete, but the late side-effects (artifacts written locally) are not rolled back.
-- Heartbeat lease renew failures are logged but do not fail the heartbeat response — missed renewals still rely on reclaim.
+- *(Mitigated 2026-09-15)* Heartbeat lease renew failures return HTTP 503 so workers retry instead of looking healthy while leases expire.
 
 ---
 
@@ -94,6 +96,17 @@
 ---
 
 ## Resolved (kept for history)
+
+### (resolved 2026-09-15) PROJECT_REVIEW Batches A–E (selected)
+
+- **CI-UI-BUILD-1 / CI-GATE-1:** `scripts/ui_build.sh` cds into `graphyn-ui/`; `.github/workflows/ci.yml` + expanded `ci_smoke.sh`.
+- **SEC-INLINE-EXEC-1 / YAML validate:** `assert_no_inline_secrets` on `LocalPythonBackend` / `DistributedBackend.execute`, MCP execute, YAML validate branch.
+- **SEC input symlink:** resolve jail by default; `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1` for Docker; `/input-files` `follow_symlink=False`.
+- **Plugin allowlist prod:** empty allowlist denies remotes when `auth_required()`.
+- **ASR/LLM egress:** share `validate_http_egress_url`.
+- **SCHED-RACE-1:** flock + claim-before-tick; corrupt `schedules.json` fail-closed.
+- **HB lease soft-fail:** heartbeat returns 503 when lease renew fails.
+- **audio_exporter / balancer / node_types / WakeWord+Video honesty / doc counts / examples get_backend / IR 1.2 / faster-whisper → `[asr]` extra.**
 
 ### (resolved 2026-09-07) DEPS-1 dependency manifest skew
 

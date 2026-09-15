@@ -194,7 +194,10 @@ class DistributedBackend(RuntimeBackend):
     ) -> dict[str, Any]:
         from app.core.distributed.placement import placement_needs_remote, resolve_worker
         from app.core.distributed.registry import get_worker_registry
+        from app.core.ir.secret_policy import assert_no_inline_secrets
         from app.core.registry_runtime import get_registry, resolve_capability
+
+        assert_no_inline_secrets(graph)
 
         registry = get_worker_registry()
         alive = registry.alive_workers()

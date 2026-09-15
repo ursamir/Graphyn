@@ -19,6 +19,8 @@ optional_dependencies = [
     "websockets>=11.0",
 ]
 
+node_types = ["stream_ingest"]
+
 [config_schema.stream_ingest]
 source = { type = "string", title = "Source", default = "microphone", description = "Ingestion backend. One of: microphone, websocket, file_stream.", enum = ["microphone", "websocket", "file_stream"], ui = { group = "Basic" } }
 device_id = { type = "integer", title = "Device ID", description = "Microphone device index for source=microphone. Empty/null/omit = OS default input (sounddevice device=None). Integer >=0 = sounddevice.query_devices() index; fails clearly if missing or not an input device.", ui = { group = "Basic" } }

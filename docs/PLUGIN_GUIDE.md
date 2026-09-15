@@ -53,6 +53,7 @@ runtime = "inprocess"                              # or "isolated" for conflicti
 - Never put heavy deps in `dependencies` — blocks CPU-only installs
 - `runtime = "isolated"` — required **and** optional deps go to `~/.graphyn/plugins/venvs/<name>/` (or `$GRAPHYN_HOME/plugins/venvs/<name>/` in Docker); `process()` runs via `app.core.plugins.worker` (use for trainer / edge-optimizer / realtime-inference). Heavy extras stay out of the host API image.
 - `torch` in `optional_dependencies` is skipped unless `GRAPHYN_ISOLATED_INSTALL_TORCH=1` (default isolated extras are TensorFlow CPU + Keras).
+- Local ASR (`asr_transcribe` with `local_whisper` / `faster_whisper`): install host extra `pip install -e ".[asr]"` or declare `faster-whisper` in the plugin `optional_dependencies`.
 - Shared-env installs guarded by `PLATFORM_CONSTRAINTS`; UI/API: `GET|POST /plugins/{name}/dependencies`
 - Existing Docker volumes created before optional extras were installed into isolated venvs:
 
@@ -313,12 +314,12 @@ node.teardown()
 
 ## Registered Plugins
 
-All 38 plugins are complete. See `plugin-development.md` steering file for the full table, or `PluginPackage/NODES.md` for config fields and capabilities.
+All 48 plugins are complete. See `plugin-development.md` steering file for the full table, or `PluginPackage/NODES.md` for config fields and capabilities.
 
-### Audio (`PluginPackage/Audio/`) — 18 nodes
-`dataset_ingest`, `stream_ingest`, `audio_conditioner`, `audio_quality_gate`, `audio_annotator`, `alignment_node`, `segmenter`, `augmentation_pipeline`, `speech_enhancer`, `speaker_separator`, `environment_simulator`, `feature_frontend`, `stream_processor`, `audio_event_detector`, `audio_classifier`, `speech_synthesizer`, `voice_converter`, `audio_generator`
+### Audio (`PluginPackage/Audio/`) — 19 nodes
+`dataset_ingest`, `stream_ingest`, `audio_conditioner`, `audio_quality_gate`, `audio_annotator`, `alignment_node`, `segmenter`, `augmentation_pipeline`, `speech_enhancer`, `speaker_separator`, `environment_simulator`, `feature_frontend`, `stream_processor`, `audio_event_detector`, `audio_classifier`, `speech_synthesizer`, `voice_converter`, `audio_generator`, `audio_exporter`
 
-### Common (`PluginPackage/Common/`) — 20 nodes
-`dataset_builder`, `model_builder`, `trainer`, `evaluator`, `edge_optimizer`, `realtime_inference`, `dataset_balancer`, `dataset_versioner`, `experiment_tracker`, `deployment_packager`, `embedding_generator`, `multimodal_fusion`, `asr_transcribe`, `pii_redact`, `structured_llm`, `eval_gate`, `http_webhook`, `doc_parse_chunk`, `caption_export`, `object_store`
+### Common (`PluginPackage/Common/`) — 29 nodes
+`dataset_builder`, `trainer`, `evaluator`, `edge_optimizer`, `realtime_inference`, `dataset_balancer`, `dataset_versioner`, `experiment_tracker`, `deployment_packager`, `embedding_generator`, `multimodal_fusion`, `asr_transcribe`, `pii_redact`, `structured_llm`, `eval_gate`, `http_webhook`, `doc_parse_chunk`, `caption_export`, `object_store`, `http_request`, `if_switch`, `set_map`, `json_transform`, `schedule_trigger`, `python_code`, `error_catch`, `merge`, `wait_delay`, `csv_table`
 
 **Trainer / ModelBuilder (Keras):** `select_keras_device()` picks `/GPU:0` or `/CPU:0`. GPUs with compute capability ≥12 (Blackwell, e.g. RTX 5070 Ti) default to CPU because this TensorFlow build cannot run Keras training on them (missing CUDA kernels / libdevice). GPU is also refused when free VRAM is below `GRAPHYN_TF_GPU_MIN_FREE_MIB` (default 4096 MiB) so other apps keep the card. CPU `fit` uses soft placement off + `tf.device("/CPU:0")`. Set `GRAPHYN_TF_FORCE_GPU=1` only to attempt unsupported CC; it does not ignore the VRAM gate. `GRAPHYN_TF_DEVICE`: `auto`|`cpu`|`gpu`. `trainer.config.device`: `auto`|`cpu`|`gpu`.

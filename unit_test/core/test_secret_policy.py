@@ -50,3 +50,25 @@ def test_rejects_hmac_secret_suffix():
     }
     with pytest.raises(InlineSecretError):
         assert_no_inline_secrets(graph)
+
+
+def test_local_backend_execute_rejects_inline_secrets():
+    from app.core.ir.loader import load_ir
+    from app.core.runtime_backend import LocalPythonBackend
+
+    graph = load_ir(
+        {
+            "schema_version": "1.0",
+            "metadata": {"name": "x", "seed": 1},
+            "nodes": [
+                {
+                    "id": "a",
+                    "node_type": "http_request",
+                    "config": {"api_key": "sk-abc", "url": "https://x"},
+                }
+            ],
+            "edges": [],
+        }
+    )
+    with pytest.raises(InlineSecretError):
+        LocalPythonBackend().execute(graph)

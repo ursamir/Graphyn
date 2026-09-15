@@ -1138,11 +1138,11 @@ function BuilderInner() {
           {catalog.length === 0 ? (
             <div className="px-1 py-2">
               <EmptyState
-                title={bootStatus === 401 || !getApiToken() ? 'Sign in to load nodes' : 'No plugins installed'}
+                title={bootStatus === 401 || !getApiToken() ? 'Sign in to load the catalog' : 'No plugins installed'}
                 description={
                   bootStatus === 401 || !getApiToken()
-                    ? 'Paste your API token in Settings to load the node catalog.'
-                    : 'Install a plugin to populate the node catalog, then add nodes here.'
+                    ? 'The API returned 401 or no token is set — paste your API token in Settings to load nodes.'
+                    : 'No node packs are installed yet — install a plugin to populate the catalog.'
                 }
                 action={
                   bootStatus === 401 || !getApiToken() ? (
@@ -1246,7 +1246,7 @@ function BuilderInner() {
               className="btn-quiet !px-2 !py-0.5 text-[11px]"
               onClick={() => openProject(activeProject)}
             >
-              Open Overview
+              Open Home
             </button>
           ) : null}
           {activeProject ? (
@@ -1379,7 +1379,7 @@ function BuilderInner() {
                   })
                 }
               >
-                Open Data
+                Open Datasets
               </button>
               <button
                 type="button"
@@ -1576,7 +1576,7 @@ function BuilderInner() {
                       })
                     }
                   >
-                    <Database className="h-3.5 w-3.5" /> Open Data
+                    <Database className="h-3.5 w-3.5" /> Open Datasets
                   </button>
                 </div>
               </div>

@@ -48,13 +48,14 @@ def _output_root() -> Path:
 
 
 def _safe_child(root: Path, *parts: str) -> Path:
-    """Join *parts under root with a lexical jail (do not follow leaf symlinks).
+    """Join *parts under root and reject symlink escapes by default.
 
-    ``Path.resolve()`` follows symlinks. Under Docker, a version dir that
-    symlinks to a host path can resolve outside ``GRAPHYN_PROJECT_DIR`` even
-    though it was listed from ``listdir`` under the workspace mount — causing
-    false "Path is outside workspace" 400s. Validate segments, join under the
-    resolved root, and check ``is_relative_to`` on the *joined* path only.
+    Segments are validated lexically. The joined path is then resolved so a
+    symlink whose target lies outside *root* cannot be served (e.g. ``passwd``).
+
+    Set ``GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1`` to restore lexical-only
+    checks for Docker layouts that intentionally symlink dataset dirs onto
+    host paths outside ``GRAPHYN_PROJECT_DIR``.
     """
     for part in parts:
         if part in {"", ".", ".."} or "/" in part or "\\" in part:
@@ -63,7 +64,21 @@ def _safe_child(root: Path, *parts: str) -> Path:
     path = resolved_root.joinpath(*parts)
     if not path.is_relative_to(resolved_root):
         raise HTTPException(status_code=400, detail="Path is outside workspace")
-    return path
+    allow_external = os.environ.get("GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS", "").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if allow_external:
+        return path
+    try:
+        resolved = path.resolve(strict=False)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
+    if not resolved.is_relative_to(resolved_root):
+        raise HTTPException(status_code=400, detail="Path is outside workspace")
+    return resolved
 
 
 # ── Input datasets ────────────────────────────────────────────────────────────
@@ -103,11 +118,10 @@ def download_input_file(
 ):
     """Serve an input audio file via path-jailed ``_safe_child``.
 
-    Nested labels (e.g. ``environmental-sounds/car_horn/x.wav``) often use
-    intermediate directory symlinks. Starlette ``StaticFiles`` defaults to
-    ``follow_symlink=False`` and 404s those paths; this endpoint joins under
-    the input root without resolving the leaf for jail checks, then lets
-    ``FileResponse`` open through the symlink.
+    Nested labels may use intermediate directory symlinks **within** the input
+    root (resolved target must stay under the root unless
+    ``GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1``). Static ``/input-files`` does
+    not follow symlinks; prefer this API for nested trees.
     """
     rel = (path or "").replace("\\", "/").lstrip("/")
     parts = [p for p in rel.split("/") if p]

@@ -5,9 +5,9 @@
 ```
 PluginPackage/
 ├── ARCHITECTURE.md     ← this file — structure, anatomy, data flow, types
-├── NODES.md            ← all 29 nodes — config, ports, capabilities
+├── NODES.md            ← all 49 node types — config, ports, capabilities
 │
-├── Audio/              ← 18 audio-domain plugins
+├── Audio/              ← 19 audio-domain plugins
 │   ├── dataset_ingest/
 │   ├── stream_ingest/
 │   ├── audio_conditioner/
@@ -25,22 +25,14 @@ PluginPackage/
 │   ├── audio_classifier/
 │   ├── speech_synthesizer/
 │   ├── voice_converter/
-│   └── audio_generator/
+│   ├── audio_generator/
+│   └── audio_exporter/
 │
-├── Common/             ← 11 cross-domain plugins (reusable for any data domain)
-│   ├── dataset_builder/
-│   ├── trainer/
-│   ├── evaluator/
-│   ├── edge_optimizer/
-│   ├── realtime_inference/
-│   ├── dataset_balancer/
-│   ├── dataset_versioner/
-│   ├── experiment_tracker/
-│   ├── deployment_packager/
-│   ├── embedding_generator/
-│   └── multimodal_fusion/
+├── Common/             ← 29 cross-domain plugins — see NODES.md for full list
 │
-└── Video/              ← future domain (out of scope)
+├── Video/              ← placeholder / out of scope (see Video/README.md)
+│
+└── WakeWord/           ← experimental CLI/library, not a plugin pack (see WakeWord/README.md)
 ```
 
 ## Plugin Anatomy
@@ -185,6 +177,16 @@ AudioSample (raw)
 | `DatasetArtifact` | `Common/dataset_builder` | `X_train/val/test`, `y_train/val/test`, `labels`, `input_shape`, `n_classes`, `version`, `hash` |
 | `EmbeddingVector` | `Common/embedding_generator` | `embedding` (float32 [D]), `source_path`, `label`, `embedding_model`, `pooling` |
 | `ExperimentArtifact` | `Common/experiment_tracker` | `run_id`, `experiment_name`, `parameters`, `metrics`, `artifact_paths`, `backend` |
+
+## Platform inventory (authoritative counts)
+
+| Surface | Count |
+|---|---|
+| Audio plugins | 19 |
+| Common plugins | 29 |
+| Node types (Audio + Common) | 49 (`model_builder` ships inside `trainer`) |
+| MCP tools | 29 |
+| API routers | 17 |
 
 ## Install and Use
 

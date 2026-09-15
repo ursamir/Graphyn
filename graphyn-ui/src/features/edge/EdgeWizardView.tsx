@@ -38,7 +38,7 @@ type WizardStep = 1 | 2 | 3 | 4
 const STEP_LABELS: Record<WizardStep, string> = {
   1: 'Graph',
   2: 'Configure',
-  3: 'Run',
+  3: 'Package run',
   4: 'Download',
 }
 
@@ -412,8 +412,8 @@ export default function EdgeWizardView() {
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
-        title="Edge deploy"
-        description="Package a project run for on-device deploy."
+        title="Edge package"
+        description="Deploy — package a trained run for on-device delivery. Use Worker fleet when Mode is Distributed."
         actions={
           packageExists ? (
             <button
@@ -731,7 +731,7 @@ export default function EdgeWizardView() {
                   setStep(3)
                 }}
               >
-                Next: Run <ChevronRight className="h-3.5 w-3.5" />
+                Next: Package run <ChevronRight className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
@@ -740,10 +740,10 @@ export default function EdgeWizardView() {
 
       {step === 3 && (
         <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
-          <h3 className="text-sm font-semibold text-ink-900">Run</h3>
+          <h3 className="text-sm font-semibold text-ink-900">Package run</h3>
           <p className="text-sm text-ink-500">
-            Starts <code className="font-mono">POST /pipelines/run-async</code> with the configured
-            graph. Needs TensorFlow (or ONNX stack) in the plugin runtime for optimize.
+            Executes the configured optimize → package graph via{' '}
+            <code className="font-mono">POST /pipelines/run-async</code>. Needs TensorFlow (or ONNX stack) in the plugin runtime.
           </p>
           {runError && <ErrorBanner message={runError} />}
           {runId && (
@@ -808,10 +808,10 @@ export default function EdgeWizardView() {
           {!packageExists && !packageChecking ? (
             <EmptyState
               title="Run package step first"
-              description="No package artifact at the expected path yet. Finish Configure → Run, or adjust the path if the packager wrote elsewhere."
+              description="No package artifact at the expected path yet. Finish Configure → Package run, or adjust the path if the packager wrote elsewhere."
               action={
                 <button type="button" className="btn-primary" onClick={() => setStep(3)}>
-                  Back to Run
+                  Back to Package run
                 </button>
               }
             />

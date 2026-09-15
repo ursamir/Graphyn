@@ -10,7 +10,7 @@ sync: after changing install_requires, update requirements.txt and run
 ``scripts/check_deps.py``.
 
 Optional surfaces (Redis, MCP SDK, HuggingFace, TensorFlow, webrtcvad,
-watchfiles) live in extras — not the default install — so a clean
+watchfiles, faster-whisper ASR) live in extras — not the default install — so a clean
 ``pip install -e .`` succeeds without system CPython headers or heavy ML
 stacks. Install extras as needed, e.g. ``pip install -e ".[dev,mcp]"``.
 """
@@ -69,6 +69,10 @@ _EXTRAS = {
     "tf": [
         "tensorflow>=2.13.0",
     ],
+    "asr": [
+        # Local faster-whisper backend for asr_transcribe (local_whisper / faster_whisper)
+        "faster-whisper>=1.0",
+    ],
 }
 
 _EXTRAS["all"] = sorted(
@@ -80,6 +84,7 @@ _EXTRAS["all"] = sorted(
         *_EXTRAS["vad"],
         *_EXTRAS["hf"],
         *_EXTRAS["tf"],
+        *_EXTRAS["asr"],
     }
 )
 

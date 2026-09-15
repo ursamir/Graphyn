@@ -299,7 +299,7 @@ export default function ArtifactsView() {
       <div className="overflow-y-auto border-r border-ink-300 bg-white p-4">
         <PageHeader
           title="Artifacts"
-          description="Advanced cross-run file registry. For one run, stay on Run → Files."
+          description="Cross-run artifact registry. For one run's outputs, use Runs → Files."
         />
         <div className="mb-3 space-y-2">
           <div className="flex flex-wrap items-end gap-2">
@@ -388,7 +388,7 @@ export default function ArtifactsView() {
             </div>
           </details>
           <p className="text-[11px] leading-relaxed text-ink-400">
-            Run → Files shows outputs for one run. Use this registry only for cross-run search or a specific artifact id.
+            Runs → Files shows outputs for one run. Use this registry only for cross-run search or a specific artifact id.
           </p>
         </div>
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
@@ -406,7 +406,7 @@ export default function ArtifactsView() {
                 ? runFilter.trim()
                   ? 'This filter produced no stored artifacts (common for failed or cancelled runs). Clear filters or open the run for logs.'
                   : 'Nothing matches. Clear filters to browse the full library.'
-                : 'Run a pipeline that produces node outputs, then refresh. Prefer Run → Files for one run.'
+                : 'Run a pipeline that produces node outputs, then refresh. Prefer Runs → Files for one run.'
             }
             action={
               hasActiveFilters ? (
@@ -423,7 +423,7 @@ export default function ArtifactsView() {
                     window.dispatchEvent(new HashChangeEvent('hashchange'))
                   }}
                 >
-                  Open Run
+                  Open Runs
                 </button>
               )
             }
@@ -459,7 +459,7 @@ export default function ArtifactsView() {
         {!selected ? (
           <EmptyState
             title="Select an artifact"
-            description="Inspect this output, download it, open Lineage, or jump to its run."
+            description="Inspect this output, download it, open Runs → Lineage, or jump to its run."
             action={
               items && items.length > 0 ? (
                 <button type="button" className="btn-secondary" onClick={() => void open(idOf(items[0]))}>
@@ -479,7 +479,7 @@ export default function ArtifactsView() {
                     window.dispatchEvent(new HashChangeEvent('hashchange'))
                   }}
                 >
-                  Open Run
+                  Open Runs
                 </button>
               )
             }
@@ -609,7 +609,7 @@ export default function ArtifactsView() {
               />
             )}
             <p className="rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-600">
-              Prefer Run → Files for one run. Provenance lives on Run → Lineage (or this Trace deep-link for artifact ids).
+              Prefer Runs → Files for one run. Provenance lives on Runs → Lineage (or this deep link for artifact ids).
             </p>
           </>
         )}

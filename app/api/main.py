@@ -343,5 +343,5 @@ _logger.info(
 )
 
 app.mount("/files",       StaticFiles(directory=str(_OUTPUT_ROOT)), name="files")
-app.mount("/input-files", StaticFiles(directory=str(_INPUT_ROOT), follow_symlink=True),  name="input-files")
+app.mount("/input-files", StaticFiles(directory=str(_INPUT_ROOT), follow_symlink=False),  name="input-files")
 app.mount("/run-files",   StaticFiles(directory=str(_RUNS_ROOT)),   name="run-files")

@@ -186,3 +186,46 @@ def load_yaml_with_deprecation(path: str) -> GraphIR:
     )
 
     return yaml_config_to_ir(raw)
+
+
+def run_pipeline_from_yaml(
+    config_path: str,
+    logger=None,
+    use_cache: bool = True,
+    checkpoint: bool = False,
+    streaming: bool = False,
+    observer=None,
+    run_manager=None,
+):
+    """Deprecated YAML file execute path used by ``app.core.pipeline.run_pipeline``.
+
+    Prefer ``get_backend().execute(graph)`` with GraphIR.
+    """
+    from app.core.runtime_backend import get_backend
+    from app.core.run_manager import RunManager
+
+    warnings.warn(
+        "run_pipeline() with a YAML config path is deprecated. "
+        "Use get_backend().execute() with a GraphIR object, or Pipeline.run() via the SDK.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+    if run_manager is None:
+        run_manager = RunManager()
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config_yaml = f.read()
+    run_manager.save_config(config_yaml)
+
+    graph = load_yaml_with_deprecation(config_path)
+
+    return get_backend().execute(
+        graph,
+        logger=logger,
+        use_cache=use_cache,
+        checkpoint=checkpoint,
+        streaming=streaming,
+        observer=observer,
+        run_manager=run_manager,
+    )

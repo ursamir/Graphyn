@@ -19,6 +19,8 @@ optional_dependencies = [
     "pyloudnorm>=0.1",
 ]
 
+node_types = ["audio_quality_gate"]
+
 [config_schema.audio_quality_gate]
 min_snr_db = { type = "number", title = "Min SNR (dB)", default = 10.0, description = "Reject audio whose estimated SNR is below this (dB).", ui = { group = "Basic" } }
 max_clipping_ratio = { type = "number", title = "Max clipping ratio", default = 0.01, description = "Reject if fraction of clipped samples exceeds this (0–1).", ui = { group = "Basic" } }
