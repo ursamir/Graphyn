@@ -88,24 +88,29 @@ def test_assemble_trace_from_artifact_with_lineage(tmp_workspace: Path):
     assert steps == ["artifact", "node", "run", "graph", "worker"]
 
 
-def test_assemble_trace_from_run_id(tmp_workspace: Path):
-    run_dir = tmp_workspace / "runs" / "run-only-1"
+def test_assemble_trace_from_run_id_with_node_stats(tmp_workspace: Path):
+    run_dir = tmp_workspace / "runs" / "run-nodes-1"
     run_dir.mkdir(parents=True)
     (run_dir / "meta.json").write_text(
         json.dumps(
             {
-                "run_id": "run-only-1",
-                "status": "running",
-                "graph_name": "solo",
-                "created_at": "2026-09-07T01:00:00+00:00",
+                "run_id": "run-nodes-1",
+                "status": "completed",
+                "graph_name": "demo",
+                "node_stats": [
+                    {"node_id": "ingest", "node_type": "AudioIngest", "status": "completed", "duration_ms": 12},
+                    {"node_id": "train", "node_type": "Trainer", "status": "completed", "duration_ms": 99},
+                ],
             }
         ),
         encoding="utf-8",
     )
-    payload = assemble_trace(run_id="run-only-1")
-    assert payload["subject"] == {"kind": "run", "id": "run-only-1"}
-    assert payload["run"]["graph_name"] == "solo"
-    assert "run" in [c["step"] for c in payload["chain"]]
+    payload = assemble_trace(run_id="run-nodes-1")
+    steps = [c["step"] for c in payload["chain"]]
+    assert steps.count("node") == 2
+    assert "run" in steps
+    assert payload["lineage"]["nodes"][0]["id"] == "ingest"
+
 
 
 def test_audit_append_and_list(tmp_workspace: Path):

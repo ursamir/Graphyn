@@ -1031,9 +1031,12 @@ At least one of `artifact_id` / `run_id` is required.
 
 **Also:** `GET /api/v1/trace/artifact/{id}` and `GET /api/v1/trace/run/{id}`.
 
-**Response (partial OK):** `subject`, `run`, `graph`, `node`, `artifact`, `lineage` (`inputs`, `downstream_hint`), `chain` (ordered steps), `warnings`.
+**Response (partial OK):** `subject`, `run`, `graph`, `node`, `artifact`, `lineage`, `chain` (ordered steps), `warnings`.
 
-Reuses ProvenanceStore lineage, ArtifactStore, and run `meta.json` (including `distributed_node_workers`).
+- **Artifact-focused** (`artifact_id`): backtrack artifact → node → run → graph → worker; `lineage.inputs` / `tree` from ProvenanceStore.
+- **Run-focused** (`run_id` only): Prefers `meta.node_stats` (else ArtifactStore) to build executed **node** steps in `chain`; `lineage.nodes` / `lineage.artifacts` / `lineage.artifact_count` / `lineage.provenance_count` for the Run → Lineage panel.
+
+Reuses ProvenanceStore, ArtifactStore, and run `meta.json` (including `distributed_node_workers`).
 
 ### `GET /api/v1/audit`
 

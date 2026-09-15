@@ -1,374 +1,537 @@
 {
-  "generated_at": "2026-09-11 10:01 IST",
-  "branch": "cursor/usecase-plugins-workflows",
-  "api": "http://127.0.0.1:8001",
-  "free_providers": {
-    "asr": "local_whisper (faster-whisper tiny, CPU)",
-    "llm": "local_heuristic (deterministic schema fill); Groq openai_compat fallback if GROQ_API_KEY+base_url",
-    "webhook": "https://httpbin.org/post"
-  },
   "templates": [
     {
       "template": "audio-classification",
+      "source": "template",
+      "project": "e2e-audio-classification",
       "status": "COMPLETED",
-      "run_id": "f8a7dfccf608445b8e8a91470d89bc0f",
-      "notes": "artifacts=1; fresh reconfirm"
+      "run_id": "772c5c578bcc4d2eb5d3c8a46f3cfcb1",
+      "notes": "artifacts=4",
+      "artifact_count": 4,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/audio-classification.graph.json"
     },
     {
       "template": "basic-wakeword",
+      "source": "template",
+      "project": "e2e-basic-wakeword",
       "status": "COMPLETED",
-      "run_id": "15eeb3dae1f74bf7a46f57f66dd6dc3e",
-      "notes": "artifacts=1"
+      "run_id": "2e7a5de02a024c31a734d293c96c09dc",
+      "notes": "artifacts=2",
+      "artifact_count": 2,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/basic-wakeword.graph.json"
     },
     {
       "template": "audio-quality-check",
+      "source": "template",
+      "project": "e2e-audio-quality-check",
       "status": "COMPLETED",
-      "run_id": "4556c917ba4c48ba877f9541b0959a49",
-      "notes": "artifacts=1"
+      "run_id": "1ca2148803814f25954ed9d8e194e27a",
+      "notes": "artifacts=4",
+      "artifact_count": 4,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/audio-quality-check.graph.json"
     },
     {
       "template": "podcast-leveling",
+      "source": "template",
+      "project": "e2e-podcast-leveling",
       "status": "COMPLETED",
-      "run_id": "a0c24ef1fce8433f8235134ea2aacbaf",
-      "notes": "artifacts=1"
+      "run_id": "1e54d1d69c714299a77d05525720a0d5",
+      "notes": "artifacts=2",
+      "artifact_count": 2,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/podcast-leveling.graph.json"
     },
     {
       "template": "speech-recognition",
+      "source": "template",
+      "project": "e2e-speech-recognition",
       "status": "COMPLETED",
-      "run_id": "d5bc6ec8e8034a99a4d3c01fc16f7f4c",
-      "notes": "artifacts=2"
+      "run_id": "24ab70cc455a4c09864aedfdd44c6a5e",
+      "notes": "artifacts=3",
+      "artifact_count": 3,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/speech-recognition.graph.json"
     },
     {
       "template": "doc-rag-ingest",
+      "source": "template",
+      "project": "e2e-doc-rag-ingest",
       "status": "COMPLETED",
-      "run_id": "f9f33605a76e4fc19c89be767d6630c5",
-      "notes": "artifacts=3"
+      "run_id": "f73483ed31c442239b5f812ca172ee47",
+      "notes": "artifacts=3",
+      "artifact_count": 3,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/doc-rag-ingest.graph.json"
     },
     {
       "template": "edge-deploy",
-      "status": "COMPLETED",
-      "run_id": "dfa82f23af3d4ed9a7dcc6814dd9445f",
-      "notes": "artifacts=3"
-    },
-    {
-      "template": "captions",
-      "status": "COMPLETED",
-      "run_id": "ef5a52c687f64f24a9a7f3285ea94b5e",
-      "notes": "local_whisper ASR (free); artifacts=3"
+      "source": "template",
+      "project": "e2e-edge-deploy",
+      "status": "SKIPPED_MODEL",
+      "run_id": null,
+      "notes": "no workspace/artifacts/models/saved_model (train first)",
+      "artifact_count": 0,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/edge-deploy.graph.json"
     },
     {
       "template": "call-analytics",
+      "source": "template",
+      "project": "e2e-call-analytics",
       "status": "COMPLETED",
-      "run_id": "6858e0deec4e42adae4c1ff04797e63a",
-      "notes": "local_whisper + local_heuristic + httpbin; artifacts=7"
+      "run_id": "c6b7a5dee9d7467d9c28e7ba0dba6eaf",
+      "notes": "artifacts=7",
+      "artifact_count": 7,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/call-analytics.graph.json"
+    },
+    {
+      "template": "captions",
+      "source": "template",
+      "project": "e2e-captions",
+      "status": "COMPLETED",
+      "run_id": "0f1c1cfc07d34ae6b803098d51937256",
+      "notes": "artifacts=3",
+      "artifact_count": 3,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/captions.graph.json"
     },
     {
       "template": "meeting-crm",
+      "source": "template",
+      "project": "e2e-meeting-crm",
       "status": "COMPLETED",
-      "run_id": "b7882cd61bc64d599e0d950a59b5566e",
-      "notes": "local_whisper + local_heuristic + httpbin; artifacts=5"
+      "run_id": "59287d6f53b04413892b82241a660338",
+      "notes": "artifacts=5",
+      "artifact_count": 5,
+      "path": "/home/meritech/Desktop/newAudio3/examples/templates/meeting-crm.graph.json"
     },
     {
       "template": "ex-01-wake-word",
+      "source": "template",
+      "project": "e2e-ex-01-wake-word",
       "status": "COMPLETED",
-      "run_id": "08fee9781ef248eea553224b8f279d8a",
-      "notes": "artifacts=3"
+      "run_id": "80c4e891fb614c829b78dcee2ae4f4cc",
+      "notes": "artifacts=2",
+      "artifact_count": 2,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-01-wake-word.graph.json"
     },
     {
       "template": "ex-02-speech-commands",
+      "source": "template",
+      "project": "e2e-ex-02-speech-commands",
       "status": "COMPLETED",
-      "run_id": "dac9d278999d4bf0894deb72e8a74e0b",
-      "notes": "artifacts=4"
+      "run_id": "44b78780e99a48f9926d1bc18623005b",
+      "notes": "artifacts=7",
+      "artifact_count": 7,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-02-speech-commands.graph.json"
     },
     {
       "template": "ex-03-environmental-sounds",
+      "source": "template",
+      "project": "e2e-ex-03-environmental-sounds",
       "status": "COMPLETED",
-      "run_id": "8d6357685a094fe7945062c89b9df103",
-      "notes": "path heal environmental-sounds/*; artifacts=4"
+      "run_id": "3655d62d20f24b0a80c86380563c8370",
+      "notes": "artifacts=6",
+      "artifact_count": 6,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-03-environmental-sounds.graph.json"
     },
     {
       "template": "ex-04-speaker-verification",
+      "source": "template",
+      "project": "e2e-ex-04-speaker-verification",
       "status": "COMPLETED",
-      "run_id": "390042cd31ae484b85f682abb4b5554a",
-      "notes": "path heal speaker-verification/*; artifacts=4"
+      "run_id": "2652e96930834d9e9313fc4394f60b08",
+      "notes": "artifacts=5",
+      "artifact_count": 5,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-04-speaker-verification.graph.json"
     },
     {
       "template": "ex-05-speech-enhancement",
+      "source": "template",
+      "project": "e2e-ex-05-speech-enhancement",
       "status": "COMPLETED",
-      "run_id": "a677e544302f45c5a3761986e260c2e9",
-      "notes": "path heal speech-enhancement/*; artifacts=3"
+      "run_id": "f019aff9b90c41569fd04d202a1ffcf0",
+      "notes": "artifacts=4",
+      "artifact_count": 4,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-05-speech-enhancement.graph.json"
     },
     {
       "template": "ex-06-speech-commands-e2e",
+      "source": "template",
+      "project": "e2e-ex-06-speech-commands-e2e",
       "status": "COMPLETED",
-      "run_id": "b78feabaabc4408c8b9b3613c71b4466",
-      "notes": "followlinks ingest + exclude_none isolated dump; artifacts=6"
+      "run_id": "89eccf48f930428dbb78e6925d9ff0ab",
+      "notes": "artifacts=6",
+      "artifact_count": 6,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-06-speech-commands-e2e.graph.json"
     },
     {
       "template": "ex-09-parallel-execution",
+      "source": "template",
+      "project": "e2e-ex-09-parallel-execution",
       "status": "COMPLETED",
-      "run_id": "3a5f670ec30449f6a4cba20cebb9e8bb",
-      "notes": "artifacts=11"
+      "run_id": "b603ef4b59d8432da44867f6ee5b07d4",
+      "notes": "artifacts=14",
+      "artifact_count": 14,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-09-parallel-execution.graph.json"
     },
     {
       "template": "ex-10-resumable-pipeline",
+      "source": "template",
+      "project": "e2e-ex-10-resumable-pipeline",
       "status": "COMPLETED",
-      "run_id": "6cde5d2375384063860553dc93b8fe78",
-      "notes": "artifacts=1"
+      "run_id": "ab04d05d71fa4792b42ea1947db7c723",
+      "notes": "artifacts=1",
+      "artifact_count": 1,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-10-resumable-pipeline.graph.json"
     },
     {
       "template": "ex-12-conditional-branching",
+      "source": "template",
+      "project": "e2e-ex-12-conditional-branching",
       "status": "COMPLETED",
-      "run_id": "2a42356c0b3840fdb3423364e414ebd2",
-      "notes": "stamp no longer injects project into artifact sinks; artifacts=7"
+      "run_id": "9a3e7db63661426b840d2f014c75d0e8",
+      "notes": "artifacts=8",
+      "artifact_count": 8,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-12-conditional-branching.graph.json"
     },
     {
       "template": "ex-18-pipeline-composition",
+      "source": "template",
+      "project": "e2e-ex-18-pipeline-composition",
       "status": "COMPLETED",
-      "run_id": "56d58286cce243dba0c025b454bf1d16",
-      "notes": "artifacts=3"
+      "run_id": "0aef5889e8d64d0c8a7ebc00a361366d",
+      "notes": "artifacts=5",
+      "artifact_count": 5,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-18-pipeline-composition.graph.json"
     },
     {
       "template": "ex-19-capability-scheduling",
+      "source": "template",
+      "project": "e2e-ex-19-capability-scheduling",
       "status": "COMPLETED",
-      "run_id": "b9150da55b29494db634f419c1cf9fbe",
-      "notes": "file_path \u2192 yes_000.wav; artifacts=2"
+      "run_id": "17297dd27af741caac1e748e7e1829e0",
+      "notes": "artifacts=2",
+      "artifact_count": 2,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-19-capability-scheduling.graph.json"
     },
     {
       "template": "ex-22-call-analytics",
+      "source": "template",
+      "project": "e2e-ex-22-call-analytics",
       "status": "COMPLETED",
-      "run_id": "5b2219b4b78b43d9bef2e52edbabeb3b",
-      "notes": "free ASR/LLM path; artifacts=3"
+      "run_id": "5796093d5a5c4846b573c86b7e8ee2e8",
+      "notes": "artifacts=3",
+      "artifact_count": 3,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-22-call-analytics.graph.json"
     },
     {
       "template": "ex-23-meeting-crm",
+      "source": "template",
+      "project": "e2e-ex-23-meeting-crm",
       "status": "COMPLETED",
-      "run_id": "9b2d0c50d47747f195e7e61f4c1cef0c",
-      "notes": "free ASR/LLM path; artifacts=3"
+      "run_id": "830ea2cd22ad4c05b6eb64af6419279d",
+      "notes": "artifacts=3",
+      "artifact_count": 3,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-23-meeting-crm.graph.json"
     },
     {
       "template": "ex-24-captions",
+      "source": "template",
+      "project": "e2e-ex-24-captions",
       "status": "COMPLETED",
-      "run_id": "64d40a3378e24f9b9fab0a54e2fd8831",
-      "notes": "local_whisper; artifacts=1"
+      "run_id": "aa9e2eb884484671acce776a2e83b767",
+      "notes": "artifacts=1",
+      "artifact_count": 1,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-24-captions.graph.json"
     },
     {
       "template": "ex-25-doc-rag-ingest",
+      "source": "template",
+      "project": "e2e-ex-25-doc-rag-ingest",
       "status": "COMPLETED",
-      "run_id": "c3b6567b744d4146a868ee3aee90eafe",
-      "notes": "artifacts=3"
+      "run_id": "bf81c8e466344b58a805315fa70c98f0",
+      "notes": "artifacts=3",
+      "artifact_count": 3,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-25-doc-rag-ingest.graph.json"
     },
     {
       "template": "ex-26-nightly-compliance",
+      "source": "template",
+      "project": "e2e-ex-26-nightly-compliance",
       "status": "SKIPPED_EXTERNAL",
       "run_id": null,
-      "notes": "Slack chat.postMessage \u2014 needs Slack token"
+      "notes": "external HTTP to slack.com (GitHub/Slack) \u2014 needs tokens",
+      "artifact_count": 0,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-26-nightly-compliance.graph.json"
     },
     {
       "template": "ex-27-github-triage",
+      "source": "template",
+      "project": "e2e-ex-27-github-triage",
       "status": "SKIPPED_EXTERNAL",
       "run_id": null,
-      "notes": "GitHub Issues API \u2014 needs GitHub token"
+      "notes": "external HTTP to api.github.com (GitHub/Slack) \u2014 needs tokens",
+      "artifact_count": 0,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-27-github-triage.graph.json"
     },
     {
       "template": "ex-28-asr-eval-merge",
+      "source": "template",
+      "project": "e2e-ex-28-asr-eval-merge",
       "status": "COMPLETED",
-      "run_id": "aa9e4a2f19124be6ab82d2d3408c0f33",
-      "notes": "local_whisper ASR eval merge; artifacts=4"
+      "run_id": "94c3d7bc637547e6af99a4238d7b3928",
+      "notes": "artifacts=4",
+      "artifact_count": 4,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-28-asr-eval-merge.graph.json"
     },
     {
       "template": "ex-29-distributed-placement",
+      "source": "template",
+      "project": "e2e-ex-29-distributed-placement",
       "status": "COMPLETED",
-      "run_id": "8c776657314c4e3d983efaf79ec3acad",
-      "notes": "artifacts=3"
+      "run_id": "6f75cde10e0a4a87a879a16a3222b000",
+      "notes": "artifacts=3",
+      "artifact_count": 3,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-29-distributed-placement.graph.json"
     },
     {
       "template": "ex-30-edge-deploy",
-      "status": "COMPLETED",
-      "run_id": "83d6712b231a44b28e69e9298b391fde",
-      "notes": "artifacts=3"
+      "source": "template",
+      "project": "e2e-ex-30-edge-deploy",
+      "status": "SKIPPED_MODEL",
+      "run_id": null,
+      "notes": "no workspace/artifacts/models/saved_model (train first)",
+      "artifact_count": 0,
+      "path": "/home/meritech/Desktop/newAudio3/workspace/configs/templates/ex-30-edge-deploy.graph.json"
     }
   ],
   "examples": [
     {
       "example": "01_wake_word",
       "status": "COMPLETED",
-      "run_id": "08fee9781ef248eea553224b8f279d8a",
-      "notes": "via ex-01-wake-word"
+      "run_id": "80c4e891fb614c829b78dcee2ae4f4cc",
+      "notes": "via template ex-01-wake-word: artifacts=2",
+      "kind": "api_template_ref",
+      "template": "ex-01-wake-word"
     },
     {
       "example": "02_speech_commands",
       "status": "COMPLETED",
-      "run_id": "dac9d278999d4bf0894deb72e8a74e0b",
-      "notes": "via ex-02-speech-commands"
+      "run_id": "44b78780e99a48f9926d1bc18623005b",
+      "notes": "via template ex-02-speech-commands: artifacts=7",
+      "kind": "api_template_ref",
+      "template": "ex-02-speech-commands"
     },
     {
       "example": "03_environmental_sounds",
       "status": "COMPLETED",
-      "run_id": "8d6357685a094fe7945062c89b9df103",
-      "notes": "via ex-03"
+      "run_id": "3655d62d20f24b0a80c86380563c8370",
+      "notes": "via template ex-03-environmental-sounds: artifacts=6",
+      "kind": "api_template_ref",
+      "template": "ex-03-environmental-sounds"
     },
     {
       "example": "04_speaker_verification",
       "status": "COMPLETED",
-      "run_id": "390042cd31ae484b85f682abb4b5554a",
-      "notes": "via ex-04"
+      "run_id": "2652e96930834d9e9313fc4394f60b08",
+      "notes": "via template ex-04-speaker-verification: artifacts=5",
+      "kind": "api_template_ref",
+      "template": "ex-04-speaker-verification"
     },
     {
       "example": "05_speech_enhancement",
       "status": "COMPLETED",
-      "run_id": "a677e544302f45c5a3761986e260c2e9",
-      "notes": "via ex-05"
+      "run_id": "f019aff9b90c41569fd04d202a1ffcf0",
+      "notes": "via template ex-05-speech-enhancement: artifacts=4",
+      "kind": "api_template_ref",
+      "template": "ex-05-speech-enhancement"
     },
     {
       "example": "06_speech_commands_e2e",
       "status": "COMPLETED",
-      "run_id": "b78feabaabc4408c8b9b3613c71b4466",
-      "notes": "via ex-06"
+      "run_id": "89eccf48f930428dbb78e6925d9ff0ab",
+      "notes": "via template ex-06-speech-commands-e2e: artifacts=6",
+      "kind": "api_template_ref",
+      "template": "ex-06-speech-commands-e2e"
     },
     {
       "example": "07_mcp_agent_pipeline",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['agent.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['agent.py']; README/CLI demo, not API template"
+      "kind": "script_readme"
     },
     {
       "example": "08_rest_api_streaming",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['stream_client.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['stream_client.py']; streaming client demo"
+      "kind": "script_readme"
     },
     {
       "example": "09_parallel_execution",
       "status": "COMPLETED",
-      "run_id": "3a5f670ec30449f6a4cba20cebb9e8bb",
-      "notes": "via ex-09"
+      "run_id": "b603ef4b59d8432da44867f6ee5b07d4",
+      "notes": "via template ex-09-parallel-execution: artifacts=14",
+      "kind": "api_template_ref",
+      "template": "ex-09-parallel-execution"
     },
     {
       "example": "10_resumable_pipeline",
       "status": "COMPLETED",
-      "run_id": "6cde5d2375384063860553dc93b8fe78",
-      "notes": "via ex-10"
+      "run_id": "ab04d05d71fa4792b42ea1947db7c723",
+      "notes": "via template ex-10-resumable-pipeline: artifacts=1",
+      "kind": "api_template_ref",
+      "template": "ex-10-resumable-pipeline"
     },
     {
       "example": "11_artifact_lineage",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['lineage_demo.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['lineage_demo.py']"
+      "kind": "script_readme"
     },
     {
       "example": "12_conditional_branching",
       "status": "COMPLETED",
-      "run_id": "2a42356c0b3840fdb3423364e414ebd2",
-      "notes": "via ex-12"
+      "run_id": "9a3e7db63661426b840d2f014c75d0e8",
+      "notes": "via template ex-12-conditional-branching: artifacts=8",
+      "kind": "api_template_ref",
+      "template": "ex-12-conditional-branching"
     },
     {
       "example": "13_csv_data_processing",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['csv_pipeline.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['csv_pipeline.py']"
+      "kind": "script_readme"
     },
     {
       "example": "14_plugin_manifest",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['manifest_demo.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['manifest_demo.py']"
+      "kind": "script_readme"
     },
     {
       "example": "15_event_driven_pipeline",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['event_driven_demo.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['event_driven_demo.py']"
+      "kind": "script_readme"
     },
     {
       "example": "16_deterministic_replay",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['replay_demo.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['replay_demo.py']"
+      "kind": "script_readme"
     },
     {
       "example": "17_partial_execution",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['partial_demo.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['partial_demo.py']"
+      "kind": "script_readme"
     },
     {
       "example": "18_pipeline_composition",
       "status": "COMPLETED",
-      "run_id": "56d58286cce243dba0c025b454bf1d16",
-      "notes": "via ex-18"
+      "run_id": "0aef5889e8d64d0c8a7ebc00a361366d",
+      "notes": "via template ex-18-pipeline-composition: artifacts=5",
+      "kind": "api_template_ref",
+      "template": "ex-18-pipeline-composition"
     },
     {
       "example": "19_capability_scheduling",
       "status": "COMPLETED",
-      "run_id": "b9150da55b29494db634f419c1cf9fbe",
-      "notes": "via ex-19"
+      "run_id": "17297dd27af741caac1e748e7e1829e0",
+      "notes": "via template ex-19-capability-scheduling: artifacts=2",
+      "kind": "api_template_ref",
+      "template": "ex-19-capability-scheduling"
     },
     {
       "example": "20_retry_fault_tolerance",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['retry_demo.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['retry_demo.py']"
+      "kind": "script_readme"
     },
     {
       "example": "21_runtime_control_api",
       "status": "N/A_SCRIPT",
+      "notes": "scripts=['runtime_control_demo.py']; run via README if needed (not API template)",
       "run_id": null,
-      "notes": "scripts=['runtime_control_demo.py']"
+      "kind": "script_readme"
     },
     {
       "example": "22_call_analytics",
       "status": "COMPLETED",
-      "run_id": "5b2219b4b78b43d9bef2e52edbabeb3b",
-      "notes": "via ex-22 free path"
+      "run_id": "5796093d5a5c4846b573c86b7e8ee2e8",
+      "notes": "via template ex-22-call-analytics: artifacts=3",
+      "kind": "api_template_ref",
+      "template": "ex-22-call-analytics"
     },
     {
       "example": "23_meeting_crm",
       "status": "COMPLETED",
-      "run_id": "9b2d0c50d47747f195e7e61f4c1cef0c",
-      "notes": "via ex-23 free path"
+      "run_id": "830ea2cd22ad4c05b6eb64af6419279d",
+      "notes": "via template ex-23-meeting-crm: artifacts=3",
+      "kind": "api_template_ref",
+      "template": "ex-23-meeting-crm"
     },
     {
       "example": "24_captions",
       "status": "COMPLETED",
-      "run_id": "64d40a3378e24f9b9fab0a54e2fd8831",
-      "notes": "via ex-24 local_whisper"
+      "run_id": "aa9e2eb884484671acce776a2e83b767",
+      "notes": "via template ex-24-captions: artifacts=1",
+      "kind": "api_template_ref",
+      "template": "ex-24-captions"
     },
     {
       "example": "25_doc_rag_ingest",
       "status": "COMPLETED",
-      "run_id": "c3b6567b744d4146a868ee3aee90eafe",
-      "notes": "via ex-25"
+      "run_id": "bf81c8e466344b58a805315fa70c98f0",
+      "notes": "via template ex-25-doc-rag-ingest: artifacts=3",
+      "kind": "api_template_ref",
+      "template": "ex-25-doc-rag-ingest"
     },
     {
       "example": "26_nightly_compliance",
       "status": "SKIPPED_EXTERNAL",
       "run_id": null,
-      "notes": "Slack token required"
+      "notes": "via template ex-26-nightly-compliance: external HTTP to slack.com (GitHub/Slack) \u2014 needs tokens",
+      "kind": "api_template_ref",
+      "template": "ex-26-nightly-compliance"
     },
     {
       "example": "27_github_triage",
       "status": "SKIPPED_EXTERNAL",
       "run_id": null,
-      "notes": "GitHub token required"
+      "notes": "via template ex-27-github-triage: external HTTP to api.github.com (GitHub/Slack) \u2014 needs tokens",
+      "kind": "api_template_ref",
+      "template": "ex-27-github-triage"
     },
     {
       "example": "28_asr_eval_merge",
       "status": "COMPLETED",
-      "run_id": "aa9e4a2f19124be6ab82d2d3408c0f33",
-      "notes": "via ex-28"
+      "run_id": "94c3d7bc637547e6af99a4238d7b3928",
+      "notes": "via template ex-28-asr-eval-merge: artifacts=4",
+      "kind": "api_template_ref",
+      "template": "ex-28-asr-eval-merge"
     },
     {
       "example": "29_distributed_placement",
       "status": "COMPLETED",
-      "run_id": "8c776657314c4e3d983efaf79ec3acad",
-      "notes": "via ex-29"
+      "run_id": "6f75cde10e0a4a87a879a16a3222b000",
+      "notes": "via template ex-29-distributed-placement: artifacts=3",
+      "kind": "api_template_ref",
+      "template": "ex-29-distributed-placement"
     },
     {
       "example": "30_edge_deploy",
-      "status": "COMPLETED",
-      "run_id": "83d6712b231a44b28e69e9298b391fde",
-      "notes": "via ex-30"
+      "status": "SKIPPED_MODEL",
+      "run_id": null,
+      "notes": "via template ex-30-edge-deploy: no workspace/artifacts/models/saved_model (train first)",
+      "kind": "api_template_ref",
+      "template": "ex-30-edge-deploy"
     }
-  ]
+  ],
+  "generated_at": "2026-09-11T17:14:39Z"
 }

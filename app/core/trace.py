@@ -241,6 +241,79 @@ def assemble_trace(
     elif graph_block is not None and provenance and not graph_block.get("hash"):
         graph_block["hash"] = provenance.get("graph_hash")
 
+    # ── Run-scoped enrichment (when no single artifact focus) ───────────────
+    run_artifacts: list[dict[str, Any]] = []
+    run_provenance: list[dict[str, Any]] = []
+    nodes_executed: list[dict[str, Any]] = []
+    inputs: list[dict[str, Any]] = []
+
+    if run_id and not artifact_id:
+        try:
+            arts = ArtifactStore().list(run_id=run_id)
+            run_artifacts = [a.model_dump(mode="json") for a in arts]
+        except Exception as exc:
+            warnings.append(f"run_artifacts_error:{exc}")
+        try:
+            pstore = ProvenanceStore()
+            run_provenance = [p.model_dump(mode="json") for p in pstore.find_by_run(run_id)]
+        except Exception as exc:
+            warnings.append(f"run_provenance_error:{exc}")
+
+        stats = run_meta.get("node_stats") if isinstance(run_meta, dict) else None
+        if isinstance(stats, list) and stats:
+            for s in stats:
+                if not isinstance(s, dict):
+                    continue
+                nid = str(s.get("node_id") or "").strip()
+                if not nid:
+                    continue
+                nodes_executed.append(
+                    {
+                        "id": nid,
+                        "node_type": s.get("node_type"),
+                        "status": s.get("status") or "completed",
+                        "duration_ms": s.get("duration_ms"),
+                        "cache_hit": s.get("cache_hit"),
+                        "error": s.get("error"),
+                    }
+                )
+        elif run_artifacts:
+            seen: set[str] = set()
+            for a in run_artifacts:
+                nid = str(a.get("node_id") or "").strip()
+                if not nid or nid in seen:
+                    continue
+                seen.add(nid)
+                nodes_executed.append(
+                    {
+                        "id": nid,
+                        "node_type": a.get("node_type"),
+                        "status": "completed",
+                        "artifact_ids": [
+                            str(x.get("artifact_id") or x.get("id") or "")
+                            for x in run_artifacts
+                            if str(x.get("node_id") or "") == nid
+                        ],
+                    }
+                )
+
+        seen_in: set[str] = set()
+        for p in run_provenance:
+            for iid in p.get("input_artifact_ids") or []:
+                sid = str(iid).strip()
+                if not sid or sid in seen_in:
+                    continue
+                seen_in.add(sid)
+                inputs.append(
+                    {
+                        "artifact_id": sid,
+                        "run_id": p.get("run_id"),
+                        "node_id": p.get("node_id"),
+                        "node_type": p.get("node_type"),
+                        "error": None,
+                    }
+                )
+
     # ── Node + worker ───────────────────────────────────────────────────────
     node_type = None
     if artifact_record:
@@ -255,7 +328,6 @@ def assemble_trace(
     if isinstance(workers_map, dict) and node_id and node_id in workers_map:
         worker_id = workers_map.get(node_id)
     elif isinstance(workers_map, dict) and len(workers_map) == 1:
-        # Single placement — useful hint even without a focused node
         worker_id = next(iter(workers_map.values()), None)
 
     node_block: dict[str, Any] | None = None
@@ -266,20 +338,37 @@ def assemble_trace(
             "worker_id": worker_id,
         }
 
-    # ── Lineage ─────────────────────────────────────────────────────────────
-    inputs = _flatten_lineage_inputs(lineage_tree)
-    if not inputs and provenance and isinstance(provenance.get("input_artifact_ids"), list):
-        inputs = [{"artifact_id": i, "error": None} for i in provenance["input_artifact_ids"]]
-
-    lineage_block = {
-        "inputs": inputs,
-        "downstream_hint": (
-            "Open Artifacts filtered by this run_id, or replay the artifact to fork a new run."
-            if artifact_id
-            else "Open Artifacts with run_id filter to browse outputs of this run."
-        ),
-        "tree": lineage_tree,
-    }
+    # ── Lineage block ───────────────────────────────────────────────────────
+    if artifact_id:
+        inputs = _flatten_lineage_inputs(lineage_tree)
+        if not inputs and provenance and isinstance(provenance.get("input_artifact_ids"), list):
+            inputs = [{"artifact_id": i, "error": None} for i in provenance["input_artifact_ids"]]
+        lineage_block: dict[str, Any] = {
+            "inputs": inputs,
+            "downstream_hint": (
+                "Open Files for this run, or replay the artifact to fork a new run."
+            ),
+            "tree": lineage_tree,
+        }
+    else:
+        lineage_block = {
+            "inputs": inputs,
+            "downstream_hint": "Select a node below, or open Files for this run's downloadable outputs.",
+            "tree": lineage_tree,
+            "nodes": nodes_executed,
+            "artifacts": [
+                {
+                    "artifact_id": a.get("artifact_id") or a.get("id"),
+                    "node_id": a.get("node_id"),
+                    "node_type": a.get("node_type"),
+                    "artifact_type": a.get("artifact_type"),
+                    "data_path": a.get("data_path") or a.get("path"),
+                }
+                for a in run_artifacts[:40]
+            ],
+            "artifact_count": len(run_artifacts),
+            "provenance_count": len(run_provenance),
+        }
 
     # ── Chain (visual steps) ────────────────────────────────────────────────
     chain: list[dict[str, Any]] = []
@@ -288,7 +377,32 @@ def assemble_trace(
         if artifact_record and artifact_record.get("artifact_type"):
             label = f"{artifact_record['artifact_type']} · {artifact_id}"
         chain.append(_chain_step("artifact", label, id=artifact_id, present=artifact_record is not None))
-    if node_block:
+        if node_block:
+            nlabel = node_block.get("node_type") or node_block.get("id") or "node"
+            chain.append(
+                _chain_step(
+                    "node",
+                    str(nlabel),
+                    id=node_block.get("id"),
+                    node_type=node_block.get("node_type"),
+                    present=bool(node_block.get("id") or node_block.get("node_type")),
+                )
+            )
+    elif nodes_executed:
+        # Prefect-style: list executed nodes then run → graph
+        for n in nodes_executed[:24]:
+            nlabel = n.get("node_type") or n.get("id") or "node"
+            chain.append(
+                _chain_step(
+                    "node",
+                    str(nlabel),
+                    id=n.get("id"),
+                    node_type=n.get("node_type"),
+                    status=n.get("status"),
+                    present=True,
+                )
+            )
+    elif node_block:
         nlabel = node_block.get("node_type") or node_block.get("id") or "node"
         chain.append(
             _chain_step(
@@ -296,9 +410,10 @@ def assemble_trace(
                 str(nlabel),
                 id=node_block.get("id"),
                 node_type=node_block.get("node_type"),
-                present=bool(node_block.get("id") or node_block.get("node_type")),
+                present=True,
             )
         )
+
     if run_block:
         rlabel = run_block.get("graph_name") or run_block.get("run_id") or "run"
         chain.append(
@@ -324,7 +439,6 @@ def assemble_trace(
     if worker_id:
         chain.append(_chain_step("worker", str(worker_id), id=worker_id, present=True))
     elif isinstance(workers_map, dict) and workers_map:
-        # Multiple workers — summarize
         ids = sorted({str(v) for v in workers_map.values() if v})
         chain.append(
             _chain_step(
@@ -333,6 +447,11 @@ def assemble_trace(
                 ids=ids,
                 present=True,
             )
+        )
+
+    if run_id and not artifact_id and not nodes_executed and not run_artifacts:
+        warnings.append(
+            "no_node_stats_or_artifacts:enable checkpointing or ensure ArtifactStore registration ran"
         )
 
     return {

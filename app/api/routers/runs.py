@@ -550,9 +550,23 @@ def get_run_debug_report(run_id: str):
     artifacts = ArtifactStore().list(run_id=run_id)
     provenance_records = ProvenanceStore().find_by_run(run_id)
 
+    meta: dict = {}
+    meta_file = run_path / "meta.json"
+    if meta_file.exists():
+        try:
+            parsed = json.loads(meta_file.read_text())
+            if isinstance(parsed, dict):
+                meta = parsed
+        except Exception:
+            meta = {}
+
+    node_stats = meta.get("node_stats") if isinstance(meta.get("node_stats"), list) else []
+
     return {
         "run_id": run_id,
         "status": status,
+        "node_stats": node_stats,
+        "nodes_executed": len(node_stats) if node_stats else len({a.node_id for a in artifacts if getattr(a, "node_id", None)}),
         "checkpoint_count": len(checkpoints),
         "checkpoints": checkpoints[:50],
         "artifact_count": len(artifacts),

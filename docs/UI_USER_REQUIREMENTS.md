@@ -164,29 +164,29 @@ Same UI. Mode B only matters after I Run a template that needs GPU placement.
 
 | Element | Expected behavior |
 |---|---|
-| **PageHeader** (shipped) | “Starter graphs and saved pipelines…” |
-| **Refresh** (shipped) | Reloads list. |
-| **Sync examples** (shipped) | Copies repo examples; shows Syncing…; banner if partial errors. |
-| **Save from Builder** (shipped) | Expands name field → **Save** / **Upload** / **Cancel**. |
+| **PageHeader** (shipped) | “New from template” — stamp into workspace then Editor. |
+| **Refresh** (shipped) | Quiet control; reloads list. |
+| **More overflow** (shipped) | Sync examples + Save from Builder (name → Save / Upload / Cancel). |
+| **Search** (shipped) | Text filter by name / description / tags / node types. |
 | **Filter pills** (shipped) | All / Examples / Saved with counts. |
-| **Cards** (shipped) | Humanized name, Example chip, version select, overflow menu, **Open in Builder**, **Open Data** when inputs needed. |
-| **Empty** (shipped) | “No templates” / “No example templates” → Sync examples. |
-| **MISSING — I need** | Text search by name/description (All/Examples/Saved alone is not enough when the library grows). |
+| **Cards** (shipped) | Humanized name, Example chip, version select, kebab delete, primary **Open**, **Open Data** when inputs needed. |
+| **Project gate** (shipped) | “Templates stamp into a project” — create/select then Editor. |
+| **Empty** (shipped) | “No templates” / “No example templates” / no search matches → Sync examples when appropriate. |
 | **MISSING — I need** | Category tags on cards (wakeword, edge-deploy, distributed, …) matching industry template galleries. |
 
 #### Links & transitions
 
 | From | To | Context |
 |---|---|---|
-| Open in Builder | `#/builder` | Full IR |
+| Open | `#/builder` | Full IR (after project stamp) |
 | Open Data | `#/data?mode=inputs` (or label) | Template input hints |
-| Save from Builder | stays / refresh | New saved card |
+| Save from Builder (More) | stays / refresh | New saved card |
 
 #### Acceptance checks
 
-- **Given** Sync examples succeeds, **When** I filter Examples, **Then** I see starter cards and Open in Builder loads IR.
-- **Given** a canvas graph, **When** I Save from Builder with a name, **Then** it appears under Saved.
-- **Given** empty library, **When** I land here, **Then** Sync examples is the next click.
+- **Given** Sync examples succeeds, **When** I filter Examples, **Then** I see starter cards and Open loads IR into a project.
+- **Given** a canvas graph, **When** I Save from Builder (More) with a name, **Then** it appears under Saved.
+- **Given** empty library, **When** I land here, **Then** Sync examples is available under More.
 
 ---
 
@@ -202,11 +202,13 @@ Same. Agents/MCP create proposals regardless of backend; execution mode applies 
 
 | Element | Expected behavior |
 |---|---|
-| **Status filter** (shipped) | Pending / accepted / rejected (and related). |
-| **Refresh** (shipped) | Reloads; updates pending badge. |
+| **Discovery banner** (shipped) | Create via MCP/API; review here. Dismiss persists `graphyn.proposals.bannerDismissed`. |
+| **Status filter chips** (shipped) | Pending / All / Accepted / Rejected. |
+| **Search** (shipped) | Filters list by actor / summary / id. |
+| **Refresh** (shipped) | Quiet; reloads; updates pending badge. |
 | **List rows** (shipped) | Summary, status, proposed-by, time; select opens detail. |
 | **Empty** (shipped) | “No proposals yet” — agents/MCP create them; CTA **Open Builder** + docs link. |
-| **Detail** (shipped) | Summary, Diff summary (nodes/edges added/removed/changed), **Accept → Builder**, **Reject**. |
+| **Detail** (shipped) | Summary, actor, status, **diff_summary first**; GraphIR JSON collapsed; **Accept → Editor** (toast confirms load), **Reject**. |
 | **No diff / not found** (shipped) | Honest empty states. |
 | **Deep link** (shipped) | `?id=` selects one. |
 | **MISSING — I need** | Richer visual IR diff (side-by-side canvas) — P2; until then structured summary must stay truthful (“No structural diff”). |
@@ -215,14 +217,14 @@ Same. Agents/MCP create proposals regardless of backend; execution mode applies 
 
 | From | To | Context |
 |---|---|---|
-| Accept | Builder | Proposed graph loaded |
+| Accept | Editor | Proposed graph loaded (toast confirms) |
 | Reject | list | Status → rejected; badge decrements |
 | Empty → Builder | `#/builder` | — |
 | Sidebar badge | `#/proposals` | Pending filter preferred |
 
 #### Acceptance checks
 
-- **Given** a pending proposal, **When** I Accept, **Then** Builder opens with that graph and toast confirms.
+- **Given** a pending proposal, **When** I Accept, **Then** Editor opens with that graph and toast confirms load into Editor.
 - **Given** Reject, **When** confirmed, **Then** it leaves pending and audit can show the mutation (System).
 - **Given** `#/proposals?id=…`, **When** I refresh, **Then** the same proposal is selected.
 
@@ -298,12 +300,14 @@ Worker hop should name the worker_id when provenance has it; link to Workers.
 
 | Element | Expected behavior |
 |---|---|
-| **Artifact ID / Run ID fields** (shipped) | Placeholders; optional paste fallback. |
+| **Recent-run picker** (shipped) | `GET /runs?limit=20` (+ `project` when `activeProject`); above free-text IDs. |
+| **Artifact ID / Run ID fields** (shipped) | Collapsed advanced paste; optional when deep-linked (context chip + Change IDs). |
 | **Refresh / Clear** (shipped) | Reload chain; clear selection. |
-| **Empty** (shipped) | “Start a backtrack” — pick run or artifact; CTAs **Open Runs** / **Open Artifacts** (no paste required if I came from them). |
-| **Chain** (shipped) | Steps with curated fields; per-hop actions: Open Run, Open Artifacts, Open Builder, Open Workers as relevant. |
+| **Empty** (shipped) | “Open Trace from a run, or pick a recent run below.” Primary CTA **Open Runs**. |
+| **Hop chain** (shipped) | Hero visual chain; select hop for secondary detail. |
+| **Hop actions** (shipped) | Contextual on selected hop only: Open run / Artifacts / Builder / Workers. |
+| **Raw JSON** (shipped) | Collapsed `CollapsibleJson`. |
 | **Lineage inputs** (shipped) | Upstream list with jump buttons; “No upstream inputs recorded.” |
-| **MISSING — I need** | Prefer hiding raw UUID paste when navigated from Runs/Artifacts (fields prefilled + readonly-or-subtle). |
 
 #### Links & transitions
 
@@ -374,12 +378,12 @@ Same. Replay starts a new run locally or distributed per backend.
 
 | Element | Expected behavior |
 |---|---|
-| **Filters** (shipped) | Run ID, Node, Type + **Apply**. |
-| **List** (shipped) | Human node label, short run id, artifact type, id. |
-| **Empty** (shipped) | Open Builder / Open Runs. |
-| **Detail** (shipped) | Preview, **Download**, **Copy path**, **Replay**, **Trace lineage**, **Open run**, **Open in Builder**; “No linked run” when absent. |
+| **Filters** (shipped) | Recent-run picker when project open + type select; advanced free-text run/node IDs collapsed. |
+| **Copy** (shipped) | Clarifies Runs → Files (one run) vs Artifacts library (cross-run). |
+| **List** (shipped) | Human title, short run id, artifact type, id. |
+| **Empty / no-match** (shipped) | Clear filters CTA when filtered; From template when empty library. |
+| **Detail** (shipped) | Path, type, size, created; primary **Trace** \| **Download** \| **Open run**; secondary Replay / Builder / Copy path. |
 | **Select empty** (shipped) | Open first artifact CTA when list non-empty. |
-| **MISSING — I need** | Stronger human titles (model name / filename) when metadata exists — not only node type. |
 
 #### Links & transitions
 
@@ -456,11 +460,13 @@ Same filesystem API on the control plane workspace. Workers reading datasets nee
 
 | Element | Expected behavior |
 |---|---|
-| **Mode tabs** (shipped) | Inputs / Outputs / Ingest / Merge. |
-| **Upload / Refresh** (shipped) | Header actions. |
-| **First-run copy** (shipped) | Upload → Templates → run → Outputs / Projects. |
-| **Inputs** (shipped) | Label list; Upload a file; open files; delete label (confirm); empty → Upload. |
-| **Outputs** (shipped) | Projects + **version dirs**; Open project → Projects; delete version (confirm); empty CTAs: Upload audio, Create project, Open Projects, Browse Templates, Browse existing outputs. |
+| **Primary modes** (shipped) | Segmented **Browse** \| **Manage**. |
+| **Browse** (shipped) | Sub-tabs **Inputs** \| **Outputs** (read-only open/play). Client search/filter on labels & files; honest “Showing first 200 of N” when capped. |
+| **Manage** (shipped) | Sub-tabs **Upload** \| **Ingest** \| **Merge**. Upload = inputs upload/delete; output-version delete in collapsed details. |
+| **Upload / Refresh** (shipped) | Header actions on Manage → Upload. |
+| **Empty** (shipped) | Single primary CTA (Open Projects / Upload / Browse existing) — no duplicate Create/Open stacks. |
+| **Inputs** (shipped) | Label list; Upload a file; open files; delete label (ConfirmButton); empty → Upload. |
+| **Outputs** (shipped) | Projects + **version dirs**; Open project → Projects; delete version (ConfirmButton in Manage). |
 | **Ingest** (shipped) | URL textarea + Start URL ingest; HF repo + Start HF ingest; log stream (“No ingest events yet.”). |
 | **Merge** (shipped) | Sources (`project:version,…`), target project/version, **Merge**; creates project.json + labels. |
 | **Path recovery empty** (shipped) | “Dataset path reset” vs “No output datasets yet”. |
@@ -544,12 +550,13 @@ Same packaging job may place optimizer nodes on GPU workers if IR says so — st
 
 | Element | Expected behavior |
 |---|---|
-| **Stepper** (shipped) | Choose graph → Configure → Run → Download. |
-| **Dataset chip / Open Data / Open Projects** (shipped) | Context only unless wiring is real. |
-| **Step 1** (shipped) | Use edge template; Open Data/Projects; Browse Templates; empty “No graph selected”. |
-| **Step 2 Configure** (shipped) | Model path, package target, quantization, optimizer backend, labels, package name; **Model path not found** warning + CTAs Templates/Builder/Artifacts. |
-| **Step 3 Run** (shipped) | Start run-async; Open run; View lineage / artifacts; Back. |
-| **Step 4 Download** (shipped) | Download package; Skip to download; Open run / Builder. |
+| **Header** (shipped) | Title only; **Artifacts** appears when a package artifact exists. |
+| **Sticky lineage bar** (shipped) | Project + source run (once — not duplicated in every step). |
+| **Stepper** (shipped) | Graph → Configure → Run → Download; each step owns its actions. |
+| **Step 1 Graph** (shipped) | Use edge template; Projects / Train template when lineage missing. |
+| **Step 2 Configure** (shipped) | Model path, package target, quantization, optimizer backend, labels, package name; **Model path not found** warning + CTAs Templates/Builder/Artifacts; Open in Editor. |
+| **Step 3 Run** (shipped) | Start run-async; Open run / Trace; Skip to download only if package exists else “Run package step first”; on failure Open run / Trace. |
+| **Step 4 Download** (shipped) | Download / promote when package exists; else empty “Run package step first.” |
 | **MISSING — I need** | Full device flash / device feedback loop (vision P2) — until then, download-only is honest. |
 
 #### Links & transitions
@@ -565,6 +572,7 @@ Same packaging job may place optimizer nodes on GPU workers if IR says so — st
 
 - **Given** missing model path, **When** I configure, **Then** I see a clear warning and CTAs — no silent fail on Run.
 - **Given** edge template + valid model, **When** I Run then Download, **Then** a package file downloads.
+- **Given** no package yet, **When** I am on Run, **Then** Skip to download is unavailable and copy says run the package step first.
 - **Given** I confuse Edge with Workers, **When** I read the page description, **Then** it points Workers for Mode B placement.
 
 ---

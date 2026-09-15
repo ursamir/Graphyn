@@ -247,7 +247,7 @@ P1 two-box path on Server-99: NFS **or** MinIO; default implementation starts wi
 
 ## 9. UI (P2)
 
-- **Workers** page under Deploy (`#/workers`): id, status, labels/pools, GPU/VRAM, last heartbeat, **stale** badge (>45s); empty state points at `GRAPHYN_BACKEND=distributed`
+- **Workers** page under Deploy (`#/workers`): summary strip + label/pool/status filters; row detail drawer; id, status, labels/pools, GPU/VRAM, last heartbeat, **stale** badge (>45s); empty state = Mode B + copyable `graphyn worker start`
 - **Trace** page under Observe (`#/trace`): backtrack artifact/run → node → graph → worker (uses `distributed_node_workers` from run meta; see `GET /api/v1/trace`)
 - Run detail: per-node placement map from `meta.distributed_node_workers` (written by `DistributedBackend` when `run_manager` is available)
 - Builder: optional placement chip on selected node (stretch / P3)

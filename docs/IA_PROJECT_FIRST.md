@@ -83,7 +83,7 @@ Selected project shows workspace cards (no circular “Open Editor / Run / Exper
 
 ### 4.3 Templates
 
-Before **Open in Editor**: if no `activeProject`, prompt Create/select project → set active → stamp graph → **PUT project pipeline** → load Editor. If active, stamp, persist, and open.
+Before **Open**: if no `activeProject`, gate modal (“Templates stamp into a project”) → create/select → stamp graph → **PUT project pipeline** → load Editor. If active, stamp, persist, and open. Library search + All/Examples/Saved pills; Sync examples / Save from Builder live under header More; delete stays in card kebab.
 
 ### 4.4 Declutter chrome
 
@@ -93,7 +93,7 @@ Before **Open in Editor**: if no `activeProject`, prompt Create/select project �
 - **Runs detail:** Trace + Artifacts + Open in Editor + Compare (no dead Projects/Data buttons — Run is project-gated).
 - **Header last-run strip:** Run + Lineage + Artifacts visible on mobile too (not `sm:`-only).
 - **Run status vocabulary:** UI normalizes `completed` / `succeeded` / `success` for filters and Edge poll.
-- **Edge:** require project + source `run_id` (and optional artifact pick) before optimize/package; persist `source_run_id` / `source_artifact_id` on the package run meta; train via Templates/Editor.
+- **Edge:** sticky lineage bar (project + source `run_id`); optional artifact pick on Configure; persist `source_run_id` / `source_artifact_id` on the package run meta; step owns actions (header Artifacts only when package exists); skip-to-download gated on package artifact; failure → Open run / Trace.
 - **Artifacts detail:** keep Trace + Replay; soften Open run / Editor duplication without removing utility
 
 ### 4.5 Project pipelines (Wave 1)
@@ -167,17 +167,46 @@ Shipped after Phase 2 to make **global vs project** and **viewer vs editor** obv
 | **Editor (Builder)** | Main editor (center stage) |
 | **Explorer (Linked data + Data Browse)** | File explorer (viewer) |
 | **Data Manage** | Explorer actions (upload / delete / ingest) — secondary |
-| **Run** | Run / Debug panel (project-scoped) |
-| **Experiments / Trace / Artifacts** | Side panels reached from a run (Problems / Output) — not equal top peers |
+| **Run** | History + Files + Lineage + Compare (one surface; Prefect/W&B pattern) |
+| **Trace / Artifacts** | Deep-link only (artifact ids / cross-run registry) — not sidebar peers |
 | **Templates** | New from template wizard (creates/opens workspace first) |
 | **Proposals** | PR review (global) |
 | **Plugins / Secrets / System** | Settings / Extensions (Admin) |
 | **Edge / Workers** | Remote deploy targets |
 
-### Chrome rules
+### Chrome rules (Web IDE hierarchy)
 
-1. **Project open:** left strip **In project** (accent tint) — Overview, Editor, Run, Experiments, Explorer; below **Global** — Templates, Proposals, Data library, Deploy, Admin.
-2. **Header:** `Project · {name}` with Switch / Close; page titles use short IDE-ish labels + **Project** / **Global** scope badge.
-3. **No project:** land on Projects picker; calm prompt if deep-linked to Editor / Run / Experiments — “Open or create a project to start work”; Data library / Templates / Proposals remain.
-4. **Data:** segmented **Browse** (default from “Browse”) vs **Manage**; deep links `mode=inputs|outputs` → Browse, `mode=ingest|merge` → Manage.
-5. **Project home:** four cards (Linked data, Pipelines, Runs, Experiments); Rename/Clone/Delete under **Project settings** disclosure. No sidebar-duplicating CTAs on Overview.
+Modeled on VS Code + Prefect run tabs + W&B/MLflow compare-in-runs:
+
+1. **Activity bar (project open):** Overview / Editor / **Run** / **Data** (library Outputs for this project — *not* Overview). Global/Settings collapsed.
+2. **Header:** project chip + Switch / Close; last-run menu: **Lineage** | **Files** | **Compare…** (land on Run panels).
+3. **Projects picker** (`#/projects`): dense explorer + filter; welcome pane only.
+4. **Workspace Overview** (`#/projects?project=`): situation strip + Open Editor / From template / Last run; **Pinned inputs** are manual links (runs do not auto-link); Versions & taxonomy collapsed.
+5. **Editor:** Run | Validate | Save; placement only in Distributed mode.
+6. **Run (unified observe):**
+   - Top: **History | Compare**.
+   - Detail panels: **Logs** (execution printout) | **Files** (downloadable outputs, type previews, grouped by node) | **Lineage** (executed nodes + provenance — enriched `/trace?run_id=`) | **Details** (counts, node_stats, errors) | **Checkpoints**.
+   - `openTrace({ runId })` → Run → Lineage; `openArtifacts({ runId })` → Run → Files.
+7. **Data vs Overview:** sidebar **Data** = Data library Outputs for the project; Overview keeps workspace home only.
+8. **Hash sync:** `replaceHash` / `go` dispatch `hashchange`; Switch clears `?project=`.
+9. **Auth:** 401 → Settings CTA.
+
+### 5.0 Data / lineage / onboard (Waves 2–3)
+
+| Surface | Primary job | IA notes |
+|---|---|---|
+| **Data** | Shared dataset library | Browse\|Manage; honesty: Outputs ≠ Run Files |
+| **Trace** | Artifact-id lineage deep-link | Prefer Run → Lineage for runs |
+| **Artifacts** | Cross-run file registry | Prefer Run → Files for one run; Lineage for provenance |
+| **Templates** | Stamp into project → Editor | Search + pills; quieter header; gate copy |
+| **Proposals** | Approve agent GraphIR | MCP discovery banner; search; diff first |
+| **Edge** | Package for device | Step-owned actions; openRun for fail/lineage |
+
+### 5.1 Admin / ops surfaces (Wave 4 persona IA)
+
+| Surface | Primary job | IA notes |
+|---|---|---|
+| **Plugins** | Install packs; fix deps so Builder catalog works | Tabs **Installed** (default) / **Install / Search**; status filter (ok / missing deps / disabled); one dep CTA per row; empty → Install tab |
+| **Workers** | Monitor Mode B workers | Summary strip (count, mode hint, refresh); client filter by label/pool/status; row → detail drawer; empty = short Mode B + copyable `graphyn worker start` |
+| **Secrets** | Create / rotate / delete named credentials | Searchable name list (values never shown); POST same name → **Replace value** confirm; note that usage index is not available yet |
+| **System** | Health, schedules, webhooks, cleanup, audit | Status: facts first, Raw JSON collapsed, no filler Projects card, Workers link when distributed; Schedules: project/pipeline selects from `/projects` + `/projects/{name}/pipelines` (text fallback); denser Audit table; shorter Cleanup prose + CLEANUP confirm |
