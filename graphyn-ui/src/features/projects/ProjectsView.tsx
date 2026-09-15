@@ -687,7 +687,7 @@ export default function ProjectsView() {
           <div className="max-w-md text-center">
             <h1 className="text-type-page text-ink-950">Open a workspace</h1>
             <p className="mt-2 text-type-body text-ink-500">
-              Pick a project on the left. Editor, Run, and Experiments appear in the activity bar once a workspace is open.
+              Pick a project on the left. Editor, Run, and Compare appear in the activity bar once a workspace is open.
             </p>
             <ol className="mt-6 space-y-2 text-left text-[13px] text-ink-600">
               <li className="flex gap-2"><span className="font-mono text-ink-400">1</span> Open or create a project</li>
@@ -737,18 +737,14 @@ export default function ProjectsView() {
             </button>
           </div>
         </div>
-        {/* L0 — situation strip */}
+        {/* L0 — compact metrics (status already in subtitle) */}
         <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-600">
-          <div className="flex gap-1.5">
-            <dt className="text-ink-400">Status</dt>
-            <dd className="font-medium text-ink-800">{statusVal}</dd>
-          </div>
           <div className="flex gap-1.5">
             <dt className="text-ink-400">Pipelines</dt>
             <dd className="font-medium text-ink-800">{projectPipelines.length}</dd>
           </div>
           <div className="flex gap-1.5">
-            <dt className="text-ink-400">Pinned</dt>
+            <dt className="text-ink-400">Pinned inputs</dt>
             <dd className="font-medium text-ink-800">{links.inputs.length}</dd>
           </div>
           <div className="flex gap-1.5">
@@ -783,6 +779,55 @@ export default function ProjectsView() {
           <p className="text-[12px] text-ink-500">
             <span className="font-medium text-ink-700">Pipelines:</span> Templates are starters · Project pipelines are the canonical saved graphs · Editor edits the active graph.
           </p>
+
+          {/* Activity feed */}
+          <section>
+            <div className="ide-section-title mb-2">Activity</div>
+            <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
+              {recentRuns.length === 0 && !schedules.some((s) => s.last_run_id) ? (
+                <div className="px-4 py-5 text-[13px] text-ink-600">
+                  No activity yet — run a pipeline from the Editor.
+                </div>
+              ) : (
+                <ul className="divide-y divide-ink-100">
+                  {recentRuns.slice(0, 8).map((r) => (
+                    <li key={r.run_id}>
+                      <button
+                        type="button"
+                        className="ide-row w-full px-3"
+                        onClick={() => useAppStore.getState().openRun(r.run_id)}
+                      >
+                        <History className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-700">
+                          {r.run_id.slice(0, 10)}…
+                          {r.graph_name ? ` · ${r.graph_name}` : ''}
+                        </span>
+                        <span className="text-[11px] text-ink-400">{r.status || ''}</span>
+                      </button>
+                    </li>
+                  ))}
+                  {schedules
+                    .filter((s) => s.last_run_id)
+                    .slice(0, 3)
+                    .map((s) => (
+                      <li key={`sched-fire-${s.id}-${s.last_run_id}`}>
+                        <button
+                          type="button"
+                          className="ide-row w-full px-3"
+                          onClick={() => s.last_run_id && useAppStore.getState().openRun(String(s.last_run_id))}
+                        >
+                          <CalendarClock className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-700">
+                            Schedule {s.name || s.id} · last {String(s.last_run_id).slice(0, 8)}…
+                          </span>
+                          <span className="text-[11px] text-ink-400">{s.pipeline || ''}</span>
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          </section>
 
           {/* Layer 1 — continue work */}
           <section>
@@ -870,55 +915,6 @@ export default function ProjectsView() {
             </div>
           </section>
 
-          {/* Activity feed */}
-          <section>
-            <div className="ide-section-title mb-2">Activity</div>
-            <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
-              {recentRuns.length === 0 && !schedules.some((s) => s.last_run_id) ? (
-                <div className="px-4 py-5 text-[13px] text-ink-600">
-                  No activity yet — run a pipeline from the Editor.
-                </div>
-              ) : (
-                <ul className="divide-y divide-ink-100">
-                  {recentRuns.slice(0, 8).map((r) => (
-                    <li key={r.run_id}>
-                      <button
-                        type="button"
-                        className="ide-row w-full px-3"
-                        onClick={() => useAppStore.getState().openRun(r.run_id)}
-                      >
-                        <History className="h-3.5 w-3.5 shrink-0 text-ink-400" />
-                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-700">
-                          {r.run_id.slice(0, 10)}…
-                          {r.graph_name ? ` · ${r.graph_name}` : ''}
-                        </span>
-                        <span className="text-[11px] text-ink-400">{r.status || ''}</span>
-                      </button>
-                    </li>
-                  ))}
-                  {schedules
-                    .filter((s) => s.last_run_id)
-                    .slice(0, 3)
-                    .map((s) => (
-                      <li key={`sched-fire-${s.id}-${s.last_run_id}`}>
-                        <button
-                          type="button"
-                          className="ide-row w-full px-3"
-                          onClick={() => s.last_run_id && useAppStore.getState().openRun(String(s.last_run_id))}
-                        >
-                          <CalendarClock className="h-3.5 w-3.5 shrink-0 text-ink-400" />
-                          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-700">
-                            Schedule {s.name || s.id} · last {String(s.last_run_id).slice(0, 8)}…
-                          </span>
-                          <span className="text-[11px] text-ink-400">{s.pipeline || ''}</span>
-                        </button>
-                      </li>
-                    ))}
-                </ul>
-              )}
-            </div>
-          </section>
-
           {/* Schedules (project-scoped when possible) */}
           <section className="ide-section">
             <div className="mb-2 flex items-center justify-between gap-2">
@@ -979,12 +975,21 @@ export default function ProjectsView() {
 
           {/* Layer 2 — linked data (compact) */}
           <section className="ide-section">
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-2 flex items-center justify-between gap-2">
               <div className="ide-section-title">Linked inputs</div>
-              <span className="text-type-meta text-ink-400">
-                {links.inputs.length} pinned
-                {versionOptions.length ? ` · ${versionOptions.length} output version${versionOptions.length === 1 ? '' : 's'}` : ''}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="ide-quiet-btn text-[11px]"
+                  onClick={() => useAppStore.getState().openArtifacts({ project: selected })}
+                >
+                  Browse files
+                </button>
+                <span className="text-type-meta text-ink-400">
+                  {links.inputs.length} pinned
+                  {versionOptions.length ? ` · ${versionOptions.length} output version${versionOptions.length === 1 ? '' : 's'}` : ''}
+                </span>
+              </div>
             </div>
             <p className="mb-2 text-[12px] text-ink-500">
               Pin Data-library input labels here so Editor runs know which folders to use. Completing a run does not auto-link.
@@ -1073,19 +1078,19 @@ export default function ProjectsView() {
               {tab === 'spec' && (
                 <section className="space-y-2">
                   <textarea value={spec} onChange={(e) => setSpec(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  <button type="button" className="btn-primary" onClick={() => void saveSpec()}>Save spec</button>
+                  <button type="button" className="btn-secondary" onClick={() => void saveSpec()}>Save spec</button>
                 </section>
               )}
               {tab === 'taxonomy' && (
                 <section className="space-y-2">
                   <textarea value={taxonomy} onChange={(e) => setTaxonomy(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  <button type="button" className="btn-primary" onClick={() => void saveTaxonomy()}>Save taxonomy</button>
+                  <button type="button" className="btn-secondary" onClick={() => void saveTaxonomy()}>Save taxonomy</button>
                 </section>
               )}
               {tab === 'contract' && (
                 <section className="space-y-2">
                   <textarea value={contract} onChange={(e) => setContract(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  <button type="button" className="btn-primary" onClick={() => void saveContract()}>Save contract</button>
+                  <button type="button" className="btn-secondary" onClick={() => void saveContract()}>Save contract</button>
                 </section>
               )}
               {tab === 'versions' && (
@@ -1112,7 +1117,7 @@ export default function ProjectsView() {
                 <section className="space-y-3">
                   <div className="flex gap-2">
                     <input id="snapshot-name" value={snapshotName} onChange={(e) => setSnapshotName(e.target.value)} placeholder="snapshot-name" className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]" />
-                    <button type="button" className="btn-primary" onClick={() => void createSnapshot()}>Create</button>
+                    <button type="button" className="btn-secondary" onClick={() => void createSnapshot()}>Create</button>
                   </div>
                   {snapshots.length === 0 ? (
                     <p className="text-[13px] text-ink-500">No snapshots.</p>
@@ -1148,7 +1153,7 @@ export default function ProjectsView() {
                         <option key={`b-${v}`} value={v}>{v}</option>
                       ))}
                     </select>
-                    <button type="button" className="btn-primary" onClick={() => void runDiff()}>Diff</button>
+                    <button type="button" className="btn-secondary" onClick={() => void runDiff()}>Diff</button>
                   </div>
                   {diffResult != null && <KeyValue data={diffResult} />}
                   {(() => {

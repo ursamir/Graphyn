@@ -885,59 +885,119 @@ export default function RunsView() {
                 </p>
               </div>
             )}
-            <div className="rounded-2xl border border-accent-200/70 bg-accent-50/40 px-4 py-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0 max-w-xl">
-                  <div className="text-[13px] font-semibold text-ink-950">Promote & models</div>
-                  <p className="mt-0.5 text-[12px] text-ink-600">
-                    Promote a successful train run into the model registry (alias stages: latest / staging / prod).
-                    Registry entries for this run appear below.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="inline-flex items-center gap-1.5 text-[11px] text-ink-500">
-                    <span className="sr-only">Promote alias</span>
-                    <select
-                      className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
-                      value={promoteAlias}
-                      onChange={(e) =>
-                        setPromoteAlias(e.target.value as 'latest' | 'staging' | 'prod')
-                      }
-                    >
-                      <option value="latest">latest</option>
-                      <option value="staging">staging</option>
-                      <option value="prod">prod</option>
-                    </select>
-                  </label>
-                  <button type="button" className="btn-primary" onClick={() => void promote()}>
-                    Promote
-                  </button>
-                </div>
-              </div>
-              {runModels.length === 0 ? (
-                <p className="mt-2 text-[12px] text-ink-500">
-                  No registry models linked to this run yet. Promote with staging to register one.
-                </p>
-              ) : (
-                <ul className="mt-2 space-y-1.5">
-                  {runModels.map((m) => {
-                    const stages = m.stages || {}
-                    const stageBits = Object.entries(stages)
-                      .map(([k, v]) => `${k}${v?.slug ? `:${v.slug}` : ''}`)
-                      .join(' · ')
-                    return (
-                      <li
-                        key={m.name}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-ink-200/80 bg-white px-2.5 py-1.5 text-[12px]"
+            {(() => {
+              const st = (runStatus || '').toLowerCase()
+              const succeeded = st === 'succeeded' || st === 'completed' || st === 'success'
+              const failed = st === 'failed' || st === 'error'
+              const cancelled = st === 'cancelled' || st === 'canceled'
+              if (failed || cancelled) {
+                return (
+                  <div className="rounded-2xl border border-rose-200/80 bg-rose-50/50 px-4 py-3">
+                    <div className="text-[13px] font-semibold text-rose-950">
+                      {failed ? 'Run failed' : 'Run cancelled'}
+                    </div>
+                    <p className="mt-0.5 text-[12px] text-rose-900/80">
+                      Fix the graph or inputs, then re-run from the Editor. Check Logs for the failing step.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void openGraphInBuilder()}
                       >
-                        <span className="font-medium text-ink-900">{m.name}</span>
-                        <span className="font-mono text-[11px] text-ink-500">{stageBits || 'registered'}</span>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </div>
+                        Open Editor
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => setPanel('logs')}
+                      >
+                        View logs
+                      </button>
+                    </div>
+                  </div>
+                )
+              }
+              if (!succeeded) {
+                // running / queued / paused — no promote
+                return runModels.length > 0 ? (
+                  <div className="rounded-2xl border border-ink-200/70 bg-white px-4 py-3">
+                    <div className="text-[13px] font-semibold text-ink-950">Models from this run</div>
+                    <ul className="mt-2 space-y-1.5">
+                      {runModels.map((m) => {
+                        const stages = m.stages || {}
+                        const stageBits = Object.entries(stages)
+                          .map(([k, v]) => `${k}${v?.slug ? `:${v.slug}` : ''}`)
+                          .join(' · ')
+                        return (
+                          <li
+                            key={m.name}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-ink-200/80 bg-ink-50/50 px-2.5 py-1.5 text-[12px]"
+                          >
+                            <span className="font-medium text-ink-900">{m.name}</span>
+                            <span className="font-mono text-[11px] text-ink-500">{stageBits || 'registered'}</span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                ) : null
+              }
+              return (
+                <div className="rounded-2xl border border-accent-200/70 bg-accent-50/40 px-4 py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 max-w-xl">
+                      <div className="text-[13px] font-semibold text-ink-950">Promote & models</div>
+                      <p className="mt-0.5 text-[12px] text-ink-600">
+                        Promote this successful train run into the model registry (latest / staging / prod).
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="inline-flex items-center gap-1.5 text-[11px] text-ink-500">
+                        <span className="sr-only">Promote alias</span>
+                        <select
+                          className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                          value={promoteAlias}
+                          onChange={(e) =>
+                            setPromoteAlias(e.target.value as 'latest' | 'staging' | 'prod')
+                          }
+                        >
+                          <option value="latest">latest</option>
+                          <option value="staging">staging</option>
+                          <option value="prod">prod</option>
+                        </select>
+                      </label>
+                      <button type="button" className="btn-primary" onClick={() => void promote()}>
+                        Promote
+                      </button>
+                    </div>
+                  </div>
+                  {runModels.length === 0 ? (
+                    <p className="mt-2 text-[12px] text-ink-500">
+                      No registry models linked yet. Promote with staging to register one.
+                    </p>
+                  ) : (
+                    <ul className="mt-2 space-y-1.5">
+                      {runModels.map((m) => {
+                        const stages = m.stages || {}
+                        const stageBits = Object.entries(stages)
+                          .map(([k, v]) => `${k}${v?.slug ? `:${v.slug}` : ''}`)
+                          .join(' · ')
+                        return (
+                          <li
+                            key={m.name}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-ink-200/80 bg-white px-2.5 py-1.5 text-[12px]"
+                          >
+                            <span className="font-medium text-ink-900">{m.name}</span>
+                            <span className="font-mono text-[11px] text-ink-500">{stageBits || 'registered'}</span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )
+            })()}
 
             <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1">
               {(['logs', 'artifacts', 'lineage', 'debug', 'checkpoints'] as const).map((p) => (
@@ -1107,23 +1167,27 @@ export default function RunsView() {
                           ) : null}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <label className="inline-flex items-center gap-1.5 text-[11px] text-ink-500">
-                            <span className="sr-only">Promote alias</span>
-                            <select
-                              className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
-                              value={promoteAlias}
-                              onChange={(e) =>
-                                setPromoteAlias(e.target.value as 'latest' | 'staging' | 'prod')
-                              }
-                            >
-                              <option value="latest">latest</option>
-                              <option value="staging">staging</option>
-                              <option value="prod">prod</option>
-                            </select>
-                          </label>
-                          <button type="button" className="btn-secondary" onClick={() => void promote()}>
-                            Promote
-                          </button>
+                          {['succeeded', 'completed', 'success'].includes((runStatus || '').toLowerCase()) ? (
+                            <>
+                              <label className="inline-flex items-center gap-1.5 text-[11px] text-ink-500">
+                                <span className="sr-only">Promote alias</span>
+                                <select
+                                  className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                                  value={promoteAlias}
+                                  onChange={(e) =>
+                                    setPromoteAlias(e.target.value as 'latest' | 'staging' | 'prod')
+                                  }
+                                >
+                                  <option value="latest">latest</option>
+                                  <option value="staging">staging</option>
+                                  <option value="prod">prod</option>
+                                </select>
+                              </label>
+                              <button type="button" className="btn-secondary" onClick={() => void promote()}>
+                                Promote
+                              </button>
+                            </>
+                          ) : null}
                           {outputFiles.length > 0 && (
                             <button type="button" className="btn-secondary" onClick={() => void downloadZip()}>
                               <Download className="h-3.5 w-3.5" /> Download all

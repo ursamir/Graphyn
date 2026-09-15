@@ -458,7 +458,7 @@ export default function EdgeWizardView() {
         />
         {sourceRunId ? (
           <button type="button" className="btn-quiet" onClick={() => openTrace({ runId: sourceRunId })}>
-            <GitBranch className="h-3.5 w-3.5" /> Trace source
+            <GitBranch className="h-3.5 w-3.5" /> Lineage
           </button>
         ) : null}
       </div>
@@ -526,10 +526,10 @@ export default function EdgeWizardView() {
               }
             />
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-3">
               <button
                 type="button"
-                className="rounded-xl border border-ink-200 bg-ink-50/50 p-4 text-left hover:border-accent-400 hover:bg-white"
+                className="w-full rounded-xl border border-accent-300 bg-accent-50/40 p-4 text-left hover:border-accent-400 hover:bg-white"
                 onClick={useEdgeTemplate}
               >
                 <div className="flex items-center gap-2 text-sm font-semibold text-ink-900">
@@ -542,13 +542,10 @@ export default function EdgeWizardView() {
               </button>
               <button
                 type="button"
-                className="rounded-xl border border-ink-200 bg-ink-50/50 p-4 text-left hover:border-accent-400 hover:bg-white"
+                className="ide-quiet-btn text-[12px]"
                 onClick={() => openTrace({ runId: sourceRunId })}
               >
-                <div className="flex items-center gap-2 text-sm font-semibold text-ink-900">
-                  <GitBranch className="h-4 w-4 text-accent-700" /> Inspect source lineage
-                </div>
-                <p className="mt-1 text-xs text-ink-500">Confirm the train run before packaging.</p>
+                <GitBranch className="h-3.5 w-3.5" /> Inspect source lineage
               </button>
             </div>
           )}
@@ -754,12 +751,12 @@ export default function EdgeWizardView() {
           {running && <LoadingBlock label="Starting run…" />}
           {runFailed && runId && (
             <div className="flex flex-wrap gap-2 rounded-xl border border-rose-200 bg-rose-50/80 px-3 py-2">
-              <p className="w-full text-sm text-rose-900">Package run failed — inspect the run or lineage.</p>
+              <p className="w-full text-sm text-rose-900">Package run failed — open the run for logs, then fix in Editor.</p>
               <button type="button" className="btn-primary" onClick={() => openRun(runId)}>
                 <RefreshCw className="h-3.5 w-3.5" /> Open run
               </button>
-              <button type="button" className="btn-secondary" onClick={() => openTrace({ runId })}>
-                <GitBranch className="h-3.5 w-3.5" /> Trace
+              <button type="button" className="btn-quiet" onClick={openInBuilder}>
+                <Workflow className="h-3.5 w-3.5" /> Open Editor
               </button>
             </div>
           )}
@@ -776,18 +773,9 @@ export default function EdgeWizardView() {
               <Play className="h-3.5 w-3.5" /> {runId ? 'Re-run' : 'Run pipeline'}
             </button>
             {runId && !runFailed && (
-              <>
-                <button type="button" className="btn-secondary" onClick={() => openRun(runId)}>
-                  <RefreshCw className="h-3.5 w-3.5" /> Open run
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => openTrace({ runId })}
-                >
-                  <GitBranch className="h-3.5 w-3.5" /> Trace
-                </button>
-              </>
+              <button type="button" className="btn-secondary" onClick={() => openRun(runId)}>
+                <RefreshCw className="h-3.5 w-3.5" /> Open run
+              </button>
             )}
             {packageExists ? (
               <button
@@ -845,9 +833,6 @@ export default function EdgeWizardView() {
             <div className="flex flex-wrap gap-2 rounded-xl border border-rose-200 bg-rose-50/80 px-3 py-2">
               <button type="button" className="btn-primary" onClick={() => openRun(runId)}>
                 <RefreshCw className="h-3.5 w-3.5" /> Open run
-              </button>
-              <button type="button" className="btn-secondary" onClick={() => openTrace({ runId })}>
-                <GitBranch className="h-3.5 w-3.5" /> Trace
               </button>
             </div>
           )}

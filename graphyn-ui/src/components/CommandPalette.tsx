@@ -66,8 +66,11 @@ export function CommandPalette({
 }) {
   const setView = useAppStore((s) => s.setView)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const closeProject = useAppStore((s) => s.closeProject)
   const openRun = useAppStore((s) => s.openRun)
   const openProject = useAppStore((s) => s.openProject)
+  const openArtifacts = useAppStore((s) => s.openArtifacts)
+  const openEdge = useAppStore((s) => s.openEdge)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const activeProject = useAppStore((s) => s.activeProject)
 
@@ -131,6 +134,57 @@ export function CommandPalette({
 
   const items = React.useMemo((): PaletteItem[] => {
     const out: PaletteItem[] = []
+    if (activeProject) {
+      out.push({
+        id: 'workspace:switch',
+        label: 'Switch project',
+        hint: 'Show picker',
+        group: 'Workspace',
+        keywords: 'switch change workspace leave picker',
+        run: () => {
+          setView('projects')
+          window.history.replaceState(null, '', '#/projects')
+          window.dispatchEvent(new HashChangeEvent('hashchange'))
+          setOpen(false)
+        },
+      })
+      out.push({
+        id: 'workspace:leave',
+        label: 'Leave workspace',
+        hint: activeProject,
+        group: 'Workspace',
+        keywords: 'close leave clear exit workspace',
+        run: () => {
+          closeProject()
+          setView('projects')
+          window.history.replaceState(null, '', '#/projects')
+          window.dispatchEvent(new HashChangeEvent('hashchange'))
+          setOpen(false)
+        },
+      })
+      out.push({
+        id: 'workspace:files',
+        label: 'Files / Artifacts',
+        hint: activeProject,
+        group: 'Workspace',
+        keywords: 'artifacts files',
+        run: () => {
+          openArtifacts({ project: activeProject })
+          setOpen(false)
+        },
+      })
+      out.push({
+        id: 'workspace:edge',
+        label: 'Edge deploy',
+        hint: activeProject,
+        group: 'Workspace',
+        keywords: 'edge tflite deploy',
+        run: () => {
+          openEdge({ project: activeProject })
+          setOpen(false)
+        },
+      })
+    }
     for (const v of VIEW_JUMPS) {
       out.push({
         id: `view:${v.id}`,
@@ -182,7 +236,7 @@ export function CommandPalette({
       })
     }
     return out
-  }, [goView, lastRunId, recentRuns, projects, openRun, openProject, setActiveProject, setOpen])
+  }, [goView, lastRunId, recentRuns, projects, openRun, openProject, setActiveProject, setOpen, activeProject, closeProject, setView, openArtifacts, openEdge])
 
   const filtered = React.useMemo(() => {
     const scored = items
@@ -206,6 +260,24 @@ export function CommandPalette({
         e.preventDefault()
         e.stopPropagation()
         setOpen(false)
+        return
+      }
+      if (e.key === 'Tab') {
+        const root = document.getElementById('command-palette-dialog')
+        if (!root) return
+        const focusables = root.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
         return
       }
       if (e.key === 'ArrowDown') {
@@ -241,6 +313,7 @@ export function CommandPalette({
       onClick={() => setOpen(false)}
     >
       <div
+        id="command-palette-dialog"
         className="w-full max-w-lg overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >

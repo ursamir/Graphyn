@@ -276,6 +276,8 @@ export default function App() {
   const statusMessage = useAppStore((s) => s.statusMessage)
   const runOutcome = useAppStore((s) => s.runOutcome)
   const lastRunId = useAppStore((s) => s.lastRunId)
+  const lastRunProject = useAppStore((s) => s.lastRunProject)
+  const focusRunsTab = useAppStore((s) => s.focusRunsTab)
   const isRunning = useAppStore((s) => s.isRunning)
   const toasts = useAppStore((s) => s.toasts)
   const dismissToast = useAppStore((s) => s.dismissToast)
@@ -697,16 +699,26 @@ export default function App() {
                 <span className="text-ink-400">· Auth</span>
               ) : null}
             </span>
-            {isRunning && (
-              <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
-                {chipLabel}
-              </span>
-            )}
-            {!isRunning && chipLabel && (
-              <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
-                {chipLabel}
-              </span>
-            )}
+            {(() => {
+              const chipForThisWorkspace =
+                !activeProject || !lastRunProject || lastRunProject === activeProject
+              if (!chipForThisWorkspace) return null
+              if (isRunning) {
+                return (
+                  <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
+                    {chipLabel}
+                  </span>
+                )
+              }
+              if (chipLabel) {
+                return (
+                  <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
+                    {chipLabel}
+                  </span>
+                )
+              }
+              return null
+            })()}
             {activeProject && (
               <div className="inline-flex max-w-[15rem] items-center gap-0.5">
                 <button
@@ -746,13 +758,13 @@ export default function App() {
                 Open workspace
               </button>
             )}
-            {lastRunId && (
+            {lastRunId && (!activeProject || !lastRunProject || lastRunProject === activeProject) && (
               <LastRunMenu
                 runId={lastRunId}
                 showCompare
-                onOpenRun={() => openRun(lastRunId)}
-                onOpenTrace={() => openTrace({ runId: lastRunId })}
-                onOpenArtifacts={() => openArtifacts({ runId: lastRunId })}
+                onOpenRun={() => openRun(lastRunId, activeProject ? { project: activeProject } : undefined)}
+                onOpenTrace={() => openTrace({ runId: lastRunId, project: activeProject || undefined })}
+                onOpenArtifacts={() => openArtifacts({ runId: lastRunId, project: activeProject || undefined })}
                 onOpenCompare={() => openExperiments({ runIds: [lastRunId] })}
               />
             )}
@@ -821,13 +833,22 @@ export default function App() {
                     </div>
                     <div className="space-y-0.5">
                       {PROJECT_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-                        const active = view === id
+                        const active =
+                          id === 'experiments'
+                            ? view === 'runs' && focusRunsTab === 'compare'
+                            : id === 'runs'
+                              ? view === 'runs' && focusRunsTab !== 'compare'
+                              : view === id
                         return (
                           <button
                             key={`proj-${id}`}
                             type="button"
                             title={NAV_HINTS[id]}
-                            onClick={() => (id === 'projects' ? openProject(activeProject) : go(id))}
+                            onClick={() => {
+                              if (id === 'projects') openProject(activeProject)
+                              else if (id === 'experiments') openExperiments()
+                              else go(id)
+                            }}
                             className={clsx(
                               'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
                               active
@@ -841,6 +862,21 @@ export default function App() {
                           </button>
                         )
                       })}
+                      <button
+                        type="button"
+                        title="Artifacts — cross-run files for this workspace"
+                        onClick={() => openArtifacts({ project: activeProject })}
+                        className={clsx(
+                          'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                          view === 'artifacts'
+                            ? 'bg-white font-medium text-ink-950 shadow-sm'
+                            : 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
+                        )}
+                        aria-current={view === 'artifacts' ? 'page' : undefined}
+                      >
+                        <Archive className={clsx('h-4 w-4', view === 'artifacts' ? 'text-accent-800' : 'text-ink-400')} />
+                        <span className="flex-1 truncate">Files</span>
+                      </button>
                       <button
                         type="button"
                         title="Data — shared library Outputs for this project (not Overview)"

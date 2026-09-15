@@ -51,3 +51,7 @@ Deep UX audit of the Graphyn console (`graphyn-ui`) against project-first IA. Fi
 
 - Internal ids (`builder`, `trace`, `experiments`, `artifacts`) unchanged for hash routes and store.
 - Do not kill FaceRecognition / unrelated Docker services; rebuild `graphyn-ui` only when shipping these UI changes.
+
+## Deep review follow-up (2026-09-15)
+
+Full audit + P0/P1 fixes: see [`UI_DEEP_REVIEW.md`](./UI_DEEP_REVIEW.md). Themes: store/project scope, Overview Activity-first, Run Promote honesty, command palette workspace actions, Edge/Editor declutter, header chip scoping.

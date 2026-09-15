@@ -872,7 +872,7 @@ function BuilderInner() {
         body: JSON.stringify({
           name,
           yaml: JSON.stringify(graph),
-          description: 'Saved from Graphyn Builder',
+          description: 'Saved from Graphyn Editor',
         }),
       })
       setTemplateName(name)

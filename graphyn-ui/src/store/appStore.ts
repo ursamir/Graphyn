@@ -115,6 +115,8 @@ interface AppState {
   setIsRunning: (v: boolean) => void
   lastRunId: string | null
   setLastRunId: (id: string | null) => void
+  /** Project that owns lastRunId / runOutcome (header chip scoping). */
+  lastRunProject: string | null
   statusMessage: string | null
   setStatusMessage: (msg: string | null) => void
   runOutcome: RunOutcome
@@ -208,8 +210,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   focusRunsTab: 'history',
   setFocusRunsTab: (focusRunsTab) => set({ focusRunsTab }),
   openRun: (id, opts) => {
-    const proj = opts?.project?.trim() || ''
-    if (proj) {
+    const proj = opts?.project?.trim() || get().activeProject || ''
+    if (opts?.project?.trim()) {
       persistActiveProject(proj)
       set({ activeProject: proj })
     }
@@ -218,6 +220,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       view: 'runs',
       focusRunId: id,
       lastRunId: id,
+      lastRunProject: proj || get().activeProject || null,
       focusRunsTab: 'history',
       focusRunPanel: opts?.panel ?? null,
     })
@@ -228,6 +231,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       persistActiveProject(proj)
       set({ activeProject: proj })
     }
+    // Preserve existing activeProject when deep-linking without an explicit project.
     const aid = artifactId?.trim() || ''
     const rid = runId?.trim() || ''
     // Run-scoped lineage stays on the Run page (no Trace app hop).
@@ -237,6 +241,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         view: 'runs',
         focusRunId: rid,
         lastRunId: rid,
+        lastRunProject: get().activeProject,
         focusRunsTab: 'history',
         focusRunPanel: 'lineage',
       })
@@ -264,6 +269,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         view: 'runs',
         focusRunId: rid,
         lastRunId: rid,
+        lastRunProject: get().activeProject,
         focusRunsTab: 'history',
         focusRunPanel: 'artifacts',
       })
@@ -293,8 +299,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ view: 'proposals' })
   },
   openEdge: ({ project, version, runId } = {}) => {
+    const proj = project?.trim() || ''
+    if (proj) {
+      persistActiveProject(proj)
+      set({ activeProject: proj })
+    }
     const params = new URLSearchParams()
-    if (project?.trim()) params.set('project', project.trim())
+    if (proj) params.set('project', proj)
     if (version?.trim()) params.set('version', version.trim())
     if (runId?.trim()) params.set('run_id', runId.trim())
     const qs = params.toString()
@@ -333,6 +344,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeProject: null,
         dataUnscopeEpoch: s.dataUnscopeEpoch + 1,
         builderDataset: null,
+        focusRunId: null,
+        focusArtifactId: null,
+        focusRunPanel: null,
+        lastRunId: null,
+        lastRunProject: null,
+        runOutcome: 'idle' as const,
+        statusMessage: null,
+        isRunning: false,
       }))
       stripProjectFromWorkspaceHash()
     } else {
@@ -346,6 +365,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeProject: null,
       dataUnscopeEpoch: s.dataUnscopeEpoch + 1,
       builderDataset: null,
+      focusRunId: null,
+      focusArtifactId: null,
+      focusRunPanel: null,
+      lastRunId: null,
+      lastRunProject: null,
+      runOutcome: 'idle' as const,
+      statusMessage: null,
+      isRunning: false,
     }))
     stripProjectFromWorkspaceHash()
   },
@@ -373,7 +400,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   isRunning: false,
   setIsRunning: (isRunning) => set({ isRunning }),
   lastRunId: null,
-  setLastRunId: (lastRunId) => set({ lastRunId }),
+  lastRunProject: null,
+  setLastRunId: (lastRunId) => set({ lastRunId, lastRunProject: lastRunId ? get().activeProject : null }),
   statusMessage: null,
   setStatusMessage: (statusMessage) => set({ statusMessage }),
   runOutcome: 'idle',

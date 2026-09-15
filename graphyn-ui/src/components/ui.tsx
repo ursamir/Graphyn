@@ -306,7 +306,7 @@ export function ScopeBadge({ scope }: { scope: 'project' | 'global' }) {
   )
 }
 
-/** Calm gate when Builder / Runs / Experiments need an active project. */
+/** Calm gate when Editor / Runs / Compare need an active project. */
 export function NeedProjectPrompt({
   onOpenProjects,
 }: {
@@ -317,7 +317,7 @@ export function NeedProjectPrompt({
       <div className="mx-auto max-w-sm empty-state-shell py-10">
         <p className="text-base font-semibold tracking-tight text-ink-950">Open a project first</p>
         <p className="mt-2 text-sm leading-relaxed text-ink-500">
-          Editor, Runs, and Experiments need an active workspace.
+          Editor, Run, and Compare need an active workspace.
         </p>
         <button type="button" className="btn-primary mt-5" onClick={onOpenProjects}>
           Open Projects
