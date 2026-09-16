@@ -14,7 +14,6 @@ export type AppView =
   | 'system'
   | 'secrets'
   | 'workers'
-  | 'trace'
   | 'edge'
   | 'experiments'
   | 'proposals'
@@ -241,8 +240,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
       return
     }
+    // No runId (or both runId+artifactId): land on Artifacts — Lineage for a
+    // specific run always resolves via the branch above (Runs → lineage panel).
     navigatePath(paths.libraryArtifacts(aid ? { artifactId: aid } : undefined))
-    set({ view: aid ? 'artifacts' : 'trace', focusArtifactId: aid || null })
+    set({ view: 'artifacts', focusArtifactId: aid || null })
   },
   openArtifacts: ({ runId, artifactId, project } = {}) => {
     const proj = project?.trim() || ''

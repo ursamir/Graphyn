@@ -17,7 +17,24 @@ export function startCase(key: string): string {
 export function humanNodeLabel(name: string): string {
   let s = stripIsolatedPrefix(name)
   s = s.replace(/Node$/, '')
+  // Graph instance ids are type_N (trainer_0) — drop the trailing index for display.
+  s = s.replace(/_\d+$/, '')
   return startCase(s) || name
+}
+
+/** True when a Focus value refers to the same node as `candidate` (id, type, or label). */
+export function focusMatchesNode(
+  focus: string | null | undefined,
+  candidate: string | null | undefined,
+): boolean {
+  const f = String(focus || '').trim()
+  const c = String(candidate || '').trim()
+  if (!f || !c) return false
+  if (f === c) return true
+  const fl = f.toLowerCase()
+  const cl = c.toLowerCase()
+  if (fl === cl || fl.includes(cl) || cl.includes(fl)) return true
+  return humanNodeLabel(f).toLowerCase() === humanNodeLabel(c).toLowerCase()
 }
 
 export function schemaFieldLabel(key: string, def?: Record<string, unknown>): string {
@@ -281,12 +298,28 @@ export function formatValidationErrors(errors: unknown): string {
   return 'Invalid config'
 }
 
-export function formatMergeToast(res: unknown): string {
-  if (!res || typeof res !== 'object') return 'Merge complete'
+/** Merge toast text + whether it should render as a success or a warning. */
+export function formatMergeToast(res: unknown): { message: string; tone: 'success' | 'error' } {
+  if (!res || typeof res !== 'object') return { message: 'Merge complete', tone: 'success' }
   const o = res as Record<string, unknown>
-  const n = o.merged ?? o.count ?? o.files ?? o.entries
-  if (typeof n === 'number' && n >= 0) return n === 0 ? 'Nothing to merge' : `Merged ${n} sources`
-  return 'Merge complete'
+  // POST /data/merge (app/api/routers/data.py) returns files_copied/errors/labels_written —
+  // not merged/count/files/entries, which this used to look for and always miss.
+  const filesCopied = typeof o.files_copied === 'number' ? o.files_copied : null
+  const errors = Array.isArray(o.errors) ? o.errors.filter((e) => typeof e === 'string') : []
+  if (errors.length > 0) {
+    const filesPart = filesCopied != null ? `${filesCopied} file(s) copied; ` : ''
+    return {
+      message: `${filesPart}${errors.length} source(s) failed: ${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '…' : ''}`,
+      tone: 'error',
+    }
+  }
+  if (filesCopied != null) {
+    return {
+      message: filesCopied === 0 ? 'Nothing to merge — no matching files' : `Merged ${filesCopied} file(s)`,
+      tone: 'success',
+    }
+  }
+  return { message: 'Merge complete', tone: 'success' }
 }
 
 const TEMPLATE_ACRONYMS = new Set(['e2e', 'asr', 'tts', 'stt', 'llm', 'api', 'hf', 'ml', 'nlp'])

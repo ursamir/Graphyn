@@ -3,7 +3,8 @@ import { Copy, Download, GitBranch, History, Play, RefreshCw, Workflow } from 'l
 import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
+import { EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
+import { MasterDetail, ViewShell } from '../../layout'
 import { formatLocaleDateTime, humanNodeLabel, humanizeTemplateName, shortRunId } from '../../lib/format'
 import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
@@ -49,7 +50,9 @@ function artifactHumanTitle(a: Artifact | Record<string, unknown>): string {
 function findCopyablePath(data: unknown, depth = 0): string | null {
   if (!data || typeof data !== 'object' || depth > 2) return null
   const o = data as Record<string, unknown>
-  for (const k of ['model_path', 'path']) {
+  // data_path is the real ArtifactRecord field (app/core/artifact_store.py) —
+  // check it first; model_path/path are legacy/best-effort fallbacks only.
+  for (const k of ['data_path', 'model_path', 'path']) {
     if (typeof o[k] === 'string' && o[k].trim()) return o[k]
   }
   for (const v of Object.values(o)) {
@@ -329,12 +332,13 @@ export default function ArtifactsView() {
   const runInPicker = recentRuns.some((r) => r.run_id === runFilter.trim())
 
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-2">
-      <div className="overflow-y-auto border-r border-ink-300 bg-white p-4">
-        <PageHeader
-          title="Artifacts"
-          description="Cross-run artifact registry. For one run's downloads, use Runs → Run outputs."
-        />
+    <ViewShell
+      title="Artifacts"
+      description="Cross-run artifact registry. For one run's downloads, use Runs → Run outputs."
+    >
+      <MasterDetail
+        master={
+      <>
         <div className="mb-3 space-y-2">
           <div className="flex flex-wrap items-end gap-2">
             {activeProject ? (
@@ -484,8 +488,10 @@ export default function ArtifactsView() {
             })}
           </ul>
         )}
-      </div>
-      <div className="overflow-y-auto border-l border-ink-200/80 bg-ink-50/40 p-4 space-y-3">
+      </>
+        }
+        detail={
+      <div className="space-y-3">
         {!selected ? (
           <EmptyState
             title="Select an artifact"
@@ -713,6 +719,8 @@ export default function ArtifactsView() {
           </>
         )}
       </div>
-    </div>
+        }
+      />
+    </ViewShell>
   )
 }

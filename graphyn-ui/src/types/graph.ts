@@ -93,6 +93,9 @@ export function buildGraphFromCanvas(
       nodeType: string
       config: Record<string, unknown>
       placement?: NodePlacement | null
+      label?: string | null
+      capabilityMetadata?: unknown
+      eventTrigger?: unknown
     }
   }>,
   edges: Array<{
@@ -100,9 +103,11 @@ export function buildGraphFromCanvas(
     target: string
     sourceHandle?: string | null
     targetHandle?: string | null
+    data?: { condition?: string | null }
   }>,
   seed: number,
   name = 'pipeline',
+  parameters: Record<string, unknown> = {},
 ): GraphIR {
   const positions: Record<string, { x: number; y: number }> = {}
   for (const n of nodes) {
@@ -131,9 +136,9 @@ export function buildGraphFromCanvas(
       id: n.id,
       node_type: n.data.nodeType,
       config: n.data.config ?? {},
-      label: null,
-      capability_metadata: null,
-      event_trigger: null,
+      label: n.data.label ?? null,
+      capability_metadata: n.data.capabilityMetadata ?? null,
+      event_trigger: n.data.eventTrigger ?? null,
       placement: n.data.placement ?? null,
     })),
     edges: edges.map((e) => ({
@@ -141,9 +146,9 @@ export function buildGraphFromCanvas(
       src_port: canonicalPort(e.sourceHandle, 'output'),
       dst_id: e.target,
       dst_port: canonicalPort(e.targetHandle, 'input'),
-      condition: null,
+      condition: e.data?.condition ?? null,
     })),
-    parameters: {},
+    parameters: parameters ?? {},
     ui: { positions },
   }
 }

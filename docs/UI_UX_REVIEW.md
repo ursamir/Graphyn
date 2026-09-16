@@ -52,6 +52,21 @@
 | Fix | Where |
 |---|---|
 | Global Ship Devices URL sticks (`/deploy/ship/devices`) | `paths.deployShipDevices` + parse + EdgeWizard write |
+| Ship/Runs native `<select>` clipped under sticky/overflow | Shared `FieldSelect` portal menu; registry paths append `/saved_model`; package download prefers run artifacts / `latest` |
+| Ship model path picker wrong | Probe-resolve candidates (run `saved_model` / `.keras` before alias); stop inventing `${project}/saved_model` |
+| Runs detail: run-wide tabs, weak previews, Promote ×3, fixed columns | Shared node focus chips; typed `FileViewer`; Promote on-demand from compact sticky chrome; `MasterDetail` + nested outputs splitter |
+| History / Live / Compare different shells | Shared `ViewShell` + app `MasterDetail` (`graphyn.layout.master`); header **Master \| Stack** layout mode; resizable nav (`graphyn.layout.nav`) |
+| Completed runs show Current node / Focus stuck on last node | Progress+current node live-only; Focus not auto-seeded on terminal; `humanNodeLabel` strips `_N` |
+| Details tab unclear + node chips duplicate Lineage | Renamed **Summary**; Focus is `FieldSelect` beside tabs on every panel including Lineage; no Summary→tab CTAs or raw JSON |
+| Run detail chrome cramped / duplicate id+status | Sticky 2-row chrome: name-first header + tabs|Focus; list keeps status/id for scan |
+| Reloading same run resets detail tab | `open()` only defaults panel when switching run ids (or pending panel) |
+| Focus on Logs showed empty “No logs recorded” | Extract node hints from formatted lines + events; `focusMatchesNode` across tabs |
+| Focus dropdown vs pipeline selection | Replaced Focus dropdown with global **PipelineStack** (All + numbered nodes); Lineage no longer duplicates the list |
+| Run outputs always showed run-level files under every node | Node focus excludes `run` group; All shows dashed Run-level section last; Outputs/Inputs split |
+| Detail cramped by nav + run list | Nav collapse persisted; Runs `MasterDetail` collapsible (hide list rail) |
+| Compare missing chrome Refresh; cards mismatched History | Compare uses same Refresh; stacked History-style cards with checkbox |
+| Last-run menu / sticky chrome / page header z-order unclear; Ops collided with Admin Ops; “Promote” read as prompt | App header `z-40`; ViewShell + sticky run chrome `z-10`; run actions **Manage** + **Promote model** (registry alias, not LLM) |
+| Node Run outputs showed only `data.json` (keras/plots/tflite lived under shared run dir) | `GET /runs/{id}/outputs` stamps `node_id` from data.json refs + basename hints; UI groups by it; audio dumps summarized |
 | Agent inbox always visible; badge only when pending | App shell |
 | Proposal badge off Editor nav | App shell |
 | Remove duplicate Bridges Lineage/Outputs/Compare | Runs detail |

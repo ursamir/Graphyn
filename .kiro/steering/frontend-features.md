@@ -8,7 +8,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 
 ## Models (`ModelsView`)
 
-- List registered models; request/approve prod; register from name + run_id + slug (primary CTA).
+- `ViewShell` + `MasterDetail` (shared `graphyn.layout.master`); list registered models; request/approve prod; register from name + run_id + slug (primary CTA).
 - Detail: **Open run Trace/Lineage** via `openTrace({ runId })`; **Dataset pins** / Home when workspace known.
 - Deep-link via path helpers when workspace is open.
 - Load error that empties the list clears `selected` / detail (no stale detail pane).
@@ -39,28 +39,33 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 ## Runs (`RunsView`) — unified observe
 
 - Page title **Runs**; hub for History, Live, **Run outputs**, Lineage, Compare (not separate Lineage tab).
-- Top tabs: **History | Live | Compare**.
-- History: status + free-text filters; optional metric name + min (client-side on loaded runs).
-- If selected run is hidden by filters: thin banner “Selected run hidden by filters” + **Clear filters**.
-- Live: polls `/runs?project=&limit=` every 3s for running/pending; node status wave uses **backend `node_stats` only** (no fabricated “done/current”); worker map from `distributed_node_workers`.
-- History detail: when status polling sees a **live → terminal** transition, refetch logs/outputs/artifacts once (not status-only).
-- Logs panel: virtualized list (windowed rows) with precomputed line hints (no per-row regex on every render).
-- Detail: **Logs** | **Run outputs** (grouped + viewers) | **Lineage** | **Details** | **Checkpoints**.
-- Failed runs: **Explain / propose fix** → `POST /proposals` (graph from run or stub with `metadata.from_run`) → Agent inbox.
-- Lineage header: graph hash + plugin versions from trace / run meta when present.
-- `openTrace({ runId })` / `openArtifacts({ runId })` stay on Runs (outputs panel).
-- Succeeded runs: Promote + **Register model** (POST `/models` with name, run_id, slug, staging).
+- Top tabs: **History | Live | Compare** — shared `ViewShell` / `RunsChrome`; list|detail via app `MasterDetail` (`graphyn.layout.master`, synced with Compare / Models / Artifacts).
+- History: status + free-text filters; optional metric name + min (client-side on loaded runs); status/promote alias use `FieldSelect`.
+- History/Live run cards use stacked flex (title+badge / meta row) — not viewport `sm:` grids — so narrow master panes (~320px) do not crush names over badges.
+- Live: same shell; left live run cards, right progress / node wave / workers + “Open full run”.
+- Compare: left checkbox run cards, right params/metrics/charts (not stacked table-over-compare).
+- Compare chrome includes the same **Refresh** as History/Live (via `ExperimentsViewHandle`).
+- Compare master cards use the same stacked layout as History (name+badge / metric+relative time+short id) with a checkbox.
+- App nav collapse persists (`graphyn.layout.navOpen`).
+- **Pipeline stack** (numbered circular steps + **All** on top) replaces the Focus dropdown — fixed `min-w` so labels stay readable; status is a dot.
+- Tabs sit under the run header; right pane shows content for **tab × stack** selection.
+- **Run outputs:** API stamps optional `node_id` on each file (ArtifactStore data dir, path refs inside `data.json`, basename hints). UI groups by that id; node focus hides journal-only run files; All shows nodes then dashed **Run-level**; node files split into Outputs / Inputs when detectable. Audio-sample dumps are summarized (manifest + a few clips) so the listing cap stays usable.
+- Focus filters Logs by extracting node hints from structured events **and** formatted lines (`Trainer · started`); empty Focus filter says “No logs for …” not “No logs recorded”.
+- **Compact sticky detail chrome** (`z-10` inside detail scroll): status · graph name · time · short id · (live only) progress/node · **Editor** (open graph) · **Manage** (pause/resume/cancel/delete — not Admin Ops) · **Promote model** (succeeded only); then tabs. No Focus chip strip / dropdown, no full-width Promote bar.
+- **Promote model** = `POST /runs/{id}/promote` with alias `latest|staging|prod` (registry stage pointer — not an LLM prompt). Panel also registers a named model when slug returned.
+- Terminal runs hide progress / “Current node”; Focus is not auto-seeded from last node (avoids empty Outputs).
+- Tab **Summary**: compact count strip + timing (+ errors when present). No duplicate tab CTAs, no raw JSON dump.
+- Detail: **Logs** | **Run outputs** | **Lineage** | **Summary** | **Checkpoints**. Nested outputs splitter: `graphyn.layout.nested`.
+- Lineage: detail-only (stack is parent); no duplicate node list / Raw JSON / Graph cards / Editor CTA.
+- Failed/cancelled: compact inline banner. Succeeded: **Promote model** → single panel (alias + register).
 
 ## Experiments (`ExperimentsView`)
 
 - Standalone title **Compare runs**; prefer Runs → Compare when a workspace is open.
+- **Embedded** under Runs → Compare: `MasterDetail` (shared master width) — checkbox cards left, compare results right.
 - Selection written to `/workspaces/:W/runs/compare?ids=` (path search).
-- Empty CTA → Runs history (not “return here”); embedded under Run → Compare tab.
-- Sticky Compare bar; Open / Lineage per row.
-- Compare: metric table + **MetricBars** charts for numeric metric keys.
+- Compare: metric table + **MetricBars** charts for numeric metric keys; **Export CSV**.
 - ErrorBanner **onRetry** → `runCompare()` when 2+ runs selected; else `refresh()`.
-- Optional **code_hash** / **data_version** columns when present on runs or compare payload.
-- **Export CSV** of the compare table (params + metrics).
 
 ## Data (`DataView`)
 
@@ -81,7 +86,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 
 ## Artifacts (`ArtifactsView`)
 
-- Cross-run file registry only; Runs → **Run outputs** for one run; Runs → Lineage for provenance.
+- `ViewShell` + `MasterDetail` (shared master width). Cross-run file registry only; Runs → **Run outputs** for one run; Runs → Lineage for provenance.
 - `open()` clears `detail` before fetch so a failed open cannot show the previous artifact.
 - `open(id)` clears detail before fetch; on failure keeps selected but never shows prior artifact detail.
 - Detail: **Register model** when artifact has `run_id` (POST `/models` staging).
@@ -97,6 +102,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 ## Proposals (`ProposalsView`)
 
 - Header **Agent inbox**; Generate proposal form → POST `/proposals` (empty-graph stub + summary).
+- List|detail via app `MasterDetail` (shared master width with Runs / Models / Artifacts).
 - Generate appends user prompt to `localStorage` `graphyn.proposal.chat.{id}`; transcript under detail.
 - Auto-bind: when `activeProject` set, include in graph metadata/tags and summary `[project:…]`.
 - Dismissible discovery banner (MCP/API create; review here); persist `graphyn.proposals.bannerDismissed`.
@@ -113,12 +119,18 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Page title **Ship**; tabs **Package | Devices** (Devices embeds `DevicesView`).
 - Wizard step **Package run** (not “Run” — avoids nav collision).
 - Step pills: cannot jump to 3/4 without project + source run; step 4 also needs package `runId`.
-- Configure: auto-pick from `GET /models` fills source run + model path when stages exist.
+- **Dropdowns** use shared `FieldSelect` (portal menu) so long run/model labels are not clipped by the sticky lineage bar / overflow parents — native `<select>` was unusable here.
+- Configure: registry / artifact pickers **probe-resolve** real model paths via `resolveModelPathCandidates` + `GET /outputs/file` (canonical `…/runs/<id>/saved_model` then `.keras`, then alias). Prefer model-like artifacts; never invent `${project}/saved_model`.
+- Download path: prefer package URI from run artifacts, else `guessPackagePath` under run `artifacts_dir` or `edge-deploy/latest/packages`.
 - Failure diagnostics: run id + Open run / lineage / outputs / Editor.
 - Download: checksum from package artifacts when present; else honesty copy.
 - Step owns actions; header Artifacts only when package artifact exists.
 - Lineage (project / run) sticky secondary bar once (not duplicated per step).
 - Skip-to-download only if package exists; else “Run package step first.”
+
+## Runs (`RunsView`)
+
+- (See unified observe section above — FieldSelect, SplitPane, FileViewer, single Promote surface.)
 
 ## Plugins (`PluginsView`)
 

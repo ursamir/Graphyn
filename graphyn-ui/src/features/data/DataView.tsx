@@ -582,7 +582,8 @@ export default function DataView() {
           target_version: mergeTargetVersion,
         }),
       })
-      pushToast(formatMergeToast(res), 'success')
+      const mergeResult = formatMergeToast(res)
+      pushToast(mergeResult.message, mergeResult.tone)
       await loadSources()
       if (mergeTargetProject.trim()) {
         openProjects({ project: mergeTargetProject.trim() })
@@ -686,7 +687,7 @@ export default function DataView() {
   )
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-4">
+    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-4">
       <PageHeader
         title="Datasets"
         description="Shared Inputs and Outputs for pipelines — not the same as per-run downloads under Runs."

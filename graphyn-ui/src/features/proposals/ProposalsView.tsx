@@ -20,6 +20,7 @@ import {
   PageHeader,
   StatusBadge,
 } from '../../components/ui'
+import { MasterDetail } from '../../layout'
 import { formatLocaleDateTime } from '../../lib/format'
 import { paths } from '../../routes/paths'
 import { navigatePath } from '../../routes/parsePath'
@@ -496,8 +497,12 @@ export default function ProposalsView() {
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(16rem,22rem)_1fr]">
-        <aside className="min-h-0 overflow-y-auto border-b border-ink-100 lg:border-b-0 lg:border-r">
+      <MasterDetail
+        className="min-h-0 flex-1"
+        masterClassName="!bg-white"
+        detailClassName="!p-0"
+        master={
+        <div className="min-h-0">
           {loading && !items ? (
             <LoadingBlock label="Loading proposals…" />
           ) : !items?.length ? (
@@ -563,9 +568,10 @@ export default function ProposalsView() {
               })}
             </ul>
           )}
-        </aside>
-
-        <section className="min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
+        </div>
+        }
+        detail={
+        <section className="min-h-0 px-4 py-4 sm:px-6">
           {!selectedId ? (
             <EmptyState
               title="Select a proposal"
@@ -729,7 +735,8 @@ export default function ProposalsView() {
             </div>
           )}
         </section>
-      </div>
+        }
+      />
     </div>
   )
 }

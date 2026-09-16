@@ -15,7 +15,7 @@ export default function AccessView() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-4">
+    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-4">
       <PageHeader
         title="Access"
         description="Actors, tokens, and roles. Full RBAC lands with the multi-user API; today you set the actor identity and API token."

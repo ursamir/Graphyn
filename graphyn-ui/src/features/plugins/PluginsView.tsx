@@ -452,7 +452,7 @@ export default function PluginsView() {
   ]
 
   return (
-    <div className="h-full overflow-y-auto p-8 space-y-6">
+    <div className="h-full min-h-0 overflow-y-auto p-8 space-y-6">
       <PageHeader
         title="Plugins"
         description="Library — install node packs for the Editor catalog."

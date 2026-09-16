@@ -2,14 +2,18 @@ import React from 'react'
 import { Box, CheckCircle2, GitBranch, RefreshCw, Shield } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
+import { EmptyState, ErrorBanner, LoadingBlock, StatusBadge } from '../../components/ui'
+import { MasterDetail, ViewShell } from '../../layout'
 import { paths } from '../../routes/paths'
 import { navigatePath } from '../../routes/parsePath'
 
 type ModelRow = {
   name: string
   description?: string
-  stages?: Record<string, { run_id?: string; slug?: string; pending_prod?: boolean }>
+  stages?: Record<string, { run_id?: string; slug?: string }>
+  // Sibling of `stages`, not nested under it (app/core/model_registry.py:
+  // request_prod() writes `cur["pending_prod"] = {...}` at the record's top level).
+  pending_prod?: { run_id?: string; slug?: string; requested_at?: string; requested_by?: string } | null
   updated_at?: string
   created_at?: string
 }
@@ -136,22 +140,22 @@ export default function ModelsView() {
     stages.prod?.run_id || stages.staging?.run_id || stages.latest?.run_id || undefined
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-4">
-      <PageHeader
-        title="Models"
-        description="Registry of promoted run artifacts — stages, request/approve prod, link back to training runs."
-        actions={
-          <div className="flex gap-2">
-            <button type="button" className="btn-secondary" onClick={() => void load()}>
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
-            </button>
-            <button type="button" className="btn-primary" onClick={() => setRegisterOpen((v) => !v)}>
-              Register model
-            </button>
-          </div>
-        }
-      />
-
+    <ViewShell
+      title="Models"
+      description="Registry of promoted run artifacts — stages, request/approve prod, link back to training runs."
+      actions={
+        <>
+          <button type="button" className="btn-secondary" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+          <button type="button" className="btn-primary" onClick={() => setRegisterOpen((v) => !v)}>
+            Register model
+          </button>
+        </>
+      }
+      contentClassName="overflow-y-auto"
+    >
+      <div className="space-y-4 p-5 h-full min-h-0 flex flex-col">
       {registerOpen && (
         <div className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3 shadow-sm">
           <h3 className="text-sm font-semibold text-ink-950">Register from a run</h3>
@@ -189,7 +193,11 @@ export default function ModelsView() {
           }
         />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <MasterDetail
+          className="min-h-0 flex-1"
+          masterClassName="!p-0 !bg-transparent"
+          detailClassName="!p-0"
+          master={
           <ul className="divide-y divide-ink-100 overflow-hidden rounded-2xl border border-ink-200 bg-white">
             {rows.map((m) => (
               <li key={m.name}>
@@ -216,7 +224,8 @@ export default function ModelsView() {
               </li>
             ))}
           </ul>
-
+          }
+          detail={
           <div className="rounded-2xl border border-ink-200 bg-white p-4 space-y-4">
             {!selected || !detail ? (
               <p className="text-sm text-ink-500">Select a model to manage stages.</p>
@@ -263,12 +272,13 @@ export default function ModelsView() {
                             <Shield className="h-3.5 w-3.5" /> Request prod
                           </button>
                         ) : null}
-                        {stage === 'prod' ? (
+                        {stage === 'prod' && detail.pending_prod?.run_id ? (
                           <button
                             type="button"
                             className="btn-primary"
                             disabled={busy}
                             onClick={() => void approveProd(detail.name)}
+                            title={`Pending since ${detail.pending_prod.requested_at ?? 'unknown'}${detail.pending_prod.requested_by ? ` by ${detail.pending_prod.requested_by}` : ''}`}
                           >
                             <CheckCircle2 className="h-3.5 w-3.5" /> Approve prod
                           </button>
@@ -324,8 +334,10 @@ export default function ModelsView() {
               </>
             )}
           </div>
-        </div>
+          }
+        />
       )}
-    </div>
+      </div>
+    </ViewShell>
   )
 }

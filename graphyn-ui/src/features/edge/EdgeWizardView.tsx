@@ -20,6 +20,7 @@ import {
   PageHeader,
   StatusBadge,
 } from '../../components/ui'
+import { FieldSelect } from '../../components/FieldSelect'
 import {
   EDGE_BACKENDS,
   EDGE_DEPLOY_TEMPLATE,
@@ -27,6 +28,10 @@ import {
   EDGE_TARGETS,
   applyEdgeConfig,
   guessPackagePath,
+  isModelLikeArtifact,
+  pickExistingModelPath,
+  preferSavedModelPath,
+  resolveModelPathCandidates,
   type EdgeBackend,
   type EdgeQuantization,
   type EdgeTarget,
@@ -114,6 +119,7 @@ export default function EdgeWizardView() {
       artifact_type?: string
       uri?: string
       path?: string
+      data_path?: string
       metadata?: Record<string, unknown>
     }>
   >([])
@@ -314,31 +320,88 @@ export default function EdgeWizardView() {
     )
   }, [linkedProject, linkedVersion, sourceRunId, step, shipTab, activeProject])
 
-  // Wire linked dataset into path-like fields when still at defaults.
+  // Package name only — never invent model path from project name (project ≠ slug).
   React.useEffect(() => {
     if (!linkedProject) return
     setPackageName((prev) => (prev === 'edge_model' ? `${linkedProject}_edge` : prev))
-    setModelPath((prev) =>
-      prev === 'workspace/artifacts/models/saved_model'
-        ? `workspace/artifacts/${linkedProject}/saved_model`
-        : prev,
-    )
   }, [linkedProject])
+
+  const probeFetch = React.useCallback(async (path: string) => {
+    return apiFetch('/outputs/file', { query: { path } })
+  }, [])
+
+  const resolveAndSetModelPath = React.useCallback(
+    async (input: {
+      slug?: string | null
+      runId?: string | null
+      stage?: string | null
+      stagePath?: string | null
+      artifactUri?: string | null
+    }) => {
+      const candidates = resolveModelPathCandidates(input)
+      if (candidates.length === 0) return
+      const { path, verified } = await pickExistingModelPath(candidates, probeFetch)
+      if (path) {
+        setModelPath(path)
+        setModelPathMissing(!verified)
+      }
+    },
+    [probeFetch],
+  )
 
   const applyRegistryModel = (name: string) => {
     setPickedModel(name)
+    if (!name) return
     const model = registryModels.find((m) => m.name === name)
     if (!model) return
     const stages = model.stages || {}
-    const stage =
-      stages.prod || stages.production || stages.staging || Object.values(stages)[0] || null
+    const stageKey =
+      stages.staging
+        ? 'staging'
+        : stages.prod
+          ? 'prod'
+          : stages.production
+            ? 'production'
+            : stages.latest
+              ? 'latest'
+              : Object.keys(stages)[0] || ''
+    const stage = stageKey ? stages[stageKey] : null
     if (stage?.run_id) setSourceRunId(stage.run_id)
-    if (typeof stage?.path === 'string' && stage.path.trim()) {
-      setModelPath(stage.path.trim())
-    } else if (stage?.slug) {
-      setModelPath(`workspace/artifacts/${stage.slug}`)
-    }
+    const slug =
+      stage?.slug ||
+      (typeof stage?.path === 'string'
+        ? stage.path.replace(/^workspace\/artifacts\//, '').split('/')[0]
+        : model.name)
+    void resolveAndSetModelPath({
+      slug,
+      runId: stage?.run_id || sourceRunId || null,
+      stage: stageKey || 'staging',
+      stagePath: typeof stage?.path === 'string' ? stage.path : null,
+    })
     pushToast(`Picked model ${name}`, 'info')
+  }
+
+  const applySourceArtifact = (id: string) => {
+    setSourceArtifactId(id)
+    if (!id) return
+    const hit = sourceArtifacts.find((a) => String(a.artifact_id || '') === id)
+    if (!hit) return
+    const meta =
+      hit.metadata && typeof hit.metadata === 'object'
+        ? (hit.metadata as Record<string, unknown>)
+        : null
+    // data_path is the real ArtifactRecord field; uri/path/meta.path are fallbacks.
+    const uri = String(
+      hit.data_path || hit.uri || hit.path || (typeof meta?.path === 'string' ? meta.path : '') || '',
+    ).trim()
+    const slugFromUri = uri.match(/workspace\/artifacts\/([^/]+)/)?.[1]
+    void resolveAndSetModelPath({
+      slug: slugFromUri || null,
+      runId: sourceRunId || null,
+      stage: 'staging',
+      artifactUri: uri || null,
+      stagePath: uri && !isModelLikeArtifact(hit) ? null : uri || null,
+    })
   }
 
   const configuredGraph = React.useMemo(() => {
@@ -425,24 +488,50 @@ export default function EdgeWizardView() {
         const status = (st.status || '').toLowerCase()
         setRunStatus(status || 'unknown')
         if (isTerminalSuccess(status)) {
-          const pkg = guessPackagePath(target, packageName)
-          setDownloadPath(pkg)
-          setPackageExists(true)
-          setStep(4)
+          let artsDir: string | null = null
+          try {
+            const detail = await apiJson<{ artifacts_dir?: string }>(`/runs/${runId}`)
+            if (typeof detail.artifacts_dir === 'string' && detail.artifacts_dir.trim()) {
+              artsDir = detail.artifacts_dir.trim()
+            }
+          } catch {
+            /* fall through to latest symlink guess */
+          }
+          let pkg = guessPackagePath(target, packageName, artsDir)
           try {
             const arts = await apiJson<Array<Record<string, unknown>>>('/artifacts', {
               query: { run_id: runId },
             })
             if (!cancelled && Array.isArray(arts)) {
-              let found: string | null = null
+              let checksum: string | null = null
               for (const a of arts) {
-                found = pickChecksum(a)
-                if (found) break
+                if (!checksum) checksum = pickChecksum(a)
+                const meta =
+                  a.metadata && typeof a.metadata === 'object'
+                    ? (a.metadata as Record<string, unknown>)
+                    : null
+                const metaPath = typeof meta?.path === 'string' ? meta.path : ''
+                const uri = String(a.data_path || a.uri || a.path || metaPath || '').trim()
+                const typ = String(a.artifact_type || '').toLowerCase()
+                if (
+                  uri &&
+                  (typ.includes('package') ||
+                    /\.(tar\.gz|tgz|zip|h)$/i.test(uri) ||
+                    /_edge\.tar\.gz$/i.test(uri))
+                ) {
+                  pkg = uri
+                  break
+                }
               }
-              setPackageChecksum(found)
+              setPackageChecksum(checksum)
             }
           } catch {
             if (!cancelled) setPackageChecksum(null)
+          }
+          if (!cancelled) {
+            setDownloadPath(pkg)
+            setPackageExists(true)
+            setStep(4)
           }
           return
         }
@@ -531,7 +620,7 @@ export default function EdgeWizardView() {
     ) : null
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-6">
+    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Ship"
         description="Deploy — package a trained run for on-device delivery, or browse the device fleet."
@@ -578,20 +667,21 @@ export default function EdgeWizardView() {
               onChange={(e) => setLinkedProject(e.target.value.trim())}
               aria-label="Project"
             />
-            <select
-              className="max-w-[16rem] rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
+            <FieldSelect
+              className="min-w-[14rem] max-w-[22rem] flex-1"
+              triggerClassName="!mt-0 rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
               value={sourceRunId}
-              onChange={(e) => setSourceRunId(e.target.value)}
+              onChange={setSourceRunId}
               aria-label="Source run"
-            >
-              <option value="">Select source run…</option>
-              {projectRuns.map((r) => (
-                <option key={r.run_id} value={r.run_id}>
-                  {r.run_id.slice(0, 8)}… {r.status || ''}{' '}
-                  {r.graph_name ? `· ${r.graph_name}` : ''}
-                </option>
-              ))}
-            </select>
+              placeholder="Select source run…"
+              emptyLabel="Select source run…"
+              mono
+              options={projectRuns.map((r) => ({
+                value: r.run_id,
+                label: `${r.run_id.slice(0, 8)} ${r.status || ''}`.trim(),
+                description: r.graph_name || undefined,
+              }))}
+            />
             <input
               className="min-w-[12rem] flex-1 rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
               placeholder="or paste run_id"
@@ -749,24 +839,38 @@ export default function EdgeWizardView() {
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
                     Auto-pick from model registry
                   </span>
-                  <select
-                    className="field-control mb-2 w-full text-xs"
+                  <FieldSelect
+                    className="mb-2 w-full"
                     value={pickedModel}
-                    onChange={(e) => applyRegistryModel(e.target.value)}
+                    onChange={applyRegistryModel}
                     aria-label="Pick registered model"
-                  >
-                    <option value="">Select registered model…</option>
-                    {registryModels.map((m) => (
-                      <option key={m.name} value={m.name}>
-                        {m.name}
-                        {m.stages?.prod || m.stages?.production
-                          ? ' · prod'
-                          : m.stages?.staging
-                            ? ' · staging'
-                            : ''}
-                      </option>
-                    ))}
-                  </select>
+                    placeholder="Select registered model…"
+                    emptyLabel="Select registered model…"
+                    options={registryModels.map((m) => {
+                      const stages = m.stages || {}
+                      const stageKey =
+                        stages.staging
+                          ? 'staging'
+                          : stages.prod
+                            ? 'prod'
+                            : stages.production
+                              ? 'production'
+                              : stages.latest
+                                ? 'latest'
+                                : Object.keys(stages)[0] || ''
+                      const stage = stageKey ? stages[stageKey] : undefined
+                      const pathHint =
+                        (typeof stage?.path === 'string' && stage.path.trim()) ||
+                        (stage?.slug ? `workspace/artifacts/${stage.slug}` : '')
+                      return {
+                        value: m.name,
+                        label: stageKey ? `${m.name} · ${stageKey}` : m.name,
+                        description: pathHint
+                          ? preferSavedModelPath(pathHint)
+                          : undefined,
+                      }
+                    })}
+                  />
                   {registryModels.length === 0 ? (
                     <p className="mb-2 text-[11px] text-ink-400">
                       No models in GET /models yet — register from Runs, or paste a path below.
@@ -778,32 +882,41 @@ export default function EdgeWizardView() {
                     Model path
                   </span>
                   {sourceArtifacts.length > 0 ? (
-                    <select
-                      className="field-control mb-2 w-full font-mono text-xs"
+                    <FieldSelect
+                      className="mb-2 w-full"
                       value={sourceArtifactId}
-                      onChange={(e) => {
-                        const id = e.target.value
-                        setSourceArtifactId(id)
-                        const hit = sourceArtifacts.find((a) => String(a.artifact_id || '') === id)
-                        if (!hit) return
-                        const uri = String(hit.uri || hit.path || hit.metadata?.path || '').trim()
-                        if (uri) setModelPath(uri)
-                      }}
+                      onChange={applySourceArtifact}
                       aria-label="Source artifact"
-                    >
-                      <option value="">Pick artifact from source run…</option>
-                      {sourceArtifacts.map((a) => {
-                        const id = String(a.artifact_id || '')
-                        const typ = String(a.artifact_type || 'artifact')
-                        const uri = String(a.uri || a.path || '')
-                        return (
-                          <option key={id} value={id}>
-                            {id.slice(0, 10)}… · {typ}
-                            {uri ? ` · ${uri}` : ''}
-                          </option>
-                        )
-                      })}
-                    </select>
+                      placeholder="Pick artifact from source run…"
+                      emptyLabel="Pick artifact from source run…"
+                      mono
+                      options={[
+                        ...sourceArtifacts
+                          .filter(isModelLikeArtifact)
+                          .map((a) => {
+                            const id = String(a.artifact_id || '')
+                            const typ = String(a.artifact_type || 'model')
+                            const uri = String(a.data_path || a.uri || a.path || '')
+                            return {
+                              value: id,
+                              label: `${id.slice(0, 10)}… · ${typ}`,
+                              description: uri || undefined,
+                            }
+                          }),
+                        ...sourceArtifacts
+                          .filter((a) => !isModelLikeArtifact(a))
+                          .map((a) => {
+                            const id = String(a.artifact_id || '')
+                            const typ = String(a.artifact_type || 'artifact')
+                            const uri = String(a.data_path || a.uri || a.path || '')
+                            return {
+                              value: id,
+                              label: `${id.slice(0, 10)}… · ${typ}`,
+                              description: uri ? `${uri} (not a model)` : undefined,
+                            }
+                          }),
+                      ]}
+                    />
                   ) : (
                     <p className="mb-2 text-[11px] text-ink-400">
                       No artifacts listed for this run yet — paste a workspace model path below
@@ -814,8 +927,13 @@ export default function EdgeWizardView() {
                     className="field-control mt-0 w-full font-mono text-xs"
                     value={modelPath}
                     onChange={(e) => setModelPath(e.target.value)}
-                    placeholder="workspace/artifacts/models/saved_model"
+                    placeholder="workspace/artifacts/<slug>/runs/<run_id>/saved_model"
                   />
+                  {!modelPathChecking && !modelPathMissing && modelPath.trim() ? (
+                    <span className="mt-1 block text-[11px] text-emerald-700">
+                      Verified on disk: <code className="font-mono">{modelPath}</code>
+                    </span>
+                  ) : null}
                   {linkedProject ? (
                     <span className="mt-1 block text-[11px] text-ink-400">
                       Linked dataset <code className="font-mono">{linkedProject}</code>
@@ -825,7 +943,7 @@ export default function EdgeWizardView() {
                           / <code className="font-mono">{linkedVersion}</code>
                         </>
                       ) : null}{' '}
-                      — adjust path if your trainer wrote elsewhere.
+                      — path comes from registry / run artifacts, not the project name.
                     </span>
                   ) : null}
                   {!modelPathChecking && modelPathMissing ? (
@@ -869,49 +987,37 @@ export default function EdgeWizardView() {
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
                     Optimizer backend
                   </span>
-                  <select
-                    className="field-control mt-0 w-full text-xs"
+                  <FieldSelect
+                    allowEmpty={false}
                     value={backend}
-                    onChange={(e) => setBackend(e.target.value as EdgeBackend)}
-                  >
-                    {EDGE_BACKENDS.map((b) => (
-                      <option key={b} value={b}>
-                        {b}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(v) => setBackend(v as EdgeBackend)}
+                    aria-label="Optimizer backend"
+                    options={EDGE_BACKENDS.map((b) => ({ value: b, label: b }))}
+                  />
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
                     Quantization
                   </span>
-                  <select
-                    className="field-control mt-0 w-full text-xs"
+                  <FieldSelect
+                    allowEmpty={false}
                     value={quantization}
-                    onChange={(e) => setQuantization(e.target.value as EdgeQuantization)}
-                  >
-                    {EDGE_QUANTIZATIONS.map((q) => (
-                      <option key={q} value={q}>
-                        {q}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(v) => setQuantization(v as EdgeQuantization)}
+                    aria-label="Quantization"
+                    options={EDGE_QUANTIZATIONS.map((q) => ({ value: q, label: q }))}
+                  />
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
                     Package target
                   </span>
-                  <select
-                    className="field-control mt-0 w-full text-xs"
+                  <FieldSelect
+                    allowEmpty={false}
                     value={target}
-                    onChange={(e) => setTarget(e.target.value as EdgeTarget)}
-                  >
-                    {EDGE_TARGETS.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(v) => setTarget(v as EdgeTarget)}
+                    aria-label="Package target"
+                    options={EDGE_TARGETS.map((t) => ({ value: t, label: t }))}
+                  />
                 </label>
                 <label className="block text-sm">
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
@@ -1054,14 +1160,18 @@ export default function EdgeWizardView() {
                 </button>
                 {runId && packageExists && (
                   <div className="inline-flex flex-wrap items-center gap-2">
-                    <select
-                      className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                    <FieldSelect
+                      className="w-[8rem]"
+                      allowEmpty={false}
                       value={promoteAlias}
-                      onChange={(e) => setPromoteAlias(e.target.value as 'staging' | 'prod')}
-                    >
-                      <option value="staging">staging</option>
-                      <option value="prod">prod</option>
-                    </select>
+                      onChange={(v) => setPromoteAlias(v as 'staging' | 'prod')}
+                      aria-label="Promote alias"
+                      options={[
+                        { value: 'staging', label: 'staging' },
+                        { value: 'prod', label: 'prod' },
+                      ]}
+                      triggerClassName="!mt-0 rounded-lg border border-ink-200 px-2 py-1.5 text-xs text-ink-800"
+                    />
                     <button
                       type="button"
                       className="btn-secondary"

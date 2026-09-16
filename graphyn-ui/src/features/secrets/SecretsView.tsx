@@ -75,7 +75,7 @@ export default function SecretsView() {
   )
 
   return (
-    <div className="h-full overflow-auto p-6">
+    <div className="h-full min-h-0 overflow-auto p-6">
       <PageHeader
         title="Secrets"
         description="Graphs reference secrets by name (never paste keys into Graph IR)."

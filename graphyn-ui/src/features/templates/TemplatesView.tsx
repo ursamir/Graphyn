@@ -341,7 +341,7 @@ export default function TemplatesView() {
   const exampleCount = (items ?? []).filter((t) => isExample(t.name)).length
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-5">
+    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="Templates"
         description="Build entry — starter graphs that stamp GraphIR into a workspace. Open one in the Editor, then save or run."

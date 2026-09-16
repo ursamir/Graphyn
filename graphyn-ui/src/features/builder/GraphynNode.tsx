@@ -12,6 +12,9 @@ export type GraphynNodeData = {
   schemaProps?: Record<string, Record<string, unknown>>
   /** IR 1.2+ placement (Mode B). */
   placement?: NodePlacement | null
+  /** Opaque IR fields the Builder doesn't edit yet — preserved verbatim through load/save. */
+  capabilityMetadata?: unknown
+  eventTrigger?: unknown
   inputs: PortDef[]
   outputs: PortDef[]
   status?: 'idle' | 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled' | 'success' | 'error'

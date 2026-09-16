@@ -144,7 +144,7 @@ export default function WorkersView() {
         : 'Set GRAPHYN_BACKEND=distributed on the control plane for Mode B.'
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-5">
+    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="Worker fleet"
         description={

@@ -554,7 +554,7 @@ Same packaging job may place optimizer nodes on GPU workers if IR says so — st
 | **Sticky lineage bar** (shipped) | Project + source run (once — not duplicated in every step). |
 | **Stepper** (shipped) | Graph → Configure → Run → Download; each step owns its actions. |
 | **Step 1 Graph** (shipped) | Use edge template; Projects / Train template when lineage missing. |
-| **Step 2 Configure** (shipped) | Model path, package target, quantization, optimizer backend, labels, package name; **Model path not found** warning + CTAs Templates/Builder/Artifacts; Open in Editor. |
+| **Step 2 Configure** (shipped) | Model path, package target, quantization, optimizer backend, labels, package name; **Model path not found** warning + CTAs Templates/Builder/Artifacts; Open in Editor. Registry / artifact / backend dropdowns use portal `FieldSelect`. Model path is probe-resolved to canonical `…/runs/<id>/saved_model` or `.keras` (not blind alias append / project-name invent). |
 | **Step 3 Run** (shipped) | Start run-async; Open run / Trace; Skip to download only if package exists else “Run package step first”; on failure Open run / Trace. |
 | **Step 4 Download** (shipped) | Download / promote when package exists; else empty “Run package step first.” |
 | **MISSING — I need** | Full device flash / device feedback loop (vision P2) — until then, download-only is honest. |

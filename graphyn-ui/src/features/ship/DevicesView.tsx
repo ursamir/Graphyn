@@ -30,7 +30,7 @@ export default function DevicesView({
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-4">
+    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-4">
       <PageHeader
         title="Devices"
         description={

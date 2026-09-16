@@ -510,10 +510,17 @@ Pipeline graphs should write under `workspace/artifacts/<name>/`, not into `exam
 **Response:**
 ```json
 [
-  {"name": "metrics.json", "path": "artifacts/speech-commands/metrics.json", "size": 128, "kind": "file"}
+  {
+    "name": "model.keras",
+    "path": "artifacts/speech-commands/runs/<run_id>/model.keras",
+    "size": 128,
+    "kind": "file",
+    "node_id": "trainer_0"
+  }
 ]
 ```
 
+`node_id` is set when the file is tied to a node (ArtifactStore data dir, path refs inside that node's `data.json`, graph `output_path`, or basename hints such as `confusion_matrix.png` → evaluator). Journal files (`meta.json` / `logs.json` / `graph.json`) omit `node_id`. Large audio-sample artifact dirs are summarized (manifest + a few clips) so the listing cap stays usable for plots and models.
 ---
 
 ### `GET /api/v1/runs/{run_id}/outputs/zip`

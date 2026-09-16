@@ -279,6 +279,15 @@ export default function SystemView() {
   const workerCount = Number(readyObj?.worker_count ?? NaN)
   const nodeTypeCount = Number(readyObj?.node_type_count ?? NaN)
   const registryReady = readyObj?.registry_ready === true || readyObj?.status === 'ready'
+  // Distinguish "still starting" (transient, will resolve) from "hard-failed"
+  // (permanent until the plugin/manifest issue is fixed and the API restarted) —
+  // status:"failed" + registry_init_error come from a real AutoDiscovery
+  // exception, not from still-loading isolated venvs.
+  const registryInitError =
+    typeof readyObj?.registry_init_error === 'string' && readyObj.registry_init_error.trim()
+      ? readyObj.registry_init_error.trim()
+      : null
+  const registryFailed = readyObj?.status === 'failed' && !!registryInitError
   const isDistributed = backendMode === 'distributed'
   const backendLabel =
     backendMode === 'distributed'
@@ -331,7 +340,7 @@ export default function SystemView() {
   const usePipelineSelect = useProjectSelect && pipelinesApiOk && !!schedProject.trim()
 
   return (
-    <div className="h-full overflow-y-auto p-6 space-y-5">
+    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="Ops"
         description="Health, schedules, webhooks, cleanup, audit."
@@ -534,7 +543,9 @@ export default function SystemView() {
                       ? Number.isFinite(nodeTypeCount)
                         ? `Ready · ${nodeTypeCount} node types`
                         : 'Ready'
-                      : 'Still loading plugins…'
+                      : registryFailed
+                        ? 'Failed to load'
+                        : 'Still loading plugins…'
                   }
                 />
                 <FactRow
@@ -576,7 +587,17 @@ export default function SystemView() {
                   }
                 />
               </dl>
-              {!registryReady ? (
+              {registryFailed ? (
+                <p className="mt-3 rounded-lg bg-rose-50 p-2 text-[11px] text-rose-800">
+                  Node registry failed to load and will not recover on its own — this is a
+                  hard AutoDiscovery error (e.g. a duplicate node_type or a broken plugin
+                  import), not a slow install. Fix the plugin, then restart the API.
+                  <br />
+                  <code className="mt-1 block whitespace-pre-wrap break-all font-mono">
+                    {registryInitError}
+                  </code>
+                </p>
+              ) : !registryReady ? (
                 <p className="mt-3 text-[11px] text-amber-800">
                   Health can be OK while plugins finish installing. Refresh in a moment, or open{' '}
                   <button type="button" className="font-medium text-accent-700 hover:underline" onClick={() => goNav('plugins')}>

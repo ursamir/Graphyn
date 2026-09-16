@@ -65,10 +65,6 @@ export function pathForView(view: AppView, ctx: ViewPathContext = {}): string | 
     case 'artifacts':
       return paths.libraryArtifacts()
 
-    case 'trace':
-      if (!W || !ctx.runId) return null
-      return paths.runPanel(W, ctx.runId, ctx.panel ?? 'lineage')
-
     case 'experiments':
       return W ? paths.runsCompare(W) : null
 
@@ -95,7 +91,6 @@ export const VIEW_PATH_HINT: Record<AppView, string> = {
   system: '/admin/ops',
   secrets: '/admin/secrets',
   workers: '/deploy/workers',
-  trace: '/workspaces/:id/runs/:runId/lineage',
   edge: '/workspaces/:id/ship',
   experiments: '/workspaces/:id/runs/compare',
   proposals: '/agent/inbox',

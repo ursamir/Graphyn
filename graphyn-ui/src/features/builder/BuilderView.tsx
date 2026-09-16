@@ -304,8 +304,15 @@ function BuilderInner() {
   const [actionError, setActionError] = React.useState<{ title: string; message: string; detail?: string } | null>(null)
   const moreRef = React.useRef<HTMLDivElement | null>(null)
   const abortRef = React.useRef<AbortController | null>(null)
+  // Backend run id for the in-flight stream, kept in sync with the local
+  // `runId` var inside handleRun so Cancel can reach the actual run even
+  // though the global store's lastRunId may lag or belong to a prior run.
+  const runIdRef = React.useRef<string | null>(null)
   const nodesRef = React.useRef(nodes)
   const edgesRef = React.useRef(edges)
+  // Graph-level `parameters` from the loaded IR — the Builder has no editor for
+  // these yet, so preserve verbatim through save rather than dropping them.
+  const graphParametersRef = React.useRef<Record<string, unknown>>({})
   const logBodyRef = React.useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = React.useRef(true)
   nodesRef.current = nodes
@@ -462,6 +469,7 @@ function BuilderInner() {
         edgesRef.current,
         seed,
         graphName,
+        graphParametersRef.current,
       ),
     [seed, graphName],
   )
@@ -533,6 +541,10 @@ function BuilderInner() {
     setGraphName(loadedName)
     if (/^[A-Za-z0-9_-]+$/.test(loadedName)) setTemplateName(loadedName)
     if (typeof graph.metadata?.seed === 'number') setSeed(graph.metadata.seed)
+    // Preserve graph-level parameters (and the legacy parameters.ui shim's
+    // sibling data) verbatim through the next save — the Builder doesn't
+    // expose an editor for these yet.
+    graphParametersRef.current = { ...(graph.parameters ?? {}) }
     const byType = new Map(catalog.map((c) => [c.node_type, c]))
     const ui = graph.ui?.positions
       ? graph.ui
@@ -555,12 +567,18 @@ function BuilderInner() {
         position: positions[n.id] ?? { x: 60 + (i % 3) * 380, y: 40 + Math.floor(i / 3) * 300 },
         data: {
           nodeType: n.node_type,
-          label: entry?.label || n.label || humanNodeLabel(n.node_type),
+          // Explicit saved label wins — only fall back to a catalog/humanized
+          // default when the graph never set one (was previously reversed,
+          // which silently discarded every custom label on the next save).
+          label: n.label || entry?.label || humanNodeLabel(n.node_type),
           category: entry?.category,
           runtime: entry?.runtime,
           config: { ...defaultsFromSchema(entry), ...(n.config ?? {}) },
           schemaProps: entry?.config_schema?.properties ?? {},
           placement: (n.placement as NodePlacement | null | undefined) ?? null,
+          // Opaque IR fields with no Builder editor yet — preserve verbatim.
+          capabilityMetadata: n.capability_metadata ?? null,
+          eventTrigger: n.event_trigger ?? null,
           inputs: ports.inputs,
           outputs: ports.outputs,
           status: 'idle',
@@ -573,6 +591,7 @@ function BuilderInner() {
       target: e.dst_id,
       sourceHandle: e.src_port,
       targetHandle: e.dst_port,
+      data: { condition: e.condition ?? null },
       ...defaultEdgeOptions,
     }))
     setNodes(layoutLeftToRight(nextNodes, nextEdges, Object.keys(positions).length === 0))
@@ -622,7 +641,25 @@ function BuilderInner() {
     }
   }
 
-  const handleCancel = () => {
+  const handleCancel = async () => {
+    const runId = runIdRef.current
+    if (runId) {
+      try {
+        await apiJson(`/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
+      } catch (err) {
+        // run_not_active/run_not_found (404) means it already finished server-side —
+        // that's fine, proceed to the local cancelled state below. Anything else
+        // (e.g. 503 run_active_on_another_worker) is surfaced so the user knows
+        // the backend run may still be executing.
+        const status = err instanceof ApiError ? err.status : null
+        if (status !== 404) {
+          pushToast(
+            `Could not cancel run on the server: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          )
+        }
+      }
+    }
     abortRef.current?.abort()
     abortRef.current = null
     setIsRunning(false)
@@ -632,6 +669,16 @@ function BuilderInner() {
     setStatusMessage('Run cancelled')
     addLog('Run cancelled by user', 'warning')
   }
+
+  // Abort any in-flight run stream on unmount so a stale stream's callbacks
+  // (which write to the global Zustand store) can never fire after the
+  // Builder tab has moved on to a different graph or run.
+  React.useEffect(() => {
+    return () => {
+      abortRef.current?.abort()
+      abortRef.current = null
+    }
+  }, [])
 
   const graphForRun = React.useCallback(() => {
     const base = currentGraph()
@@ -667,6 +714,7 @@ function BuilderInner() {
     setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'pending' } })))
     const controller = new AbortController()
     abortRef.current = controller
+    runIdRef.current = null
     let streamCancelled = false
     try {
       const graph = graphForRun()
@@ -697,6 +745,7 @@ function BuilderInner() {
       const headerRunId = res.headers.get('X-Run-Id') || res.headers.get('x-run-id')
       if (headerRunId?.trim()) {
         setLastRunId(headerRunId.trim())
+        runIdRef.current = headerRunId.trim()
       }
       if (!res.body) throw new Error('No response body')
       const reader = res.body.getReader()
@@ -719,6 +768,7 @@ function BuilderInner() {
             const ev = JSON.parse(trimmed) as Record<string, unknown>
             if (typeof ev.run_id === 'string') {
               runId = ev.run_id
+              runIdRef.current = ev.run_id
               setLastRunId(ev.run_id)
             }
             const t = String(ev.type ?? ev.event ?? '')
@@ -1117,16 +1167,16 @@ function BuilderInner() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-950 md:hidden">
         Editor works best on a wide screen — collapse the catalog or rotate to landscape if the canvas feels cramped.
       </div>
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       <aside
         className={
           catalogOpen
-            ? 'flex w-[17.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-white'
-            : 'flex w-10 shrink-0 flex-col border-r border-ink-200/80 bg-white'
+            ? 'flex w-[min(17.5rem,32vw)] min-w-[12rem] shrink-0 min-h-0 flex-col overflow-hidden border-r border-ink-200/80 bg-white'
+            : 'flex w-10 shrink-0 min-h-0 flex-col overflow-hidden border-r border-ink-200/80 bg-white'
         }
       >
         <div className="flex items-center justify-between gap-1 border-b border-ink-100 px-1.5 py-1">
@@ -1282,8 +1332,8 @@ function BuilderInner() {
         )}
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="relative z-30 flex flex-wrap items-center gap-2 border-b border-ink-200/50 bg-white/80 px-3 py-1.5 backdrop-blur-md">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="relative z-30 flex shrink-0 flex-wrap items-center gap-2 border-b border-ink-200/50 bg-white/80 px-3 py-1.5 backdrop-blur-md">
           <button
             type="button"
             className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950 hover:border-accent-400"
@@ -1453,7 +1503,7 @@ function BuilderInner() {
               <Play className="h-3.5 w-3.5" /> Run
             </button>
           ) : (
-            <button type="button" onClick={handleCancel} className="btn-danger">
+            <button type="button" onClick={() => void handleCancel()} className="btn-danger">
               <Square className="h-3.5 w-3.5" /> Cancel
             </button>
           )}
@@ -1629,8 +1679,9 @@ function BuilderInner() {
             })()}
           </div>
         )}
-        <div className="relative flex min-h-0 flex-1 bg-canvas">
-          <div className="relative min-h-0 min-w-0 flex-1">
+        <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-canvas">
+          <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div className="absolute inset-0">
           {nodes.length > 0 && (
             <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-xs rounded-lg border border-ink-200/80 bg-white/90 px-2.5 py-1.5 text-type-meta text-ink-500 shadow-sm backdrop-blur">
               Drag from a teal output handle to a dark input handle to connect. Hover a handle for port type.
@@ -1726,7 +1777,8 @@ function BuilderInner() {
             />
           ) : null}
           </div>
-          <aside className="relative z-20 flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur">
+          </div>
+          <aside className="relative z-20 flex w-[clamp(15rem,28vw,21.25rem)] shrink-0 min-h-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur">
             <AgentDrawer open={agentOpen} onClose={() => setAgentOpen(false)} />
             {!agentOpen && (() => {
               const node = inspectorId ? nodes.find((n) => n.id === inspectorId) : null

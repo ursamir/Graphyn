@@ -12,11 +12,13 @@ import {
 } from '../../components/ui'
 import {
   formatLocaleDateTime,
+  formatRelativeTime,
   humanizeTemplateName,
   prettyScalar,
   shortRunId,
 } from '../../lib/format'
 import { MetricBars } from '../../components/MetricBars'
+import { MasterDetail } from '../../layout'
 import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 
@@ -151,7 +153,12 @@ function parseExperimentsLocation(): string[] {
   return collected
 }
 
-export default function ExperimentsView({ embedded = false }: { embedded?: boolean }) {
+export type ExperimentsViewHandle = {
+  refresh: () => void
+}
+
+const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boolean }>(
+  function ExperimentsView({ embedded = false }, ref) {
   const openRun = useAppStore((s) => s.openRun)
   const openExperiments = useAppStore((s) => s.openExperiments)
   const setFocusRunsTab = useAppStore((s) => s.setFocusRunsTab)
@@ -190,6 +197,16 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
       setLoading(false)
     }
   }, [pushToast, activeProject])
+
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      refresh: () => {
+        void refresh()
+      },
+    }),
+    [refresh],
+  )
 
   React.useEffect(() => {
     void refresh()
@@ -305,11 +322,210 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
     )
   }
 
+  // Embedded under Runs → Compare: same MasterDetail + shared divider as History/Live.
+  if (embedded) {
+    return (
+      <MasterDetail
+        master={
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[12px] text-ink-500">
+                {selectedIds.length === 0
+                  ? 'Tick 2–5 runs to compare'
+                  : `${selectedIds.length} selected`}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {selectedIds.length >= 2 ? (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={compareLoading}
+                    onClick={() => void runCompare()}
+                  >
+                    {compareLoading ? 'Comparing…' : `Compare (${selectedIds.length})`}
+                  </button>
+                ) : null}
+                {selectedIds.length > 0 ? (
+                  <button type="button" className="btn-secondary" onClick={clearCompare}>
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {error && (
+              <ErrorBanner
+                message={error}
+                onRetry={() => void (selectedIds.length >= 2 ? runCompare() : refresh())}
+              />
+            )}
+            {loading && blocks === null ? (
+              <LoadingBlock label="Loading runs…" />
+            ) : !blocks || tableRuns.length === 0 ? (
+              <EmptyState
+                title="No runs to compare"
+                description="Run a few pipelines from the Editor, then return here."
+                action={
+                  <button type="button" className="btn-primary" onClick={() => goView('builder')}>
+                    Open Editor
+                  </button>
+                }
+              />
+            ) : (
+              <ul className="mt-3 space-y-1.5">
+                {tableRuns.map((r) => {
+                  const checked = selectedIds.includes(r.run_id)
+                  const metric = (() => {
+                    const m = r.metrics
+                    if (!m || typeof m !== 'object') return ''
+                    for (const k of PREFERRED_METRICS) {
+                      const v = m[k]
+                      if (typeof v === 'number' && Number.isFinite(v)) return `${k} ${v}`
+                      if (Array.isArray(v) && typeof v[v.length - 1] === 'number') {
+                        return `${k} ${v[v.length - 1]}`
+                      }
+                    }
+                    const first = Object.entries(m)[0]
+                    if (!first) return ''
+                    const [k, v] = first
+                    if (typeof v === 'number') return `${k} ${v}`
+                    return ''
+                  })()
+                  return (
+                    <li key={r.run_id}>
+                      <label
+                        className={`flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-xl border px-3 py-2.5 text-left shadow-sm transition ${
+                          checked
+                            ? 'border-accent-200 bg-accent-50/80 shadow-soft'
+                            : 'border-ink-200/70 bg-white hover:border-ink-300 hover:bg-ink-50/80'
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-start justify-between gap-2">
+                          <div className="flex min-w-0 flex-1 items-start gap-2">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleSelect(r.run_id)}
+                              className="mt-0.5 shrink-0 rounded border-ink-300"
+                              aria-label={`Select ${r.run_id}`}
+                            />
+                            <div
+                              className="min-w-0 flex-1 truncate text-sm font-medium text-ink-900"
+                              title={String(r.graph_name ?? '') || undefined}
+                            >
+                              {r.graph_name
+                                ? humanizeTemplateName(String(r.graph_name))
+                                : shortRunId(r.run_id)}
+                            </div>
+                          </div>
+                          <StatusBadge status={r.status || 'unknown'} />
+                        </div>
+                        <div className="flex min-w-0 items-center justify-between gap-2 pl-6 text-[11px] text-ink-500">
+                          <span className="min-w-0 truncate tabular-nums" title={metric || undefined}>
+                            {metric || '\u00a0'}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-2">
+                            <span title={formatLocaleDateTime(r.created_at)}>
+                              {formatRelativeTime(r.created_at)}
+                            </span>
+                            <span className="font-mono text-ink-400" title={r.run_id}>
+                              {shortRunId(r.run_id)}
+                            </span>
+                          </span>
+                        </div>
+                      </label>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </>
+        }
+        detail={
+          selectedIds.length < 2 ? (
+            <EmptyState
+              title="Select runs to compare"
+              description="Tick at least two runs on the left. Results (params, metrics, charts) appear here."
+            />
+          ) : compareLoading && !compare ? (
+            <LoadingBlock label="Comparing…" />
+          ) : !compare ? (
+            <EmptyState
+              title="Ready to compare"
+              description={`${selectedIds.length} runs selected.`}
+              action={
+                <button type="button" className="btn-primary" onClick={() => void runCompare()}>
+                  Compare now
+                </button>
+              }
+            />
+          ) : (
+            <div ref={compareRef} className="space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="text-sm font-medium text-ink-900">Compare</div>
+                  <div className="text-xs text-ink-500">
+                    Side-by-side params & metrics — differing cells highlighted
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    downloadCompareCsv(compare)
+                    pushToast('Compare CSV downloaded', 'success')
+                  }}
+                >
+                  Export CSV
+                </button>
+              </div>
+              {compare.missing_run_ids && compare.missing_run_ids.length > 0 ? (
+                <div className="text-xs text-amber-700">Missing: {compare.missing_run_ids.join(', ')}</div>
+              ) : null}
+              <div className="overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
+                <CompareTable
+                  title="Parameters"
+                  keys={compare.param_keys || []}
+                  runs={compare.runs}
+                  getter={(r, k) => r.parameters?.[k]}
+                  emptyLabel="No parameters recorded for these runs"
+                  onOpenRun={openRun}
+                />
+                <CompareTable
+                  title="Metrics"
+                  keys={compare.metric_keys || []}
+                  runs={compare.runs}
+                  getter={(r, k) => r.metrics?.[k]}
+                  format={fmtMetric}
+                  emptyLabel="No metrics recorded for these runs"
+                  onOpenRun={openRun}
+                />
+              </div>
+              {compare.metric_keys && compare.metric_keys.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {compare.metric_keys.map((key) => {
+                    const series = compare.runs
+                      .map((r) => {
+                        const raw = r.metrics?.[key]
+                        const n = typeof raw === 'number' ? raw : Number(raw)
+                        if (!Number.isFinite(n)) return null
+                        return { label: shortRunId(r.run_id), value: n }
+                      })
+                      .filter((s): s is { label: string; value: number } => !!s)
+                    if (series.length === 0) return null
+                    return <MetricBars key={key} title={key} series={series} />
+                  })}
+                </div>
+              ) : null}
+            </div>
+          )
+        }
+      />
+    )
+  }
+
   return (
-    <div className={`relative h-full overflow-y-auto space-y-6 ${embedded ? 'p-5' : 'p-6'}`}>
-      {!embedded ? (
-        <>
-          <PageHeader
+    <div className="relative h-full min-h-0 space-y-6 overflow-y-auto p-6">
+      <PageHeader
             title="Compare runs"
             description="Deep link for cross-run metrics. Prefer Runs → Compare tab when a workspace is open."
             actions={
@@ -343,24 +559,6 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
             </button>
             .
           </div>
-        </>
-      ) : (
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {selectedIds.length >= 2 && (
-            <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
-              Compare ({selectedIds.length})
-            </button>
-          )}
-          {compare && (
-            <button type="button" className="btn-secondary" onClick={clearCompare}>
-              Clear
-            </button>
-          )}
-          <button type="button" className="btn-quiet" onClick={() => void refresh()}>
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
-        </div>
-      )}
 
       {selectedIds.length >= 2 ? (
         <div className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
@@ -704,7 +902,9 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
       )}
     </div>
   )
-}
+})
+
+export default ExperimentsView
 
 function CompareTable({
   title,

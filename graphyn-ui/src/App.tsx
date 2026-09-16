@@ -27,6 +27,8 @@ import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
 import { useAppStore, type AppView } from './store/appStore'
 import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
+import { SplitPane } from './components/SplitPane'
+import { LayoutModeControl, LayoutPrefsProvider, LAYOUT_KEYS } from './layout'
 import { shortRunId } from './lib/format'
 import { KeyboardHelp } from './components/KeyboardHelp'
 import { CommandPalette } from './components/CommandPalette'
@@ -40,7 +42,6 @@ import ProjectsView from './features/projects/ProjectsView'
 import SystemView from './features/system/SystemView'
 import SecretsView from './features/secrets/SecretsView'
 import WorkersView from './features/workers/WorkersView'
-import TraceView from './features/trace/TraceView'
 import EdgeWizardView from './features/edge/EdgeWizardView'
 import ExperimentsView from './features/experiments/ExperimentsView'
 import ProposalsView from './features/proposals/ProposalsView'
@@ -115,7 +116,6 @@ const VIEW_LABEL: Record<AppView, string> = {
   plugins: 'Plugins',
   data: 'Datasets',
   artifacts: 'Artifacts',
-  trace: 'Lineage',
   edge: 'Ship',
   experiments: 'Compare runs',
   proposals: 'Agent inbox',
@@ -133,7 +133,6 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   templates: 'Templates — stamp a starter graph into a workspace',
   proposals: 'Agent inbox — review agent GraphIR before it enters the Editor',
   runs: 'Runs — history; open a run for Outputs, Lineage, and Compare',
-  trace: 'Lineage — artifact deep links; for a run use Runs → Lineage',
   experiments: 'Compare runs — prefer Runs → Compare when a workspace is open',
   artifacts: 'Artifacts — cross-run registry; for one run use Runs → Run outputs',
   plugins: 'Plugins — install node packs for the Editor catalog',
@@ -307,12 +306,28 @@ export default function App() {
   const settingsPanelRef = React.useRef<HTMLDivElement>(null)
   const settingsTriggerRef = React.useRef<HTMLElement | null>(null)
   const tokenInputRef = React.useRef<HTMLInputElement>(null)
-  const [navOpen, setNavOpen] = React.useState(() =>
-    typeof window !== 'undefined' ? window.matchMedia('(min-width: 768px)').matches : true,
-  )
+  const [navOpen, setNavOpen] = React.useState(() => {
+    if (typeof window === 'undefined') return true
+    try {
+      const stored = localStorage.getItem('graphyn.layout.navOpen')
+      if (stored === '0') return false
+      if (stored === '1') return true
+    } catch {
+      /* ignore */
+    }
+    return window.matchMedia('(min-width: 768px)').matches
+  })
   const [narrow, setNarrow] = React.useState(() =>
     typeof window !== 'undefined' ? !window.matchMedia('(min-width: 768px)').matches : false,
   )
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('graphyn.layout.navOpen', navOpen ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }, [navOpen])
+
   /** When a project is open, Global/Admin is collapsed by default (IDE-first). */
   const [globalNavOpen, setGlobalNavOpen] = React.useState(false)
   const [locationKey, setLocationKey] = React.useState(
@@ -677,193 +692,38 @@ export default function App() {
             ? 'bg-amber-100 text-amber-900'
             : 'bg-ink-100 text-ink-600'
 
-  return (
-    <ErrorBoundary>
-      <HashRedirect activeProject={activeProject} />
-      <div className="flex h-full flex-col bg-mesh">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-200/70 bg-white/80 px-4 backdrop-blur-md">
-          <div className="flex min-w-0 items-center gap-2">
-            <button
-              type="button"
-              className="btn-quiet md:hidden"
-              onClick={() => setNavOpen((o) => !o)}
-              aria-label={navOpen ? 'Close navigation' : 'Open navigation'}
-            >
-              <Menu className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              className="btn-quiet hidden md:inline-flex"
-              onClick={() => setNavOpen((o) => !o)}
-              aria-label={navOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-            >
-              <PanelLeftClose className={clsx('h-4 w-4', !navOpen && 'rotate-180')} />
-            </button>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent-500 text-ink-950 shadow-sm">
-              <Boxes className="h-3.5 w-3.5" />
-            </div>
-            <div className="min-w-0 leading-tight">
-              <div className="text-[15px] font-semibold text-ink-950">Graphyn</div>
-              <div className="truncate text-[11px] text-ink-500">
-                {workspaceOpen && parsedLocation.workspaceId
-                  ? `${VIEW_LABEL[view]} · ${parsedLocation.workspaceId}`
-                  : VIEW_LABEL[view]}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Single status chip: mode + connection (Auth banner handles 401 CTA) */}
-            <button
-              type="button"
-              onClick={() => {
-                if (bootStatus === 401) openSettings()
-                else if (!bootError) setModeExplainerOpen(true)
-              }}
-              className={clsx(
-                'hidden items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium sm:inline-flex',
-                bootStatus === 401
-                  ? 'border-amber-200 bg-amber-50 text-amber-900'
-                  : bootError
-                    ? 'border-rose-200 bg-rose-50 text-rose-800'
-                    : backendMode === 'distributed'
-                      ? 'border-accent-300 bg-accent-50 text-accent-950'
-                      : 'border-ink-200 bg-white text-ink-600 hover:border-ink-300',
-              )}
-              title={
-                bootStatus === 401
-                  ? 'Paste API token in Settings'
-                  : bootError
-                    ? bootError
-                    : 'Click for Mode A vs Mode B'
-              }
-            >
-              {bootStatus === 401
-                ? 'Sign in'
-                : bootError
-                  ? 'Offline'
-                  : backendMode === 'distributed'
-                    ? 'Distributed'
-                    : 'Local'}
-              {authHonesty?.auth_required && !bootError && bootStatus !== 401 ? (
-                <span className="text-ink-400">· Auth</span>
-              ) : null}
-            </button>
-            {(() => {
-              const chipForThisWorkspace = Boolean(effectiveLastRunId) || isRunning
-              if (!chipForThisWorkspace && !chipLabel) return null
-              if (isRunning) {
-                return (
-                  <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
-                    {chipLabel}
-                  </span>
-                )
-              }
-              if (chipLabel && effectiveLastRunId) {
-                return (
-                  <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
-                    {chipLabel}
-                  </span>
-                )
-              }
-              return null
-            })()}
-            {workspaceOpen && parsedLocation.workspaceId && (
-              <div className="inline-flex max-w-[15rem] items-center gap-0.5">
-                <button
-                  type="button"
-                  className="inline-flex max-w-[12rem] items-center gap-1 truncate rounded-l-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400"
-                  title="Open workspace Home"
-                  onClick={() => {
-                    const W = parsedLocation.workspaceId || activeProject
-                    if (W) openProject(W)
-                  }}
-                >
-                  <FolderKanban className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{parsedLocation.workspaceId || activeProject}</span>
-                </button>
-                <button
-                  type="button"
-                  className="rounded-r-full border border-l-0 border-accent-300 bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800 hover:bg-accent-100"
-                  title="Switch workspace — show project picker"
-                  onClick={switchProject}
-                >
-                  Switch
-                </button>
-              </div>
-            )}
-            {(!activeProject || !workspaceOpen) && (
-              <button
-                type="button"
-                className="inline-flex items-center rounded-full border border-dashed border-ink-300 bg-white/80 px-2.5 py-0.5 text-[11px] text-ink-500 hover:border-accent-300 hover:text-accent-800"
-                onClick={() => {
-                  if (activeProject) openProject(activeProject)
-                  else go('projects')
-                }}
-              >
-                Open workspace
-              </button>
-            )}
-            {effectiveLastRunId && (
-              <LastRunMenu
-                runId={effectiveLastRunId}
-                showCompare
-                onOpenRun={() =>
-                  openRun(effectiveLastRunId, activeProject ? { project: activeProject } : undefined)
-                }
-                onOpenTrace={() =>
-                  openTrace({ runId: effectiveLastRunId, project: activeProject || undefined })
-                }
-                onOpenArtifacts={() =>
-                  openArtifacts({ runId: effectiveLastRunId, project: activeProject || undefined })
-                }
-                onOpenCompare={() => openExperiments({ runIds: [effectiveLastRunId] })}
-              />
-            )}
-            <button
-              type="button"
-              className="btn-icon"
-              onClick={() => setHelpOpen(true)}
-              aria-label="Keyboard shortcuts"
-              title="Keyboard shortcuts (?)"
-            >
-              <span className="text-[13px] font-semibold">?</span>
-            </button>
-            <button
-              type="button"
-              className="btn-icon"
-              onClick={openSettings}
-              aria-label="Settings"
-            >
-              <Settings className="h-4 w-4" />
-            </button>
-          </div>
-        </header>
+  const mainContent = (
+    <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {window.location.pathname.startsWith('/login') ? (
+        <LoginView />
+      ) : (
+        <>
+          {view === 'builder' && <BuilderView />}
+          {view === 'runs' && <RunsView />}
+          {view === 'artifacts' && <ArtifactsView />}
+          {view === 'plugins' && <PluginsView />}
+          {view === 'templates' && <TemplatesView />}
+          {view === 'data' && <DataView />}
+          {view === 'projects' && <ProjectsView />}
+          {view === 'system' && <SystemView />}
+          {view === 'workers' && <WorkersView />}
+          {view === 'edge' && <EdgeWizardView />}
+          {view === 'experiments' && <ExperimentsView />}
+          {view === 'proposals' && <ProposalsView />}
+          {view === 'secrets' && <SecretsView />}
+          {view === 'models' && <ModelsView />}
+          {view === 'access' && <AccessView />}
+          {view === 'devices' && <DevicesView workspaceId={activeProject} />}
+        </>
+      )}
+    </main>
+  )
 
-        {bootError && (
-          <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950">
-            <span title={bootError}>
-              {bootStatus === 401 ? 'Sign in with your API token' : "Can't reach the API"}
-            </span>
-            <button type="button" className="btn-secondary" onClick={openSettings}>
-              Open Settings
-            </button>
-          </div>
-        )}
-
-        <div className="relative flex min-h-0 flex-1">
-          {navOpen && narrow && (
-            <button
-              type="button"
-              className="absolute inset-0 z-20 bg-ink-950/30 md:hidden"
-              aria-label="Close navigation"
-              onClick={() => setNavOpen(false)}
-            />
-          )}
-          {navOpen && (
-            <aside
+  const navAside = (
+    <aside
               className={clsx(
-                'z-30 flex w-[13.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-[#f7f7f8]',
-                narrow && 'absolute inset-y-0 left-0 shadow-xl md:static md:shadow-none',
+                'z-30 flex h-full min-h-0 flex-col border-r border-ink-200/80 bg-[#f7f7f8]',
+                narrow ? 'absolute inset-y-0 left-0 w-[13.5rem] shadow-xl' : 'w-full',
               )}
             >
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
@@ -1023,33 +883,210 @@ export default function App() {
                 )}
               </nav>
             </aside>
-          )}
+  )
 
-          <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
-            {window.location.pathname.startsWith('/login') ? (
-              <LoginView />
-            ) : (
-              <>
-            {view === 'builder' && <BuilderView />}
-            {view === 'runs' && <RunsView />}
-            {view === 'artifacts' && <ArtifactsView />}
-            {view === 'plugins' && <PluginsView />}
-            {view === 'templates' && <TemplatesView />}
-            {view === 'data' && <DataView />}
-            {view === 'projects' && <ProjectsView />}
-            {view === 'system' && <SystemView />}
-            {view === 'workers' && <WorkersView />}
-            {view === 'trace' && <TraceView />}
-            {view === 'edge' && <EdgeWizardView />}
-            {view === 'experiments' && <ExperimentsView />}
-            {view === 'proposals' && <ProposalsView />}
-            {view === 'secrets' && <SecretsView />}
-            {view === 'models' && <ModelsView />}
-            {view === 'access' && <AccessView />}
-            {view === 'devices' && <DevicesView workspaceId={activeProject} />}
-              </>
+
+  return (
+    <ErrorBoundary>
+      <LayoutPrefsProvider>
+      <HashRedirect activeProject={activeProject} />
+      <div className="flex h-full flex-col overflow-hidden bg-mesh">
+        <header className="relative z-40 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-200/70 bg-white/80 px-4 backdrop-blur-md">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              className="btn-quiet md:hidden"
+              onClick={() => setNavOpen((o) => !o)}
+              aria-label={navOpen ? 'Close navigation' : 'Open navigation'}
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              className="btn-quiet hidden md:inline-flex"
+              onClick={() => setNavOpen((o) => !o)}
+              aria-label={navOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            >
+              <PanelLeftClose className={clsx('h-4 w-4', !navOpen && 'rotate-180')} />
+            </button>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent-500 text-ink-950 shadow-sm">
+              <Boxes className="h-3.5 w-3.5" />
+            </div>
+            <div className="min-w-0 leading-tight">
+              <div className="text-[15px] font-semibold text-ink-950">Graphyn</div>
+              <div className="truncate text-[11px] text-ink-500">
+                {workspaceOpen && parsedLocation.workspaceId
+                  ? `${VIEW_LABEL[view]} · ${parsedLocation.workspaceId}`
+                  : VIEW_LABEL[view]}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Single status chip: mode + connection (Auth banner handles 401 CTA) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (bootStatus === 401) openSettings()
+                else if (!bootError) setModeExplainerOpen(true)
+              }}
+              className={clsx(
+                'hidden items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium sm:inline-flex',
+                bootStatus === 401
+                  ? 'border-amber-200 bg-amber-50 text-amber-900'
+                  : bootError
+                    ? 'border-rose-200 bg-rose-50 text-rose-800'
+                    : backendMode === 'distributed'
+                      ? 'border-accent-300 bg-accent-50 text-accent-950'
+                      : 'border-ink-200 bg-white text-ink-600 hover:border-ink-300',
+              )}
+              title={
+                bootStatus === 401
+                  ? 'Paste API token in Settings'
+                  : bootError
+                    ? bootError
+                    : 'Click for Mode A vs Mode B'
+              }
+            >
+              {bootStatus === 401
+                ? 'Sign in'
+                : bootError
+                  ? 'Offline'
+                  : backendMode === 'distributed'
+                    ? 'Distributed'
+                    : 'Local'}
+              {authHonesty?.auth_required && !bootError && bootStatus !== 401 ? (
+                <span className="text-ink-400">· Auth</span>
+              ) : null}
+            </button>
+            {(() => {
+              const chipForThisWorkspace = Boolean(effectiveLastRunId) || isRunning
+              if (!chipForThisWorkspace && !chipLabel) return null
+              if (isRunning) {
+                return (
+                  <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
+                    {chipLabel}
+                  </span>
+                )
+              }
+              if (chipLabel && effectiveLastRunId) {
+                return (
+                  <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
+                    {chipLabel}
+                  </span>
+                )
+              }
+              return null
+            })()}
+            {workspaceOpen && parsedLocation.workspaceId && (
+              <div className="inline-flex max-w-[15rem] items-center gap-0.5">
+                <button
+                  type="button"
+                  className="inline-flex max-w-[12rem] items-center gap-1 truncate rounded-l-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400"
+                  title="Open workspace Home"
+                  onClick={() => {
+                    const W = parsedLocation.workspaceId || activeProject
+                    if (W) openProject(W)
+                  }}
+                >
+                  <FolderKanban className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{parsedLocation.workspaceId || activeProject}</span>
+                </button>
+                <button
+                  type="button"
+                  className="rounded-r-full border border-l-0 border-accent-300 bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800 hover:bg-accent-100"
+                  title="Switch workspace — show project picker"
+                  onClick={switchProject}
+                >
+                  Switch
+                </button>
+              </div>
             )}
-          </main>
+            {(!activeProject || !workspaceOpen) && (
+              <button
+                type="button"
+                className="inline-flex items-center rounded-full border border-dashed border-ink-300 bg-white/80 px-2.5 py-0.5 text-[11px] text-ink-500 hover:border-accent-300 hover:text-accent-800"
+                onClick={() => {
+                  if (activeProject) openProject(activeProject)
+                  else go('projects')
+                }}
+              >
+                Open workspace
+              </button>
+            )}
+            {effectiveLastRunId && (
+              <LastRunMenu
+                runId={effectiveLastRunId}
+                showCompare
+                onOpenRun={() =>
+                  openRun(effectiveLastRunId, activeProject ? { project: activeProject } : undefined)
+                }
+                onOpenTrace={() =>
+                  openTrace({ runId: effectiveLastRunId, project: activeProject || undefined })
+                }
+                onOpenArtifacts={() =>
+                  openArtifacts({ runId: effectiveLastRunId, project: activeProject || undefined })
+                }
+                onOpenCompare={() => openExperiments({ runIds: [effectiveLastRunId] })}
+              />
+            )}
+            <LayoutModeControl className="hidden sm:inline-flex" />
+            <button
+              type="button"
+              className="btn-icon"
+              onClick={() => setHelpOpen(true)}
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts (?)"
+            >
+              <span className="text-[13px] font-semibold">?</span>
+            </button>
+            <button
+              type="button"
+              className="btn-icon"
+              onClick={openSettings}
+              aria-label="Settings"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        {bootError && (
+          <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950">
+            <span title={bootError}>
+              {bootStatus === 401 ? 'Sign in with your API token' : "Can't reach the API"}
+            </span>
+            <button type="button" className="btn-secondary" onClick={openSettings}>
+              Open Settings
+            </button>
+          </div>
+        )}
+
+        <div className="relative flex min-h-0 flex-1 overflow-hidden">
+          {navOpen && narrow && (
+            <button
+              type="button"
+              className="absolute inset-0 z-20 bg-ink-950/30 md:hidden"
+              aria-label="Close navigation"
+              onClick={() => setNavOpen(false)}
+            />
+          )}
+          {navOpen && !narrow ? (
+            <SplitPane
+              className="h-full min-h-0 w-full flex-1"
+              storageKey={LAYOUT_KEYS.nav}
+              defaultSize={216}
+              minSize={168}
+              maxSize={300}
+              paneOverflow="hidden"
+            >
+              {[navAside, mainContent]}
+            </SplitPane>
+          ) : (
+            <>
+              {navOpen ? navAside : null}
+              {mainContent}
+            </>
+          )}
         </div>
 
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onOpenChange={setPaletteOpen} />
@@ -1192,6 +1229,7 @@ export default function App() {
           </div>
         )}
       </div>
+      </LayoutPrefsProvider>
     </ErrorBoundary>
   )
 }
