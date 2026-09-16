@@ -188,9 +188,17 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
 
         from app.core.ir.loader import load_ir_from_file
         from app.core.run_journal import RunManager
+        from app.mcp.handlers.artifacts import _safe_run_dir
 
         from app.core.config import runs_dir as _runs_dir
-        run_dir = _runs_dir() / run_id
+        try:
+            run_dir = _safe_run_dir(_runs_dir(), run_id)
+        except ValueError as exc:
+            return {
+                "error": True,
+                "error_type": "invalid_run_id",
+                "message": str(exc),
+            }
 
         if not run_dir.exists():
             return {

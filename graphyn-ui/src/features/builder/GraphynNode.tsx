@@ -402,7 +402,14 @@ export type NodeExecStatus =
 /** Normalize legacy success/error aliases used during streaming. */
 export function normalizeExecStatus(status?: string): NodeExecStatus {
   const s = (status || 'idle').toLowerCase()
-  if (s === 'success' || s === 'complete' || s === 'completed' || s === 'ok') return 'succeeded'
+  if (
+    s === 'success' ||
+    s === 'succeeded' ||
+    s === 'complete' ||
+    s === 'completed' ||
+    s === 'ok'
+  )
+    return 'succeeded'
   if (s === 'error' || s === 'fail' || s === 'failed') return 'failed'
   if (s === 'skip' || s === 'skipped') return 'skipped'
   if (s === 'cancel' || s === 'cancelled' || s === 'canceled') return 'cancelled'

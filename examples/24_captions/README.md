@@ -4,7 +4,7 @@ dataset_ingest → asr_transcribe (mock word timings) → caption_export (SRT + 
 
 ## Output
 
-`examples/24_captions/output/captions.{srt,vtt,json}`
+`workspace/artifacts/captions/` (SRT/VTT/JSON from `pipeline.graph.json` `output_dir`)
 
 ## Run with mock ASR
 

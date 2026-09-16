@@ -58,7 +58,7 @@ def readiness_check():
     """
     import os
 
-    from app.core.nodes import is_registry_ready, registry
+    from app.core.nodes import is_registry_ready, registry, registry_init_error
 
     backend_id = (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python"
     backend_mode = "distributed" if backend_id == "distributed" else "local"
@@ -70,13 +70,15 @@ def readiness_check():
     except Exception:
         worker_count = 0
     reg_ready = is_registry_ready()
+    init_err = registry_init_error()
     return {
-        "status": "ready" if reg_ready else "starting",
+        "status": "ready" if reg_ready else ("failed" if init_err else "starting"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "backend": backend_id,
         "backend_mode": backend_mode,
         "worker_count": worker_count,
         "registry_ready": reg_ready,
+        "registry_init_error": init_err,
         "node_type_count": len(registry) if reg_ready else 0,
         "checks": {
             "runs_dir_exists": _runs_dir().exists(),
@@ -125,7 +127,7 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
     """
     from app.core.run_cleanup import cleanup_workspace
 
-    return cleanup_workspace(
+    result = cleanup_workspace(
         older_than_days=body.older_than_days,
         delete_cache=body.delete_cache,
         delete_artifacts=body.delete_artifacts,
@@ -133,6 +135,24 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
         reconcile_abandoned=body.reconcile_abandoned,
         stale_after_hours=body.stale_after_hours,
     )
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor="api",
+            action="system.cleanup",
+            resource_type="workspace",
+            resource_id="cleanup",
+            meta={
+                "older_than_days": body.older_than_days,
+                "delete_cache": body.delete_cache,
+                "delete_artifacts": body.delete_artifacts,
+                **{k: result.get(k) for k in ("runs_deleted", "cache_deleted", "artifacts_deleted", "reconciled") if isinstance(result, dict)},
+            },
+        )
+    except Exception:
+        pass
+    return result
 
 
 # ── Projects registry ─────────────────────────────────────────────────────────
@@ -168,7 +188,10 @@ def get_webhooks():
 @router.put("/webhooks", summary="Set webhook configuration")
 def set_webhooks(body: WebhookBody, request: Request):
     """Save webhook configuration."""
-    _webhook_svc.save(body.url, body.events)
+    try:
+        _webhook_svc.save(body.url, body.events)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         from app.core.audit import record_audit
 

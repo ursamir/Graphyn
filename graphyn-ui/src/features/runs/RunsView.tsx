@@ -6,7 +6,12 @@ import { emptyGraph } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { runMatchesProject } from '../../lib/projectStamp'
-import { normalizeRunStatus, statusMatchesFilter } from '../../lib/runStatus'
+import {
+  isLiveRunStatus,
+  isTerminalRunStatus,
+  normalizeRunStatus,
+  statusMatchesFilter,
+} from '../../lib/runStatus'
 import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, LoadingBlock, NeedProjectPrompt, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
 import {
   formatExecutionLine,
@@ -137,7 +142,6 @@ type WaveBucket = { key: string; count: number; className: string }
 
 function waveBucketsFromNodeStats(
   nodeStats: Array<Record<string, unknown>> | undefined,
-  currentNode?: string | null,
 ): WaveBucket[] {
   const WAVE_TONE: Record<string, string> = {
     running: 'bg-sky-400',
@@ -152,16 +156,11 @@ function waveBucketsFromNodeStats(
     success: 'bg-emerald-400',
     cancelled: 'bg-ink-300',
   }
-  if (!nodeStats?.length) {
-    if (currentNode) return [{ key: 'running', count: 1, className: WAVE_TONE.running }]
-    return []
-  }
+  if (!nodeStats?.length) return []
   const counts: Record<string, number> = {}
   for (const n of nodeStats) {
-    let st = String(n.status ?? n.state ?? '').toLowerCase().trim()
-    if (!st) {
-      st = currentNode && String(n.node_id || '') === String(currentNode) ? 'running' : 'done'
-    }
+    const st = String(n.status ?? n.state ?? '').toLowerCase().trim()
+    if (!st) continue
     counts[st] = (counts[st] || 0) + 1
   }
   return Object.entries(counts).map(([key, count]) => ({
@@ -169,6 +168,65 @@ function waveBucketsFromNodeStats(
     count,
     className: WAVE_TONE[key] || 'bg-ink-300',
   }))
+}
+
+const LOG_ROW_PX = 20
+const LOG_VIEWPORT_PX = 448
+
+type FormattedLogRow = {
+  i: number
+  l: Record<string, unknown>
+  line: ReturnType<typeof formatExecutionLine>
+  nodeHint: string | null
+  failed: boolean
+}
+
+function VirtualRunLogList({ rows }: { rows: FormattedLogRow[] }) {
+  const scrollerRef = React.useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = React.useState(0)
+  const [viewportH, setViewportH] = React.useState(LOG_VIEWPORT_PX)
+
+  React.useEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setViewportH(el.clientHeight || LOG_VIEWPORT_PX))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const totalH = rows.length * LOG_ROW_PX
+  const start = Math.max(0, Math.floor(scrollTop / LOG_ROW_PX) - 4)
+  const visibleCount = Math.ceil(viewportH / LOG_ROW_PX) + 8
+  const end = Math.min(rows.length, start + visibleCount)
+  const slice = rows.slice(start, end)
+  const offsetY = start * LOG_ROW_PX
+
+  return (
+    <div
+      ref={scrollerRef}
+      className="max-h-[28rem] overflow-auto rounded-2xl bg-ink-950 p-4 font-mono text-[11px] leading-5 text-ink-100 shadow-soft"
+      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+    >
+      {rows.length === 0 ? (
+        <div className="text-ink-500">No logs recorded for this run.</div>
+      ) : (
+        <div style={{ height: totalH, position: 'relative' }}>
+          <div style={{ transform: `translateY(${offsetY}px)` }}>
+            {slice.map(({ i, line, nodeHint, failed }) => (
+              <div key={i} style={{ height: LOG_ROW_PX }} className={failed ? 'text-rose-300' : ''}>
+                {nodeHint ? (
+                  <span className="mr-1.5 rounded bg-ink-800 px-1 text-[10px] text-accent-300">
+                    {humanNodeLabel(nodeHint)}
+                  </span>
+                ) : null}
+                {line.text}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function NodeStatusWave({ buckets }: { buckets: WaveBucket[] }) {
@@ -274,6 +332,7 @@ export default function RunsView() {
   >([])
   const limit = 50
   const pendingPanelRef = React.useRef<'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage' | null>(null)
+  const wasLiveRunRef = React.useRef(false)
 
   const goHistoryTab = React.useCallback(() => {
     setFocusRunsTab('history')
@@ -488,6 +547,43 @@ export default function RunsView() {
     }
   }
 
+  const refetchRunDetail = React.useCallback(async (id: string) => {
+    try {
+      const [d, st, dbg, cps, outs, arts] = await Promise.all([
+        apiJson<Record<string, unknown>>(`/runs/${id}`),
+        apiJson<Record<string, unknown>>(`/runs/${id}/status`).catch(() => null),
+        apiJson<Record<string, unknown>>(`/runs/${id}/debug-report`).catch(() => null),
+        apiJson<string[]>(`/runs/${id}/checkpoints`).catch(() => []),
+        apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
+        apiJson<RunArtifact[]>(`/runs/${id}/artifacts`).catch(() => []),
+      ])
+      setDetail(d)
+      setStatus(st)
+      setDebug(dbg)
+      setCheckpoints(Array.isArray(cps) ? cps : [])
+      setOutputFiles(Array.isArray(outs) ? outs : [])
+      setRunArtifacts(Array.isArray(arts) ? arts : [])
+      void loadRunModels(id)
+    } catch {
+      /* keep prior detail on refresh failure */
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (!selected) {
+      wasLiveRunRef.current = false
+      return
+    }
+    const metaStatus = (detail?.meta as { status?: string } | undefined)?.status
+    const normalized = normalizeRunStatus(status?.status ?? metaStatus)
+    const live = isLiveRunStatus(normalized)
+    if (wasLiveRunRef.current && !live && isTerminalRunStatus(normalized)) {
+      void refetchRunDetail(selected)
+      void load()
+    }
+    wasLiveRunRef.current = live
+  }, [selected, status?.status, detail, refetchRunDetail, load])
+
   const promote = async (alias: 'latest' | 'staging' | 'prod' = promoteAlias) => {
     if (!selected) return
     try {
@@ -646,11 +742,17 @@ export default function RunsView() {
       'unknown',
   )
   const logs = Array.isArray(detail?.logs) ? (detail!.logs as Array<Record<string, unknown>>) : []
-  const formattedLogs = skipConsecutiveByText(
+  const formattedLogs: FormattedLogRow[] = skipConsecutiveByText(
     logs.map((l, i) => {
       const raw = typeof l.message === 'string' ? l.message : JSON.stringify(l)
       const line = formatExecutionLine(raw)
-      return { i, l, line }
+      const msg = line.text
+      const nodeHint =
+        msg.match(/\bnode[_\s]?id[=: ]+([A-Za-z0-9_.-]+)/i)?.[1] ||
+        msg.match(/\b(?:executing|completed|failed)\s+([A-Za-z0-9_.-]+)/i)?.[1] ||
+        null
+      const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
+      return { i, l, line, nodeHint, failed }
     }),
     (row) => row.line.text,
   )
@@ -812,7 +914,7 @@ export default function RunsView() {
         ? ((liveDetail!.meta as { node_stats: Array<Record<string, unknown>> }).node_stats)
         : []
     const currentNode = liveStatus?.current_node != null ? String(liveStatus.current_node) : null
-    const wave = waveBucketsFromNodeStats(liveNodeStats, currentNode)
+    const wave = waveBucketsFromNodeStats(liveNodeStats)
     const workers =
       (liveDetail?.meta as { distributed_node_workers?: Record<string, string> } | undefined)
         ?.distributed_node_workers ||
@@ -1539,29 +1641,7 @@ export default function RunsView() {
                 <p className="text-xs text-ink-500">
                   Chronological execution log — what each step printed while the pipeline ran. Use Lineage for node order; Run outputs for downloads.
                 </p>
-                <div className="max-h-[28rem] overflow-auto rounded-2xl bg-ink-950 p-4 font-mono text-[11px] leading-5 text-ink-100 shadow-soft">
-                  {logs.length === 0 ? (
-                    <div className="text-ink-500">No logs recorded for this run.</div>
-                  ) : (
-                    formattedLogs.map(({ i, l, line }) => {
-                      const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
-                      const msg = line.text
-                      const nodeHint = (() => {
-                        const m = msg.match(/\bnode[_\s]?id[=: ]+([A-Za-z0-9_.-]+)/i)
-                          || msg.match(/\b(?:executing|completed|failed)\s+([A-Za-z0-9_.-]+)/i)
-                        return m ? m[1] : null
-                      })()
-                      return (
-                        <div key={i} className={failed ? 'text-rose-300' : ''}>
-                          {nodeHint ? (
-                            <span className="mr-1.5 rounded bg-ink-800 px-1 text-[10px] text-accent-300">{humanNodeLabel(nodeHint)}</span>
-                          ) : null}
-                          {msg}
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
+                <VirtualRunLogList rows={formattedLogs} />
               </div>
             )}
             {panel === 'debug' && (

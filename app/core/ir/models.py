@@ -25,6 +25,11 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def thaw_config(v: Any) -> Any:
+    """Public helper: deep-copy-friendly thaw of frozen IR config mappings."""
+    return _deep_unfreeze(v)
+
+
 def _deep_unfreeze(v: Any) -> Any:
     """Recursively convert MappingProxyType/tuple containers to dict/list."""
     if isinstance(v, MappingProxyType):

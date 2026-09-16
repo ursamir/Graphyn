@@ -50,7 +50,7 @@ augmentation_pipeline(codec_degrade + noise_inject) →
 audio_exporter (label=degraded, append=true)
 ```
 
-Output: `output/speech_enhancement/v1/`
+Output: `workspace/artifacts/speech-enhancement/speech_enhancement/` (per `pipeline.graph.json` `audio_exporter.output_dir`)
 
 ### Why each stage
 

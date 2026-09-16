@@ -76,10 +76,11 @@ def _resolve_under_project(raw: str) -> Path | None:
         candidates.append(path)
     else:
         candidates.append(Path.cwd() / path)
-        candidates.append(root / path)
         parts = path.parts
         if parts and parts[0] == "workspace":
+            # Prefer project-relative path when IR uses workspace/… prefix (P2-26).
             candidates.append(root / Path(*parts[1:]))
+        candidates.append(root / path)
         if parts and parts[0] == "artifacts":
             candidates.append(root / path)
     for cand in candidates:

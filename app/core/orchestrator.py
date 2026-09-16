@@ -42,6 +42,59 @@ from app.core.nodes.metadata import stable_node_type
 log = logging.getLogger(__name__)
 
 
+def _persist_node_stats(run: Any, node_stats: list) -> None:
+    try:
+        run._write_meta_field("node_stats", node_stats)
+    except Exception:
+        pass
+
+
+def _node_stat_record(
+    node_id: str,
+    node_type: str,
+    node_index: int,
+    duration_s: float,
+    *,
+    status: str = "completed",
+    cache_hit: bool = False,
+) -> dict:
+    return {
+        "node_id": node_id,
+        "node_type": node_type,
+        "node_index": node_index,
+        "duration_s": round(duration_s, 4),
+        "duration_ms": round(duration_s * 1000, 2),
+        "status": status,
+        "cache_hit": cache_hit,
+    }
+
+
+def _compute_node_cache_key(
+    cache: Any,
+    node_type: str,
+    node_cfg_dict: dict,
+    inputs: dict,
+    graph_obj: Any,
+    node_id: str,
+    registry: Any,
+) -> str:
+    node_inst = graph_obj.get_node(node_id)
+    node_seed = getattr(node_inst, "seed", None)
+    node_version: str | None = None
+    if registry is not None:
+        try:
+            node_version = registry.get_metadata(node_type).version
+        except Exception:
+            node_version = None
+    return cache.compute_key(
+        node_type,
+        node_cfg_dict,
+        inputs,
+        node_seed=node_seed,
+        node_version=node_version,
+    )
+
+
 def _graph_display_name(graph: Any) -> str:
     return str(getattr(getattr(graph, "metadata", None), "name", "") or "")
 
@@ -65,6 +118,40 @@ def _scope_graph_to_run(graph: Any, run: Any) -> Any:
         pass
     run._write_meta_field("artifacts_dir", layout["run_dir"])
     return scoped
+
+
+def _finalize_event_driven_run(
+    run: Any,
+    logger: Any,
+    event_terminal: str | None,
+    *,
+    active_nodes: set[str],
+    node_stats: list,
+    start_time: float,
+    trigger_count: int,
+    graph_name: str | None,
+    graph: Any,
+) -> None:
+    """Persist logs and terminal metadata for event-driven execution (P3-13 extract)."""
+    run.save_logs(logger.logs)
+    if event_terminal == "cancelled":
+        run.mark_cancelled()
+    elif event_terminal == "failed":
+        return
+    elif event_terminal is None:
+        run.save_metadata({
+            "num_nodes": len(active_nodes),
+            "node_stats": node_stats,
+            "duration_s": round(time.time() - start_time, 4),
+            "event_driven": True,
+            "trigger_count": trigger_count,
+            **({"graph_name": graph_name} if graph_name else {}),
+            **_finalize_run_artifacts(run, graph),
+        })
+        try:
+            logger.pipeline_done(run.run_id, time.time() - start_time)
+        except Exception:
+            log.debug("pipeline_done emit failed (event-driven)", exc_info=True)
 
 
 def _finalize_run_artifacts(run: Any, graph: Any) -> dict[str, Any]:
@@ -100,31 +187,6 @@ def _finalize_run_artifacts(run: Any, graph: Any) -> dict[str, Any]:
 
 
 
-# ── Capability resolution ──────────────────────────────────────────────────────
-# Canonical implementation lives in registry_runtime (BC3).
-# This alias is kept here for backward compatibility with any callers that
-# imported _resolve_capability directly from orchestrator (e.g. CLI inspect,
-# MCP optimization handler). New code should import from registry_runtime.
-
-def _resolve_capability(ir_node: Any, registry: Any) -> Any:
-    """Resolve capability metadata for a node instance.
-
-    Delegates to registry_runtime.resolve_capability — canonical implementation
-    lives in BC3 (Node Catalog) since it only depends on IR models and the registry.
-
-    Deprecated: import ``resolve_capability`` from ``app.core.registry_runtime``.
-    """
-    import warnings
-
-    warnings.warn(
-        "_resolve_capability from app.core.orchestrator is deprecated; "
-        "import resolve_capability from app.core.registry_runtime instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _resolve_capability_impl(ir_node, registry)
-
-
 # ── Main async execution entry point ──────────────────────────────────────────
 
 async def run_pipeline_ir_async(
@@ -153,6 +215,19 @@ async def run_pipeline_ir_async(
         raise ValueError(
             "parallel and event_driven are mutually exclusive execution modes. "
             "Pass only one of parallel=True or event_driven=True."
+        )
+    # P1-4: parallel path does not yet honour filters / overrides / resume —
+    # refuse rather than silently producing wrong results.
+    if parallel and (
+        include_nodes is not None
+        or exclude_nodes is not None
+        or input_overrides
+        or resume_run_id is not None
+    ):
+        raise ValueError(
+            "parallel=True cannot be combined with include_nodes, exclude_nodes, "
+            "input_overrides, or resume_run_id until those are wired into ParallelExecutor. "
+            "Run without --parallel, or omit those options."
         )
 
     from app.core.logger import PipelineLogger
@@ -219,6 +294,9 @@ async def run_pipeline_ir_async(
         included_nodes=sorted(active_nodes) if is_partial else None,
         run_id=run_id,
     )
+    run._write_meta_field("num_nodes", len(active_nodes))
+
+    from app.core.nodes import registry as node_registry
 
     # ── Setup executors ────────────────────────────────────────────────────────
     # SA-O-SETUP fix: if setup() raises for any node, tear down all executors
@@ -251,6 +329,8 @@ async def run_pipeline_ir_async(
     node_stats: list[dict] = []
     completed_nodes: set[str] = set()
     skipped_nodes: list[str] = []
+    # Nodes skipped because a required branch/condition input was unproduced (P1-1).
+    branch_skipped: set[str] = set()
     _seq_teardown_done = False  # set True by sequential finally to prevent double teardown
 
     # ── Resume ─────────────────────────────────────────────────────────────────
@@ -292,7 +372,6 @@ async def run_pipeline_ir_async(
     # ── Parallel execution ─────────────────────────────────────────────────────
     if parallel:
         from app.core.executor import ParallelExecutor
-        from app.core.nodes import registry as node_registry
 
         par_exec = ParallelExecutor(max_workers=max_workers)
         node_index_map = {nid: idx for idx, nid in enumerate(graph_obj.execution_order)}
@@ -302,6 +381,7 @@ async def run_pipeline_ir_async(
         # and executor teardowns always run, even when a wave raises.
         try:
             for wave_idx, wave in enumerate(graph_obj.execution_waves):
+                run.wait_if_paused()
                 if run.is_cancelled:
                     nodes_completed = len(node_stats)
                     nodes_remaining = len(active_nodes) - nodes_completed
@@ -339,7 +419,7 @@ async def run_pipeline_ir_async(
                     )
                 except Exception as exc:
                     run.save_logs(logger.logs)
-                    run.mark_failed(str(exc))
+                    run.mark_failed(str(exc), node_stats=node_stats)
                     deregister_active_run(run.run_id)
                     raise
                 logger.wave_end(wave_idx, wave, time.time() - wave_start_time)
@@ -400,7 +480,9 @@ async def run_pipeline_ir_async(
             exec_ = executors[node_id]
             node_type = stable_node_type(node)
 
-            logger.node_start(node_type, idx, total_nodes=len(active_nodes))
+            logger.node_start(
+                node_type, idx, total_nodes=len(active_nodes), node_id=node_id
+            )
             node_start_time = time.time()
 
             # Assemble inputs — cache condition results to avoid double-evaluation
@@ -428,15 +510,21 @@ async def run_pipeline_ir_async(
                     except ConditionEvaluationError as exc:
                         logger.node_error(node_type, idx, exc)
                         run.save_logs(logger.logs)
-                        run.mark_failed(str(exc))
+                        run.mark_failed(str(exc), node_stats=node_stats)
                         deregister_active_run(run.run_id)
                         raise
                     _condition_results[(src_id, src_port, dst_port)] = passes
                     if not passes:
-                        inputs[dst_port] = None
+                        # Unproduced — do not inject None (P1-1 / T1).
                         continue
 
-                upstream_outputs = node_outputs[src_id]
+                if src_id in branch_skipped:
+                    continue
+
+                upstream_outputs = node_outputs.get(src_id, {})
+                if not isinstance(upstream_outputs, dict) or src_port not in upstream_outputs:
+                    # Inactive if_switch branch or empty skip outputs.
+                    continue
                 value = upstream_outputs.get(src_port)
                 port = node.input_ports.get(dst_port)
                 if port and port.cardinality == "multi":
@@ -445,27 +533,22 @@ async def run_pipeline_ir_async(
                 else:
                     inputs[dst_port] = value
 
-            # Skip node if required port has None from a false condition.
-            # Reuse cached condition results — no second evaluation needed.
-            skip_node = False
-            for port_name, port in node.input_ports.items():
-                if port.required and inputs.get(port_name) is None:
-                    false_condition_ports: set[str] = set()
-                    for src_id, src_port, dst_port in incoming[node_id]:
-                        if dst_port != port_name:
-                            continue
-                        condition = edge_conditions.get((src_id, src_port, node_id, dst_port))
-                        if condition is not None:
-                            cached = _condition_results.get((src_id, src_port, dst_port))
-                            if cached is False:
-                                false_condition_ports.add(dst_port)
-                    if port_name in false_condition_ports:
-                        logger.node_skip(node_id, node_type, reason="condition_false")
-                        node_outputs[node_id] = {}
-                        skip_node = True
-                        break
+            # Skip when a required port is unproduced (condition / branch / upstream skip).
+            from app.core.skip_logic import should_skip_for_unproduced
 
+            skip_node, skip_reason = should_skip_for_unproduced(
+                node_id=node_id,
+                node=node,
+                incoming=incoming,
+                node_outputs=node_outputs,
+                skipped=branch_skipped,
+                edge_conditions=edge_conditions,
+                condition_results=_condition_results,
+            )
             if skip_node:
+                logger.node_skip(node_id, node_type, reason=skip_reason or "condition_false")
+                node_outputs[node_id] = {}
+                branch_skipped.add(node_id)
                 continue
 
             if input_overrides and node_id in input_overrides:
@@ -486,7 +569,20 @@ async def run_pipeline_ir_async(
                 node_cfg_dict = next(
                     (spec.config for spec in pipeline_cfg.nodes if spec.node_id == node_id), {}
                 )
-                cache_key = cache.compute_key(node_type, node_cfg_dict, inputs)
+                _node_version: str | None = None
+                try:
+                    from app.core.registry_runtime import get_registry as _get_reg_cache
+
+                    _node_version = _get_reg_cache().get_metadata(node_type).version
+                except Exception:
+                    _node_version = None
+                cache_key = cache.compute_key(
+                    node_type,
+                    node_cfg_dict,
+                    inputs,
+                    node_seed=getattr(node, "seed", None),
+                    node_version=_node_version,
+                )
                 cached_result = cache.load(cache_key)
                 if cached_result is not None:
                     node_outputs[node_id] = cached_result
@@ -500,9 +596,14 @@ async def run_pipeline_ir_async(
                     else:
                         outputs = exec_.execute(inputs)
                 except Exception as exc:
-                    logger.node_error(node_type, idx, exc)
+                    logger.node_error(node_type, idx, exc, node_id=node_id)
                     run.save_logs(logger.logs)
-                    run.mark_failed(str(exc))
+                    run.mark_failed(
+                        str(exc),
+                        node_stats=node_stats,
+                        failed_node_id=node_id,
+                        failed_node_type=node_type,
+                    )
                     deregister_active_run(run.run_id)
                     raise
 
@@ -514,7 +615,7 @@ async def run_pipeline_ir_async(
                     if ir_node is not None:
                         try:
                             from app.core.registry_runtime import get_registry as _get_reg
-                            cap = _resolve_capability(ir_node, _get_reg())
+                            cap = _resolve_capability_impl(ir_node, _get_reg())
                             cacheable = cap.cacheable
                         except Exception:
                             cacheable = True
@@ -522,38 +623,43 @@ async def run_pipeline_ir_async(
                         cache.save(cache_key, outputs)
 
             if checkpoint:
-                _write_checkpoint(run.base_path, node_id, node_outputs[node_id], logger=logger)
+                _write_checkpoint(
+                    run.base_path,
+                    node_id,
+                    node_outputs[node_id],
+                    logger=logger,
+                    graph_hash=graph_hash,
+                )
                 run.update_resume_state(node_id)
 
-            if not cache_hit:
-                _prior_artifact_ids: list[str] = []
-                for _src_id, _src_port, _dst_port in incoming[node_id]:
-                    _prior_artifact_ids.extend(
-                        r.artifact_id for r in run._artifacts if r.node_id == _src_id
+            _prior_artifact_ids: list[str] = []
+            for _src_id, _src_port, _dst_port in incoming[node_id]:
+                _prior_artifact_ids.extend(
+                    r.artifact_id for r in run._artifacts if r.node_id == _src_id
+                )
+            _registered_this_node: set[str] = set()
+            for _port_name, _port_value in node_outputs[node_id].items():
+                if _port_value is None:
+                    continue
+                _artifact_type = _infer_artifact_type(_port_value)
+                try:
+                    _rec = run.register_artifact(
+                        node_id=node_id,
+                        node_type=node_type,
+                        artifact_type=_artifact_type,
+                        data=_port_value,
+                        metadata={"port": _port_name},
+                        input_artifact_ids=[
+                            aid for aid in _prior_artifact_ids
+                            if aid not in _registered_this_node
+                        ],
                     )
-                _registered_this_node: set[str] = set()
-                for _port_name, _port_value in node_outputs[node_id].items():
-                    if _port_value is None:
-                        continue
-                    _artifact_type = _infer_artifact_type(_port_value)
-                    try:
-                        _rec = run.register_artifact(
-                            node_id=node_id,
-                            node_type=node_type,
-                            artifact_type=_artifact_type,
-                            data=_port_value,
-                            metadata={"port": _port_name},
-                            input_artifact_ids=[
-                                aid for aid in _prior_artifact_ids
-                                if aid not in _registered_this_node
-                            ],
-                        )
-                        _registered_this_node.add(_rec.artifact_id)
-                    except Exception as _art_exc:
-                        log.warning(
-                            "Artifact registration failed for node '%s' port '%s': %s",
-                            node_id, _port_name, _art_exc,
-                        )
+                    _registered_this_node.add(_rec.artifact_id)
+                except Exception as _art_exc:
+                    log.warning(
+                        "Artifact registration failed for node '%s' port '%s': %s",
+                        node_id, _port_name, _art_exc,
+                    )
 
             node_duration = time.time() - node_start_time
             # SA-O-CNT fix: count all outputs — list length for list ports,
@@ -562,13 +668,19 @@ async def run_pipeline_ir_async(
                 len(v) if isinstance(v, list) else (0 if v is None else 1)
                 for v in node_outputs[node_id].values()
             )
-            logger.node_end(node_type, idx, node_duration, output_count=_output_count)
-            node_stats.append({
-                "node_id": node_id,
-                "node_type": node_type,
-                "node_index": idx,
-                "duration_s": round(node_duration, 4),
-            })
+            logger.node_end(
+                node_type,
+                idx,
+                node_duration,
+                output_count=_output_count,
+                node_id=node_id,
+            )
+            node_stats.append(
+                _node_stat_record(
+                    node_id, node_type, idx, node_duration, cache_hit=cache_hit
+                )
+            )
+            _persist_node_stats(run, node_stats)
         except Exception as _e:
             raise
         finally:
@@ -598,12 +710,15 @@ async def run_pipeline_ir_async(
             }
 
             trigger_count = 0
+            event_terminal: str | None = None
 
             async def _handle_source(node_id: str, source: EventSource) -> None:
-                nonlocal trigger_count
+                nonlocal trigger_count, event_terminal
                 source_type = trigger_nodes[node_id]["source_type"]
                 async for payload in source.watch():
+                    run.wait_if_paused()
                     if run.is_cancelled:
+                        event_terminal = "cancelled"
                         break
                     logger.event_received(
                         source_type=source_type,
@@ -617,6 +732,10 @@ async def run_pipeline_ir_async(
                         trigger_idx = 0
 
                     for exec_node_id in exec_order[trigger_idx:]:
+                        run.wait_if_paused()
+                        if run.is_cancelled:
+                            event_terminal = "cancelled"
+                            break
                         if exec_node_id not in active_nodes:
                             continue
                         exec_node = graph_obj.get_node(exec_node_id)
@@ -647,16 +766,31 @@ async def run_pipeline_ir_async(
                             if port_name not in exec_inputs and not port.required:
                                 exec_inputs[port_name] = None
 
-                        logger.node_start(exec_node_type, exec_idx, total_nodes=len(active_nodes))
+                        logger.node_start(
+                            exec_node_type,
+                            exec_idx,
+                            total_nodes=len(active_nodes),
+                            node_id=exec_node_id,
+                        )
                         _node_start_time = time.time()
                         try:
-                            exec_outputs = exec_obj.execute(exec_inputs)
+                            exec_outputs = await asyncio.to_thread(
+                                exec_obj.execute, exec_inputs
+                            )
                             node_outputs[exec_node_id] = exec_outputs
                         except Exception as exc:
-                            logger.node_error(exec_node_type, exec_idx, exc)
+                            logger.node_error(
+                                exec_node_type, exec_idx, exc, node_id=exec_node_id
+                            )
                             # SA-O-EVT fix: mark the run failed so it is not
                             # left in an indeterminate "active" state forever.
-                            run.mark_failed(str(exc))
+                            run.mark_failed(
+                                str(exc),
+                                node_stats=node_stats,
+                                failed_node_id=exec_node_id,
+                                failed_node_type=exec_node_type,
+                            )
+                            event_terminal = "failed"
                             break
                         _node_duration = time.time() - _node_start_time
                         # SA-O-CNT fix: count all outputs correctly.
@@ -664,14 +798,24 @@ async def run_pipeline_ir_async(
                             len(v) if isinstance(v, list) else (0 if v is None else 1)
                             for v in exec_outputs.values()
                         )
-                        logger.node_end(exec_node_type, exec_idx, _node_duration,
-                                        output_count=_output_count)
-                        node_stats.append({
-                            "node_id": exec_node_id,
-                            "node_type": exec_node_type,
-                            "node_index": exec_idx,
-                            "duration_s": round(_node_duration, 4),
-                        })
+                        logger.node_end(
+                            exec_node_type,
+                            exec_idx,
+                            _node_duration,
+                            output_count=_output_count,
+                            node_id=exec_node_id,
+                        )
+                        node_stats.append(
+                            _node_stat_record(
+                                exec_node_id,
+                                exec_node_type,
+                                exec_idx,
+                                _node_duration,
+                            )
+                        )
+                        _persist_node_stats(run, node_stats)
+                    if event_terminal == "cancelled":
+                        break
                     trigger_count += 1
 
             async def _cancel_watcher() -> None:
@@ -692,10 +836,11 @@ async def run_pipeline_ir_async(
                 cancel_task.cancel()
                 for result in results:
                     if isinstance(result, BaseException):
-                        run.mark_failed(str(result))
+                        run.mark_failed(str(result), node_stats=node_stats)
+                        event_terminal = "failed"
                         raise result
             except asyncio.CancelledError:
-                pass
+                event_terminal = event_terminal or "cancelled"
             finally:
                 # SA-O2 fix: always deregister, even if asyncio.gather raises
                 # an unexpected exception (not just CancelledError).
@@ -706,20 +851,17 @@ async def run_pipeline_ir_async(
             for exec_ in executors.values():
                 exec_.teardown()
 
-            run.save_logs(logger.logs)
-            run.save_metadata({
-                "num_nodes": len(active_nodes),
-                "node_stats": node_stats,
-                "duration_s": round(time.time() - start_time, 4),
-                "event_driven": True,
-                "trigger_count": trigger_count,
-                **({"graph_name": graph_name} if graph_name else {}),
-                **_finalize_run_artifacts(run, graph),
-            })
-            try:
-                logger.pipeline_done(run.run_id, time.time() - start_time)
-            except Exception:
-                log.debug("pipeline_done emit failed (event-driven)", exc_info=True)
+            _finalize_event_driven_run(
+                run,
+                logger,
+                event_terminal,
+                active_nodes=active_nodes,
+                node_stats=node_stats,
+                start_time=start_time,
+                trigger_count=trigger_count,
+                graph_name=graph_name,
+                graph=graph,
+            )
             last_id = graph_obj.execution_order[-1]
             return node_outputs.get(last_id, {})
 

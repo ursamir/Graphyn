@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI smoke: empty-env install + deps gate + import + focused pytest + templates.
+# CI gate: empty-env install + deps + import + full unit_test suite + templates.
 # Usage (from repo root): bash scripts/ci_smoke.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,26 +12,25 @@ python3 -m venv "$VENV"
 "$VENV/bin/python" scripts/check_deps.py --inventory
 "$VENV/bin/python" scripts/_import_smoke.py
 
-# Core isolation suite (no plugin install required)
-export GRAPHYN_SKIP_PLUGIN_LOAD=1
-"$VENV/bin/pytest" --collect-only -q
-"$VENV/bin/pytest" -q \
-  unit_test/core/test_conditions.py \
-  unit_test/models/test_audio_sample.py \
-  unit_test/test_suite_bootstrap.py \
-  unit_test/core/plugins/test_manifest.py \
-  unit_test/core/test_secret_policy.py \
-  unit_test/core/test_http_egress.py \
-  unit_test/core/test_schedules.py \
-  --maxfail=5
-
-# Plugin registry smoke (requires load; auto-install declared plugin deps)
+# Do NOT set GRAPHYN_SKIP_PLUGIN_LOAD globally — isolation tests that need it
+# set it themselves. Full suite is the gate (DEEP_REVIEW P0-4).
 unset GRAPHYN_SKIP_PLUGIN_LOAD || true
-export GRAPHYN_PLUGIN_AUTO_INSTALL=1
-"$VENV/bin/pytest" -q \
-  unit_test/plugins/audio/test_all_audio_plugins.py \
-  unit_test/plugins/common/test_all_common_plugins.py \
-  --maxfail=5
+export GRAPHYN_PLUGIN_AUTO_INSTALL="${GRAPHYN_PLUGIN_AUTO_INSTALL:-1}"
+
+"$VENV/bin/pytest" --collect-only -q
+"$VENV/bin/pytest" -q unit_test/ --maxfail=50
+
+# Lint / types: report mode (non-zero only if tools missing after install)
+if "$VENV/bin/python" -c "import ruff" 2>/dev/null || "$VENV/bin/ruff" --version >/dev/null 2>&1; then
+  "$VENV/bin/ruff" check app/ unit_test/ --output-format=concise || true
+else
+  echo "ci_smoke: ruff not installed — skipping (dev extra should provide it)"
+fi
+if "$VENV/bin/python" -c "import mypy" 2>/dev/null; then
+  "$VENV/bin/mypy" app/ --ignore-missing-imports --no-error-summary 2>/dev/null || true
+else
+  echo "ci_smoke: mypy not installed — skipping"
+fi
 
 "$VENV/bin/python" scripts/verify_templates.py
 echo "ci_smoke: OK"

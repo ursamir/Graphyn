@@ -188,11 +188,17 @@ The SDK always produces the linear format (no `edges` key). To use the DAG forma
 usage: graphyn COMMAND
 
 Commands:
-  run       Execute a pipeline synchronously
-  validate  Validate a pipeline YAML or IR JSON file
-  migrate   Convert a YAML pipeline config to IR JSON
-  runs      Manage pipeline run history
-  mcp       Start the MCP server (stdio transport)
+  run         Execute a pipeline synchronously
+  validate    Validate a pipeline YAML or IR JSON file
+  migrate     Convert a YAML pipeline config to IR JSON
+  inspect     Print capability summary for an IR graph
+  nodes       List registered node types (catalog)
+  runs        Manage pipeline run history (list, logs, pause, resume, cancel)
+  artifacts   List/get/lineage/replay artifacts
+  plugin      Install, list, enable/disable, search plugins
+  secrets     List, set, delete named secrets (local store)
+  worker      Distributed worker daemon (register, heartbeat, claim jobs)
+  mcp         Start the MCP server (stdio transport)
 ```
 
 ---
@@ -344,6 +350,34 @@ graphyn runs logs a1b2   # prefix match
 Partial run ID prefix matching is supported: if the prefix uniquely identifies one run, it is used. If ambiguous, an error is printed.
 
 Log entries are color-coded in terminals: red for `ERROR`, yellow for `WARNING`, default for others.
+
+---
+
+### `graphyn runs pause` · `resume` · `cancel`
+
+Cooperative run control for **active** runs in the local API process (same registry as `POST /api/v1/runs/{run_id}/pause|resume|cancel`).
+
+```
+usage: graphyn runs pause RUN_ID
+       graphyn runs resume RUN_ID
+       graphyn runs cancel RUN_ID
+```
+
+Pause and cancel take effect after the current node finishes. Exits non-zero if the run is not active in this process.
+
+---
+
+### `graphyn secrets`
+
+Manage the local named secret store (values are never printed).
+
+```
+usage: graphyn secrets list [--json]
+       graphyn secrets set NAME
+       graphyn secrets delete NAME
+```
+
+`secrets set` reads the value from the environment variable with the same name as `NAME`, or from stdin when the env var is unset (recommended — avoids argv leakage).
 
 ---
 

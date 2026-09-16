@@ -70,6 +70,7 @@ export default function SystemView() {
   const [reconcileAbandoned, setReconcileAbandoned] = React.useState(true)
   const [reconciling, setReconciling] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [panelErrors, setPanelErrors] = React.useState<Record<string, string>>({})
   const [loading, setLoading] = React.useState(true)
   const [auditEvents, setAuditEvents] = React.useState<
     Array<{
@@ -139,33 +140,65 @@ export default function SystemView() {
   }
 
   const refresh = React.useCallback(async () => {
-    setError(null)
     setAuditError(null)
     setLoading(true)
-    try {
-      const [h, r, m, w, audit, auth, sched] = await Promise.all([
-        apiJson('/system/health'),
-        apiJson('/system/readiness'),
-        apiJson('/system/metrics'),
-        apiJson<{ url?: string; events?: string[] }>('/system/webhooks'),
-        apiJson<{ events?: unknown[] }>('/audit', { query: { limit: 100 } }).catch((err) => {
-          setAuditError(err instanceof Error ? err.message : String(err))
-          return { events: [] }
-        }),
-        apiJson<{
-          auth_required?: boolean
-          token_configured?: boolean
-          env?: string
-          ok?: boolean
-        }>('/system/auth-status').catch(() => null),
-        apiJson<{ schedules?: unknown[] }>('/system/schedules').catch(() => ({ schedules: [] })),
-      ])
-      setHealth(h)
-      setReady(r)
-      setMetrics(m)
+    const errs: Record<string, string> = {}
+    const settled = await Promise.allSettled([
+      apiJson('/system/health'),
+      apiJson('/system/readiness'),
+      apiJson('/system/metrics'),
+      apiJson<{ url?: string; events?: string[] }>('/system/webhooks'),
+      apiJson<{ events?: unknown[] }>('/audit', { query: { limit: 100 } }),
+      apiJson<{
+        auth_required?: boolean
+        token_configured?: boolean
+        env?: string
+        ok?: boolean
+      }>('/system/auth-status'),
+      apiJson<{ schedules?: unknown[] }>('/system/schedules'),
+    ])
+    const label = ['health', 'readiness', 'metrics', 'webhooks', 'audit', 'auth', 'schedules'] as const
+    settled.forEach((res, i) => {
+      const key = label[i]
+      if (res.status === 'rejected') {
+        errs[key] = res.reason instanceof Error ? res.reason.message : String(res.reason)
+      }
+    })
+    setPanelErrors(errs)
+    setError(
+      errs.health && errs.readiness
+        ? 'Health and readiness probes failed — see panel messages below.'
+        : null,
+    )
+
+    if (settled[0].status === 'fulfilled') setHealth(settled[0].value)
+    if (settled[1].status === 'fulfilled') setReady(settled[1].value)
+    if (settled[2].status === 'fulfilled') setMetrics(settled[2].value)
+    if (settled[3].status === 'fulfilled') {
+      const w = settled[3].value
       setWebhookUrl(w.url ?? '')
       setWebhookEvents(w.events ?? [])
-      setAuthStatus(auth)
+    }
+    if (settled[4].status === 'fulfilled') {
+      const audit = settled[4].value
+      const events = Array.isArray(audit?.events) ? audit.events : []
+      setAuditEvents(
+        events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
+          event_id?: string
+          ts?: string
+          actor?: string
+          action?: string
+          resource_type?: string
+          resource_id?: string
+        }>,
+      )
+    } else {
+      setAuditError(errs.audit ?? 'Audit feed unavailable')
+      setAuditEvents([])
+    }
+    if (settled[5].status === 'fulfilled') setAuthStatus(settled[5].value)
+    if (settled[6].status === 'fulfilled') {
+      const sched = settled[6].value
       const schedList = Array.isArray(sched?.schedules) ? sched.schedules : []
       setSchedules(
         schedList.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
@@ -180,22 +213,10 @@ export default function SystemView() {
           last_error?: string
         }>,
       )
-      const events = Array.isArray(audit?.events) ? audit.events : []
-      setAuditEvents(
-        events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
-          event_id?: string
-          ts?: string
-          actor?: string
-          action?: string
-          resource_type?: string
-          resource_id?: string
-        }>,
-      )
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
+    } else {
+      setSchedules([])
     }
+    setLoading(false)
   }, [])
 
   const loadProjects = React.useCallback(async () => {
@@ -321,7 +342,7 @@ export default function SystemView() {
         }
       />
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
-      {loading && <LoadingBlock label="Loading system status…" />}
+      {loading && health == null && ready == null ? <LoadingBlock label="Loading system status…" /> : null}
 
       <div className="flex flex-wrap gap-1 border-b border-ink-200/80 pb-0">
         {tabs.map((t) => (
@@ -414,6 +435,9 @@ export default function SystemView() {
             </button>
           </div>
 
+          {panelErrors.metrics ? (
+            <p className="text-xs text-rose-700">{panelErrors.metrics}</p>
+          ) : null}
           {metricsObj ? (
             <div className="flex flex-wrap items-stretch gap-2 rounded-2xl border border-ink-200 bg-white px-3 py-2.5 shadow-sm">
               <span className="self-center text-[11px] font-semibold uppercase tracking-wide text-ink-400 px-1">
@@ -472,6 +496,9 @@ export default function SystemView() {
                 <h3 className="text-sm font-semibold">Health</h3>
                 <StatusBadge status={badgeFromPayload(health, ['ok'])} />
               </div>
+              {panelErrors.health ? (
+                <p className="mb-2 text-xs text-rose-700">{panelErrors.health}</p>
+              ) : null}
               <dl className="space-y-1.5">
                 <FactRow
                   label="Process"
@@ -496,6 +523,9 @@ export default function SystemView() {
                 <h3 className="text-sm font-semibold">Readiness</h3>
                 <StatusBadge status={badgeFromPayload(ready, ['ready'])} />
               </div>
+              {panelErrors.readiness ? (
+                <p className="mb-2 text-xs text-rose-700">{panelErrors.readiness}</p>
+              ) : null}
               <dl className="space-y-1.5">
                 <FactRow
                   label="Catalog"
@@ -678,6 +708,9 @@ export default function SystemView() {
 
       {systemTab === 'schedules' && (
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+        {panelErrors.schedules ? (
+          <p className="text-xs text-rose-700">{panelErrors.schedules}</p>
+        ) : null}
         <div>
           <h3 className="text-sm font-semibold">Schedules</h3>
           <p className="text-xs text-ink-500">
@@ -904,6 +937,9 @@ export default function SystemView() {
 
       {systemTab === 'webhooks' && (
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
+        {panelErrors.webhooks ? (
+          <p className="text-xs text-rose-700">{panelErrors.webhooks}</p>
+        ) : null}
         <div>
           <h3 className="text-sm font-semibold">Webhooks</h3>
           <p className="text-xs text-ink-500">

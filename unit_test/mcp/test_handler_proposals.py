@@ -17,7 +17,8 @@ GRAPH = {
 }
 
 
-def test_propose_list_get(tmp_workspace):
+def test_propose_list_get(tmp_workspace, monkeypatch):
+    monkeypatch.setenv("GRAPHYN_MCP_HUMAN_APPROVAL", "1")
     bad = propose_graph_handler({"summary": "", "graph": GRAPH})
     assert bad.get("error") is True
 

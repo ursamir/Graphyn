@@ -288,6 +288,33 @@ def _parse_due(nxt: Any, now: datetime) -> datetime:
     return due
 
 
+def _ticker_lock_path(base_dir: str | Path | None = None) -> Path:
+    return schedules_path(base_dir).with_name("schedules.ticker.lock")
+
+
+def try_tick_due_schedules(base_dir: str | Path | None = None) -> list[dict[str, Any]]:
+    """Run :func:`tick_due_schedules` only when this process holds the ticker lease.
+
+    Uses a non-blocking flock so multiple API workers do not each fire schedules.
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover
+        return tick_due_schedules(base_dir)
+
+    lock_path = _ticker_lock_path(base_dir)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as lf:
+        try:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return []
+        try:
+            return tick_due_schedules(base_dir)
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+
 def tick_due_schedules(base_dir: str | Path | None = None) -> list[dict[str, Any]]:
     """Run any enabled schedules whose next_run_at is due. Returns fired items.
 

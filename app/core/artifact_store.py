@@ -182,6 +182,28 @@ class ArtifactStore:
         (self.base / "by_run").mkdir(exist_ok=True)
         (self.base / "by_name").mkdir(exist_ok=True)
 
+    @staticmethod
+    def _with_path_lock(target: Path, exclusive: bool, fn):
+        """Advisory flock around index RMW (cross-process, P1-17)."""
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover
+            fcntl = None  # type: ignore[assignment]
+
+        lock_path = target.with_suffix(target.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+", encoding="utf-8") as lf:
+            if fcntl is not None:
+                fcntl.flock(
+                    lf.fileno(),
+                    fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
+                )
+            try:
+                return fn()
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
     # ------------------------------------------------------------------
     # Index management
     # ------------------------------------------------------------------
@@ -192,28 +214,36 @@ class ArtifactStore:
         Returns {} on missing or corrupt file (fail-open, logs warning).
         """
         index_path = self.base / "index.json"
-        try:
-            with open(index_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError("index.json is not a JSON object")
-            return data
-        except FileNotFoundError:
-            return {}
-        except Exception as exc:
-            logger.warning(
-                "ArtifactStore: index.json is corrupt or unreadable (%s: %s) — treating as empty",
-                type(exc).__name__,
-                exc,
-            )
-            return {}
+
+        def _read() -> dict[str, str]:
+            try:
+                with open(index_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("index.json is not a JSON object")
+                return data
+            except FileNotFoundError:
+                return {}
+            except Exception as exc:
+                logger.warning(
+                    "ArtifactStore: index.json is corrupt or unreadable (%s: %s) — treating as empty",
+                    type(exc).__name__,
+                    exc,
+                )
+                return {}
+
+        return self._with_path_lock(index_path, False, _read)
 
     def _save_index(self, index: dict[str, str]) -> None:
         """Write index.json atomically (caller must hold self._lock)."""
         index_path = self.base / "index.json"
-        tmp_path = index_path.with_suffix(".json.tmp")
-        tmp_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
-        tmp_path.replace(index_path)
+
+        def _write() -> None:
+            tmp_path = index_path.with_suffix(".json.tmp")
+            tmp_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
+            tmp_path.replace(index_path)
+
+        self._with_path_lock(index_path, True, _write)
 
     # ------------------------------------------------------------------
     # Secondary index: by_run/{run_id}.json → [artifact_id, ...]
@@ -222,28 +252,74 @@ class ArtifactStore:
     def _by_run_path(self, run_id: str) -> Path:
         return self.base / "by_run" / f"{run_id}.json"
 
+    def _rebuild_by_run_ids(self, run_id: str) -> list[str]:
+        """Rebuild by_run membership by scanning per-artifact record.json files."""
+        ids: list[str] = []
+        for entry in self.base.iterdir():
+            if not entry.is_dir() or entry.name in ("by_run", "by_name"):
+                continue
+            if entry.name.startswith("_tmp_"):
+                continue
+            record_path = entry / "record.json"
+            if not record_path.exists():
+                continue
+            try:
+                record_data = json.loads(record_path.read_text(encoding="utf-8"))
+                record = ArtifactRecord.model_validate(record_data)
+                if record.run_id == run_id:
+                    ids.append(record.artifact_id)
+            except Exception:
+                continue
+        return ids
+
     def _load_by_run(self, run_id: str) -> list[str]:
         """Return list of artifact_ids for run_id. Returns [] on missing/corrupt."""
         path = self._by_run_path(run_id)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data if isinstance(data, list) else []
-        except FileNotFoundError:
-            return []
-        except Exception as exc:
-            logger.warning("ArtifactStore: by_run/%s.json corrupt (%s) — treating as empty", run_id, exc)
-            return []
+
+        def _read() -> list[str]:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return data if isinstance(data, list) else []
+            except FileNotFoundError:
+                return []
+            except Exception as exc:
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+                corrupt = path.with_name(f"{path.name}.corrupt.{ts}")
+                try:
+                    if path.exists():
+                        path.rename(corrupt)
+                except OSError:
+                    pass
+                logger.warning(
+                    "ArtifactStore: by_run/%s.json corrupt (%s) — quarantined to %s, rebuilding",
+                    run_id,
+                    exc,
+                    corrupt.name,
+                )
+                return self._rebuild_by_run_ids(run_id)
+
+        return self._with_path_lock(path, False, _read)
 
     def _append_by_run(self, run_id: str, artifact_id: str) -> None:
         """Append artifact_id to the by_run index for run_id (caller must hold self._lock)."""
         (self.base / "by_run").mkdir(exist_ok=True)
-        ids = self._load_by_run(run_id)
-        if artifact_id not in ids:
-            ids.append(artifact_id)
         path = self._by_run_path(run_id)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(ids, indent=2), encoding="utf-8")
-        tmp.replace(path)
+
+        def _append() -> None:
+            ids: list[str] = []
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    ids = data if isinstance(data, list) else []
+                except Exception:
+                    ids = self._rebuild_by_run_ids(run_id)
+            if artifact_id not in ids:
+                ids.append(artifact_id)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(ids, indent=2), encoding="utf-8")
+            tmp.replace(path)
+
+        self._with_path_lock(path, True, _append)
 
     # ------------------------------------------------------------------
     # Secondary index: by_name/{name}.json → [artifact_id, ...]
@@ -444,7 +520,7 @@ class ArtifactStore:
         data: Any,
         metadata: dict[str, Any] | None = None,
         name: str | None = None,
-    ) -> ArtifactRecord:
+    ) -> tuple[ArtifactRecord, bool]:
         """Register a node output as an artifact.
 
         Returns an existing ArtifactRecord if content_hash already exists
@@ -508,18 +584,21 @@ class ArtifactStore:
                         _shutil.rmtree(str(tmp_artifact_dir), ignore_errors=True)
                         # G3-09 fix: add deduplicated artifact to the by_run index for this run
                         self._append_by_run(run_id, existing.artifact_id)
-                        return ArtifactRecord(
-                            artifact_id=existing.artifact_id,
-                            content_hash=existing.content_hash,
-                            artifact_type=existing.artifact_type,
-                            node_id=node_id,
-                            node_type=node_type,
-                            run_id=run_id,
-                            name=name if name is not None else existing.name,
-                            metadata=metadata if metadata is not None else existing.metadata,
-                            created_at=existing.created_at,
-                            schema_version=existing.schema_version,
-                            data_path=existing.data_path,
+                        return (
+                            ArtifactRecord(
+                                artifact_id=existing.artifact_id,
+                                content_hash=existing.content_hash,
+                                artifact_type=existing.artifact_type,
+                                node_id=node_id,
+                                node_type=node_type,
+                                run_id=run_id,
+                                name=name if name is not None else existing.name,
+                                metadata=metadata if metadata is not None else existing.metadata,
+                                created_at=existing.created_at,
+                                schema_version=existing.schema_version,
+                                data_path=existing.data_path,
+                            ),
+                            True,
                         )
                     except Exception as exc:
                         logger.warning(
@@ -548,7 +627,7 @@ class ArtifactStore:
                             import shutil as _shutil
                             _shutil.rmtree(str(tmp_artifact_dir), ignore_errors=True)
                             record_data = json.loads(record_path_recheck.read_text(encoding="utf-8"))
-                            return ArtifactRecord.model_validate(record_data)
+                            return ArtifactRecord.model_validate(record_data), True
                         except Exception:
                             pass
                 import shutil as _shutil
@@ -588,7 +667,33 @@ class ArtifactStore:
             if name:
                 self._append_by_name(name, artifact_id)
 
-            return record
+            return record, False
+
+    def purge_run(self, run_id: str) -> int:
+        """Remove artifact store indexes and owned artifact dirs for a run."""
+        import shutil
+
+        removed = 0
+        artifact_ids = self._load_by_run(run_id)
+        with self._lock:
+            index = self._load_index()
+            for aid in list(artifact_ids):
+                try:
+                    record = self.get(aid)
+                except ArtifactNotFoundError:
+                    continue
+                if record.run_id != run_id:
+                    continue
+                artifact_dir = self.base / aid
+                if artifact_dir.is_dir():
+                    shutil.rmtree(str(artifact_dir), ignore_errors=True)
+                index.pop(record.content_hash, None)
+                removed += 1
+            self._save_index(index)
+            path = self._by_run_path(run_id)
+            if path.exists():
+                path.unlink()
+        return removed
 
     def get(self, artifact_id: str) -> ArtifactRecord:
         """Return the ArtifactRecord for the given artifact_id.
@@ -601,6 +706,11 @@ class ArtifactStore:
             raise ArtifactNotFoundError(artifact_id)
         try:
             record_data = json.loads(record_path.read_text(encoding="utf-8"))
+            from app.core.storage_schema import assert_storage_schema_version
+
+            assert_storage_schema_version(
+                record_data, context=f"artifact record {artifact_id}"
+            )
             return ArtifactRecord.model_validate(record_data)
         except ArtifactNotFoundError:
             raise

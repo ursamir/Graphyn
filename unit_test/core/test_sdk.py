@@ -140,6 +140,24 @@ def test_pipeline_subscribe_multiple_callbacks():
     assert len(pipeline._subscribers) == 0
 
 
+def test_pipeline_explicit_edge_negative_index_raises():
+    """Negative edge indices must not silently wrap (P3-24)."""
+    nodes = [PipelineNode("audio_conditioner", {}), PipelineNode("audio_conditioner", {})]
+    with pytest.raises(ValueError, match="out of range"):
+        Pipeline(nodes, edges=[(-1, "output", 1, "input")])
+
+
+def test_pipeline_to_yaml_config_preserves_edges(tmp_path):
+    """Branched IR must round-trip edges in YAML config (P3-20)."""
+    n0 = PipelineNode("audio_conditioner", {})
+    n1 = PipelineNode("audio_exporter", {})
+    pipeline = Pipeline([n0, n1], edges=[(0, "output", 1, "input")])
+    out = tmp_path / "p.yaml"
+    pipeline.to_yaml(str(out))
+    text = out.read_text()
+    assert "edges:" in text
+
+
 def test_pipeline_subscribe_unsubscribe_is_idempotent():
     """Calling unsubscribe twice does not raise."""
     node = PipelineNode("audio_conditioner", {})

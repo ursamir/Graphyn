@@ -206,11 +206,8 @@ class QueueSource(EventSource):
 
     Yields: whatever dict is put into the queue.
 
-    **Construction note:** ``QueueSource`` requires a live ``asyncio.Queue``
-    object and therefore CANNOT be instantiated via ``create_event_source()``
-    from an IR ``event_trigger`` config (which is JSON-deserialized). Always
-    construct ``QueueSource`` directly in Python code and pass it to the
-    orchestrator programmatically.
+    **IR note:** JSON ``event_trigger`` configs cannot embed a live queue; pass
+    ``queue`` only via ``create_event_source("queue", {"queue": q})`` in code.
 
     Req 6.1
     """
@@ -245,9 +242,7 @@ class QueueSource(EventSource):
 _SOURCE_REGISTRY: dict[str, type[EventSource]] = {
     "file_watcher": FileWatcherSource,
     "timer": TimerSource,
-    # QueueSource is intentionally excluded: it requires a live asyncio.Queue
-    # object that cannot be represented in a JSON IR source_config.
-    # Construct QueueSource directly in Python code.
+    "queue": QueueSource,
 }
 
 

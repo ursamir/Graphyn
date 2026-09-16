@@ -248,6 +248,11 @@ class ProvenanceStore:
 
         try:
             data = json.loads(record_path.read_text(encoding="utf-8"))
+            from app.core.storage_schema import assert_storage_schema_version
+
+            assert_storage_schema_version(
+                data, context=f"provenance record {artifact_id}"
+            )
             prov = ProvenanceRecord.model_validate(data)
         except Exception as exc:
             logger.warning(
@@ -278,6 +283,35 @@ class ProvenanceStore:
     # find_by_run()  (req-02 §5)
     # ------------------------------------------------------------------
 
+    def _rebuild_by_run_ids(self, run_id: str) -> list[str]:
+        ids: list[str] = []
+        for record_path in self.base.glob("*.json"):
+            if record_path.parent.name != self.base.name:
+                continue
+            if record_path.name.startswith("by_"):
+                continue
+            try:
+                data = json.loads(record_path.read_text(encoding="utf-8"))
+                prov = ProvenanceRecord.model_validate(data)
+                if prov.run_id == run_id:
+                    ids.append(prov.artifact_id)
+            except Exception:
+                continue
+        return ids
+
+    def purge_run(self, run_id: str) -> int:
+        """Delete provenance records and by_run index for a run."""
+        removed = 0
+        for rec in self.find_by_run(run_id):
+            path = self.base / f"{rec.artifact_id}.json"
+            if path.exists():
+                path.unlink()
+                removed += 1
+        by_run_path = self.base / "by_run" / f"{run_id}.json"
+        if by_run_path.exists():
+            by_run_path.unlink()
+        return removed
+
     def find_by_run(self, run_id: str) -> list[ProvenanceRecord]:
         """Return all ProvenanceRecords for the given run.
 
@@ -294,12 +328,21 @@ class ProvenanceStore:
             if not isinstance(artifact_ids, list):
                 return []
         except Exception as exc:
+            from datetime import datetime, timezone
+
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+            corrupt = by_run_path.with_name(f"{by_run_path.name}.corrupt.{ts}")
+            try:
+                if by_run_path.exists():
+                    by_run_path.rename(corrupt)
+            except OSError:
+                pass
             logger.warning(
-                "ProvenanceStore: failed to read by_run/%s.json (%s) — returning []",
+                "ProvenanceStore: failed to read by_run/%s.json (%s) — quarantined, rebuilding",
                 run_id,
                 exc,
             )
-            return []
+            artifact_ids = self._rebuild_by_run_ids(run_id)
 
         records: list[ProvenanceRecord] = []
         for aid in artifact_ids:
@@ -313,6 +356,11 @@ class ProvenanceStore:
                 continue
             try:
                 data = json.loads(record_path.read_text(encoding="utf-8"))
+                from app.core.storage_schema import assert_storage_schema_version
+
+                assert_storage_schema_version(
+                    data, context=f"provenance record {aid}"
+                )
                 records.append(ProvenanceRecord.model_validate(data))
             except Exception as exc:
                 logger.warning(

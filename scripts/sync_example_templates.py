@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import all examples/**/*.graph.json into workspace/configs/templates/."""
+"""Sync example graphs into workspace/configs/templates/ (one ex-* per numbered folder)."""
 from __future__ import annotations
 
 import json

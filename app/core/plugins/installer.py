@@ -189,22 +189,19 @@ class PluginInstaller:
             When the allowlist is non-empty and *source* does not structurally
             match any of the listed base URLs.
         """
-        from app.core.config import plugin_allowed_sources as _allowed_sources  # noqa: PLC0415
-
         from app.core.config import plugin_source_is_allowed  # noqa: PLC0415
 
-        allowed = _allowed_sources()
-        if not allowed:
-            return  # allowlist not configured — permit all (backward compat)
-
+        # Always delegate — empty allowlist + auth_required fails closed (P1-26).
         if plugin_source_is_allowed(source):
             return
 
+        from app.core.config import plugin_allowed_sources as _allowed_sources  # noqa: PLC0415
+
+        allowed = _allowed_sources()
         raise PluginInstallError(
             f"Plugin source {source!r} is not in the allowed sources list. "
-            f"Set GRAPHYN_PLUGIN_ALLOWED_SOURCES to include this base URL, "
-            f"or leave it unset to allow all sources. "
-            f"Current allowed bases: {allowed}"
+            f"Set GRAPHYN_PLUGIN_ALLOWED_SOURCES to include this base URL. "
+            f"Current allowed bases: {allowed or '(empty — remote installs blocked when auth is required)'}"
         )
 
     def _resolve_git(self, url: str) -> Path:
@@ -291,23 +288,43 @@ class PluginInstaller:
 
         Raises PluginInstallError on HTTP errors, network errors, or size exceeded.
         """
+        from urllib.parse import urljoin
+
         chunks: list[bytes] = []
         total = 0
+        current = url
         try:
-            with httpx.stream("GET", url, follow_redirects=True, timeout=30.0) as response:
-                response.raise_for_status()
-                # H4: every redirect hop and the final URL must pass the allowlist
-                for hop in (*response.history, response):
-                    hop_url = str(hop.url)
-                    self._check_allowed_source(hop_url)
-                for chunk in response.iter_bytes(chunk_size=65_536):
-                    total += len(chunk)
-                    if total > _MAX_DOWNLOAD_BYTES:
-                        raise PluginInstallError(
-                            f"Download from {url!r} exceeds the maximum allowed size "
-                            f"of {_MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB."
-                        )
-                    chunks.append(chunk)
+            with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+                for _hop in range(16):
+                    self._check_allowed_source(current)
+                    with client.stream("GET", current) as response:
+                        if response.status_code in (
+                            301,
+                            302,
+                            303,
+                            307,
+                            308,
+                        ):
+                            location = response.headers.get("location")
+                            if not location:
+                                raise PluginInstallError(
+                                    f"HTTP redirect from {current!r} missing Location header"
+                                )
+                            current = urljoin(current, location)
+                            continue
+                        response.raise_for_status()
+                        for chunk in response.iter_bytes(chunk_size=65_536):
+                            total += len(chunk)
+                            if total > _MAX_DOWNLOAD_BYTES:
+                                raise PluginInstallError(
+                                    f"Download from {url!r} exceeds the maximum allowed size "
+                                    f"of {_MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB."
+                                )
+                            chunks.append(chunk)
+                        return b"".join(chunks)
+                raise PluginInstallError(
+                    f"Too many redirects while downloading {url!r}"
+                )
         except httpx.HTTPStatusError as exc:
             raise PluginInstallError(
                 f"HTTP download failed for {url!r}: status {exc.response.status_code}"
@@ -316,7 +333,6 @@ class PluginInstaller:
             raise PluginInstallError(
                 f"Network error downloading {url!r}: {exc}"
             ) from exc
-        return b"".join(chunks)
 
     def _resolve_local_dir(self, path: Path) -> Path:
         """Copy a local plugin directory to a temporary location.

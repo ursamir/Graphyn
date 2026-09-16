@@ -164,7 +164,7 @@ result = run_pipeline_ir(graph, ...)
 
 `run_pipeline()` is a **deprecated shim** — it reads raw YAML, emits `DeprecationWarning`, then calls `run_pipeline_ir`. Use `get_backend().execute()` for all new code.
 
-`app/core/pipeline.py` is a **re-export shim** for backward compatibility. It re-exports `run_pipeline_ir` from `orchestrator.py`. New code should import from `orchestrator` or use `get_backend().execute()` directly.
+The legacy `app/core/pipeline.py` re-export shim was **removed** (2026-09-16). Import from `app.core.planner`, `app.core.orchestrator`, or use `get_backend().execute()` directly. YAML execution: `app.core.ir.yaml_shim.run_pipeline_from_yaml` (deprecated).
 
 ```yaml
 pipeline:
@@ -356,7 +356,10 @@ Caches node outputs under `workspace/cache/{sha256}/`. Domain-agnostic — uses 
 cache = PipelineCache()
 
 # Canonical key computation (shared by sequential and parallel executors)
-key = cache.compute_key(node_type, config_dict, inputs)
+key = cache.compute_key(
+    node_type, config_dict, inputs,
+    node_seed=node.seed, node_version=registry.get_metadata(node_type).version,
+)
 
 # Load — treat None as a miss; never call has() first (TOCTOU hazard)
 cached = cache.load(key)   # returns outputs dict or None

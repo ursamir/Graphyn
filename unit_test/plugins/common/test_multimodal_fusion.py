@@ -8,6 +8,7 @@ Covers:
   - Req 10.6: output existence with concat strategy
 """
 from __future__ import annotations
+from unit_test.plugins._helpers import materialize_isolated_class
 
 import numpy as np
 import pytest
@@ -55,14 +56,14 @@ def installed_cls(tmp_path_factory):
     mgr.install(EMBEDDING_SOURCE)
     mgr._plugins_dir = str(tmp_dir)
     mgr.install(PLUGIN_SOURCE)
-    return reg.get_class(NODE_TYPE)
+    return materialize_isolated_class(reg.get_class(NODE_TYPE))
 
 
 # ── registration ──────────────────────────────────────────────────────────────
 
 def test_registers(tmp_plugin_dir, fresh_registry):
     """Req 8.11 — multimodal_fusion registers in a fresh registry."""
-    mgr = PluginManager(registry=fresh_registry)
+    mgr = PluginManager(registry=fresh_registry, base_dir=str(tmp_plugin_dir))
     mgr._plugins_dir = str(tmp_plugin_dir)
     mgr.install(EMBEDDING_SOURCE)
     mgr._plugins_dir = str(tmp_plugin_dir)

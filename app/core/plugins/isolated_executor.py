@@ -54,6 +54,7 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 # Host-side unpickle allowlist for worker outputs (fail closed).
+# Module membership alone is NOT enough — ``builtins`` exports ``eval``/``exec``.
 _ALLOWED_PICKLE_MODULES = frozenset(
     {
         "builtins",
@@ -77,17 +78,76 @@ _ALLOWED_PICKLE_MODULES = frozenset(
     }
 )
 
+# Name-level allowlists for modules that also export dangerous callables.
+_ALLOWED_BUILTINS = frozenset(
+    {
+        "NoneType",
+        "bool",
+        "bytearray",
+        "bytes",
+        "complex",
+        "dict",
+        "float",
+        "frozenset",
+        "int",
+        "list",
+        "object",
+        "set",
+        "str",
+        "tuple",
+        "type",
+    }
+)
+_ALLOWED_COLLECTIONS = frozenset(
+    {
+        "OrderedDict",
+        "defaultdict",
+        "deque",
+        "Counter",
+        "ChainMap",
+        "UserDict",
+        "UserList",
+        "UserString",
+    }
+)
+_ALLOWED_COPYREG = frozenset({"_reconstructor", "__newobj__", "__newobj_ex__"})
+_ALLOWED_PATHLIB = frozenset({"PurePath", "PurePosixPath", "PureWindowsPath", "Path", "PosixPath", "WindowsPath"})
+_ALLOWED_NUMPY_MULTIARRAY = frozenset(
+    {
+        "_reconstruct",
+        "scalar",
+        "ndarray",
+        "dtype",
+        "_frombuffer",
+    }
+)
+
 
 class RestrictedUnpickler(pickle.Unpickler):
     """Unpickler that refuses globals outside a known port/artifact set."""
 
     def find_class(self, module: str, name: str) -> Any:
-        if module in _ALLOWED_PICKLE_MODULES or module.startswith("app.models."):
+        if module.startswith("app.models."):
             return super().find_class(module, name)
-        raise pickle.UnpicklingError(
-            f"Refusing to unpickle {module}.{name} from isolated worker output "
-            "(not in the host allowlist of builtins/numpy/app.models types)"
-        )
+        if module not in _ALLOWED_PICKLE_MODULES:
+            raise pickle.UnpicklingError(
+                f"Refusing to unpickle {module}.{name} from isolated worker output "
+                "(module not in the host allowlist)"
+            )
+        if module == "builtins" and name not in _ALLOWED_BUILTINS:
+            raise pickle.UnpicklingError(f"Refusing builtins.{name}")
+        if module in {"collections", "collections.abc"} and name not in _ALLOWED_COLLECTIONS:
+            # collections.abc is mostly ABCs — still refuse unknown names.
+            if module == "collections.abc":
+                raise pickle.UnpicklingError(f"Refusing {module}.{name}")
+            raise pickle.UnpicklingError(f"Refusing collections.{name}")
+        if module == "copyreg" and name not in _ALLOWED_COPYREG:
+            raise pickle.UnpicklingError(f"Refusing copyreg.{name}")
+        if module == "pathlib" and name not in _ALLOWED_PATHLIB:
+            raise pickle.UnpicklingError(f"Refusing pathlib.{name}")
+        if module.endswith("multiarray") and name not in _ALLOWED_NUMPY_MULTIARRAY:
+            raise pickle.UnpicklingError(f"Refusing {module}.{name}")
+        return super().find_class(module, name)
 
 
 def _is_dynamic_plugin_module(module: str) -> bool:

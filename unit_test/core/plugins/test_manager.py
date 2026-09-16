@@ -107,11 +107,12 @@ def test_install_registers_node_type(tmp_path: Path, fresh_registry: NodeRegistr
 
 
 def test_double_install_reuses_existing(tmp_path: Path, fresh_registry: NodeRegistry) -> None:
-    """Req 6.6 — double install without upgrade=True reuses the existing record.
+    """Req 6.6 / P0-2 — second install without upgrade raises after reload.
 
-    The first install uses the plain plugin name so _parse_name_version extracts
-    the correct name and the store lookup works on the second call.
+    Node types are reloaded into the registry; the store still has one record.
     """
+    from app.core.plugins.errors import PluginAlreadyInstalledError
+
     src = _make_plugin_src(tmp_path)
     manager = _make_manager(tmp_path, registry=fresh_registry)
 
@@ -120,10 +121,10 @@ def test_double_install_reuses_existing(tmp_path: Path, fresh_registry: NodeRegi
         first = manager.install("test-plugin")
 
     with _patch_resolve(src), _patch_loader_load():
-        second = manager.install("test-plugin")
+        with pytest.raises(PluginAlreadyInstalledError):
+            manager.install("test-plugin")
 
-    assert second.name == first.name
-    assert second.version == first.version
+    assert manager.get(first.name).version == first.version
     assert len(manager.list_installed()) == 1
 
 
@@ -370,7 +371,13 @@ def _plugin001_same_plugin_worker(
             record = mgr.install(str(src))
         Path(out_path).write_text(f"ok:{record.name}", encoding="utf-8")
     except Exception as exc:  # noqa: BLE001 — surface to parent via file
-        Path(out_path).write_text(f"err:{type(exc).__name__}:{exc}", encoding="utf-8")
+        from app.core.plugins.errors import PluginAlreadyInstalledError
+
+        # P0-2: losing the race after another worker installed is success.
+        if isinstance(exc, PluginAlreadyInstalledError):
+            Path(out_path).write_text("ok:race-plugin", encoding="utf-8")
+        else:
+            Path(out_path).write_text(f"err:{type(exc).__name__}:{exc}", encoding="utf-8")
 
 
 def test_concurrent_install_same_plugin_consistent(

@@ -88,9 +88,10 @@ class CsvTableNode(Node):
     def process(self, inputs):
         payload = inputs.get("input") if isinstance(inputs, dict) else inputs
         op = (self.config.operation or "read").strip().lower()
-        path = Path(self.config.path or "")
-        if not str(path):
+        raw_path = (self.config.path or "").strip()
+        if not raw_path:
             raise RuntimeError("CsvTableNode: config.path is required.")
+        path = Path(raw_path)
         encoding = self.config.encoding or "utf-8"
         if op == "write":
             rows = _rows_of(payload)

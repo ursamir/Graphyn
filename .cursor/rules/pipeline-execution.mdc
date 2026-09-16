@@ -1,13 +1,13 @@
 ---
 description: Graph IR, orchestrator, planner, and runtime execution rules
-globs: "app/core/orchestrator.py,app/core/planner.py,app/core/node_executor.py,app/core/executor.py,app/core/checkpoint.py,app/core/pipeline_cache.py,app/core/pipeline.py,app/core/runtime_backend.py,app/core/registry_runtime.py,app/core/conditions.py,app/core/events.py,app/core/ir/**/*.py,app/core/sdk.py"
+globs: "app/core/orchestrator.py,app/core/planner.py,app/core/node_executor.py,app/core/executor.py,app/core/checkpoint.py,app/core/pipeline_cache.py,app/core/runtime_backend.py,app/core/registry_runtime.py,app/core/conditions.py,app/core/events.py,app/core/ir/**/*.py,app/core/sdk.py"
 alwaysApply: false
 ---
 
 # Pipeline Execution (BC1 / BC4 / BC5)
 
 - Interfaces → `get_backend().execute(graph)` only.
-- `pipeline.py` / legacy shims: re-exports only — put logic in orchestrator / planner / node_executor / executor / checkpoint.
+- Legacy `pipeline.py` shim removed; YAML via `ir/yaml_shim.py` only. Logic lives in orchestrator / planner / node_executor / executor / checkpoint.
 - IR: validate via `load_ir` / `dump_ir`; major version mismatch hard-fails.
 - Modes: sequential (default), `parallel` (waves), streaming, event-driven (xor parallel), resume via `resume_run_id` + graph_hash.
 - Conditions: AST whitelist only (`conditions.py`).

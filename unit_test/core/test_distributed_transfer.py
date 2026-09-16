@@ -58,8 +58,10 @@ def test_put_get_nested_content_addressed_key(tmp_path, monkeypatch):
 
     monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path / "workspace"))
     body = b"nested-key-payload-xyz"
-    # Explicit nested key shaped like content-addressed layout.
-    key = local_content_key("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+    import hashlib
+
+    digest = hashlib.sha256(body).hexdigest()
+    key = local_content_key(digest)
     assert key.startswith("sha256/")
     assert "/" in key
     uri = put_blob(body, key=key)
@@ -92,6 +94,20 @@ def test_put_get_nested_content_addressed_key(tmp_path, monkeypatch):
     assert "sha256/" in captured["url"]
     # Encoded form should match quote(key, safe="/")
     assert url_quote(key, safe="/") in captured["url"]
+
+
+def test_get_blob_rejects_sha256_mismatch(tmp_path, monkeypatch):
+    from app.core.artifact_uri import local_content_key
+    from app.core.distributed import transfer as tr
+
+    monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path / "workspace"))
+    key = local_content_key("a" * 64)
+    path = tr._safe_path(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"wrong-bytes")
+    uri = f"artifact://local/{key}"
+    with pytest.raises(ValueError, match="hash mismatch"):
+        tr.get_blob(uri)
 
 
 def test_load_port_value_rejects_disallowed_globals():

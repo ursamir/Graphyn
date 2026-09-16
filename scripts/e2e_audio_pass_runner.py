@@ -11,9 +11,13 @@ import urllib.request
 from copy import deepcopy
 from pathlib import Path
 
-ROOT = Path("/workspace/Graphyn")
+ROOT = Path(__file__).resolve().parents[1]
 API = os.environ.get("GRAPHYN_API", "http://127.0.0.1:8001")
-TOKEN = Path("/workspace/graphyn-api-token.txt").read_text().strip()
+TOKEN = os.environ.get("GRAPHYN_API_TOKEN", "").strip()
+if not TOKEN:
+    _token_file = os.environ.get("GRAPHYN_API_TOKEN_FILE", "")
+    if _token_file:
+        TOKEN = Path(_token_file).read_text(encoding="utf-8").strip()
 TEMPLATES_DIR = ROOT / "examples" / "templates"
 OUT = ROOT / "docs" / "_e2e_audio_matrix.json"
 

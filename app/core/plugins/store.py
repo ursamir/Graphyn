@@ -40,7 +40,32 @@ from app.core.plugins.errors import PluginManifestError, PluginNotFoundError
 
 logger = logging.getLogger(__name__)
 
+REGISTRY_SCHEMA_VERSION = "1"
+_REGISTRY_META_KEYS = frozenset({"schema_version", "_quarantine"})
+
 T = TypeVar("T")
+
+
+def _split_registry_blob(data: dict) -> tuple[dict[str, dict], dict[str, dict]]:
+    quarantine = data.get("_quarantine")
+    if not isinstance(quarantine, dict):
+        quarantine = {}
+    plugins = {
+        k: v
+        for k, v in data.items()
+        if k not in _REGISTRY_META_KEYS and isinstance(v, dict)
+    }
+    return plugins, quarantine
+
+
+def _pack_registry_blob(
+    plugins: dict[str, dict], quarantine: dict[str, dict]
+) -> dict[str, object]:
+    return {
+        "schema_version": REGISTRY_SCHEMA_VERSION,
+        **plugins,
+        "_quarantine": quarantine,
+    }
 
 # Process-wide locks keyed by resolved registry path so separate PluginStore
 # instances in the same process serialize on the same file (PLUGIN-002).
@@ -124,6 +149,7 @@ class PluginStore:
             self._registry_path = _plugin_registry_path()
         self._lock = _process_lock_for(self._registry_path)
         self._lock_path = self._registry_path.parent / "registry.lock"
+        self._quarantine: dict[str, dict] = {}
         # Ensure the directory exists so _save() never has to create it.
         self._registry_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -158,7 +184,31 @@ class PluginStore:
             return {}
         try:
             text = self._registry_path.read_text(encoding="utf-8")
-            return json.loads(text)
+            raw = json.loads(text)
+            if not isinstance(raw, dict):
+                return {}
+            plugins, quarantine = _split_registry_blob(raw)
+            good: dict[str, dict] = {}
+            for name, row in plugins.items():
+                try:
+                    PluginRecord(**row)
+                    good[name] = row
+                except Exception as exc:
+                    quarantine[name] = {
+                        "error": str(exc),
+                        "row": row,
+                    }
+                    logger.warning(
+                        "PluginStore: quarantined corrupt plugin record '%s': %s",
+                        name,
+                        exc,
+                    )
+            self._quarantine = quarantine
+            if quarantine != raw.get("_quarantine") or raw.get(
+                "schema_version"
+            ) != REGISTRY_SCHEMA_VERSION:
+                self._save_unlocked(good)
+            return good
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
             # Back up the corrupt file before treating as empty
             backup_path = self._registry_path.with_suffix(".json.corrupt")
@@ -189,8 +239,9 @@ class PluginStore:
         # Close the raw fd immediately so os.fdopen() failure cannot leak it.
         os.close(fd)
         try:
+            payload = _pack_registry_blob(data, self._quarantine)
             with open(tmp_path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=2)
+                json.dump(payload, fh, indent=2)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp_path, self._registry_path)

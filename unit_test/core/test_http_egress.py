@@ -12,6 +12,7 @@ from app.core.egress import (
     host_on_allowlist,
     is_blocked_ip,
     validate_http_egress_url,
+    validate_webhook_target_url,
 )
 
 
@@ -118,3 +119,8 @@ def test_is_blocked_ip_flags() -> None:
 def test_allowlist_parser(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GRAPHYN_HTTP_EGRESS_ALLOWLIST", " A.com , B.org ")
     assert http_egress_allowlist() == ["a.com", "b.org"]
+
+
+def test_webhook_target_always_blocks_loopback() -> None:
+    with pytest.raises(ValueError, match="private|loopback|blocked"):
+        validate_webhook_target_url("http://127.0.0.1/hook")

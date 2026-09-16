@@ -197,7 +197,7 @@ def run_pipeline_from_yaml(
     observer=None,
     run_manager=None,
 ):
-    """Deprecated YAML file execute path used by ``app.core.pipeline.run_pipeline``.
+    """Deprecated YAML file execute path (legacy ``run_pipeline`` shim removed — import here).
 
     Prefer ``get_backend().execute(graph)`` with GraphIR.
     """

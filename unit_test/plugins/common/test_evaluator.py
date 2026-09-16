@@ -8,6 +8,7 @@ Covers:
   - process() returns ModelArtifact (no live Keras model, no TF download)
 """
 from __future__ import annotations
+from unit_test.plugins._helpers import materialize_isolated_class
 
 import importlib.util
 import sys
@@ -51,7 +52,7 @@ def installed_cls(tmp_path_factory):
     mgr._plugins_dir = str(tmp_dir)
     with patch.object(PluginVenvManager, "ensure", side_effect=_mock_ensure):
         mgr.install(PLUGIN_SOURCE)
-    return reg.get_class(NODE_TYPE)
+    return materialize_isolated_class(reg.get_class(NODE_TYPE))
 
 
 # ── registration ──────────────────────────────────────────────────────────────

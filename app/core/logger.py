@@ -114,19 +114,21 @@ class PipelineLogger:
         )
         self._emit_structured(event)
 
-    def node_start(self, node_type, index, total_nodes=None):
+    def node_start(self, node_type, index, total_nodes=None, node_id=None):
         event = {
             "type": "node_start",
             "node_type": node_type,
             "node_index": index,
             "timestamp": self._timestamp(),
         }
+        if node_id:
+            event["node_id"] = node_id
         if total_nodes is not None:
             event["total_nodes"] = total_nodes
         _log.info("[%s] %s — starting", index, node_type)
         self._emit_structured(event)
 
-    def node_end(self, node_type, index, duration, output_count: int = 0):
+    def node_end(self, node_type, index, duration, output_count: int = 0, node_id=None):
         """Emit a node_end event.
 
         Args:
@@ -137,25 +139,31 @@ class PipelineLogger:
         count_str = f" → {output_count} output items" if output_count else ""
         _log.info("[%s] %s — done in %.3fs%s", index, node_type, duration, count_str)
         # Use "duration_s" consistently across all events (B-10 fix)
-        self._emit_structured({
+        end_event = {
             "type": "node_end",
             "node_type": node_type,
             "node_index": index,
             "duration_s": duration,
             "output_count": output_count,
             "timestamp": self._timestamp(),
-        })
+        }
+        if node_id:
+            end_event["node_id"] = node_id
+        self._emit_structured(end_event)
 
-    def node_error(self, node_type, index, error):
+    def node_error(self, node_type, index, error, node_id=None):
         _log.error("[%s] %s — FAILED: %s", index, node_type, error)
-        self._emit_structured({
+        err_event = {
             "type": "node_error",
             "node_type": node_type,
             "node_index": index,
             "error_message": str(error),
             "error_type": type(error).__name__,
             "timestamp": self._timestamp(),
-        })
+        }
+        if node_id:
+            err_event["node_id"] = node_id
+        self._emit_structured(err_event)
 
     def pipeline_done(self, run_id: str, duration: float):
         self._emit_structured({

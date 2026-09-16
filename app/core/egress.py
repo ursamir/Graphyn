@@ -4,7 +4,8 @@ Bounded Context:  Platform Infrastructure (shared by all BCs)
 Responsibility:   HTTP egress policy for workflow nodes (SSRF hardening).
 Owns:             HttpEgressError, validate_http_egress_url(), is_blocked_ip(),
                   host_on_allowlist().
-Public Surface:   validate_http_egress_url(url) -> None (raises on deny)
+Public Surface:   validate_http_egress_url(url), validate_webhook_target_url(url)
+                  -> None (raises on deny)
 Must NOT:         Perform the HTTP request itself; only validate destinations.
                   Must not cache env reads at import time (token/mode rotation).
 Dependencies:     stdlib (ipaddress, socket, urllib.parse), app.core.config.
@@ -184,3 +185,56 @@ def validate_http_egress_url(url: str, *, mode: str | None = None) -> None:
                 "(private/link-local/loopback/reserved). Restricted mode denies "
                 "SSRF-prone destinations."
             )
+
+
+def validate_webhook_target_url(url: str) -> None:
+    """Validate an admin-configured webhook URL (always SSRF-hardened).
+
+    Unlike workflow nodes, platform webhooks always block private/loopback/
+    link-local/reserved targets regardless of ``GRAPHYN_HTTP_EGRESS_MODE``.
+
+    Raises:
+        ValueError: when the URL is denied (wraps :class:`HttpEgressError`).
+    """
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("Webhook URL is required.")
+
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(
+            f"Webhook URL must use http or https scheme, got {scheme!r}. URL: {url!r}"
+        )
+    hostname = parsed.hostname
+    if not hostname or not parsed.netloc:
+        raise ValueError(f"Webhook URL must have a valid host. URL: {url!r}")
+
+    host_l = hostname.lower().rstrip(".")
+    if host_l in _METADATA_HOSTS:
+        raise ValueError(
+            f"Webhook URL '{url}' uses blocked metadata host {hostname!r}."
+        )
+
+    try:
+        ips = _resolve_ips(hostname)
+    except HttpEgressError as exc:
+        raise ValueError(str(exc)) from exc
+
+    for ip in ips:
+        if is_blocked_ip(ip):
+            raise ValueError(
+                f"Webhook URL '{url}' resolves to a private or loopback address "
+                f"({ip}). Webhook targets must be publicly reachable hosts."
+            )
+
+
+def webhook_url_log_label(url: str) -> str:
+    """Return scheme+host for logs (never log path/query — may contain secrets)."""
+    parsed = urlparse(url or "")
+    if parsed.scheme and parsed.hostname:
+        host = parsed.hostname
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        return f"{parsed.scheme}://{host}"
+    return "<invalid-url>"

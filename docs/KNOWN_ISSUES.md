@@ -6,7 +6,21 @@
 
 ## Open — Fix This Sprint
 
-> Historical fix pack: repo-root [`PROJECT_REVIEW.md`](../PROJECT_REVIEW.md) (2026-09-15). Items below are still open.
+### TEST-SUITE-1 — Full pytest suite residuals (2026-09-16)
+
+**Source:** [`docs/DEEP_REVIEW.md`](./DEEP_REVIEW.md)  
+**Progress:** DEEP_REVIEW P0–P3 code fixes landed. Suite improved from **92 failed + 49 errors** toward green; remaining failures are mostly ML model-download / optional-dep smoke tests and env-only items — not the original silent-wrong-results defects. CI gate is full `unit_test/` (`scripts/ci_smoke.sh`, Python 3.12).
+
+### DEEP-REVIEW-P0 — Verification loop + critical defects (2026-09-16) — **CLOSED**
+
+**Source:** [`docs/DEEP_REVIEW.md`](./DEEP_REVIEW.md)  
+**Fixed in-tree (complete pass):** P0-1..P0-5; P1-1..P1-28; P2-1..P2-50; P3-1..P3-35 except host-only **P3-32** (`UI-BUILD-EACCES-1` below — needs local `sudo chown`). P3-22 CLI coverage expanded in `unit_test/cli/test_cli.py` (runs/secrets/artifacts/inspect). Large-module splits P3-13/14/18 remain incremental (helpers extracted; full god-module split deferred).
+
+**Still open:** none of the DEEP_REVIEW correctness findings. Residual suite flakes and P3-32 ownership are tracked above / as UI-BUILD-EACCES.
+
+**Fixed (2026-09-16, Mode B / plugins / scripts batch):** P2-10..P2-13, P2-20..P2-26, P2-35..P2-39, P2-41..P2-50 per §6 (disk queue fail-closed, blob atomic+hash verify, job cancel on backend failure, stale worker pin release, plugin.toml defaults, isolated runtime registry, registry quarantine, trace/meta stats, migrate aliases, heal/e2e scripts, deps/docker/events).
+
+---
 
 ### PLUGIN-LOAD-1 — Plugin startup can fail with stale installed bytecode / vanished paths — mitigated
 
@@ -84,6 +98,12 @@
 **Detail:** Auth is shared Bearer / optional local unlock (unauthenticated-dev when `GRAPHYN_API_TOKEN` unset). No per-user roles, tenants, or OIDC. Resource capabilities for the current model are documented in `docs/TRUST_MODEL.md` §2 — that matrix is **not** RBAC.  
 **Future:** when multi-user is supported, cross-project access must be prevented by default.  
 **Do not claim done** in market/vision docs until implemented.
+
+### UI-BUILD-EACCES-1 — `npm run build` may fail on root-owned `graphyn-ui` artifacts
+
+**Files:** `graphyn-ui/node_modules/.tmp`, `graphyn-ui/dist/`  
+**Detail:** If UI was built as root, TypeScript incremental files under `node_modules/.tmp` are not writable.  
+**Workaround:** `sudo chown -R "$USER:$USER" graphyn-ui/node_modules graphyn-ui/dist` (or delete those dirs and `npm ci`), then `npm run build`.
 
 ### OTEL-1 — OpenTelemetry traces not shipped
 

@@ -239,6 +239,28 @@ class DistributedBackend(RuntimeBackend):
                         f"(type={node.node_type!r}, placement={node.placement!r})"
                     )
 
+        if needs_remote:
+            unsupported: list[str] = []
+            if checkpoint:
+                unsupported.append("checkpoint")
+            if resume_run_id:
+                unsupported.append("resume_run_id")
+            if streaming:
+                unsupported.append("streaming")
+            if parallel:
+                unsupported.append("parallel")
+            if event_driven:
+                unsupported.append("event_driven")
+            if not use_cache:
+                unsupported.append("use_cache=False")
+            if max_workers is not None:
+                unsupported.append("max_workers")
+            if unsupported:
+                raise NotImplementedError(
+                    "DistributedBackend remote execution does not support: "
+                    + ", ".join(unsupported)
+                )
+
         if not needs_remote:
             log.debug(
                 "DistributedBackend: all nodes local — delegating to LocalPythonBackend"
@@ -268,6 +290,8 @@ class DistributedBackend(RuntimeBackend):
             include_nodes=include_nodes,
             exclude_nodes=exclude_nodes,
             run_manager=run_manager,
+            use_cache=use_cache,
+            checkpoint=checkpoint,
         )
 
     def _execute_with_jobs(
@@ -280,11 +304,18 @@ class DistributedBackend(RuntimeBackend):
         include_nodes: list[str] | None,
         exclude_nodes: list[str] | None,
         run_manager: "RunManager | None",
+        use_cache: bool = True,
+        checkpoint: bool = False,
     ) -> dict[str, Any]:
         """Wave scheduler: local NodeExecutor + remote jobs with artifact refs."""
+        import time as _time
+
         from app.core.distributed.models import NodeJob
         from app.core.distributed.queue import get_job_queue
         from app.core.distributed.transfer import get_port_value, put_port_value
+        from app.core.ir.loader import dump_ir
+        from app.core.run_control import deregister_active_run, register_active_run
+        from app.core.run_journal import RunManager
 
         if include_nodes is not None and exclude_nodes is not None:
             raise ValueError("include_nodes and exclude_nodes are mutually exclusive")
@@ -301,10 +332,20 @@ class DistributedBackend(RuntimeBackend):
         else:
             active_nodes = all_node_ids
 
+        if run_manager is None:
+            run_manager = RunManager()
+        run = run_manager
+        run.save_graph_ir(dump_ir(graph))
+        register_active_run(run)
+
         queue = get_job_queue()
-        run_id = getattr(run_manager, "run_id", None) or str(uuid.uuid4())
+        run_id = run.run_id
         seed = int(getattr(getattr(graph, "metadata", None), "seed", 0) or 0)
         nodes_by_id = {n.id: n for n in graph.nodes}
+        node_stats: list[dict] = []
+        start_time = _time.time()
+        run._write_meta_field("num_nodes", len(active_nodes))
+        terminal_status: str | None = None
 
         incoming: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
         for edge in graph.edges:
@@ -330,172 +371,213 @@ class DistributedBackend(RuntimeBackend):
 
         execution_order = [nid for wave in waves for nid in wave]
 
-        for wave_idx, wave in enumerate(waves):
-            log.info("DistributedBackend wave %s: %s", wave_idx, wave)
-            for node_id in wave:
-                if node_id not in active_nodes:
-                    # Passthrough wiring for excluded nodes.
-                    passthrough: dict[str, Any] = {}
-                    for src_id, src_port, dst_port in incoming.get(node_id, []):
-                        upstream = node_outputs.get(src_id, {})
-                        passthrough[dst_port] = upstream.get(src_port)
-                    node_outputs[node_id] = passthrough
-                    continue
+        enqueued_job_ids: list[str] = []
 
-                ir_node = nodes_by_id[node_id]
-                inputs = _assemble_inputs(
-                    node_id,
-                    incoming=incoming,
-                    node_outputs=node_outputs,
-                    input_overrides=input_overrides,
-                )
-                target = placements.get(node_id)
+        def _cancel_enqueued_jobs() -> None:
+            for jid in list(enqueued_job_ids):
+                try:
+                    queue.cancel(jid)
+                except Exception as exc:
+                    log.warning(
+                        "DistributedBackend: failed to cancel job %s: %s", jid, exc
+                    )
 
-                if target in (None, "local"):
-                    outputs = _run_local_node(
+        try:
+            for wave_idx, wave in enumerate(waves):
+                run.wait_if_paused()
+                if run.is_cancelled:
+                    terminal_status = "cancelled"
+                    run.mark_cancelled()
+                    break
+                log.info("DistributedBackend wave %s: %s", wave_idx, wave)
+                for node_id in wave:
+                    if node_id not in active_nodes:
+                        passthrough: dict[str, Any] = {}
+                        for src_id, src_port, dst_port in incoming.get(node_id, []):
+                            upstream = node_outputs.get(src_id, {})
+                            passthrough[dst_port] = upstream.get(src_port)
+                        node_outputs[node_id] = passthrough
+                        continue
+
+                    ir_node = nodes_by_id[node_id]
+                    inputs = _assemble_inputs(
+                        node_id,
+                        incoming=incoming,
+                        node_outputs=node_outputs,
+                        input_overrides=input_overrides,
+                    )
+                    target = placements.get(node_id)
+
+                    if target in (None, "local"):
+                        _node_start = _time.time()
+                        outputs = _run_local_node(
+                            node_id=node_id,
+                            node_type=ir_node.node_type,
+                            config=dict(ir_node.config) if ir_node.config else {},
+                            seed=seed,
+                            inputs=inputs,
+                            run_id=run_id,
+                        )
+                        node_outputs[node_id] = outputs or {}
+                        node_workers[node_id] = "local"
+                        node_stats.append({
+                            "node_id": node_id,
+                            "node_type": ir_node.node_type,
+                            "duration_s": round(_time.time() - _node_start, 4),
+                        })
+                        run._write_meta_field("node_stats", node_stats)
+                        continue
+
+                    input_refs: dict[str, str] = {}
+                    for port, value in inputs.items():
+                        input_refs[port] = put_port_value(value)
+
+                    placement = getattr(ir_node, "placement", None)
+                    from app.core.distributed.placement import effective_job_constraints
+                    from app.core.ir.models import IRPlacement as _IRPlacement
+
+                    cap = getattr(ir_node, "capability_metadata", None)
+                    try:
+                        from app.core.registry_runtime import get_registry, resolve_capability
+                        import warnings as _warnings
+
+                        with _warnings.catch_warnings():
+                            _warnings.simplefilter("ignore", RuntimeWarning)
+                            cap = resolve_capability(ir_node, get_registry())
+                    except Exception:
+                        pass
+                    constraints = effective_job_constraints(placement, capability=cap)
+
+                    job_placement = placement
+                    if isinstance(target, str) and target not in ("local", ""):
+                        job_placement = _IRPlacement(
+                            mode="worker",
+                            worker=str(target),
+                            pool=constraints["pool"],
+                            tags=tuple(constraints["tags"]),
+                            require_gpu=bool(constraints["require_gpu"]),
+                            min_vram_mib=constraints["min_vram_mib"],
+                        )
+
+                    default_timeout = float(
+                        os.environ.get("GRAPHYN_DISTRIBUTED_JOB_TIMEOUT", "120") or "120"
+                    )
+                    job = NodeJob(
+                        job_id=str(uuid.uuid4()),
+                        run_id=run_id,
                         node_id=node_id,
                         node_type=ir_node.node_type,
                         config=dict(ir_node.config) if ir_node.config else {},
                         seed=seed,
-                        inputs=inputs,
-                        run_id=run_id,
-                    )
-                    node_outputs[node_id] = outputs or {}
-                    node_workers[node_id] = "local"
-                    continue
-
-                # Remote path: serialize inputs → enqueue → wait → hydrate.
-                input_refs: dict[str, str] = {}
-                for port, value in inputs.items():
-                    input_refs[port] = put_port_value(value)
-
-                placement = getattr(ir_node, "placement", None)
-                from app.core.distributed.placement import effective_job_constraints
-                from app.core.ir.models import IRPlacement as _IRPlacement
-
-                cap = getattr(ir_node, "capability_metadata", None)
-                try:
-                    from app.core.registry_runtime import get_registry, resolve_capability
-                    import warnings as _warnings
-
-                    with _warnings.catch_warnings():
-                        _warnings.simplefilter("ignore", RuntimeWarning)
-                        cap = resolve_capability(ir_node, get_registry())
-                except Exception:
-                    pass
-                constraints = effective_job_constraints(placement, capability=cap)
-
-                # Prefer the resolved worker so claim eligibility stays tight.
-                job_placement = placement
-                if isinstance(target, str) and target not in ("local", ""):
-                    job_placement = _IRPlacement(
-                        mode="worker",
-                        worker=str(target),
-                        pool=constraints["pool"],
-                        tags=tuple(constraints["tags"]),
+                        input_refs=input_refs,
+                        placement=job_placement,
                         require_gpu=bool(constraints["require_gpu"]),
                         min_vram_mib=constraints["min_vram_mib"],
+                        tags=list(constraints["tags"]),
+                        pool=constraints["pool"],
+                        timeout_s=default_timeout,
+                    )
+                    _remote_start = _time.time()
+                    stored = queue.enqueue(job)
+                    enqueued_job_ids.append(stored.job_id)
+                    log.info(
+                        "Enqueued remote job %s for node %s → target %s refs=%s "
+                        "require_gpu=%s tags=%s",
+                        stored.job_id,
+                        node_id,
+                        target,
+                        list(input_refs),
+                        stored.require_gpu,
+                        stored.tags,
                     )
 
-                default_timeout = float(
-                    os.environ.get("GRAPHYN_DISTRIBUTED_JOB_TIMEOUT", "120") or "120"
-                )
-                job = NodeJob(
-                    job_id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    node_id=node_id,
-                    node_type=ir_node.node_type,
-                    config=dict(ir_node.config) if ir_node.config else {},
-                    seed=seed,
-                    input_refs=input_refs,
-                    placement=job_placement,
-                    require_gpu=bool(constraints["require_gpu"]),
-                    min_vram_mib=constraints["min_vram_mib"],
-                    tags=list(constraints["tags"]),
-                    pool=constraints["pool"],
-                    timeout_s=default_timeout,
-                )
-                stored = queue.enqueue(job)
-                log.info(
-                    "Enqueued remote job %s for node %s → target %s refs=%s "
-                    "require_gpu=%s tags=%s",
-                    stored.job_id,
-                    node_id,
-                    target,
-                    list(input_refs),
-                    stored.require_gpu,
-                    stored.tags,
-                )
-
-                # Per-job timeout (do not share one graph-wide deadline).
-                job_timeout = float(
-                    stored.timeout_s if stored.timeout_s is not None else default_timeout
-                )
-                result = queue.wait_for_result(stored.job_id, timeout_s=job_timeout)
-                if result is None:
-                    raise TimeoutError(
-                        f"Timed out waiting for distributed job {stored.job_id} "
-                        f"(node={node_id})"
+                    job_timeout = float(
+                        stored.timeout_s if stored.timeout_s is not None else default_timeout
                     )
-                if result.status != "succeeded":
-                    raise RuntimeError(
-                        f"Distributed job {stored.job_id} (node={node_id}) "
-                        f"ended with status={result.status}: {result.error}"
-                    )
-
-                outputs = {}
-                if result.output_refs:
-                    for port, uri in result.output_refs.items():
-                        outputs[port] = get_port_value(uri)
-                else:
-                    # Soft fallback: embedded debug events (must not be required).
-                    for ev in result.events or []:
-                        if isinstance(ev, dict) and ev.get("type") == "outputs":
-                            data = ev.get("data")
-                            if isinstance(data, dict):
-                                outputs = data
-                                break
-                    if not outputs and result.output_refs == {}:
-                        outputs = {}
-
-                node_outputs[node_id] = outputs
-                if result.worker_id:
-                    node_workers[node_id] = result.worker_id
-                else:
-                    node_workers[node_id] = str(target)
-
-                if run_manager is not None:
-                    try:
-                        write_field = getattr(run_manager, "_write_meta_field", None)
-                        if callable(write_field):
-                            write_field(
-                                "distributed_node_workers", dict(node_workers)
-                            )
-                    except Exception:
-                        pass
-
-                if logger is not None:
-                    try:
-                        logger.info(
-                            "distributed_node_done",
-                            node_id=node_id,
-                            worker_id=node_workers[node_id],
+                    result = queue.wait_for_result(stored.job_id, timeout_s=job_timeout)
+                    if result is None:
+                        raise TimeoutError(
+                            f"Timed out waiting for distributed job {stored.job_id} "
+                            f"(node={node_id})"
                         )
-                    except Exception:
+                    if result.status != "succeeded":
+                        raise RuntimeError(
+                            f"Distributed job {stored.job_id} (node={node_id}) "
+                            f"ended with status={result.status}: {result.error}"
+                        )
+                    try:
+                        enqueued_job_ids.remove(stored.job_id)
+                    except ValueError:
                         pass
+
+                    outputs = {}
+                    if result.output_refs:
+                        for port, uri in result.output_refs.items():
+                            outputs[port] = get_port_value(uri)
+                    else:
+                        for ev in result.events or []:
+                            if isinstance(ev, dict) and ev.get("type") == "outputs":
+                                data = ev.get("data")
+                                if isinstance(data, dict):
+                                    outputs = data
+                                    break
+                        if not outputs and result.output_refs == {}:
+                            outputs = {}
+
+                    node_outputs[node_id] = outputs
+                    if result.worker_id:
+                        node_workers[node_id] = result.worker_id
+                    else:
+                        node_workers[node_id] = str(target)
+
+                    run._write_meta_field("distributed_node_workers", dict(node_workers))
+
+                    if logger is not None:
+                        try:
+                            logger.info(
+                                "distributed_node_done",
+                                node_id=node_id,
+                                worker_id=node_workers[node_id],
+                            )
+                        except Exception:
+                            pass
+
+                    node_stats.append({
+                        "node_id": node_id,
+                        "node_type": ir_node.node_type,
+                        "duration_s": round(_time.time() - _remote_start, 4),
+                    })
+                    run._write_meta_field("node_stats", node_stats)
+
+        except Exception as exc:
+            _cancel_enqueued_jobs()
+            terminal_status = "failed"
+            run.mark_failed(str(exc), node_stats=node_stats)
+            raise
+        finally:
+            deregister_active_run(run.run_id)
 
         self.last_node_workers = dict(node_workers)
-        if run_manager is not None:
+        try:
+            run._write_meta_field("distributed_node_workers", dict(node_workers))
+        except Exception:
+            pass
+
+        if logger is not None and hasattr(logger, "logs"):
             try:
-                write_field = getattr(run_manager, "_write_meta_field", None)
-                if callable(write_field):
-                    write_field("distributed_node_workers", dict(node_workers))
-                else:
-                    meta = getattr(run_manager, "metadata", None)
-                    if isinstance(meta, dict):
-                        meta["distributed_node_workers"] = dict(node_workers)
+                run.save_logs(logger.logs)
             except Exception:
                 pass
+
+        if terminal_status is None:
+            run.save_metadata({
+                "num_nodes": len(active_nodes),
+                "node_stats": node_stats,
+                "duration_s": round(_time.time() - start_time, 4),
+                "distributed": True,
+            })
+        elif terminal_status == "cancelled":
+            pass  # mark_cancelled() already written in the wave loop
 
         if not execution_order:
             return {}

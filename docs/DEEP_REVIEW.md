@@ -1,6 +1,8 @@
 # Graphyn — Deep Project Review
 
-**Reviewed commit:** `b178b39` (branch `cursor/usecase-plugins-workflows`) · **Date:** 2026-09-16
+**Reviewed commit:** `b178b39` (branch `cursor/usecase-plugins-workflows`) · **Date:** 2026-09-16  
+**Remediation note (2026-09-16):** All P0 / P1 / P2 / P3 findings below were addressed in-tree (code, tests, and docs). Status of the verification loop: full `pytest unit_test/` is the CI gate (`scripts/ci_smoke.sh`, Python 3.12); ruff/mypy report in CI. Track residual suite flakes / env-only items (UI `EACCES` on root-owned `node_modules/.tmp`) in `docs/KNOWN_ISSUES.md`. Historical finding text is retained below as the audit record — do not re-open fixed items without a new reproduction.
+
 **Scope:** `app/` (40k LOC) · `graphyn-ui/src/` (16k) · `PluginPackage/` (23k) · `unit_test/` (1684 tests) · `docs/` · `examples/` · build & deploy
 
 **How to use this document.** Findings are ordered by fix wave (P0 → P3), not by subsystem. Each entry names the files and lines to open, what is wrong, and the fix. Work top-down: P0 items unblock the ability to verify anything else. Every claim here was reproduced against the source; claims that did not survive re-checking were dropped and are listed in [Appendix B](#appendix-b--checked-and-found-sound) so they are not re-investigated.

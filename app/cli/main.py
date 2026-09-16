@@ -418,10 +418,16 @@ def cmd_validate(args):
     has_graph = getattr(args, "graph", None) is not None
     has_config = getattr(args, "config", None) is not None
 
+    if not has_graph and not has_config:
+        print(
+            "Error: graphyn validate requires --graph PATH or --config PATH",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     if has_graph:
         from app.core.ir.loader import load_ir_from_file, IRVersionError
         from app.core.registry_runtime import get_registry
-        import pydantic
 
         graph_path = args.graph
         if not os.path.isfile(graph_path):
@@ -440,113 +446,19 @@ def cmd_validate(args):
             print(f"✗ Schema validation failed: {exc}", file=sys.stderr)
             sys.exit(1)
 
-        # ── Step 3 & 4: node type resolution + config validation ──────────────
+        # ── Steps 3–7: deep validation (shared with API/MCP) ─────────────────
+        from app.core.validation import validate_graph_ir
+
         registry = get_registry()
         node_classes: dict[str, type] = {}
+        for line in validate_graph_ir(graph, registry):
+            errors.append(f"  ✗ {line}")
 
         for node in graph.nodes:
             try:
-                node_class = registry.get_class(node.node_type)
-                node_classes[node.id] = node_class
+                node_classes[node.id] = registry.get_class(node.node_type)
             except Exception:
-                available = sorted(m.node_type for m in registry.list_nodes())
-                errors.append(
-                    f"  ✗ [{node.id}] Unknown node type '{node.node_type}'. "
-                    f"Available: {', '.join(available)}"
-                )
-                continue
-
-            try:
-                node_class.Config.model_validate(dict(node.config))
-            except pydantic.ValidationError as exc:
-                for e in exc.errors():
-                    loc = ".".join(str(l) for l in e["loc"])
-                    errors.append(
-                        f"  ✗ [{node.id}] Config error at '{loc}': {e['msg']}"
-                    )
-
-        # ── Step 5 & 6: port existence + type compatibility ───────────────────
-        from app.core.nodes.compat import CompatibilityChecker
-        from app.core.nodes.errors import NodeTypeError
-        from app.core.utils.hash import stable_hash
-        import copy
-
-        # Instantiate nodes (needed for port inspection)
-        node_instances: dict[str, object] = {}
-        for node in graph.nodes:
-            if node.id not in node_classes:
-                continue  # already flagged as unknown type
-            try:
-                node_class = node_classes[node.id]
-                node_seed = stable_hash(graph.metadata.seed, node.node_type, 0) % (2 ** 32)
-                instance = node_class(
-                    config=copy.deepcopy(dict(node.config)),
-                    seed=node_seed,
-                )
-                node_instances[node.id] = instance
-            except Exception as exc:
-                errors.append(f"  ✗ [{node.id}] Failed to instantiate node: {exc}")
-
-        for edge in graph.edges:
-            src_inst = node_instances.get(edge.src_id)
-            dst_inst = node_instances.get(edge.dst_id)
-
-            if src_inst is None or dst_inst is None:
-                errors.append(
-                    f"  ⚠ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
-                    f"skipped (node instantiation failed)"
-                )
-                continue  # node instantiation already failed — skip port check
-
-            # Port existence
-            if edge.src_port not in src_inst.__class__.output_ports:
-                available = sorted(src_inst.__class__.output_ports)
-                errors.append(
-                    f"  ✗ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
-                    f"'{edge.src_id}' has no output port '{edge.src_port}'. "
-                    f"Available: {available}"
-                )
-                continue
-
-            if edge.dst_port not in dst_inst.__class__.input_ports:
-                available = sorted(dst_inst.__class__.input_ports)
-                errors.append(
-                    f"  ✗ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
-                    f"'{edge.dst_id}' has no input port '{edge.dst_port}'. "
-                    f"Available: {available}"
-                )
-                continue
-
-            # Type compatibility
-            try:
-                CompatibilityChecker.check_connection(
-                    src_inst, edge.src_port, dst_inst, edge.dst_port
-                )
-            except NodeTypeError as exc:
-                errors.append(
-                    f"  ✗ Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
-                    f"Type mismatch — {exc}"
-                )
-
-        # ── Step 7: cycle detection ───────────────────────────────────────────
-        from collections import defaultdict, deque as _deque
-        in_degree: dict[str, int] = {n.id: 0 for n in graph.nodes}
-        adjacency: dict[str, list[str]] = defaultdict(list)
-        for edge in graph.edges:
-            adjacency[edge.src_id].append(edge.dst_id)
-            in_degree[edge.dst_id] += 1
-        queue = _deque(nid for nid, deg in in_degree.items() if deg == 0)
-        visited = 0
-        while queue:
-            nid = queue.popleft()
-            visited += 1
-            for succ in adjacency[nid]:
-                in_degree[succ] -= 1
-                if in_degree[succ] == 0:
-                    queue.append(succ)
-        if visited != len(graph.nodes):
-            cycle_nodes = [n.id for n in graph.nodes if in_degree[n.id] > 0]
-            errors.append(f"  ✗ Cycle detected — nodes involved: {cycle_nodes}")
+                pass
 
         # ── Report ────────────────────────────────────────────────────────────
         if errors:
@@ -1194,6 +1106,16 @@ def cmd_mcp(args):
 
 # ─── Argument parser ──────────────────────────────────────────────────────────
 
+def _worker_heartbeat_payload(
+    resources: dict,
+    status: str,
+    *,
+    active_jobs: int = 0,
+) -> dict:
+    """JSON body for POST /workers/{id}/heartbeat (P3-14 helper)."""
+    return {"resources": resources, "status": status, "active_jobs": active_jobs}
+
+
 def cmd_worker_start(args):
     """Register with the control plane and run heartbeat + claim loop.
 
@@ -1457,10 +1379,28 @@ def cmd_worker_start(args):
                 continue
             get_job_queue().mark_running(job.job_id)
             started = time.time()
+            import threading as _threading
+
+            _lease_stop = _threading.Event()
+            _lease_interval = max(5.0, min(heartbeat_s, 30.0))
+
+            def _lease_heartbeat_inproc() -> None:
+                while not _lease_stop.wait(_lease_interval):
+                    try:
+                        get_job_queue().renew_leases_for_worker(worker_id)
+                    except Exception:
+                        pass
+
+            _lease = _threading.Thread(
+                target=_lease_heartbeat_inproc,
+                name=f"graphyn-lease-heartbeat-{job.job_id}",
+                daemon=True,
+            )
             try:
                 if get_job_queue().is_cancelled(job.job_id):
                     raise RuntimeError("cancelled by control plane")
                 jid = job.job_id
+                _lease.start()
                 outputs, output_refs = _execute_job(
                     job.model_dump(mode="json"),
                     cancel_check=lambda: get_job_queue().is_cancelled(jid),
@@ -1528,6 +1468,8 @@ def cmd_worker_start(args):
                         )
                     )
                     print(f"[worker] job {job.job_id} failed: {exc}", file=sys.stderr)
+            finally:
+                _lease_stop.set()
             if once:
                 return
 
@@ -1546,7 +1488,7 @@ def cmd_worker_start(args):
                 _http_json(
                     "POST",
                     f"/workers/{worker_id}/heartbeat",
-                    {"resources": resources, "status": "idle"},
+                    _worker_heartbeat_payload(resources, "idle"),
                 )
                 claimed = _http_json("POST", "/jobs/claim", {"worker_id": worker_id})
                 job = (claimed or {}).get("job")
@@ -1586,7 +1528,10 @@ def cmd_worker_start(args):
 
                 def _job_cancelled() -> bool:
                     try:
-                        st = _http_json("GET", f"/jobs/{job['job_id']}")
+                        st = _http_json(
+                            "GET",
+                            f"/jobs/{job['job_id']}?worker_id={worker_id}",
+                        )
                         j = (st or {}).get("job") or {}
                         return j.get("status") == "cancelled"
                     except Exception:
@@ -1599,6 +1544,11 @@ def cmd_worker_start(args):
                     continue
                 started = time.time()
                 try:
+                    _http_json(
+                        "POST",
+                        f"/workers/{worker_id}/heartbeat",
+                        _worker_heartbeat_payload(resources, "busy", active_jobs=1),
+                    )
                     if _job_cancelled():
                         raise RuntimeError("cancelled by control plane")
                     # Poll cancel more often during long execute; NodeExecutor /
@@ -1607,6 +1557,8 @@ def cmd_worker_start(args):
 
                     _cancel_flag = _threading.Event()
                     _watch_stop = _threading.Event()
+                    _lease_stop = _threading.Event()
+                    _lease_interval = max(5.0, min(heartbeat_s, 30.0))
 
                     def _cancel_watch() -> None:
                         # ~2 Hz during execute (faster than heartbeat interval).
@@ -1615,12 +1567,34 @@ def cmd_worker_start(args):
                                 _cancel_flag.set()
                                 return
 
+                    def _lease_heartbeat() -> None:
+                        """Keep claimed job leases alive for long executions (P1-11)."""
+                        while not _lease_stop.wait(_lease_interval):
+                            try:
+                                _http_json(
+                                    "POST",
+                                    f"/workers/{worker_id}/heartbeat",
+                                    {
+                                        "resources": resources,
+                                        "status": "busy",
+                                        "active_jobs": 1,
+                                    },
+                                )
+                            except Exception:
+                                pass
+
                     _watch = _threading.Thread(
                         target=_cancel_watch,
                         name=f"graphyn-cancel-watch-{job.get('job_id')}",
                         daemon=True,
                     )
+                    _lease = _threading.Thread(
+                        target=_lease_heartbeat,
+                        name=f"graphyn-lease-heartbeat-{job.get('job_id')}",
+                        daemon=True,
+                    )
                     _watch.start()
+                    _lease.start()
                     try:
                         outputs, output_refs = _execute_job(
                             job,
@@ -1630,6 +1604,7 @@ def cmd_worker_start(args):
                         )
                     finally:
                         _watch_stop.set()
+                        _lease_stop.set()
                     if _job_cancelled() or _cancel_flag.is_set():
                         raise RuntimeError("cancelled by control plane")
                     events = []
@@ -1677,6 +1652,14 @@ def cmd_worker_start(args):
                         file=sys.stderr,
                     )
                 print(f"[worker] reported completion for {job['job_id']}")
+                try:
+                    _http_json(
+                        "POST",
+                        f"/workers/{worker_id}/heartbeat",
+                        _worker_heartbeat_payload(resources, "idle"),
+                    )
+                except Exception:
+                    pass
                 if once:
                     return
             except KeyboardInterrupt:

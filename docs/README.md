@@ -37,6 +37,6 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 - **Graph IR** — versioned JSON DAG (current schema_version: 1.2). Optional placement for workers.
 - **RuntimeBackend** — call get_backend().execute(graph). Default LocalPythonBackend; GRAPHYN_BACKEND=distributed for workers.
 - **Plugins** — nodes ship as plugin.toml packages under PluginPackage/.
-- **Console** — IR-native UI: Build / Observe / Library / Deploy / Admin.
+- **Console** — IR-native UI: project-first nav (Build · Library · Deploy · Admin; Runs/Editor under an open workspace).
 
 Contributor orientation: [AGENTS.md](../AGENTS.md). Area steering: [.kiro/steering/](../.kiro/steering/).

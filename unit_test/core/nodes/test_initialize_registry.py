@@ -44,16 +44,44 @@ class InitFixtureNode(Node):
 """
 
 
-def _reset_nodes_package() -> None:
-    """Reload app.core.nodes so initialize_registry is idempotent-fresh."""
+@pytest.fixture
+def reset_nodes_package():
+    """Snapshot NodeRegistry + init flags; restore after the test (P0-3)."""
+    import copy
+
     import app.core.nodes as nodes_pkg
 
+    snap = {
+        "initialized": nodes_pkg._initialized,
+        "started": getattr(nodes_pkg, "_started", False),
+        "ready": nodes_pkg._ready_event.is_set(),
+        "classes": dict(nodes_pkg.registry._classes),
+        "metadata": dict(nodes_pkg.registry._metadata),
+        "plugin_ui": copy.deepcopy(getattr(nodes_pkg.registry, "_plugin_ui_fields", {})),
+    }
     nodes_pkg._initialized = False
     nodes_pkg._started = False
     nodes_pkg._ready_event.clear()
     nodes_pkg.registry._classes.clear()
     nodes_pkg.registry._metadata.clear()
-    nodes_pkg.registry._plugin_ui_fields.clear()
+    if hasattr(nodes_pkg.registry, "_plugin_ui_fields"):
+        nodes_pkg.registry._plugin_ui_fields.clear()
+    try:
+        yield
+    finally:
+        nodes_pkg._initialized = snap["initialized"]
+        nodes_pkg._started = snap["started"]
+        if snap["ready"]:
+            nodes_pkg._ready_event.set()
+        else:
+            nodes_pkg._ready_event.clear()
+        nodes_pkg.registry._classes.clear()
+        nodes_pkg.registry._classes.update(snap["classes"])
+        nodes_pkg.registry._metadata.clear()
+        nodes_pkg.registry._metadata.update(snap["metadata"])
+        if hasattr(nodes_pkg.registry, "_plugin_ui_fields"):
+            nodes_pkg.registry._plugin_ui_fields.clear()
+            nodes_pkg.registry._plugin_ui_fields.update(snap["plugin_ui"])
 
 
 def _write_installed_plugin(plugins_installed: Path, name: str = "init-fixture") -> Path:
@@ -65,7 +93,7 @@ def _write_installed_plugin(plugins_installed: Path, name: str = "init-fixture")
 
 
 def test_initialize_registry_loads_temp_plugin_install_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_nodes_package
 ) -> None:
     """After init with a temp GRAPHYN_HOME install dir, get_registry() is non-empty."""
     home = tmp_path / "graphyn-home"
@@ -97,7 +125,6 @@ def test_initialize_registry_loads_temp_plugin_install_dir(
     monkeypatch.setenv("GRAPHYN_ENV", "development")
     monkeypatch.delenv("GRAPHYN_PLUGINS_DIR", raising=False)
 
-    _reset_nodes_package()
     from app.core.nodes import initialize_registry, registry
     from app.core.registry_runtime import get_registry
 
@@ -109,7 +136,7 @@ def test_initialize_registry_loads_temp_plugin_install_dir(
 
 
 def test_initialize_registry_heals_stale_pytest_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_nodes_package
 ) -> None:
     """Stale /tmp/pytest-of-* records heal via plugins_home or are pruned."""
     home = tmp_path / "graphyn-home"
@@ -152,7 +179,6 @@ def test_initialize_registry_heals_stale_pytest_path(
     monkeypatch.setenv("GRAPHYN_ENV", "development")
     monkeypatch.delenv("GRAPHYN_PLUGINS_DIR", raising=False)
 
-    _reset_nodes_package()
     from app.core.nodes import initialize_registry, registry
 
     initialize_registry()
@@ -165,7 +191,7 @@ def test_initialize_registry_heals_stale_pytest_path(
 
 
 def test_initialize_registry_skip_flag_leaves_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_nodes_package
 ) -> None:
     """GRAPHYN_SKIP_PLUGIN_LOAD=1 must still skip install/load (test isolation)."""
     home = tmp_path / "graphyn-home"
@@ -177,7 +203,6 @@ def test_initialize_registry_skip_flag_leaves_empty(
     monkeypatch.setenv("GRAPHYN_SKIP_PLUGIN_LOAD", "1")
     monkeypatch.setenv("GRAPHYN_AUTO_INSTALL_PLUGINS", "0")
 
-    _reset_nodes_package()
     from app.core.nodes import initialize_registry, registry
 
     initialize_registry()

@@ -56,6 +56,17 @@ def test_nodes_exits_zero():
 
 
 # ---------------------------------------------------------------------------
+# Test: validate requires --graph or --config
+# ---------------------------------------------------------------------------
+
+def test_validate_no_args_exits_nonzero():
+    """'validate' with neither --graph nor --config exits 2 with usage (P3-21)."""
+    result = _run_cli("validate")
+    assert result.returncode == 2, result.stderr
+    assert "requires --graph PATH or --config PATH" in result.stderr
+
+
+# ---------------------------------------------------------------------------
 # Test: validate --graph with valid IR JSON
 # ---------------------------------------------------------------------------
 
@@ -190,3 +201,45 @@ def test_run_valid_ir_exits_zero(tmp_path: Path):
             exit_code = e.code if e.code is not None else 0
 
     assert exit_code == 0, f"Expected exit 0, got {exit_code}"
+
+
+# ---------------------------------------------------------------------------
+# P3-22: previously untested state-mutating / control surface commands
+# ---------------------------------------------------------------------------
+
+def test_runs_list_exits_zero():
+    """'runs list' exits 0 (empty or populated)."""
+    result = _run_cli("runs", "list")
+    assert result.returncode == 0, (
+        f"Expected exit 0, got {result.returncode}.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.parametrize("verb", ["pause", "resume", "cancel"])
+def test_runs_control_requires_run_id(verb: str):
+    """'runs pause|resume|cancel' without run_id exits non-zero (argparse)."""
+    result = _run_cli("runs", verb)
+    assert result.returncode != 0
+    assert "usage" in (result.stderr + result.stdout).lower() or result.returncode == 2
+
+
+def test_secrets_list_exits_zero():
+    """'secrets list' exits 0."""
+    result = _run_cli("secrets", "list")
+    assert result.returncode == 0, (
+        f"Expected exit 0, got {result.returncode}.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+def test_artifacts_list_exits_zero():
+    """'artifacts list' exits 0."""
+    result = _run_cli("artifacts", "list")
+    assert result.returncode == 0, (
+        f"Expected exit 0, got {result.returncode}.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+def test_inspect_missing_path_exits_nonzero():
+    """'inspect' without a path exits non-zero."""
+    result = _run_cli("inspect")
+    assert result.returncode != 0

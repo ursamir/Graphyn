@@ -5,7 +5,8 @@ Responsibility:   Validate pipeline config dicts (YAML-derived or API-supplied)
                   against the node registry. Used by the REST API and CLI.
 Owns:             validate_pipeline(), _validate_dag_edges(),
                   _validate_connections().
-Public Surface:   validate_pipeline(config, registry) -> list[dict]
+Public Surface:   validate_pipeline(config, registry) -> list[dict],
+                  validate_graph_ir(graph, registry) -> list[str]
 Must NOT:         Import from app.domain or app.api. Must not execute nodes.
 Dependencies:     BC2 (nodes.compat, nodes.errors — lazy), BC3 (registry —
                   passed as argument), pydantic.
@@ -14,11 +15,15 @@ Reason To Change: Validation rules evolve (new edge constraints, new config
 """
 from __future__ import annotations
 
+import copy
 import logging
-import pydantic
-from app.core.nodes.config import sanitize_node_config_dict
-
+from collections import defaultdict, deque
 from typing import Any
+
+import pydantic
+
+from app.core.nodes.config import sanitize_node_config_dict
+from app.core.utils.hash import stable_hash
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +269,120 @@ def validate_pipeline(config: Any, registry: Any) -> list[dict]:
         _validate_connections(validated_nodes, registry)
 
     return validated_nodes
+
+
+def validate_graph_ir(graph: Any, registry: Any) -> list[str]:
+    """Deep GraphIR validation (CLI validate steps 3–7).
+
+    Returns a list of human-readable error strings; empty means the graph can execute.
+    """
+    from app.core.ir.models import _deep_unfreeze
+    from app.core.nodes.compat import CompatibilityChecker
+    from app.core.nodes.errors import NodeTypeError
+
+    errors: list[str] = []
+    node_classes: dict[str, type] = {}
+
+    for node in graph.nodes:
+        try:
+            node_class = registry.get_class(node.node_type)
+            node_classes[node.id] = node_class
+        except Exception:
+            try:
+                available = sorted(m.node_type for m in registry.list_nodes())
+            except Exception:
+                available = ["<registry unavailable>"]
+            errors.append(
+                f"[{node.id}] Unknown node type '{node.node_type}'. "
+                f"Available: {', '.join(available)}"
+            )
+            continue
+
+        try:
+            cfg = sanitize_node_config_dict(
+                node_class.Config, dict(_deep_unfreeze(node.config or {}))
+            )
+            node_class.Config.model_validate(cfg)
+        except pydantic.ValidationError as exc:
+            for e in exc.errors():
+                loc = ".".join(str(part) for part in e["loc"])
+                errors.append(
+                    f"[{node.id}] Config error at '{loc}': {e['msg']}"
+                )
+
+    node_instances: dict[str, object] = {}
+    seed_base = getattr(getattr(graph, "metadata", None), "seed", 0) or 0
+    for node in graph.nodes:
+        if node.id not in node_classes:
+            continue
+        try:
+            node_class = node_classes[node.id]
+            node_seed = stable_hash(seed_base, node.node_type, 0) % (2 ** 32)
+            instance = node_class(
+                config=copy.deepcopy(dict(_deep_unfreeze(node.config or {}))),
+                seed=node_seed,
+            )
+            node_instances[node.id] = instance
+        except Exception as exc:
+            errors.append(f"[{node.id}] Failed to instantiate node: {exc}")
+
+    for edge in graph.edges:
+        src_inst = node_instances.get(edge.src_id)
+        dst_inst = node_instances.get(edge.dst_id)
+        if src_inst is None or dst_inst is None:
+            errors.append(
+                f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                f"skipped (node instantiation failed)"
+            )
+            continue
+
+        if edge.src_port not in src_inst.__class__.output_ports:
+            available = sorted(src_inst.__class__.output_ports)
+            errors.append(
+                f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                f"'{edge.src_id}' has no output port '{edge.src_port}'. "
+                f"Available: {available}"
+            )
+            continue
+
+        if edge.dst_port not in dst_inst.__class__.input_ports:
+            available = sorted(dst_inst.__class__.input_ports)
+            errors.append(
+                f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                f"'{edge.dst_id}' has no input port '{edge.dst_port}'. "
+                f"Available: {available}"
+            )
+            continue
+
+        try:
+            CompatibilityChecker.check_connection(
+                src_inst, edge.src_port, dst_inst, edge.dst_port
+            )
+        except NodeTypeError as exc:
+            errors.append(
+                f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                f"Type mismatch — {exc}"
+            )
+
+    in_degree: dict[str, int] = {n.id: 0 for n in graph.nodes}
+    adjacency: dict[str, list[str]] = defaultdict(list)
+    for edge in graph.edges:
+        adjacency[edge.src_id].append(edge.dst_id)
+        in_degree[edge.dst_id] += 1
+    queue: deque[str] = deque(nid for nid, deg in in_degree.items() if deg == 0)
+    visited = 0
+    while queue:
+        nid = queue.popleft()
+        visited += 1
+        for succ in adjacency[nid]:
+            in_degree[succ] -= 1
+            if in_degree[succ] == 0:
+                queue.append(succ)
+    if visited != len(graph.nodes):
+        cycle_nodes = [n.id for n in graph.nodes if in_degree[n.id] > 0]
+        errors.append(f"Cycle detected — nodes involved: {cycle_nodes}")
+
+    return errors
 
 
 def validate_node_config(node_type: str, config: dict, schema: dict) -> dict:

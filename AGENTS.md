@@ -43,7 +43,7 @@ User-facing steps: docs/GETTING_STARTED.md. Protocol details: docs/DISTRIBUTED_E
 5. **`resolve_capability`** from `registry_runtime.py`, never from `orchestrator`.
 6. **Plugins live in `PluginPackage/`.** Never edit `plugins/` (install target).
 7. **YAML is deprecated.** Prefer `.graph.json`; migrate with `graphyn migrate`.
-8. **After code changes:** update matching `.kiro/steering/` file and matching `docs/` file (see update protocol rule).
+8. **After code changes:** update matching `.kiro/steering/` file and matching `docs/` file (see update protocol rule). `.kiro/steering/` is **tracked** (`.gitignore` excludes `.kiro/*` but un-ignores `.kiro/steering/**`).
 9. **`app/` modules:** keep the 7-field architectural contract docstring (see file-header rule).
 
 ## Layout

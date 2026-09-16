@@ -51,6 +51,8 @@ def list_artifacts(
     run_id: Optional[str] = Query(None, description="Filter by run ID"),
     node_type: Optional[str] = Query(None, description="Filter by node type"),
     artifact_type: Optional[str] = Query(None, description="Filter by artifact type"),
+    limit: int = Query(100, ge=1, le=1000, description="Max records to return"),
+    offset: int = Query(0, ge=0, description="Records to skip after sort"),
 ):
     """Return all artifacts matching the provided filters, sorted by created_at descending.
 
@@ -60,7 +62,8 @@ def list_artifacts(
 
     store = ArtifactStore()
     records = store.list(run_id=run_id, node_type=node_type, artifact_type=artifact_type)
-    return [r.model_dump(mode="json") for r in records]
+    page = records[offset : offset + limit]
+    return [r.model_dump(mode="json") for r in page]
 
 
 # ── GET /artifacts/{artifact_id} ───────────────────────────────────────────────

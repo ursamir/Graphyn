@@ -22,6 +22,11 @@ PAUSE_RUN_SCHEMA = {
     "type": "object",
     "properties": {
         "run_id": {"type": "string", "description": "The run ID to pause."},
+        "_meta": {
+            "type": "object",
+            "description": "MCP metadata (auth_token, etc.).",
+            "properties": {"auth_token": {"type": "string"}},
+        },
     },
     "required": ["run_id"],
 }
@@ -31,6 +36,11 @@ RESUME_RUN_SCHEMA = {
     "type": "object",
     "properties": {
         "run_id": {"type": "string", "description": "The run ID to resume."},
+        "_meta": {
+            "type": "object",
+            "description": "MCP metadata (auth_token, etc.).",
+            "properties": {"auth_token": {"type": "string"}},
+        },
     },
     "required": ["run_id"],
 }
@@ -40,6 +50,11 @@ CANCEL_RUN_SCHEMA = {
     "type": "object",
     "properties": {
         "run_id": {"type": "string", "description": "The run ID to cancel."},
+        "_meta": {
+            "type": "object",
+            "description": "MCP metadata (auth_token, etc.).",
+            "properties": {"auth_token": {"type": "string"}},
+        },
     },
     "required": ["run_id"],
 }

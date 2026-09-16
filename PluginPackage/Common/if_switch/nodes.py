@@ -160,9 +160,14 @@ class IfSwitchNode(Node):
             payload=payload,
             metadata={"cases": sorted(case_hits.keys())},
         )
-        return {
-            "true": payload if matched else None,
-            "false": None if matched else payload,
+        # Omit the inactive branch key so orchestrators treat it as unproduced
+        # (P1-2) — do not emit ``true: None`` / ``false: None``.
+        out: dict[str, Any] = {
             "cases": case_hits,
             "output": result,
         }
+        if matched:
+            out["true"] = payload
+        else:
+            out["false"] = payload
+        return out

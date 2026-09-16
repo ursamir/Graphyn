@@ -8,6 +8,7 @@ Covers:
   - Req 9 criteria 11–12: rejection routing, quality metadata
 """
 from __future__ import annotations
+from unit_test.plugins._helpers import materialize_isolated_class
 
 import numpy as np
 import pytest
@@ -29,7 +30,7 @@ def installed_cls(tmp_path_factory):
     mgr = PluginManager(registry=reg, base_dir=str(tmp_dir))
     mgr._plugins_dir = str(tmp_dir)
     mgr.install(PLUGIN_SOURCE)
-    return reg.get_class(NODE_TYPE)
+    return materialize_isolated_class(reg.get_class(NODE_TYPE))
 
 
 # ── registration ──────────────────────────────────────────────────────────────

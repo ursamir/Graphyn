@@ -1,6 +1,8 @@
 # Plugin Guide
 
-All 38 production nodes are implemented as plugins in `PluginPackage/`. This guide covers how to write new plugins, install them, and manage their lifecycle.
+All **49** production node types are implemented as plugins in `PluginPackage/` (Audio + Common; see `PluginPackage/NODES.md`). This guide covers how to write new plugins, install them, and manage their lifecycle.
+
+**Not in the default catalog:** `PluginPackage/Video/` is a placeholder (no manifests). `PluginPackage/WakeWord/` is experimental source-only — it is **not** auto-installed and is not importable as a full plugin pack until its training subtree is wired to a manifest; use Audio/Common wake-word templates for runnable graphs.
 
 For the full node reference → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture and data flow → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
@@ -51,7 +53,7 @@ runtime = "inprocess"                              # or "isolated" for conflicti
 - Core deps (numpy, librosa, scipy) → `dependencies`
 - Heavy deps (torch, tensorflow, transformers) → `optional_dependencies` only
 - Never put heavy deps in `dependencies` — blocks CPU-only installs
-- `runtime = "isolated"` — **required** deps go to `~/.graphyn/plugins/venvs/<name>/` (or `$GRAPHYN_HOME/plugins/venvs/<name>/` in Docker); `process()` runs via `app.core.plugins.worker`. Optional TensorFlow/Keras/ONNX install at load only when `GRAPHYN_ISOLATED_BOOT_HEAVY=1`. Other optionals (TTS, audiocraft, tflite-runtime, transformers, …) install on demand from Plugins → **Install optional (venv)** so missing wheels cannot abort API startup. Set `GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1` to install every optional at load (may fail boot).
+- `runtime = "isolated"` — **required** deps go to `~/.graphyn/plugins/venvs/<name>/` (or `$GRAPHYN_HOME/plugins/venvs/<name>/` in Docker); `process()` runs via `app.core.plugins.worker`. Optional TensorFlow/Keras/ONNX from the boot allowlist install at load by default (API still binds first via background registry init). Set `GRAPHYN_ISOLATED_BOOT_HEAVY=0` to defer them to Plugins → **Install optional (venv)**. Other optionals (TTS, audiocraft, tflite-runtime, transformers, …) stay on-demand. Set `GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1` to install every optional at load (may fail boot).
 - `runtime = "inprocess"` (default) — deps install into the **shared API Python**. Heavy optional wheels often fail here; the Plugins UI labels this **shared env**. Install progress lists the actual package names being pip-installed (not a generic “PyTorch” stub).
 - `torch` in `optional_dependencies` is skipped at boot unless `GRAPHYN_ISOLATED_INSTALL_TORCH=1`.
 - API Docker/uvicorn: `/health` binds immediately; plugin catalog loads in a background thread. Poll `/api/v1/system/readiness` (`registry_ready`) until the Builder catalog is populated. `docker logs` shows `graphyn: plugin '…' installing …` progress (pip stdout is captured).

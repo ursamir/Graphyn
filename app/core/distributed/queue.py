@@ -36,6 +36,34 @@ log = logging.getLogger(__name__)
 
 # Default job lease TTL (~4 missed 15s heartbeats). Override: GRAPHYN_JOB_LEASE_TTL_S.
 DEFAULT_LEASE_TTL_S = float(os.environ.get("GRAPHYN_JOB_LEASE_TTL_S", "60") or "60")
+_TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+_MAX_PERSISTED_TERMINAL_JOBS = int(os.environ.get("GRAPHYN_JOB_HISTORY_MAX", "500") or "500")
+
+
+def _trim_terminal_jobs_snapshot(snap: dict[str, Any]) -> dict[str, Any]:
+    """Drop oldest terminal jobs when the persisted queue grows without bound (P3-18)."""
+    jobs = dict(snap.get("jobs") or {})
+    if not jobs:
+        return snap
+    terminal_ids = sorted(
+        jid
+        for jid, payload in jobs.items()
+        if isinstance(payload, dict)
+        and payload.get("status") in _TERMINAL_JOB_STATUSES
+    )
+    excess = len(terminal_ids) - _MAX_PERSISTED_TERMINAL_JOBS
+    if excess <= 0:
+        return snap
+    drop = set(terminal_ids[:excess])
+    for jid in drop:
+        jobs.pop(jid, None)
+    results = dict(snap.get("results") or {})
+    events = dict(snap.get("events") or {})
+    for jid in drop:
+        results.pop(jid, None)
+        events.pop(jid, None)
+    order = [j for j in (snap.get("order") or []) if j not in drop]
+    return {**snap, "jobs": jobs, "results": results, "events": events, "order": order}
 
 
 def _utcnow() -> datetime:
@@ -147,7 +175,10 @@ class JobQueue:
 
                 def mut(snap: dict[str, Any]):
                     snap = self._reclaim_in_snapshot(
-                        snap, lease_ttl_s=self._lease_ttl_s, now=_utcnow()
+                        snap,
+                        lease_ttl_s=self._lease_ttl_s,
+                        now=_utcnow(),
+                        stale_workers=self._stale_worker_ids(),
                     )
                     stored = job.model_copy(
                         update={
@@ -350,18 +381,35 @@ class JobQueue:
             if jid in self._results:
                 self._waiters[jid].set()
 
+    def _stale_worker_ids(self) -> frozenset[str]:
+        """Worker ids whose heartbeat is past the stale TTL (unreachable pins)."""
+        try:
+            from app.core.distributed.registry import get_worker_registry
+
+            reg = get_worker_registry()
+            return frozenset(
+                w.worker_id
+                for w in reg.list(include_stale=True)
+                if reg.is_stale(w)
+            )
+        except Exception:
+            return frozenset()
+
     @staticmethod
     def _reclaim_in_snapshot(
         snap: dict[str, Any],
         *,
         lease_ttl_s: float,
         now: datetime | None = None,
+        stale_workers: frozenset[str] | None = None,
     ) -> dict[str, Any]:
         """Return a new snapshot with expired leases requeued (pure)."""
         now = _as_aware(now) or _utcnow()
         jobs_raw = dict(snap.get("jobs") or {})
         order = list(snap.get("order") or [])
+        results_raw = dict(snap.get("results") or {})
         changed = False
+        stale_workers = stale_workers or frozenset()
         for jid, payload in list(jobs_raw.items()):
             try:
                 job = NodeJob.model_validate(payload)
@@ -380,12 +428,43 @@ class JobQueue:
                 expires = claimed_at + timedelta(seconds=lease_ttl_s)
             if expires > now:
                 continue
+            next_attempts = int(job.attempts or 0) + 1
+            max_attempts = int(job.max_attempts or 5)
+            if next_attempts > max_attempts:
+                failed = job.model_copy(
+                    update={
+                        "status": "failed",
+                        "claimed_by": None,
+                        "claimed_at": None,
+                        "lease_expires_at": None,
+                        "attempts": next_attempts,
+                    }
+                )
+                jobs_raw[jid] = failed.model_dump(mode="json")
+                if jid in order:
+                    order = [j for j in order if j != jid]
+                results_raw[jid] = JobResult(
+                    job_id=jid,
+                    status="failed",
+                    error=(
+                        f"exceeded max_attempts ({max_attempts}) after lease reclaim"
+                    ),
+                    worker_id=job.claimed_by,
+                ).model_dump(mode="json")
+                changed = True
+                log.warning(
+                    "JobQueue: job %s failed — max_attempts %s exceeded",
+                    jid,
+                    max_attempts,
+                )
+                continue
             update: dict[str, Any] = {
                 "status": "pending",
                 "claimed_by": None,
                 "claimed_at": None,
                 "lease_expires_at": None,
                 "lease_generation": int(job.lease_generation or 0) + 1,
+                "attempts": next_attempts,
             }
             widened = widen_placement_after_reclaim(
                 job.placement,
@@ -406,12 +485,50 @@ class JobQueue:
                 jid,
                 job.claimed_by,
             )
+        for jid, payload in list(jobs_raw.items()):
+            try:
+                job = NodeJob.model_validate(payload)
+            except Exception as exc:
+                log.warning(
+                    "JobQueue: skip corrupt job %r during pending pin release: %s",
+                    jid,
+                    exc,
+                )
+                continue
+            if job.status != "pending":
+                continue
+            placement = job.placement
+            pinned = (
+                placement is not None
+                and getattr(placement, "mode", None) == "worker"
+                and getattr(placement, "worker", None)
+            )
+            if not pinned or placement.worker not in stale_workers:
+                continue
+            widened = widen_placement_after_reclaim(
+                job.placement,
+                tags=list(job.tags or []),
+                require_gpu=bool(job.require_gpu),
+                min_vram_mib=job.min_vram_mib,
+                pool=job.pool,
+            )
+            if widened is job.placement:
+                continue
+            jobs_raw[jid] = job.model_copy(update={"placement": widened}).model_dump(
+                mode="json"
+            )
+            changed = True
+            log.info(
+                "JobQueue: released stale worker pin on pending job %s (was %s)",
+                jid,
+                placement.worker,
+            )
         if not changed:
             return snap
         return {
             "jobs": jobs_raw,
             "order": order,
-            "results": dict(snap.get("results") or {}),
+            "results": results_raw,
             "events": dict(snap.get("events") or {}),
         }
 
@@ -420,7 +537,10 @@ class JobQueue:
     ) -> tuple[dict[str, Any], NodeJob | None]:
         """CAS claim against a queue snapshot. At most one pending→claimed."""
         snap = self._reclaim_in_snapshot(
-            snap, lease_ttl_s=self._lease_ttl_s, now=_utcnow()
+            snap,
+            lease_ttl_s=self._lease_ttl_s,
+            now=_utcnow(),
+            stale_workers=self._stale_worker_ids(),
         )
         jobs_raw = dict(snap.get("jobs") or {})
         order = list(snap.get("order") or [])
@@ -630,7 +750,10 @@ class JobQueue:
                 def mut(snap: dict[str, Any]):
                     before = dict(snap.get("jobs") or {})
                     new_snap = self._reclaim_in_snapshot(
-                        snap, lease_ttl_s=self._lease_ttl_s, now=now_fixed
+                        snap,
+                        lease_ttl_s=self._lease_ttl_s,
+                        now=now_fixed,
+                        stale_workers=self._stale_worker_ids(),
                     )
                     reclaimed: list[str] = []
                     for jid, new_payload in (new_snap.get("jobs") or {}).items():
@@ -814,7 +937,7 @@ class JobQueue:
                         "results": results,
                         "events": evmap,
                     }
-                    return new_snap, updated
+                    return _trim_terminal_jobs_snapshot(new_snap), updated
 
                 updated = self._durable_mutate(mut)
                 evt = self._waiters.get(result.job_id)

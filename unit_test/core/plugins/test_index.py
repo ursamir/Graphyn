@@ -42,20 +42,33 @@ def _make_client() -> PluginIndexClient:
 # ---------------------------------------------------------------------------
 
 
-def test_remote_fetch_calls_httpx_get() -> None:
-    """Remote fetch calls httpx.get with the configured URL."""
+def _mock_httpx_client_stream(response: MagicMock) -> MagicMock:
+    stream_cm = MagicMock()
+    stream_cm.__enter__.return_value = response
+    stream_cm.__exit__.return_value = False
+    client = MagicMock()
+    client.stream.return_value = stream_cm
+    client_cm = MagicMock()
+    client_cm.__enter__.return_value = client
+    client_cm.__exit__.return_value = False
+    return client_cm
+
+
+def test_remote_fetch_calls_httpx_stream() -> None:
+    """Remote fetch streams via httpx.Client with the configured URL."""
     client = _make_client()
 
     mock_response = MagicMock()
     mock_response.is_success = True
-    mock_response.json.return_value = SAMPLE_INDEX
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.iter_bytes.return_value = [json.dumps(SAMPLE_INDEX).encode()]
 
     with (
-        patch("app.core.plugins.index.httpx.get", return_value=mock_response) as mock_get,
         patch(
-            "app.core.plugins.index.PluginIndexClient._fetch_remote",
-            wraps=client._fetch_remote,
-        ),
+            "app.core.plugins.index.httpx.Client",
+            return_value=_mock_httpx_client_stream(mock_response),
+        ) as mock_client_cls,
         patch(
             "app.core.config.plugin_index_url",
             return_value="https://example.com/index.json",
@@ -64,7 +77,7 @@ def test_remote_fetch_calls_httpx_get() -> None:
         PluginIndexClient._cache = None
         entries = client._fetch_remote("https://example.com/index.json")
 
-    mock_get.assert_called_once_with("https://example.com/index.json", timeout=10)
+    mock_client_cls.assert_called_once()
     assert len(entries) == 1
     assert entries[0].name == "audio-denoiser"
 
@@ -76,8 +89,15 @@ def test_http_error_raises_plugin_index_error() -> None:
     mock_response = MagicMock()
     mock_response.is_success = False
     mock_response.status_code = 404
+    mock_response.history = []
+    mock_response.url = "https://example.com/index.json"
+    mock_response.iter_bytes.return_value = []
 
-    with patch("app.core.plugins.index.httpx.get", return_value=mock_response):
+    mock_response.headers = {}
+    with patch(
+        "app.core.plugins.index.httpx.Client",
+        return_value=_mock_httpx_client_stream(mock_response),
+    ):
         with pytest.raises(PluginIndexError):
             client._fetch_remote("https://example.com/index.json")
 
@@ -89,7 +109,7 @@ def test_network_error_raises_plugin_index_error() -> None:
     client = _make_client()
 
     with patch(
-        "app.core.plugins.index.httpx.get",
+        "app.core.plugins.index.httpx.Client",
         side_effect=_httpx.RequestError("connection refused"),
     ):
         with pytest.raises(PluginIndexError):
@@ -149,10 +169,21 @@ def test_caching_returns_same_list() -> None:
 
     mock_response = MagicMock()
     mock_response.is_success = True
-    mock_response.json.return_value = SAMPLE_INDEX
+    mock_response.status_code = 200
+    mock_response.history = []
+    mock_response.url = "https://example.com/index.json"
+    mock_response.iter_bytes.return_value = [json.dumps(SAMPLE_INDEX).encode()]
 
+    mock_stream_cm = MagicMock()
+    mock_stream_cm.__enter__.return_value = mock_response
+    mock_stream_cm.__exit__.return_value = False
+
+    mock_response.headers = {}
     with (
-        patch("app.core.plugins.index.httpx.get", return_value=mock_response) as mock_get,
+        patch(
+            "app.core.plugins.index.httpx.Client",
+            return_value=_mock_httpx_client_stream(mock_response),
+        ) as mock_client_cls,
         patch(
             "app.core.config.plugin_index_url",
             return_value="https://example.com/index.json",
@@ -161,8 +192,7 @@ def test_caching_returns_same_list() -> None:
         first = client.fetch()
         second = client.fetch()
 
-    # httpx.get should only be called once (second call uses cache)
-    assert mock_get.call_count == 1
+    assert mock_client_cls.call_count == 1
     assert first is second
 
 

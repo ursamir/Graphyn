@@ -356,21 +356,59 @@ def _config_fields(cls: ast.ClassDef) -> list[tuple[str, Any, Any]]:
             if fname.startswith("_"):
                 continue
             typ = _eval_type(stmt.annotation)
-            default = _MISSING if stmt.value is None else _eval_literal(stmt.value)
-            if default is _MISSING and stmt.value is not None:
-                # non-literal default — keep as required-with-type is wrong;
-                # treat as Any default None if we cannot eval
-                default = None
-                typ = typ | type(None) if typ is not Any else Any
+            default = _eval_field_default(stmt.value)
             fields.append((fname, typ, default))
         elif isinstance(stmt, ast.Assign) and stmt.targets:
             t = stmt.targets[0]
             if isinstance(t, ast.Name) and not t.id.startswith("_"):
-                default = _eval_literal(stmt.value)
+                default = _eval_field_default(stmt.value)
                 if default is _MISSING:
                     continue
                 fields.append((t.id, type(default) if default is not None else Any, default))
     return fields
+
+
+def _eval_field_default(node: ast.AST | None) -> Any:
+    """Resolve a Config field default for isolated stubs (P2-23).
+
+    - Annotation-only (``x: int``) → required (``_MISSING`` / ``...``)
+    - Literal (``x: int = 0``) → that literal
+    - ``Field(default=…)`` / ``Field(default_factory=list)`` → extracted default
+    - ``Field(...)`` (ellipsis) → required
+    - Other non-literals → ``None`` (optional on the host; worker validates)
+    """
+    if node is None:
+        return _MISSING
+    lit = _eval_literal(node)
+    if lit is not _MISSING:
+        return lit
+    if isinstance(node, ast.Call) and _call_name(node) == "Field":
+        if node.args:
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and first.value is Ellipsis:
+                return _MISSING
+            lit = _eval_literal(first)
+            if lit is not _MISSING:
+                return lit
+        for kw in node.keywords:
+            if kw.arg == "default":
+                lit = _eval_literal(kw.value)
+                return None if lit is _MISSING else lit
+            if kw.arg == "default_factory":
+                if isinstance(kw.value, ast.Name):
+                    if kw.value.id == "list":
+                        return []
+                    if kw.value.id == "dict":
+                        return {}
+                    if kw.value.id == "set":
+                        return set()
+                    if kw.value.id == "tuple":
+                        return ()
+                return []
+        # Field(title=...) with neither default nor factory → required
+        return _MISSING
+    # Non-literal, non-Field default expression — keep optional on the host.
+    return None
 
 
 def _eval_type(node: ast.AST | None) -> Any:

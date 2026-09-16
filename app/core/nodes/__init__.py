@@ -66,13 +66,21 @@ def _plugin_load_skipped() -> bool:
 _init_lock = threading.Lock()
 _started = False
 _ready_event = threading.Event()
+_init_error: BaseException | None = None
 # Back-compat for tests that flip ``_initialized``
 _initialized = False
 
 
 def is_registry_ready() -> bool:
-    """True after ``initialize_registry()`` has finished (success or soft-fail)."""
-    return _ready_event.is_set()
+    """True after registry init finished without a hard failure."""
+    return _ready_event.is_set() and _init_error is None
+
+
+def registry_init_error() -> str | None:
+    """Human-readable init failure, or None when the registry is ready."""
+    if _init_error is None:
+        return None
+    return str(_init_error)
 
 
 def initialize_registry() -> None:
@@ -91,7 +99,7 @@ def initialize_registry() -> None:
         ImportError: if AutoDiscovery fails critically (duplicate node_type,
                      import error in a node file).
     """
-    global _initialized, _started
+    global _initialized, _started, _init_error
 
     with _init_lock:
         if _ready_event.is_set():
@@ -174,6 +182,7 @@ def initialize_registry() -> None:
                 models_dir=_models_dir,
             )
         except Exception as _exc:
+            _init_error = _exc
             raise ImportError(
                 f"app.core.nodes.initialize_registry() failed: {_exc}. "
                 "Check plugin files for duplicate node_type declarations or import errors."
@@ -199,6 +208,7 @@ __all__ = [
     "registry",
     "initialize_registry",
     "is_registry_ready",
+    "registry_init_error",
     # Node base classes
     "Node",
     # Port types

@@ -155,7 +155,7 @@ Find nodes whose ports are compatible with a given port type.
 ### `POST /api/v1/pipelines/validate`
 
 Validate a pipeline without executing it. Accepts IR JSON (`schema_version` present)
-or legacy `{"yaml": "..."}`.
+or legacy `{"yaml": "..."}`. IR paths run `validate_graph_ir()` (registry, configs, ports, cycles).
 
 **Response (valid):** HTTP **200**
 ```json
@@ -336,6 +336,14 @@ Delete a named template.
 ```
 
 **Errors:** `400` invalid name/version. `404` not found.
+
+---
+
+### `GET /api/v1/artifacts`
+
+List artifact records (newest first). Optional filters: `run_id`, `node_type`, `artifact_type`.
+
+**Query params:** `limit` (default 100, max 1000), `offset` (default 0).
 
 ---
 
@@ -531,6 +539,26 @@ Point `workspace/artifacts/<slug>/<alias>` at this run’s artifact tree.
 
 ---
 
+### Run control — `POST /api/v1/runs/{run_id}/pause|resume|cancel`
+
+Runtime control for **active** runs in this API process (same registry as MCP `pause_run` / `resume_run` / `cancel_run`). Cooperative: pause/cancel take effect after the current node finishes.
+
+| Method | Path | Effect |
+|---|---|---|
+| POST | `/api/v1/runs/{run_id}/pause` | Pause after current node |
+| POST | `/api/v1/runs/{run_id}/resume` | Resume a paused run |
+| POST | `/api/v1/runs/{run_id}/cancel` | Cancel after current node |
+
+**Errors:** `400` invalid `run_id`. `404` detail `run_not_found` vs `run_not_active`. `503` `run_active_on_another_worker` when distributed and the run is owned elsewhere.
+
+---
+
+### `DELETE /api/v1/runs/{run_id}`
+
+Delete a finished run journal and its workspace artifacts. Not allowed while status is `running` or `paused`.
+
+---
+
 ### `GET /api/v1/outputs/file`
 
 Download one file as an attachment. Query: `path`.
@@ -568,6 +596,21 @@ artifact/provenance counts, and recent error log entries.
 - `artifact_count`, `provenance_count`
 - `error_count`, `recent_errors`
 - `paths` (`run_dir`, `meta_json`, `logs_json`, `checkpoints_dir`)
+
+---
+
+## Secrets — `/api/v1/secrets`
+
+Local named secret store (values never returned in list/get responses). Writes require Bearer auth when `GRAPHYN_API_TOKEN` is set.
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/v1/secrets` | — | `{ "names": ["OPENAI_API_KEY", ...] }` |
+| POST | `/api/v1/secrets` | `{ "name", "value" }` | `{ "ok": true, "name" }` |
+| PUT | `/api/v1/secrets/{name}` | `{ "value" }` | `{ "ok": true, "name" }` |
+| DELETE | `/api/v1/secrets/{name}` | — | `{ "ok": true, "name" }` or `404` |
+
+Audited as `secret.set` / `secret.delete` when audit is enabled.
 
 ---
 
@@ -721,9 +764,13 @@ Readiness check with basic filesystem dependency validation.
   "backend": "local_python",
   "backend_mode": "local",
   "worker_count": 0,
+  "registry_ready": true,
+  "registry_init_error": null,
   "checks": {"runs_dir_exists": true, "cache_dir_exists": true}
 }
 ```
+
+`status` is `starting` while plugins load, `ready` when the registry initialized cleanly, or `failed` when `registry_init_error` is set.
 
 `backend_mode` is `local` (Mode A) or `distributed` (Mode B). The console header chip uses this field.
 
@@ -821,6 +868,8 @@ Save webhook configuration.
 {"ok": true, "url": "https://example.com/webhook", "events": ["pipeline_complete"]}
 ```
 
+Invalid or SSRF-blocked URLs return **422** with a `detail` string (not 500).
+
 ---
 
 ### `POST /api/v1/system/webhooks/test`
@@ -861,6 +910,8 @@ Run immediately, toggle enabled, or delete. Mutations audit with actor from `X-A
 ## Ingest — `/api/v1/ingest`
 
 ### `POST /api/v1/ingest/url`
+
+Each URL is validated with `validate_http_egress_url` before the job starts (same policy as workflow HTTP nodes). Invalid destinations return **422**.
 
 Start a background job to download audio files from URLs.
 

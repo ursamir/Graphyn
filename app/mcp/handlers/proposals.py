@@ -231,7 +231,18 @@ REJECT_PROPOSAL_SCHEMA = {
 
 
 def accept_proposal_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    from app.core.config import mcp_human_approval_enabled
     from app.core.agentic.proposals import accept_proposal
+
+    if not mcp_human_approval_enabled():
+        return {
+            "error": True,
+            "error_type": "capability_denied",
+            "message": (
+                "accept_proposal is disabled. Set GRAPHYN_MCP_HUMAN_APPROVAL=1 "
+                "to enable human approval via MCP."
+            ),
+        }
 
     args = arguments or {}
     proposal_id = args.get("id")

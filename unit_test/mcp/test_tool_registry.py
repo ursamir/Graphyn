@@ -2,6 +2,8 @@
 """Tests for app/mcp/tool_registry.py — Req 25 criteria 6–8."""
 from __future__ import annotations
 
+import pytest
+
 from app.mcp.tool_registry import register_all_tools
 
 EXPECTED_TOOL_NAMES = {
@@ -37,15 +39,24 @@ EXPECTED_TOOL_NAMES = {
 }
 
 
-def test_register_all_tools_calls_register_15_times():
-    """Req 25.6 — register_all_tools calls register_fn exactly 29 times."""
+def test_register_all_tools_calls_register_15_times(monkeypatch: pytest.MonkeyPatch):
+    """Req 25.6 — register_all_tools registers all tools (accept_proposal gated)."""
+    monkeypatch.setenv("GRAPHYN_MCP_HUMAN_APPROVAL", "1")
     calls = []
     register_all_tools(lambda name, desc, schema, handler: calls.append(name))
     assert len(calls) == 29, f"Expected 29 calls, got {len(calls)}: {calls}"
 
 
-def test_register_all_tools_correct_names():
+def test_register_all_tools_hides_accept_proposal_by_default():
+    calls = []
+    register_all_tools(lambda name, desc, schema, handler: calls.append(name))
+    assert "accept_proposal" not in calls
+    assert len(calls) == 28
+
+
+def test_register_all_tools_correct_names(monkeypatch: pytest.MonkeyPatch):
     """Req 25.7 — registered tool names match the expected 29 names exactly."""
+    monkeypatch.setenv("GRAPHYN_MCP_HUMAN_APPROVAL", "1")
     registered = []
     register_all_tools(lambda name, desc, schema, handler: registered.append(name))
     assert set(registered) == EXPECTED_TOOL_NAMES, (

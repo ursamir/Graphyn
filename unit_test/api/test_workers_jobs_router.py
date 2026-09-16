@@ -20,6 +20,30 @@ def isolated_queue(monkeypatch):
     _reset_job_queue(use_memory=True)
 
 
+def test_get_job_renews_lease_for_claiming_worker(api_client, isolated_queue):
+    q = isolated_queue
+    reg = get_worker_registry()
+    reg.register(WorkerInfo(worker_id="lease-w1", plugins=["x"]))
+    q.enqueue(NodeJob(job_id="lease-j1", run_id="r", node_id="n", node_type="x"))
+    claimed = q.claim(reg.get("lease-w1"))
+    assert claimed is not None
+    before = claimed.lease_expires_at
+    assert before is not None
+
+    resp = api_client.get("/api/v1/jobs/lease-j1", params={"worker_id": "lease-w1"})
+    assert resp.status_code == 200
+    after_raw = resp.json()["job"].get("lease_expires_at")
+    assert after_raw is not None
+    from datetime import datetime
+
+    after = (
+        datetime.fromisoformat(after_raw.replace("Z", "+00:00"))
+        if isinstance(after_raw, str)
+        else after_raw
+    )
+    assert after >= before
+
+
 def test_api_double_complete_returns_409_without_corrupting(api_client, isolated_queue):
     q = isolated_queue
     reg = get_worker_registry()

@@ -217,7 +217,6 @@ Env:
 - `GRAPHYN_BACKEND=distributed`
 - `GRAPHYN_CONTROL_URL=…`
 - `GRAPHYN_WORKER_ID=…`
-- `GRAPHYN_ARTIFACT_STORE=local|file|s3` (P1+)
 - `GRAPHYN_API_TOKEN=…`
 
 ---
@@ -236,7 +235,7 @@ P1 two-box path on Server-99: NFS **or** MinIO; default implementation starts wi
 
 ## 8. Failure, cancel, resume
 
-- Job lease with TTL; worker heartbeat renews lease; expired lease → requeue (at-most-once → at-least-once with idempotent artifact keys)
+- Job lease with TTL; worker heartbeat renews lease (including a daemon thread during long `execute`, and `GET /jobs/{id}?worker_id=` when the caller is `claimed_by`); expired lease → requeue (at-most-once → at-least-once with idempotent artifact keys)
 - Cancel: control sets job cancelled; worker polls (CLI cancel-watch ~2 Hz during execute) and stops via `NodeExecutor.request_cancel` / isolated process-group terminate
 - Checkpoints: write checkpoint blobs to artifact store so resume can continue on another worker (P3)
 - Isolated plugin timeouts stay via `GRAPHYN_PLUGIN_ISOLATED_TIMEOUT`

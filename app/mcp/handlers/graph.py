@@ -414,6 +414,16 @@ def validate_graph_handler(arguments: dict[str, Any]) -> Any:
         from app.core.ir.secret_policy import assert_no_inline_secrets
 
         assert_no_inline_secrets(graph)
+        from app.core.registry_runtime import get_registry
+        from app.core.validation import validate_graph_ir
+
+        deep_errors = validate_graph_ir(graph, get_registry())
+        if deep_errors:
+            return {
+                "valid": False,
+                "node_count": len(graph.nodes),
+                "errors": deep_errors,
+            }
         return {
             "valid": True,
             "node_count": len(graph.nodes),
@@ -461,7 +471,7 @@ def get_graph_schema_handler(arguments: dict[str, Any]) -> Any:
 def get_graph_capability_summary_handler(arguments: dict[str, Any]) -> Any:
     """Aggregate capability metadata for a graph (Req 7.7–7.9).
 
-    Uses the two-step resolution rule from _resolve_capability() in pipeline.py:
+    Uses the two-step resolution rule from registry_runtime.resolve_capability:
       Step 1: if IRNode.capability_metadata is non-null, use those values.
       Step 2: otherwise, use the corresponding fields from NodeMetadata.
 

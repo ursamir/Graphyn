@@ -21,10 +21,7 @@ def main() -> int:
 
         initialize_registry()
         reg = get_registry()
-        if hasattr(reg, "list_types"):
-            registered = set(reg.list_types())
-        elif hasattr(reg, "_nodes"):
-            registered = set(reg._nodes.keys())  # noqa: SLF001
+        registered = {m.node_type for m in reg.list_nodes()}
     except Exception as exc:
         print(f"warn: registry init failed ({exc}); path/IR checks only")
 

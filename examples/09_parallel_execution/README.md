@@ -84,7 +84,8 @@ result = pipeline.run(parallel=True)
 result = pipeline.run(parallel=True, max_workers=4)
 
 # Inspect waves before running
-from app.core.pipeline import PipelineGraph, _ir_to_pipeline_config
+from app.core.planner import PipelineGraph, _ir_to_pipeline_config
+from app.core.runtime_backend import get_backend
 cfg   = _ir_to_pipeline_config(pipeline.to_ir())
 graph = PipelineGraph(cfg)
 for i, wave in enumerate(graph.execution_waves):

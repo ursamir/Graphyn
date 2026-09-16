@@ -1,14 +1,15 @@
 # AudioBuilder — Examples
 
-This directory contains **28 production-grade examples** that cover the full feature set of the platform — from audio ML pipelines to agent-native MCP operation, parallel execution, provenance tracking, plugin development, and general-purpose workflow execution.
+This directory contains **30 numbered examples** (`01`–`30`) that cover the full feature set of the platform — from audio ML pipelines to agent-native MCP operation, parallel execution, provenance tracking, plugin development, and general-purpose workflow execution.
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Prepare the dataset (run once)
-venv/bin/python examples/prepare_real_data.py
+# 1. Prepare ingest paths for templates/examples (run once)
+venv/bin/python scripts/heal_e2e_local_data.py
+# Optional: venv/bin/python examples/prepare_real_data.py
 
 # 2. Run your first example
 venv/bin/python examples/01_wake_word/run_sdk.py
@@ -51,6 +52,7 @@ Use this table to find the example that demonstrates a specific feature:
 | Nightly compliance (schedule + IF + HTTP mock/CSV) | 26 |
 | GitHub triage via http_request + IF | 27 |
 | ASR + python_code fan-out → merge → CSV | 28 |
+| Distributed placement / worker labels | 29 |
 | Edge optimize → package (deploy wizard) | 30 |
 
 ---

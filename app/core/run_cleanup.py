@@ -417,6 +417,14 @@ def delete_run(run_id: str, *, require_finished: bool = True) -> dict[str, Any]:
         raise RunInProgressError(f"Run {run_id} is {status}")
     slug = _slug_for_run(run_id, run_path, meta)
     bytes_freed = 0
+    try:
+        from app.core.artifact_store import ArtifactStore
+        from app.core.provenance import ProvenanceStore
+
+        ArtifactStore().purge_run(run_id)
+        ProvenanceStore().purge_run(run_id)
+    except Exception as exc:
+        logger.warning("delete_run: artifact/provenance cleanup failed for %s: %s", run_id, exc)
     bytes_freed += _delete_workspace_run_artifacts(slug, run_id)
     bytes_freed += _rmtree_jailed(run_path, runs_root)
     return {

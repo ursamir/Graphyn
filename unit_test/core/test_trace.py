@@ -30,7 +30,7 @@ def test_assemble_trace_from_artifact_with_lineage(tmp_workspace: Path):
 
     store = ArtifactStore()
     # Register a tiny generic artifact (bytes payload)
-    art = store.register(
+    art, _ = store.register(
         run_id="run-trace-1",
         node_id="node_a",
         node_type="python_code",

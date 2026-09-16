@@ -30,10 +30,17 @@ class TestValidatePipeline:
         mock_graph.nodes = []
         mock_graph.metadata = IRMetadata(name="test", seed=42)
 
-        with patch("app.core.ir.loader.load_ir", return_value=mock_graph):
+        with (
+            patch("app.core.ir.loader.load_ir", return_value=mock_graph),
+            patch(
+                "app.core.workspace_paths.apply_output_rewire",
+                return_value=mock_graph,
+            ),
+            patch("app.core.validation.validate_graph_ir", return_value=[]),
+        ):
             resp = api_client.post("/api/v1/pipelines/validate", json=_VALID_IR)
 
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.json()
         body = resp.json()
         assert body["valid"] is True
 

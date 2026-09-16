@@ -167,8 +167,16 @@ class RunManager:
         self._graph_hash = hashlib.sha256(
             json.dumps(graph_data, sort_keys=True).encode()
         ).hexdigest()
+        self._write_meta_field("graph_hash", self._graph_hash)
 
-    def mark_failed(self, error: str) -> None:
+    def mark_failed(
+        self,
+        error: str,
+        *,
+        node_stats: list | None = None,
+        failed_node_id: str | None = None,
+        failed_node_type: str | None = None,
+    ) -> None:
         duration = time.time() - self._start_time
         meta_path = os.path.join(self.base_path, "meta.json")
         tmp = meta_path + ".tmp"
@@ -180,12 +188,21 @@ class RunManager:
                         existing = json.load(f)
                 except Exception:
                     pass
+            stats = list(node_stats if node_stats is not None else existing.get("node_stats") or [])
+            if failed_node_id and not any(s.get("node_id") == failed_node_id for s in stats):
+                stats.append({
+                    "node_id": failed_node_id,
+                    "node_type": failed_node_type or "",
+                    "status": "failed",
+                })
             existing.update({
                 "run_id": self.run_id,
                 "duration_s": round(duration, 3),
                 "status": "failed",
                 "error": error,
             })
+            if stats:
+                existing["node_stats"] = stats
             self._write_meta_unlocked(existing, meta_path, tmp)
         try:
             from app.core.run_notify import notify_run_terminal
@@ -311,7 +328,7 @@ class RunManager:
         in the run lifecycle manager (SA-RJ-ARCH fix).
         """
         from app.core.checkpoint import _find_latest_checkpoint  # noqa: PLC0415
-        return _find_latest_checkpoint(node_id)
+        return _find_latest_checkpoint(node_id, graph_hash=self._graph_hash or None)
 
     # ── Artifact registration ──────────────────────────────────────────────────
 
@@ -346,7 +363,7 @@ class RunManager:
     ) -> "ArtifactRecord":
         from app.core.artifact_store import ArtifactRecord
 
-        record: ArtifactRecord = self._get_artifact_store().register(
+        record, deduplicated = self._get_artifact_store().register(
             run_id=self.run_id,
             node_id=node_id,
             node_type=node_type,
@@ -359,7 +376,7 @@ class RunManager:
         )
 
         _input_ids = input_artifact_ids or []
-        if record.artifact_id not in _input_ids:
+        if not deduplicated and record.artifact_id not in _input_ids:
             try:
                 self._get_provenance_store().record(
                     artifact_id=record.artifact_id,

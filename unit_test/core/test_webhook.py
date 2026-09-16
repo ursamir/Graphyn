@@ -45,7 +45,7 @@ def test_load_returns_empty_dict_when_file_missing(tmp_path: Path, monkeypatch: 
 
     result = svc.load()
 
-    assert result == {}
+    assert result == {"url": "", "events": []}
 
 
 # ── notify — no URL configured ────────────────────────────────────────────────

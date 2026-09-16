@@ -23,8 +23,8 @@ method = {  type = "string", title = "Method", default = "GET", description = "H
 url = { type = "string", title = "URL", default = "", description = "Full request URL (https recommended).", ui = { group = "Basic" } }
 headers = {  type = "object", title = "Headers", default = { }, description = "HTTP headers as a JSON object of string keys to string values.", widget = "json", ui = { group = "Basic" } }
 query = {  type = "object", title = "Query", default = { }, description = "URL query parameters as a JSON object.", widget = "json", ui = { group = "Basic" } }
-json_body = {  type = "object", title = "JSON body", default = { }, description = "JSON request body (object or array). Prefer this over raw body for JSON APIs.", widget = "json", ui = { group = "Basic" } }
-body = { type = "string", title = "Body", default = "", description = "Raw request body string used when json_body is empty.", ui = { group = "Basic" } }
+json_body = { type = "object", title = "JSON body", description = "JSON request body (object or array). Prefer this over raw body for JSON APIs; omit to use connected payload.", widget = "json", ui = { group = "Basic" } }
+body = { type = "string", title = "Body", description = "Raw request body string used when json_body is empty.", ui = { group = "Basic" } }
 timeout_s = { type = "number", title = "Timeout (s)", default = 30.0, description = "Request/operation timeout in seconds.", ui = { group = "Advanced" } }
 retry = { type = "integer", title = "Retries", default = 0, description = "Number of retries after a failed attempt (0 = no retry).", ui = { group = "Advanced" } }
 provider = { type = "string", title = "Provider", default = "http", description = "HTTP provider. Only http (real network) is supported.", enum = ["http"], ui = { group = "Basic" } }

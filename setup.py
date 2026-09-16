@@ -46,6 +46,8 @@ _EXTRAS = {
         "pytest~=8.3.5",
         "pytest-asyncio>=0.24.0",
         "hypothesis~=6.131.15",
+        "ruff>=0.8.0",
+        "mypy>=1.13.0",
     ],
     "mcp": [
         # Official MCP Python SDK (app.mcp.server hard-imports `mcp`)

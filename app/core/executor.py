@@ -199,7 +199,9 @@ class ParallelExecutor:
         # Use -1 sentinel for unknown nodes so they don't appear as "node 0" in logs
         idx = node_index_map.get(node_id, -1)
 
-        logger.node_start(node_type, idx, total_nodes=total_nodes)
+        logger.node_start(
+            node_type, idx, total_nodes=total_nodes, node_id=node_id
+        )
         node_start_time = time.time()
 
         # ── Assemble inputs from upstream outputs ──────────────────────────────
@@ -213,6 +215,10 @@ class ParallelExecutor:
         # The node_outputs_lock is held by run_wave but not needed here.
         _edge_conditions = edge_conditions or {}
         inputs: dict[str, Any] = {}
+        _condition_results: dict[tuple[str, str, str], bool] = {}
+        _branch_skipped: set[str] = set(
+            nid for nid, outs in node_outputs.items() if isinstance(outs, dict) and outs == {}
+        )
         for src_id, src_port, dst_port in incoming.get(node_id, []):
             condition = _edge_conditions.get((src_id, src_port, node_id, dst_port))
             if condition is not None:
@@ -226,11 +232,16 @@ class ParallelExecutor:
                     # a broken condition as "not met" would route None to downstream
                     # nodes without any indication that the condition was malformed.
                     raise
+                _condition_results[(src_id, src_port, dst_port)] = passes
                 if not passes:
-                    inputs[dst_port] = None
                     continue
 
+            if src_id in _branch_skipped:
+                continue
+
             upstream_outputs = node_outputs.get(src_id, {})
+            if not isinstance(upstream_outputs, dict) or src_port not in upstream_outputs:
+                continue
             value = upstream_outputs.get(src_port)
             port = node.input_ports.get(dst_port)
             if port and port.cardinality == "multi":
@@ -238,6 +249,22 @@ class ParallelExecutor:
                 inputs[dst_port].append(value)
             else:
                 inputs[dst_port] = value
+
+        from app.core.skip_logic import should_skip_for_unproduced
+
+        skip_node, skip_reason = should_skip_for_unproduced(
+            node_id=node_id,
+            node=node,
+            incoming=incoming,
+            node_outputs=node_outputs,
+            skipped=_branch_skipped,
+            edge_conditions=_edge_conditions,
+            condition_results=_condition_results,
+        )
+        if skip_node:
+            logger.node_skip(node_id, node_type, reason=skip_reason or "condition_false")
+            node_outputs[node_id] = {}
+            return
 
         # Fill unconnected optional ports with None
         for port_name, port in node.input_ports.items():
@@ -256,7 +283,20 @@ class ParallelExecutor:
                     break
             # Use the canonical compute_key() on PipelineCache so the hashing
             # strategy is never duplicated between sequential and parallel paths.
-            cache_key = cache.compute_key(node_type, node_cfg_dict, inputs)
+            _node_version: str | None = None
+            try:
+                from app.core.registry_runtime import get_registry as _get_reg_cache
+
+                _node_version = _get_reg_cache().get_metadata(node_type).version
+            except Exception:
+                _node_version = None
+            cache_key = cache.compute_key(
+                node_type,
+                node_cfg_dict,
+                inputs,
+                node_seed=getattr(node, "seed", None),
+                node_version=_node_version,
+            )
             cached_result = cache.load(cache_key)
             if cached_result is not None:
                 node_outputs[node_id] = cached_result
@@ -274,11 +314,13 @@ class ParallelExecutor:
                         pool, exec_.execute, inputs
                     )
             except Exception as exc:
-                logger.node_error(node_type, idx, exc)
+                logger.node_error(node_type, idx, exc, node_id=node_id)
                 # Emit node_end so logging/metrics systems see a matched span
                 # even for failed nodes (Finding 4 fix).
                 node_duration = time.time() - node_start_time
-                logger.node_end(node_type, idx, node_duration, output_count=0)
+                logger.node_end(
+                    node_type, idx, node_duration, output_count=0, node_id=node_id
+                )
                 raise
 
             node_outputs[node_id] = outputs
@@ -300,10 +342,17 @@ class ParallelExecutor:
 
         # ── Checkpoint ────────────────────────────────────────────────────────
         if checkpoint:
-            _write_checkpoint(run_base_path, node_id, node_outputs[node_id], logger=logger)
+            _gh = getattr(run_manager, "_graph_hash", None) if run_manager is not None else None
+            _write_checkpoint(
+                run_base_path,
+                node_id,
+                node_outputs[node_id],
+                logger=logger,
+                graph_hash=_gh or "",
+            )
 
         # ── Artifact registration (Phase 4 provenance) ────────────────────────
-        if not cache_hit and run_manager is not None:
+        if run_manager is not None:
             from app.core.artifact_store import _infer_artifact_type
             _prior_artifact_ids: list[str] = []
             for _src_id, _src_port, _dst_port in incoming.get(node_id, []):
@@ -338,7 +387,13 @@ class ParallelExecutor:
             len(v) if isinstance(v, list) else (0 if v is None else 1)
             for v in _node_outputs.values()
         )
-        logger.node_end(node_type, idx, node_duration, output_count=_output_count)
+        logger.node_end(
+            node_type,
+            idx,
+            node_duration,
+            output_count=_output_count,
+            node_id=node_id,
+        )
 
         # NEW-5 fix: protect node_stats.append() with a lock so ordering is
         # deterministic and node_stats[-1] returns the correct last completed node.
@@ -348,5 +403,13 @@ class ParallelExecutor:
                 "node_type": node_type,
                 "node_index": idx,
                 "duration_s": round(node_duration, 4),
+                "duration_ms": round(node_duration * 1000, 2),
+                "status": "completed",
+                "cache_hit": cache_hit,
             })
+        if run_manager is not None:
+            try:
+                run_manager._write_meta_field("node_stats", list(node_stats))
+            except Exception:
+                pass
 

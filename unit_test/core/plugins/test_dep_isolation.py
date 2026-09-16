@@ -236,6 +236,7 @@ def test_isolated_venv_requirements_torch_env(monkeypatch) -> None:
 def test_isolated_venv_requirements_defers_exotic_optionals(monkeypatch) -> None:
     monkeypatch.delenv("GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL", raising=False)
     monkeypatch.delenv("GRAPHYN_ISOLATED_INSTALL_TORCH", raising=False)
+    monkeypatch.delenv("GRAPHYN_ISOLATED_BOOT_HEAVY", raising=False)  # default ON
     m = PluginManifest(
         name="audio-classifier",
         version="1.0.0",
@@ -261,6 +262,26 @@ def test_isolated_venv_requirements_defers_exotic_optionals(monkeypatch) -> None
     assert "onnxruntime>=1.16" in reqs
     assert not any("tflite-runtime" in r for r in reqs)
     assert not any(r.lower().startswith("torch") for r in reqs)
+
+
+def test_isolated_venv_requirements_boot_heavy_off(monkeypatch) -> None:
+    """GRAPHYN_ISOLATED_BOOT_HEAVY=0 defers TF/Keras/ONNX to Install optional."""
+    monkeypatch.setenv("GRAPHYN_ISOLATED_BOOT_HEAVY", "0")
+    monkeypatch.delenv("GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL", raising=False)
+    monkeypatch.delenv("GRAPHYN_ISOLATED_INSTALL_TORCH", raising=False)
+    m = PluginManifest(
+        name="trainer",
+        version="1.0.0",
+        description="demo",
+        author="t",
+        platform_version=">=0.0",
+        entry_points=["nodes.py"],
+        runtime="isolated",
+        dependencies=["numpy>=1.24"],
+        optional_dependencies=["tensorflow>=2.13", "keras>=3.0", "onnxruntime>=1.16"],
+    )
+    reqs = isolated_venv_requirements(m)
+    assert reqs == ["numpy>=1.24"]
 
 
 def test_isolated_venv_requirements_all_optional_env(monkeypatch) -> None:

@@ -260,6 +260,19 @@ class IngestionService:
         label_distribution: dict[str, int] = {}
 
         for url in urls:
+            from app.core.egress import HttpEgressError, validate_http_egress_url
+
+            try:
+                validate_http_egress_url(url)
+            except HttpEgressError as exc:
+                job.append_progress({
+                    "type": "progress",
+                    "url": url,
+                    "status": "error",
+                    "message": str(exc),
+                })
+                continue
+
             # Validate extension before downloading.
             # Primary: use the URL path component's suffix.
             # Fallback: scan query-string values for a recognisable extension

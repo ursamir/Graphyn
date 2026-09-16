@@ -129,6 +129,12 @@ def main(argv: list[str]) -> int:
     if missing:
         print("FAIL: requirements.txt out of sync with setup.py")
         return 1
+    if extra:
+        print(
+            "FAIL: requirements.txt lists packages not in install_requires "
+            "(declare them in setup.py extras or remove the pin)"
+        )
+        return 1
     print("OK: requirements.txt covers setup.py install_requires")
     return 0
 

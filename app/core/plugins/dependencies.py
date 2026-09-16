@@ -16,6 +16,7 @@ Reason To Change: Dependency resolution strategy changes, or auto-install
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import subprocess
@@ -91,6 +92,9 @@ class DepStatus:
 
 class DependencyChecker:
     """Checks / installs PEP 508 deps against the current or a target Python."""
+
+    _installed_cache: dict[tuple[str, str], tuple[str | None, float]] = {}
+    _site_packages_mtime: dict[str, float] = {}
 
     def check(self, dependencies: list[str], *, python: str | None = None) -> None:
         """Verify every dependency is satisfied; optionally auto-install."""
@@ -389,6 +393,10 @@ class DependencyChecker:
     def _find_unsatisfied(
         cls, requirements: list[Requirement], *, python: str | None
     ) -> list[str]:
+        if python is not None and requirements:
+            cls._prefetch_installed_versions(
+                [req.name for req in requirements], python=python
+            )
         unsatisfied: list[str] = []
         tf_present: bool | None = None
         for req in requirements:
@@ -409,6 +417,78 @@ class DependencyChecker:
         return unsatisfied
 
     @classmethod
+    def _site_packages_mtime_for(cls, python: str) -> float:
+        if python in cls._site_packages_mtime:
+            return cls._site_packages_mtime[python]
+        code = (
+            "import site, os, sys\n"
+            "paths = site.getsitepackages()\n"
+            "p = paths[0] if paths else ''\n"
+            "print(os.path.getmtime(p) if p and os.path.isdir(p) else 0.0)\n"
+        )
+        try:
+            result = subprocess.run(
+                [python, "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            stamp = float((result.stdout or "0").strip() or 0.0)
+        except Exception:
+            stamp = 0.0
+        cls._site_packages_mtime[python] = stamp
+        return stamp
+
+    @classmethod
+    def _prefetch_installed_versions(cls, names: list[str], *, python: str) -> None:
+        stamp = cls._site_packages_mtime_for(python)
+        missing = [
+            n
+            for n in names
+            if (python, n) not in cls._installed_cache
+            or cls._installed_cache[(python, n)][1] != stamp
+        ]
+        if not missing:
+            return
+        payload = json.dumps(missing)
+        code = (
+            "import json, re\n"
+            "from importlib.metadata import version, PackageNotFoundError\n"
+            f"names = json.loads({payload!r})\n"
+            "out = {}\n"
+            "for name in names:\n"
+            "    try:\n"
+            "        out[name] = version(name)\n"
+            "    except PackageNotFoundError:\n"
+            "        n = re.sub(r'[-_.]+', '_', name).lower()\n"
+            "        try:\n"
+            "            out[name] = version(n)\n"
+            "        except PackageNotFoundError:\n"
+            "            out[name] = None\n"
+            "print(json.dumps(out))\n"
+        )
+        try:
+            result = subprocess.run(
+                [python, "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                return
+            data = json.loads(result.stdout or "{}")
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        for name in missing:
+            ver = data.get(name)
+            cls._installed_cache[(python, name)] = (
+                ver if isinstance(ver, str) and ver else None,
+                stamp,
+            )
+
+    @classmethod
     def _installed_version(
         cls, req: Requirement, *, python: str | None
     ) -> str | None:
@@ -422,33 +502,15 @@ class DependencyChecker:
                 except PackageNotFoundError:
                     return None
 
-        # Query another interpreter via a tiny subprocess
-        code = (
-            "import sys\n"
-            "from importlib.metadata import version, PackageNotFoundError\n"
-            f"name={req.name!r}\n"
-            "try:\n"
-            "    print(version(name))\n"
-            "except PackageNotFoundError:\n"
-            "    import re\n"
-            "    n=re.sub(r'[-_.]+', '_', name).lower()\n"
-            "    try:\n"
-            "        print(version(n))\n"
-            "    except PackageNotFoundError:\n"
-            "        sys.exit(2)\n"
-        )
-        try:
-            result = subprocess.run(
-                [python, "-c", code],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        except Exception:
-            return None
-        if result.returncode != 0:
-            return None
-        return (result.stdout or "").strip() or None
+        stamp = cls._site_packages_mtime_for(python)
+        cached = cls._installed_cache.get((python, req.name))
+        if cached is not None and cached[1] == stamp:
+            return cached[0]
+        cls._prefetch_installed_versions([req.name], python=python)
+        cached = cls._installed_cache.get((python, req.name))
+        if cached is not None and cached[1] == stamp:
+            return cached[0]
+        return None
 
     @staticmethod
     def _specifiers_overlap(a: SpecifierSet, b: SpecifierSet) -> bool:

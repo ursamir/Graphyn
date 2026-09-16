@@ -1,4 +1,4 @@
-"""Unit tests for app/core/pipeline.py — Req 4 criteria 5–9."""
+"""Unit tests for planner/validation pipeline config — Req 4 criteria 5–9."""
 from __future__ import annotations
 
 import pytest

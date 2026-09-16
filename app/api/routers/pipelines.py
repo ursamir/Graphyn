@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
@@ -37,6 +38,9 @@ from pydantic import BaseModel
 from app.core.logger import PipelineLogger
 from app.core.registry_runtime import get_registry
 from app.core.validation import validate_pipeline
+
+# Shared pool for /run and /run-async (avoids unbounded daemon threads per request).
+_PIPELINE_RUN_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="graphyn-pipeline-run")
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -279,11 +283,20 @@ def validate_pipeline_config(payload: dict = Body(...)):
                 ir_body = nested
             graph = apply_output_rewire(load_ir(ir_body))
             assert_no_inline_secrets(graph)
+            from app.core.validation import validate_graph_ir
+
+            errors = validate_graph_ir(graph, get_registry())
+            if errors:
+                return JSONResponse(
+                    status_code=422,
+                    content={"valid": False, "error": errors[0], "errors": errors},
+                )
             return {"valid": True, "node_count": len(graph.nodes)}
         except Exception as exc:
+            msg = str(exc)
             return JSONResponse(
                 status_code=422,
-                content={"valid": False, "error": str(exc)},
+                content={"valid": False, "error": msg, "detail": msg},
             )
     else:
         # YAML validation — use yaml_config_to_ir (no DeprecationWarning) (Req 4.8.2, 4.8.5)
@@ -291,28 +304,30 @@ def validate_pipeline_config(payload: dict = Body(...)):
         try:
             config = yaml.safe_load(yaml_str)
         except yaml.YAMLError as exc:
+            msg = f"YAML parse error: {exc}"
             return JSONResponse(
                 status_code=422,
-                content={"valid": False, "error": f"YAML parse error: {exc}"},
+                content={"valid": False, "error": msg, "detail": msg},
             )
 
-        registry = get_registry()
         try:
             from app.core.ir.secret_policy import assert_no_inline_secrets
             from app.core.ir.yaml_shim import yaml_config_to_ir
 
-            validate_pipeline(config, registry)
+            validate_pipeline(config, get_registry())
             graph = yaml_config_to_ir(config)
             assert_no_inline_secrets(graph)
         except ValueError as exc:
+            msg = str(exc)
             return JSONResponse(
                 status_code=422,
-                content={"valid": False, "error": str(exc)},
+                content={"valid": False, "error": msg, "detail": msg},
             )
         except Exception as exc:
+            msg = str(exc)
             return JSONResponse(
                 status_code=422,
-                content={"valid": False, "error": str(exc)},
+                content={"valid": False, "error": msg, "detail": msg},
             )
 
         headers = {"X-Deprecation-Warning": "YAML pipeline input is deprecated. Use IR JSON format."}
@@ -368,9 +383,12 @@ def run_pipeline_stream(payload: dict = Body(...)):
                 "message": str(exc),
             })
         finally:
-            queue.put(None)  # sentinel
+            try:
+                queue.put_nowait(None)  # sentinel
+            except Exception:
+                pass
 
-    threading.Thread(target=_run, daemon=True).start()
+    _PIPELINE_RUN_EXECUTOR.submit(_run)
 
     def stream():
         # Emit run_id immediately so Observe deep-links work before first node
@@ -454,7 +472,7 @@ def run_pipeline_async(payload: dict = Body(...)):
         except Exception as exc:
             run_mgr.mark_failed(str(exc))
 
-    threading.Thread(target=_run, daemon=True).start()
+    _PIPELINE_RUN_EXECUTOR.submit(_run)
 
     headers = {}
     if deprecation_header:

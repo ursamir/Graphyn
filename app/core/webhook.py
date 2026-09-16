@@ -8,16 +8,15 @@ Owns:             WebhookService — save(), load(), notify(), _send().
 Public Surface:   WebhookService.save(url, events), .notify(event, payload)
 Must NOT:         Import from app.domain or app.api at module level.
                   Must never raise on notification failure (fire-and-forget).
-Dependencies:     stdlib (ipaddress, json, logging, socket, threading, urllib),
-                  httpx (lazy, inside _send()), app.core.config (webhooks_path).
+Dependencies:     stdlib (json, logging, threading, urllib),
+                  httpx (lazy, inside _send()), app.core.config (webhooks_path),
+                  app.core.egress (validate_webhook_target_url, webhook_url_log_label).
 Reason To Change: Webhook delivery guarantees change (e.g. retry added),
                   SSRF protection policy evolves, or new event types are added.
 """
 
-import ipaddress
 import json
 import logging
-import socket
 import threading
 from typing import Any
 from urllib.parse import urlparse
@@ -25,34 +24,10 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 from app.core.config import webhooks_path as _webhooks_path
+from app.core.egress import validate_webhook_target_url, webhook_url_log_label
 
 # Allowed URL schemes for webhook targets (SSRF prevention)
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
-
-
-def _is_private_host(hostname: str) -> bool:
-    """Return True if hostname resolves to a private, loopback, or link-local address.
-
-    Raises ValueError if the hostname cannot be resolved.
-    Used to block SSRF attacks via webhook URLs pointing at internal services.
-
-    IPv6 literals (e.g. ``::1``, ``::ffff:127.0.0.1``) are checked directly
-    via :func:`ipaddress.ip_address` before falling back to DNS resolution, so
-    the check is consistent across IPv4-only and dual-stack platforms.
-    """
-    # Fast path: bare IP literal (IPv4 or IPv6) — no DNS needed.
-    try:
-        ip = ipaddress.ip_address(hostname)
-        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-    except ValueError:
-        pass  # not a bare IP literal — proceed with DNS resolution
-
-    try:
-        addr_str = socket.gethostbyname(hostname)
-        ip = ipaddress.ip_address(addr_str)
-        return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-    except socket.gaierror as exc:
-        raise ValueError(f"Webhook URL hostname '{hostname}' could not be resolved: {exc}") from exc
 
 
 class WebhookService:
@@ -88,23 +63,7 @@ class WebhookService:
                 f"Webhook URL must have a valid host. URL: {url!r}"
             )
 
-        # Block RFC 1918, loopback, and link-local addresses (SSRF prevention).
-        # Resolve at save() time so the check is not bypassable via DNS rebinding
-        # after the config is written.
-        hostname = parsed.hostname or ""
-        if hostname:
-            try:
-                if _is_private_host(hostname):
-                    raise ValueError(
-                        f"Webhook URL '{url}' resolves to a private or loopback address. "
-                        "Webhook targets must be publicly reachable hosts."
-                    )
-            except ValueError:
-                raise
-            except Exception as exc:
-                raise ValueError(
-                    f"Webhook URL hostname validation failed for '{url}': {exc}"
-                ) from exc
+        validate_webhook_target_url(url)
 
         self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         config = {"url": url, "events": events}
@@ -175,68 +134,30 @@ class WebhookService:
     def _send(self, url: str, event: str, payload: dict[str, Any]) -> None:
         """Internal: perform the HTTP POST. Logs warning on failure.
 
-        SSRF protection: the hostname is resolved once via ``_is_private_host``
-        and the connection is made directly to the resolved IP address with the
-        ``Host`` header set manually.  This eliminates the DNS rebinding window
-        that would exist if ``httpx`` performed its own independent DNS lookup
-        after the check.
+        SSRF protection: re-validates the destination with ``validate_webhook_target_url``
+        (``getaddrinfo`` + blocked-range checks) then POSTs the original URL so TLS/SNI
+        remain correct. DNS rebinding TOCTOU is documented in ``app.core.egress``.
         """
+        log_target = webhook_url_log_label(url)
         try:
             import httpx
 
-            parsed = urlparse(url)
-            hostname = parsed.hostname or ""
-            if hostname:
-                # Resolve the IP once and verify it is not private/loopback.
-                # Then rewrite the URL to connect directly to the resolved IP so
-                # httpx does not perform a second, independent DNS lookup (which
-                # would re-open the DNS rebinding window).
-                try:
-                    # _is_private_host raises ValueError on unresolvable hosts.
-                    if _is_private_host(hostname):
-                        logger.warning(
-                            "Webhook blocked: URL '%s' resolves to a private/loopback "
-                            "address at send time (possible DNS rebinding attack).",
-                            url,
-                        )
-                        return
-                    # Resolve to a concrete IP for the actual connection.
-                    resolved_ip = socket.gethostbyname(hostname)
-                except Exception as exc:
-                    logger.warning(
-                        "Webhook send-time host validation failed for '%s': %s — skipping.",
-                        url, exc,
-                    )
-                    return
-
-                # Build a URL that targets the resolved IP directly so httpx
-                # does not re-resolve DNS.  Preserve scheme, port, path, and
-                # query.  IPv6 addresses must be bracketed in the netloc.
-                port = parsed.port
-                ip_obj = ipaddress.ip_address(resolved_ip)
-                ip_netloc = f"[{resolved_ip}]" if ip_obj.version == 6 else resolved_ip
-                if port:
-                    ip_netloc = f"{ip_netloc}:{port}"
-                ip_url = parsed._replace(netloc=ip_netloc).geturl()
-
-                body = {"event": event, "payload": payload}
-                # Set the Host header to the original hostname so the remote
-                # server receives a well-formed HTTP/1.1 request.
-                headers = {"Host": parsed.netloc}
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.post(ip_url, json=body, headers=headers)
-                    response.raise_for_status()
-            else:
-                # No hostname (should not reach here after save() validation,
-                # but handle defensively).
-                body = {"event": event, "payload": payload}
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.post(url, json=body)
-                    response.raise_for_status()
+            validate_webhook_target_url(url)
+            body = {"event": event, "payload": payload}
+            with httpx.Client(timeout=10.0) as client:
+                response = client.post(url, json=body)
+                response.raise_for_status()
+        except ValueError as exc:
+            logger.warning(
+                "Webhook blocked for event '%s' to %s: %s",
+                event,
+                log_target,
+                exc,
+            )
         except Exception as exc:
             logger.warning(
-                "Webhook notification failed for event '%s' to '%s': %s",
+                "Webhook notification failed for event '%s' to %s: %s",
                 event,
-                url,
+                log_target,
                 exc,
             )

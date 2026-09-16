@@ -623,8 +623,10 @@ export default function TraceView() {
                         type="button"
                         className="min-w-0 flex-1 truncate text-left text-sm font-medium text-ink-900 hover:text-accent-700"
                         onClick={() => {
+                          const inputRun = String(item.run_id ?? item.source_run_id ?? '').trim()
                           setArtifactId(id)
-                          void load(id, runId)
+                          setRunId(inputRun)
+                          void load(id, inputRun)
                         }}
                       >
                         {item.node_type ? humanNodeLabel(String(item.node_type)) : label}

@@ -49,12 +49,13 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-# Optional packages safe to install into isolated venvs at plugin *load*.
-# Default is **empty** so API/Docker boot is not blocked for 10–30+ minutes
-# pip-installing TensorFlow into every ML plugin venv. Enable the heavy set with
-# ``GRAPHYN_ISOLATED_BOOT_HEAVY=1``. Otherwise use Plugins → Install optional
-# (venv), or ``GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1``.
-_ISOLATED_BOOT_OPTIONAL_HEAVY = frozenset(
+# Optional packages safe to install into isolated venvs at plugin *load*
+# (trainer / edge / classifier stacks). API binds first and loads plugins in a
+# background thread, so this no longer blocks ``/health``. Exotic optionals
+# (TTS, audiocraft, tflite-runtime, …) stay UI-on-demand via
+# ``install_dependencies(include_optional=True)``.
+# Opt out of heavy boot installs with ``GRAPHYN_ISOLATED_BOOT_HEAVY=0``.
+_ISOLATED_BOOT_OPTIONAL_ALLOWLIST = frozenset(
     {
         "tensorflow",
         "tensorflow-cpu",
@@ -72,10 +73,11 @@ _ISOLATED_BOOT_OPTIONAL_HEAVY = frozenset(
 def isolated_venv_requirements(manifest: PluginManifest) -> list[str]:
     """Requirements to pip-install into an isolated plugin venv at load time.
 
-    Always includes required ``dependencies``. Optional ML stacks (TensorFlow /
-    Keras / ONNX) install at load only when ``GRAPHYN_ISOLATED_BOOT_HEAVY=1``.
-    Other optionals stay UI-on-demand unless
-    ``GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1``.
+    Always includes required ``dependencies`` plus the ML allowlist
+    (TensorFlow / Keras / ONNX) when those packages appear in
+    ``optional_dependencies``. Set ``GRAPHYN_ISOLATED_BOOT_HEAVY=0`` to defer
+    them to Plugins → Install optional (venv). Set
+    ``GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1`` to install every optional at load.
 
     ``torch`` is skipped unless ``GRAPHYN_ISOLATED_INSTALL_TORCH=1``.
     """
@@ -91,12 +93,10 @@ def isolated_venv_requirements(manifest: PluginManifest) -> list[str]:
         "true",
         "yes",
     )
-    boot_heavy = os.environ.get("GRAPHYN_ISOLATED_BOOT_HEAVY", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    allowlist = _ISOLATED_BOOT_OPTIONAL_HEAVY if boot_heavy else frozenset()
+    # Default ON — trainer/model_builder need TF at load. Opt out with =0/false/no.
+    _heavy_raw = os.environ.get("GRAPHYN_ISOLATED_BOOT_HEAVY", "1").strip().lower()
+    boot_heavy = _heavy_raw not in ("0", "false", "no")
+    allowlist = _ISOLATED_BOOT_OPTIONAL_ALLOWLIST if boot_heavy else frozenset()
 
     def _pkg_name(item: str) -> str:
         try:
@@ -122,8 +122,7 @@ def isolated_venv_requirements(manifest: PluginManifest) -> list[str]:
         else:
             log.debug(
                 "Deferring optional '%s' for isolated plugin '%s' "
-                "(install via UI, GRAPHYN_ISOLATED_BOOT_HEAVY=1, or "
-                "GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1)",
+                "(install via UI; default allowlist uses GRAPHYN_ISOLATED_BOOT_HEAVY=1)",
                 item,
                 manifest.name,
             )
@@ -237,7 +236,7 @@ class PluginLoader:
             from app.core.plugins.venv_manager import PluginVenvManager
             from app.core.plugins.errors import PluginDependencyError
 
-            # Required deps at load. Heavy TF/ONNX only with GRAPHYN_ISOLATED_BOOT_HEAVY=1.
+            # Required + allowlisted ML optionals at load (opt out: BOOT_HEAVY=0).
             venv_mgr = PluginVenvManager()
             reqs = isolated_venv_requirements(manifest)
             try:
@@ -269,12 +268,21 @@ class PluginLoader:
                 get_runtime_registry,
             )
 
+            # Only claim runtime ownership of types this load actually registered
+            # (P2-22 — never hijack another plugin's node_type via stale manifest lists).
+            registered = set(new_node_types)
+            if manifest.node_types:
+                claimed = tuple(nt for nt in manifest.node_types if nt in registered)
+            else:
+                claimed = tuple(new_node_types)
+            if not claimed and registered:
+                claimed = tuple(new_node_types)
             get_runtime_registry().register(
                 IsolatedPluginSpec(
                     plugin_name=manifest.name,
                     install_path=str(Path(plugin_dir).resolve()),
                     venv_python=str(venv_py),
-                    node_types=tuple(new_node_types),
+                    node_types=claimed,
                 )
             )
 
@@ -361,7 +369,13 @@ class PluginLoader:
         if manifest.min_python is None:
             return
 
-        required = Version(manifest.min_python)
+        try:
+            required = Version(str(manifest.min_python).strip())
+        except Exception as exc:
+            raise PluginCompatibilityError(
+                f"Plugin '{manifest.name}' has invalid min_python "
+                f"specifier '{manifest.min_python}': {exc}"
+            ) from exc
         # Build a comparable version string from sys.version_info
         actual_str = (
             f"{sys.version_info.major}."
@@ -578,7 +592,7 @@ class PluginLoader:
             after: set[str] = set(self._registry._classes.keys())
             new_types = sorted(after - before)
 
-        return sorted(set(names) | set(new_types))
+        return new_types
 
     def _attach_plugin_ui_schema(self, manifest: PluginManifest) -> None:
         """Publish plugin.toml [config_schema] as the Builder UI contract."""

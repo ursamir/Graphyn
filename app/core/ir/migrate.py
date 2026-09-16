@@ -20,8 +20,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from app.core.ir.legacy_aliases import migrate_legacy_node_types
 from app.core.ir.yaml_shim import yaml_config_to_ir
-from app.core.ir.loader import dump_ir_to_file
+from app.core.ir.loader import dump_ir, dump_ir_to_file, load_ir
 
 
 def migrate_yaml_to_ir_file(
@@ -70,6 +71,7 @@ def migrate_yaml_to_ir_file(
         )
 
     graph = yaml_config_to_ir(raw)
+    graph = load_ir(migrate_legacy_node_types(dump_ir(graph)))
 
     # Atomic-safe write: clean up partial output on failure (Req 4.4.4)
     try:

@@ -51,6 +51,18 @@ def test_key_differs_for_different_input_hashes(cache: PipelineCache):
     assert k1 != k2
 
 
+def test_key_differs_for_node_seed_and_version(cache: PipelineCache):
+    """P1-7 — seed and NodeMetadata.version fold into cache key."""
+    base = cache.key("audio_conditioner", {"x": 1}, "inh")
+    k_seed = cache.key("audio_conditioner", {"x": 1}, "inh", node_seed=1)
+    k_seed2 = cache.key("audio_conditioner", {"x": 1}, "inh", node_seed=2)
+    k_ver = cache.key("audio_conditioner", {"x": 1}, "inh", node_version="1.0.0")
+    k_ver2 = cache.key("audio_conditioner", {"x": 1}, "inh", node_version="2.0.0")
+    assert k_seed != base
+    assert k_seed != k_seed2
+    assert k_ver != k_ver2
+
+
 def test_key_is_hex_string(cache: PipelineCache):
     """key() returns a 64-character hex string (SHA-256)."""
     k = cache.key("audio_conditioner", {}, "abc")

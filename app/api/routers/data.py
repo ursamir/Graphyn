@@ -22,7 +22,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -191,12 +191,24 @@ def delete_input_dataset(label: str):
     return {"deleted": label}
 
 
+_MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
 @router.post("/inputs/upload", summary="Upload an audio file")
-async def upload_file(file: UploadFile = File(...)):
+def upload_file(request: Request, file: UploadFile = File(...)):
     """Upload an audio file to the uploads input directory."""
     ext = os.path.splitext(file.filename or "recording.wav")[1].lower() or ".wav"
     if ext not in SUPPORTED_AUDIO_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Unsupported audio extension")
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > _MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload too large")
+        except ValueError:
+            pass
 
     target_dir = _input_root() / "uploads"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -204,8 +216,17 @@ async def upload_file(file: UploadFile = File(...)):
     safe_name = datetime.now(timezone.utc).strftime("upload_%Y%m%d_%H%M%S_%f") + ext
     out_path = target_dir / safe_name
 
-    content = await file.read()
-    out_path.write_bytes(content)
+    total = 0
+    with out_path.open("wb") as out_f:
+        while True:
+            chunk = file.file.read(_UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_UPLOAD_BYTES:
+                out_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="Upload too large")
+            out_f.write(chunk)
 
     return {"file_path": str(out_path), "filename": safe_name}
 
@@ -354,8 +375,12 @@ def merge_datasets(body: MergeRequest):
 
     output_root = _output_root()
     pm = ProjectManager()
+    # Jail the target project BEFORE any mkdir/write (P1-25).
+    try:
+        project_root = _safe_child(output_root, body.target_project)
+    except HTTPException:
+        raise
     # Ensure project workspace exists for Projects sidebar discovery.
-    project_root = output_root / body.target_project
     if not (project_root / "project.json").exists():
         try:
             if project_root.exists():
@@ -376,9 +401,8 @@ def merge_datasets(body: MergeRequest):
                 )
             else:
                 pm.create(body.target_project)
-        except ValueError:
-            # Name validation failure — fall through; copy may still succeed.
-            project_root.mkdir(parents=True, exist_ok=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     target_dir = _safe_child(output_root, body.target_project, body.target_version)
     target_dir.mkdir(parents=True, exist_ok=True)

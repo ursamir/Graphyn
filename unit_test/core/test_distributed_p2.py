@@ -627,6 +627,15 @@ def test_atomic_claim_two_queues_shared_memory_store():
     assert snap["jobs"]["t1"]["claimed_by"] == "wa"
 
 
+def test_disk_mutate_queue_fail_closed_on_corrupt_jobs(tmp_path: Path):
+    """P2-10: corrupt jobs.json must not be erased via mutate_queue."""
+    store = DiskStateStore(root=tmp_path)
+    jobs_path = tmp_path / "jobs.json"
+    jobs_path.write_text("{not valid json", encoding="utf-8")
+    with pytest.raises(OSError, match="unreadable"):
+        store.mutate_queue(lambda snap: (snap, None))
+
+
 def test_disk_mutate_queue_cas_helper(tmp_path: Path):
     """DiskStateStore.mutate_queue serializes RMW and returns mutator result."""
     store = DiskStateStore(root=tmp_path)

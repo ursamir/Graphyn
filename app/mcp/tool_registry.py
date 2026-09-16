@@ -155,7 +155,10 @@ def register_all_tools(register: Callable) -> None:
     register("propose_graph", PROPOSE_GRAPH_DESCRIPTION, PROPOSE_GRAPH_SCHEMA, propose_graph_handler)
     register("list_proposals", LIST_PROPOSALS_DESCRIPTION, LIST_PROPOSALS_SCHEMA, list_proposals_handler)
     register("get_proposal", GET_PROPOSAL_DESCRIPTION, GET_PROPOSAL_SCHEMA, get_proposal_handler)
-    register("accept_proposal", ACCEPT_PROPOSAL_DESCRIPTION, ACCEPT_PROPOSAL_SCHEMA, accept_proposal_handler)
+    from app.core.config import mcp_human_approval_enabled
+
+    if mcp_human_approval_enabled():
+        register("accept_proposal", ACCEPT_PROPOSAL_DESCRIPTION, ACCEPT_PROPOSAL_SCHEMA, accept_proposal_handler)
     register("reject_proposal", REJECT_PROPOSAL_DESCRIPTION, REJECT_PROPOSAL_SCHEMA, reject_proposal_handler)
     register("list_experiments", LIST_EXPERIMENTS_DESCRIPTION, LIST_EXPERIMENTS_SCHEMA, list_experiments_handler)
     register("get_trace", GET_TRACE_DESCRIPTION, GET_TRACE_SCHEMA, get_trace_handler)

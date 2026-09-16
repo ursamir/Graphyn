@@ -225,13 +225,17 @@ class DiskStateStore(DistributedStateStore):
             "events": data.get("events") if isinstance(data.get("events"), dict) else {},
         }
 
-    def _read_json(self, path: Path, default: Any) -> Any:
+    def _read_json(
+        self, path: Path, default: Any, *, fail_closed: bool = False
+    ) -> Any:
         try:
             import fcntl
         except ImportError:  # pragma: no cover — non-POSIX
             fcntl = None  # type: ignore[assignment]
 
         if not path.is_file():
+            if fail_closed:
+                raise FileNotFoundError(f"DiskStateStore: missing state file {path}")
             return default
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -243,7 +247,15 @@ class DiskStateStore(DistributedStateStore):
                     if fcntl is not None:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             return data if data is not None else default
+        except FileNotFoundError:
+            if fail_closed:
+                raise
+            return default
         except Exception as exc:
+            if fail_closed:
+                raise OSError(
+                    f"DiskStateStore: unreadable state file {path}: {exc}"
+                ) from exc
             log.warning("DiskStateStore: failed to read %s: %s", path, exc)
             return default
 
@@ -355,7 +367,9 @@ class DiskStateStore(DistributedStateStore):
         def _mutate() -> T:
             _, jobs_path, _, _ = self._paths()
             snap = self._normalize_queue(
-                self._read_json(jobs_path, self._empty_queue())
+                self._read_json(
+                    jobs_path, self._empty_queue(), fail_closed=True
+                )
             )
             new_snap, result = mutator(snap)
             self._write_json(

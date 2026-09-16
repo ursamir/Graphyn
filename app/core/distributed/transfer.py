@@ -26,6 +26,7 @@ import io
 import logging
 import os
 import pickle
+import uuid
 import re
 import urllib.error
 import urllib.request
@@ -105,8 +106,19 @@ def put_blob(data: bytes, *, key: str | None = None) -> str:
         key = local_content_key(digest)
     path = _safe_path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.is_file():
-        path.write_bytes(body)
+    tmp = path.parent / f".{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(body)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
     return build_artifact_uri(LOCAL_STORE_ID, key)
 
 
@@ -120,7 +132,18 @@ def get_blob(uri: str) -> bytes:
     path = _safe_path(parsed.key)
     if not path.is_file():
         raise FileNotFoundError(f"Blob not found for {uri}")
-    return path.read_bytes()
+    data = path.read_bytes()
+    key = parsed.key
+    if key.startswith("sha256/"):
+        expected = key.rsplit("/", 1)[-1].lower()
+        if len(expected) >= 8 and all(c in "0123456789abcdef" for c in expected):
+            actual = hashlib.sha256(data).hexdigest()
+            if actual != expected:
+                raise ValueError(
+                    f"Blob content hash mismatch for {uri}: "
+                    f"expected {expected}, got {actual}"
+                )
+    return data
 
 
 def http_put_blob(

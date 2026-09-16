@@ -95,6 +95,10 @@ class NodeJob(BaseModel):
     pool: str | None = None
     lease_generation: int = 0
     """Incremented on lease reclaim; complete must present the same value."""
+    attempts: int = 0
+    """Times this job was reclaimed after lease expiry (P1-12)."""
+    max_attempts: int = 5
+    """Stop requeueing after this many reclaim cycles (P1-12)."""
 
 
 class JobResult(BaseModel):

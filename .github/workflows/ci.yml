@@ -13,9 +13,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Smoke (deps + tests + templates)
+          python-version: "3.12"
+      - name: Full suite (deps + unit_test + templates)
         run: bash scripts/ci_smoke.sh
+        env:
+          GRAPHYN_PLUGIN_AUTO_INSTALL: "1"
+
 
   ui-build:
     runs-on: ubuntu-latest

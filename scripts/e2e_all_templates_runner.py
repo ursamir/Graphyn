@@ -342,7 +342,9 @@ def classify_example_folder(folder: Path) -> dict:
         if m:
             num = int(m.group(1))
             # find matching ex-NN template
-            candidates = sorted(WS_TEMPLATES.glob(f"ex-{num:02d}-*.graph.json"))
+            candidates = sorted(EX_TEMPLATES.glob(f"ex-{num:02d}-*.graph.json"))
+            if not candidates:
+                candidates = sorted(WS_TEMPLATES.glob(f"ex-{num:02d}-*.graph.json"))
             if candidates:
                 tname = candidates[0].stem.replace(".graph", "")
                 if tname.endswith(".graph"):

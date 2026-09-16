@@ -54,6 +54,7 @@ def _write_checkpoint(
     node_id: str,
     outputs: dict,
     logger: Any = None,
+    graph_hash: str | None = None,
 ) -> None:
     """Write a node's outputs to a checkpoint directory.
 
@@ -142,11 +143,13 @@ def _write_checkpoint(
         # is either fully written or absent, never half-written.
         top_manifest_path = os.path.join(checkpoint_dir, "manifest.json")
         tmp_manifest_path = top_manifest_path + ".tmp"
+        all_ports = sorted(outputs.keys())
         with open(tmp_manifest_path, "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "checkpointed_ports": sorted(port_manifest.keys()),
                     "port_types": port_manifest,
+                    "all_ports": all_ports,
                 },
                 f,
                 indent=2,
@@ -155,7 +158,7 @@ def _write_checkpoint(
 
         # Update the per-node O(1) lookup index so _find_latest_checkpoint
         # does not need to scan all run directories.
-        _update_checkpoint_index(run_base_path, node_id)
+        _update_checkpoint_index(run_base_path, node_id, graph_hash=graph_hash or "")
 
     except Exception as exc:
         log.warning("Checkpoint write failed for node '%s': %s", node_id, exc)
@@ -175,11 +178,16 @@ def _write_checkpoint(
                 pass
 
 
-def _update_checkpoint_index(run_base_path: str, node_id: str) -> None:
+def _update_checkpoint_index(
+    run_base_path: str,
+    node_id: str,
+    *,
+    graph_hash: str,
+) -> None:
     """Update the per-node checkpoint index for O(1) latest-checkpoint lookup.
 
-    Writes ``<runs_dir>/checkpoints/node_<id>/latest_run`` containing the
-    run_base_path of the most recently written checkpoint. This allows
+    Writes ``<runs_dir>/checkpoints/<graph_hash>/node_<id>/latest_run`` containing
+    the run_base_path of the most recently written checkpoint. This allows
     _find_latest_checkpoint() to skip the O(N) full-run-directory scan.
 
     The index file is written atomically (tmp + os.replace).
@@ -188,7 +196,10 @@ def _update_checkpoint_index(run_base_path: str, node_id: str) -> None:
         from app.core.config import runs_dir as _runs_dir  # noqa: PLC0415
 
         runs_dir_path = str(_runs_dir())
-        index_dir = os.path.join(runs_dir_path, "checkpoints", f"node_{node_id}")
+        gh = graph_hash or "_unknown"
+        index_dir = os.path.join(
+            runs_dir_path, "checkpoints", gh, f"node_{node_id}"
+        )
         os.makedirs(index_dir, exist_ok=True)
         index_path = os.path.join(index_dir, "latest_run")
         tmp_index_path = index_path + ".tmp"
@@ -201,7 +212,7 @@ def _update_checkpoint_index(run_base_path: str, node_id: str) -> None:
         log.debug("Checkpoint index update failed for node '%s': %s", node_id, exc)
 
 
-def _find_latest_checkpoint(node_id: str) -> dict | None:
+def _find_latest_checkpoint(node_id: str, graph_hash: str | None = None) -> dict | None:
     """Search runs/ for the most recent checkpoint for node_id.
 
     Uses an O(1) per-node index file written by _update_checkpoint_index()
@@ -224,9 +235,10 @@ def _find_latest_checkpoint(node_id: str) -> dict | None:
     if not os.path.exists(runs_dir_path):
         return None
 
+    gh = graph_hash or ""
     # ── Fast path: O(1) index lookup ─────────────────────────────────────────
     index_path = os.path.join(
-        runs_dir_path, "checkpoints", f"node_{node_id}", "latest_run"
+        runs_dir_path, "checkpoints", gh or "_unknown", f"node_{node_id}", "latest_run"
     )
     if os.path.exists(index_path):
         try:
@@ -330,6 +342,7 @@ def _load_checkpoint_outputs(checkpoint_dir: str) -> dict | None:
 
         checkpointed_ports = top_manifest.get("checkpointed_ports")
         port_types: dict[str, str] | None = top_manifest.get("port_types")
+        all_ports = top_manifest.get("all_ports")
 
         if checkpointed_ports is None or port_types is None:
             log.warning(
@@ -338,6 +351,17 @@ def _load_checkpoint_outputs(checkpoint_dir: str) -> dict | None:
                 checkpoint_dir,
             )
             return None
+
+        if all_ports is not None:
+            if sorted(checkpointed_ports) != sorted(all_ports):
+                log.warning(
+                    "Checkpoint at '%s' is partial (checkpointed %s vs all_ports %s) "
+                    "— will re-execute.",
+                    checkpoint_dir,
+                    checkpointed_ports,
+                    all_ports,
+                )
+                return None
 
         _ser_registry = get_serializer_registry()
         result: dict = {}

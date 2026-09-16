@@ -26,7 +26,9 @@ PluginPackage/*/output/*
 
 # Process / IDE caches (never commit)
 review_agent_work/
-.kiro/
+.kiro/*
+!.kiro/steering/
+!.kiro/steering/**
 Requirement/
 .venv-test/
 .graphyn-e2e/

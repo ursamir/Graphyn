@@ -28,12 +28,14 @@ services:
       GRAPHYN_API_TOKEN: ${GRAPHYN_API_TOKEN:-}
       GRAPHYN_HOME: /data/graphyn-home
       GRAPHYN_PROJECT_DIR: /app/workspace
+      GRAPHYN_PLUGINS_DIR: /app/plugins
       GRAPHYN_AUTO_INSTALL_PLUGINS: "1"
       # Bind-mounted workspace often uses host symlinks under datasets/input.
       GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS: ${GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS:-1}
       # API binds immediately; plugins load in a background thread.
-      # Heavy TF/ONNX into every isolated venv at boot is OFF by default —
-      # use Plugins → Install optional (venv), or set GRAPHYN_ISOLATED_BOOT_HEAVY=1.
+      # Isolated ML plugins (trainer, …) install TensorFlow/Keras into their
+      # venvs at load by default. Set GRAPHYN_ISOLATED_BOOT_HEAVY=0 to defer.
+      GRAPHYN_ISOLATED_BOOT_HEAVY: ${GRAPHYN_ISOLATED_BOOT_HEAVY:-1}
       CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
     volumes:
       - graphyn-home:/data/graphyn-home

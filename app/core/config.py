@@ -36,6 +36,7 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_REDIS_URL               Default: "" (use in-process store)
   GRAPHYN_HTTP_EGRESS_MODE        Default: trusted (workflow HTTP nodes; use restricted for SSRF hardening)
   GRAPHYN_HTTP_EGRESS_ALLOWLIST   Default: "" (comma-separated hosts/domains; used in restricted mode)
+  GRAPHYN_MCP_HUMAN_APPROVAL      Default: "" (set 1 to expose MCP accept_proposal)
 
 ## Three-tier directory model
 
@@ -518,6 +519,11 @@ def http_egress_mode() -> str:
         f"GRAPHYN_HTTP_EGRESS_MODE={raw!r} is invalid; "
         "use 'trusted' (default) or 'restricted'."
     )
+
+
+def mcp_human_approval_enabled() -> bool:
+    """When true, MCP registers ``accept_proposal`` (human-in-the-loop approval)."""
+    return _env("GRAPHYN_MCP_HUMAN_APPROVAL").lower() in ("1", "true", "yes", "on")
 
 
 def http_egress_allowlist() -> list[str]:

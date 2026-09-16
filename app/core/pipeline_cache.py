@@ -55,6 +55,38 @@ def _is_json_serializable(value: Any) -> bool:
         return False
 
 
+def _hash_pydantic_with_arrays(obj: Any) -> str:
+    """Stable digest for nested dict/list trees that may contain numpy arrays."""
+    h = hashlib.sha256()
+
+    def _walk(v: Any) -> None:
+        try:
+            import numpy as np  # noqa: PLC0415
+        except ImportError:
+            np = None  # type: ignore
+        if np is not None and isinstance(v, np.ndarray):
+            h.update(str(v.shape).encode())
+            h.update(str(v.dtype).encode())
+            h.update(v.tobytes())
+            return
+        if isinstance(v, dict):
+            for k in sorted(v.keys(), key=str):
+                h.update(str(k).encode())
+                _walk(v[k])
+            return
+        if isinstance(v, (list, tuple)):
+            for item in v:
+                _walk(item)
+            return
+        try:
+            h.update(json.dumps(v, sort_keys=True, default=str).encode())
+        except Exception:
+            h.update(repr(v).encode())
+
+    _walk(obj)
+    return h.hexdigest()
+
+
 class PipelineCache:
     def __init__(self) -> None:
         self._base_override: Path | None = None
@@ -91,7 +123,15 @@ class PipelineCache:
             # Config not yet initialised (e.g. in tests) — skip the check
         self._base_override = value
 
-    def compute_key(self, node_type: str, config: dict, inputs: dict) -> str:
+    def compute_key(
+        self,
+        node_type: str,
+        config: dict,
+        inputs: dict,
+        *,
+        node_seed: int | None = None,
+        node_version: str | None = None,
+    ) -> str:
         """Compute the cache key for a node given its type, config, and inputs dict.
 
         Combines per-port input hashes so port identity is preserved (NEW-6 fix).
@@ -103,6 +143,8 @@ class PipelineCache:
             node_type: The node's type string.
             config: The node's config dict.
             inputs: The node's input dict (port_name → value).
+            node_seed: Planner-assigned node seed (P1-7).
+            node_version: Registered NodeMetadata.version (P1-7).
 
         Returns:
             A SHA-256 hex digest string suitable for use as a cache directory name.
@@ -111,12 +153,28 @@ class PipelineCache:
         combined_input_hash = _hashlib.sha256(
             "".join(self.input_hash(v) for v in inputs.values()).encode()
         ).hexdigest()
-        return self.key(node_type, config, combined_input_hash)
+        return self.key(
+            node_type,
+            config,
+            combined_input_hash,
+            node_seed=node_seed,
+            node_version=node_version,
+        )
 
-    def key(self, node_type: str, config: dict, input_hash: str) -> str:
-        """SHA-256 of node_type + sorted_json(config) + input_hash."""
+    def key(
+        self,
+        node_type: str,
+        config: dict,
+        input_hash: str,
+        *,
+        node_seed: int | None = None,
+        node_version: str | None = None,
+    ) -> str:
+        """SHA-256 of node_type + sorted_json(config) + input_hash + seed + version."""
         sorted_config = json.dumps(config, sort_keys=True)
-        raw = node_type + sorted_config + input_hash
+        seed_part = "" if node_seed is None else str(node_seed)
+        version_part = "" if node_version is None else str(node_version)
+        raw = node_type + sorted_config + input_hash + seed_part + version_part
         return hashlib.sha256(raw.encode()).hexdigest()
 
     def input_hash(self, inputs: Any) -> str:
@@ -143,12 +201,22 @@ class PipelineCache:
                 raw = "".join(parts)
                 return hashlib.sha256(raw.encode()).hexdigest()
             if hasattr(first, "model_dump"):
-                # List of Pydantic models — may contain non-serializable types (e.g. numpy arrays)
+                # List of Pydantic models — may contain numpy arrays on Any fields.
                 try:
-                    raw = json.dumps([item.model_dump(mode="json") for item in inputs], sort_keys=True)
+                    raw = json.dumps(
+                        [item.model_dump(mode="json") for item in inputs], sort_keys=True
+                    )
                     return hashlib.sha256(raw.encode()).hexdigest()
                 except Exception:
-                    pass  # Fall through to numpy / repr() fallback
+                    # Fold array shape/dtype/bytes when JSON dump fails (P1-5).
+                    h = hashlib.sha256()
+                    for item in inputs:
+                        try:
+                            dumped = item.model_dump()
+                        except Exception:
+                            dumped = {}
+                        h.update(_hash_pydantic_with_arrays(dumped).encode())
+                    return h.hexdigest()
 
         # Single Pydantic model (e.g. DatasetArtifact passed to trainer.dataset port)
         if hasattr(inputs, "model_dump"):
@@ -156,7 +224,12 @@ class PipelineCache:
                 raw = json.dumps(inputs.model_dump(mode="json"), sort_keys=True)
                 return hashlib.sha256(raw.encode()).hexdigest()
             except Exception:
-                pass  # Fall through to numpy / repr() fallback
+                try:
+                    return hashlib.sha256(
+                        _hash_pydantic_with_arrays(inputs.model_dump()).encode()
+                    ).hexdigest()
+                except Exception:
+                    pass  # Fall through to numpy / repr() fallback
 
         # numpy ndarray — hash raw bytes for cross-run stability
         try:
@@ -176,18 +249,16 @@ class PipelineCache:
             raw = json.dumps(inputs, sort_keys=True, default=str)
             return hashlib.sha256(raw.encode()).hexdigest()
 
-        # Last-resort fallback: repr() is NOT stable across process restarts
-        # (object addresses change). Return an empty string so the cache key
-        # is effectively random, which forces a cache miss on every run.
-        # Nodes that reach this path should be marked cacheable=False.
-        # We log a warning so operators can identify and fix the node.
+        # Last-resort fallback: unhashable input must NOT collide across runs.
+        # Return a unique token so the cache key forces a miss (P1-5).
+        import uuid as _uuid  # noqa: PLC0415
+
         logger.warning(
             "PipelineCache.input_hash: cannot compute stable hash for type %s — "
-            "returning empty hash (cache will always miss for this input). "
-            "Mark this node cacheable=False to suppress this warning.",
+            "returning unique miss token. Mark this node cacheable=False to suppress.",
             type(inputs).__name__,
         )
-        return ""
+        return f"miss-{_uuid.uuid4().hex}"
 
     def _cache_dir(self, cache_key: str) -> Path:
         return self.BASE / cache_key
@@ -234,13 +305,17 @@ class PipelineCache:
         """
         cache_dir = self._cache_dir(cache_key)
 
-        # ── New generic format ─────────────────────────────────────────────────
+        merged: dict[str, Any] = {}
+
+        # ── Generic JSON ports ─────────────────────────────────────────────────
         outputs_path = cache_dir / "outputs.json"
         if outputs_path.exists():
             try:
                 with open(outputs_path, "r", encoding="utf-8") as f:
                     from app.core.plugins.hydrate import hydrate_platform_models  # noqa: PLC0415
-                    return hydrate_platform_models(json.load(f))
+                    loaded = hydrate_platform_models(json.load(f))
+                if isinstance(loaded, dict):
+                    merged.update(loaded)
             except Exception as exc:
                 logger.warning(
                     "Cache read (outputs.json) failed for key %s (%s) — will re-execute",
@@ -250,76 +325,45 @@ class PipelineCache:
 
         # ── Multi-port serialized format ───────────────────────────────────────
         top_manifest_path = cache_dir / "manifest.json"
-        if not top_manifest_path.exists():
-            return None
+        if top_manifest_path.exists():
+            try:
+                with open(top_manifest_path, "r", encoding="utf-8") as f:
+                    top_manifest_data = json.load(f)
+            except Exception as exc:
+                logger.warning(
+                    "Cache read (manifest.json) failed for key %s (%s)",
+                    cache_key,
+                    exc,
+                )
+                return merged or None
 
-        try:
-            with open(top_manifest_path, "r", encoding="utf-8") as f:
-                top_manifest_data = json.load(f)
-        except Exception as exc:
-            logger.warning(
-                "Cache read (manifest.json) failed for key %s (%s) — will re-execute",
-                cache_key, exc,
-            )
-            return None
+            cached_ports = top_manifest_data.get("cached_ports")
+            port_types = top_manifest_data.get("port_types")
+            if not isinstance(cached_ports, list) or not isinstance(port_types, dict):
+                return merged or None
 
-        cached_ports = top_manifest_data.get("cached_ports")
-        port_types: dict[str, str] = top_manifest_data.get("port_types", {})
-
-        if cached_ports is None:
-            # Manifest exists but has no cached_ports key — unreadable format.
-            logger.warning(
-                "Cache at '%s' has manifest.json without 'cached_ports' key — "
-                "unreadable format, will re-execute.",
-                cache_dir,
-            )
-            return None
-
-        # Valid new-format entry with zero ports — return empty dict (cache hit).
-        if cached_ports == []:
-            return {}
-
-        try:
             from app.core.artifact_serializer import get_serializer_registry  # noqa: PLC0415
             _ser_registry = get_serializer_registry()
-            result: dict = {}
             for port_name in cached_ports:
-                port_dir = cache_dir / f"port_{port_name}"
-                if not port_dir.exists():
-                    logger.warning(
-                        "Cache read: port dir missing for '%s' in key %s — will re-execute",
-                        port_name, cache_key,
-                    )
-                    return None
                 type_key = port_types.get(port_name)
-                if type_key is None:
-                    logger.warning(
-                        "Cache manifest for key %s has no type_key for port '%s' — will re-execute",
-                        cache_key, port_name,
-                    )
-                    return None
+                if not type_key:
+                    continue
                 handler = _ser_registry.get(type_key)
                 if handler is None:
+                    continue
+                port_dir = cache_dir / f"port_{port_name}"
+                try:
+                    merged[port_name] = handler.deserialize(port_dir)
+                except Exception as exc:
                     logger.warning(
-                        "Cache read: no handler for type '%s' (port '%s', key %s) — will re-execute",
-                        type_key, port_name, cache_key,
+                        "Cache deserialize failed for port '%s' key %s: %s",
+                        port_name,
+                        cache_key,
+                        exc,
                     )
                     return None
-                value = handler.deserialize(port_dir)
-                if value is None:
-                    logger.warning(
-                        "Cache read: deserialize returned None for port '%s' key %s — will re-execute",
-                        port_name, cache_key,
-                    )
-                    return None
-                result[port_name] = value
-            return result
-        except Exception as exc:
-            logger.warning(
-                "Cache read (port subdirs) failed for key %s (%s) — will re-execute",
-                cache_key, exc,
-            )
-            return None
+
+        return merged or None
 
     def save(self, cache_key: str, outputs: Any) -> None:
         """Save node outputs to cache.
@@ -395,7 +439,7 @@ class PipelineCache:
                     indent=2,
                 )
             tmp_manifest.replace(top_manifest_path)
-            return
+            # Fall through so JSON-only ports are also written (P1-6).
 
         # ── JSON-only ports → outputs.json ─────────────────────────────────────
         serializable: dict = {}
@@ -411,6 +455,13 @@ class PipelineCache:
             else:
                 skipped_ports.append(port_name)
 
+        if serializable:
+            outputs_path = cache_dir / "outputs.json"
+            tmp_outputs = cache_dir / "outputs.json.tmp"
+            with open(tmp_outputs, "w", encoding="utf-8") as f:
+                json.dump(serializable, f, indent=2, default=str)
+            tmp_outputs.replace(outputs_path)
+
         if skipped_ports:
             logger.warning(
                 "Cache.save: skipping non-serializable port(s) %s — "
@@ -419,17 +470,11 @@ class PipelineCache:
                 skipped_ports,
             )
 
-        if not serializable:
+        if not registry_ports and not serializable:
             logger.warning(
                 "Cache.save: no serializable ports in outputs — skipping cache write entirely."
             )
             return
-
-        outputs_path = cache_dir / "outputs.json"
-        tmp_outputs = cache_dir / "outputs.json.tmp"
-        with open(tmp_outputs, "w", encoding="utf-8") as f:
-            json.dump(serializable, f, indent=2)
-        tmp_outputs.replace(outputs_path)
 
     def clear(self) -> dict:
         """Delete all cache entries. Returns {entries_deleted, bytes_freed}.

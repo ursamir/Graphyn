@@ -64,6 +64,16 @@ Ensure `GRAPHYN_SKIP_PLUGIN_LOAD` is **unset** (if set to `1`, `/api/v1/nodes` r
 - API URL: `http://localhost:8001/api/v1/`
 - UI URL: `http://localhost:5173`
 
+### Seed local input data (first run)
+
+Example graphs ingest from `workspace/datasets/input/…`, which is gitignored on a fresh clone. Run once:
+
+```bash
+venv/bin/python scripts/heal_e2e_local_data.py
+```
+
+If ingest fails with `FileNotFoundError`, re-run the heal script or point `dataset_ingest` / `stream_ingest` at a WAV under `examples/*/data/`.
+
 ### Run a graph
 
 - `venv/bin/python -m app.cli.main run --graph examples/templates/basic-wakeword.graph.json`
@@ -76,7 +86,7 @@ Use `Pipeline` and `PipelineNode` from `app.core.sdk`; call pipeline.run(). See 
 
 - `venv/bin/python -m app.mcp.server`
 
-Console groups: **Build** (Builder, Templates, Proposals, Runs) · **Observe** (Trace, Experiments, Artifacts) · **Library** (Plugins, Data, Projects) · **Deploy** (Edge, Workers) · **Admin** (Secrets, System).
+Console groups (global shell): **Projects** · **Build** (Templates, Agent inbox) · **Library** (Datasets, Plugins, Models, Artifacts) · **Deploy** (Ship, Worker fleet) · **Admin** (Secrets, Ops, Access). With a workspace open: **Home · Editor · Runs · Models · Ship · Datasets** (Runs includes History, Live, outputs, lineage, compare).
 
 **Data vs Projects:** Data is files in/out (`workspace/datasets/`). Projects is the dataset workspace over the same output folder (versions/snapshots/lineage). Loop: Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge.
 

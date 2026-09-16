@@ -26,7 +26,7 @@ def test_register_returns_artifact_record_with_non_empty_id_and_hash(
 ):
     """Req 20.1 — register() returns ArtifactRecord with non-empty artifact_id and content_hash."""
     store = _store(tmp_workspace)
-    record = store.register(
+    record, _dedup = store.register(
         run_id="run-1",
         node_id="node-1",
         node_type="clean",
@@ -48,14 +48,14 @@ def test_register_twice_with_identical_data_returns_same_artifact_id(
     store = _store(tmp_workspace)
     data = {"payload": "same"}
 
-    record1 = store.register(
+    record1, _ = store.register(
         run_id="run-1",
         node_id="node-1",
         node_type="clean",
         artifact_type="generic",
         data=data,
     )
-    record2 = store.register(
+    record2, dedup2 = store.register(
         run_id="run-1",
         node_id="node-1",
         node_type="clean",
@@ -64,6 +64,7 @@ def test_register_twice_with_identical_data_returns_same_artifact_id(
     )
 
     assert record1.artifact_id == record2.artifact_id
+    assert dedup2 is True
 
 
 # ── Req 20.3 — get returns the registered record ─────────────────────────────
@@ -71,7 +72,7 @@ def test_register_twice_with_identical_data_returns_same_artifact_id(
 def test_get_returns_registered_artifact_record(tmp_workspace: Path):
     """Req 20.3 — get(artifact_id) returns the same ArtifactRecord that was registered."""
     store = _store(tmp_workspace)
-    registered = store.register(
+    registered, _ = store.register(
         run_id="run-1",
         node_id="node-1",
         node_type="clean",

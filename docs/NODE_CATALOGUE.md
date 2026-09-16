@@ -1,6 +1,6 @@
 # Node Catalogue
 
-All 48 production nodes live in `PluginPackage/`. There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
+All **49** production node types live in `PluginPackage/` (see `PluginPackage/NODES.md` — `model_builder` ships inside the `trainer` plugin). There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
 
 For full config fields, port specs, and capability details → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
@@ -36,7 +36,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | node_type | Category | Key Dependencies |
 |---|---|---|
 | `dataset_builder` | ML | numpy, scikit-learn; optional: tensorflow, torch |
-| `model_builder` | ML | optional: tensorflow/keras, torch |
+| `model_builder` | ML | ships inside the `trainer` plugin (same pack) |
 | `trainer` | ML | optional: tensorflow/keras, torch |
 | `evaluator` | ML | scikit-learn, numpy; optional: matplotlib, seaborn |
 | `edge_optimizer` | ML | optional: tensorflow, onnx, tf2onnx |

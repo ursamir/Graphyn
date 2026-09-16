@@ -101,7 +101,39 @@ async def _lifespan(_app: FastAPI):
         flush=True,
         file=sys.stderr,
     )
+
+    _skip_schedule_ticker = (
+        "pytest" in sys.modules
+        or os.environ.get("GRAPHYN_SKIP_SCHEDULE_TICKER", "").strip().lower()
+        in ("1", "true", "yes")
+    )
+    _ticker_stop = threading.Event()
+    _ticker_thread: threading.Thread | None = None
+
+    if not _skip_schedule_ticker:
+
+        def _schedule_ticker_loop() -> None:
+            while not _ticker_stop.wait(60):
+                try:
+                    from app.core.schedules import try_tick_due_schedules
+
+                    fired = try_tick_due_schedules()
+                    if fired:
+                        _logger.info("Schedule ticker fired %s job(s)", len(fired))
+                except Exception as exc:
+                    _logger.debug("Schedule ticker tick failed: %s", exc)
+
+        _ticker_thread = threading.Thread(
+            target=_schedule_ticker_loop, name="graphyn-schedules", daemon=True
+        )
+        _ticker_thread.start()
+        _logger.info("Schedule ticker started (60s interval, cross-process lease)")
+
     yield
+
+    _ticker_stop.set()
+    if _ticker_thread is not None:
+        _ticker_thread.join(timeout=2.0)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -277,7 +309,14 @@ async def _auth_static_mounts(request: Request, call_next):
     """Protect mounted static routes with the same token policy as /api/v1."""
     path = request.url.path
     if path.startswith("/files") or path.startswith("/input-files") or path.startswith("/run-files"):
-        _auth_dep_request(request)
+        try:
+            _auth_dep_request(request)
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=dict(exc.headers) if exc.headers else None,
+            )
     return await call_next(request)
 
 
@@ -292,7 +331,9 @@ async def _request_metrics(request: Request, call_next):
         return response
     finally:
         duration_s = time.perf_counter() - started
-        record_request(request.url.path, request.method, status_code, duration_s)
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", None) or request.url.path
+        record_request(route_path, request.method, status_code, duration_s)
 
 # ── Static file mounts ────────────────────────────────────────────────────────
 # NEW-8: Paths are resolved at startup time from GRAPHYN_PROJECT_DIR.
@@ -336,31 +377,6 @@ if not _skip_startup_reconcile:
             )
     except Exception as exc:
         _logger.warning("Startup reconcile of abandoned runs failed: %s", exc)
-
-# Background schedule ticker (always-on lite). Skipped under pytest.
-_skip_schedule_ticker = (
-    "pytest" in _sys.modules
-    or os.environ.get("GRAPHYN_SKIP_SCHEDULE_TICKER", "").strip().lower()
-    in ("1", "true", "yes")
-)
-if not _skip_schedule_ticker:
-    import threading as _threading
-    import time as _time
-
-    def _schedule_ticker_loop() -> None:
-        while True:
-            try:
-                from app.core.schedules import tick_due_schedules
-
-                fired = tick_due_schedules()
-                if fired:
-                    _logger.info("Schedule ticker fired %s job(s)", len(fired))
-            except Exception as exc:
-                _logger.debug("Schedule ticker tick failed: %s", exc)
-            _time.sleep(60)
-
-    _threading.Thread(target=_schedule_ticker_loop, name="graphyn-schedules", daemon=True).start()
-    _logger.info("Schedule ticker started (60s interval)")
 
 _logger.info(
     "Static mounts resolved — /files → %s | /input-files → %s | /run-files → %s",

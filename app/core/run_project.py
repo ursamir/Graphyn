@@ -159,10 +159,41 @@ def resolve_run_project(meta: dict[str, Any], run_path: Path | None = None) -> s
     return None
 
 
+def backfill_project_meta(run_path: Path) -> dict[str, str]:
+    """If meta.json lacks project, infer from graph.json once and persist."""
+    meta_path = run_path / "meta.json"
+    meta: dict[str, Any] = {}
+    if meta_path.is_file():
+        try:
+            raw = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                meta = raw
+        except Exception:
+            meta = {}
+    if normalize_project_name(meta.get("project")):
+        return {
+            k: v
+            for k, v in meta.items()
+            if k in ("project", "version_tag") and isinstance(v, str)
+        }
+    inferred = infer_project_from_graph_file(run_path)
+    if not inferred:
+        return {}
+    try:
+        merged = {**meta, **inferred}
+        meta_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return inferred
+
+
 def project_matches(meta: dict[str, Any], project: str, run_path: Path | None = None) -> bool:
     """Hard match: resolved project equals the filter (exact, case-sensitive after strip)."""
     needle = normalize_project_name(project)
     if not needle:
         return True
-    resolved = resolve_run_project(meta, run_path)
+    resolved = normalize_project_name(meta.get("project"))
+    if not resolved and run_path is not None:
+        backfill = backfill_project_meta(run_path)
+        resolved = normalize_project_name(backfill.get("project"))
     return resolved == needle

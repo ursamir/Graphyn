@@ -65,6 +65,11 @@ def heal_datasets() -> None:
     sc = EX / "02_speech_commands" / "data"
     for label in ("go", "yes", "no", "up", "down", "stop"):
         rel_link(IN / label, sc / label)
+    # Templates use workspace/datasets/input/speech-commands/<label>/…
+    sc_pack = IN / "speech-commands"
+    sc_pack.mkdir(parents=True, exist_ok=True)
+    for label in ("go", "yes", "no", "up", "down", "stop"):
+        rel_link(sc_pack / label, sc / label)
 
     env = EX / "03_environmental_sounds" / "data"
     # common alt names
@@ -125,7 +130,7 @@ def patch_templates(td: Path) -> None:
 
 def main() -> None:
     heal_datasets()
-    patch_templates(ROOT / "examples" / "templates")
+    # Only patch disposable workspace copies — not versioned examples/templates (P2-47).
     patch_templates(ROOT / "workspace" / "configs" / "templates")
     # sync workspace configs from examples if missing
     src = ROOT / "examples" / "templates"

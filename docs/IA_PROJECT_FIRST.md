@@ -28,9 +28,9 @@
 |---|---|---|
 | **Projects** | Projects | Primary entry — picker / create / open |
 | **Build** | Templates, Proposals | Builder optional for canvas-only; **Run** path should go through a project |
-| **Library** | Data | Global file library (`workspace/datasets/…`) |
-| **Deploy** | Edge, Workers | Unchanged |
-| **Admin** | Plugins, Secrets, System | **Plugins moved from Library → Admin** |
+| **Library** | Datasets, Plugins, Models, Artifacts | Global library + plugin catalog |
+| **Deploy** | Ship, Worker fleet | Unchanged |
+| **Admin** | Secrets, Ops, Access | Credentials and platform ops (Plugins stay in **Library**, shipped UI) |
 
 **Removed as equal top peers when no project:** Runs, Trace, Experiments, Artifacts as a flat Observe group. Deep links (`#/runs/{id}`, `#/trace?run_id=`, …) still work.
 

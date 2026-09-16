@@ -39,6 +39,16 @@ export function isTerminalFailure(raw: unknown): boolean {
   return n === 'failed' || n === 'cancelled'
 }
 
+export function isLiveRunStatus(raw: unknown): boolean {
+  const n = normalizeRunStatus(raw)
+  return n === 'running' || n === 'paused' || n === 'queued'
+}
+
+export function isTerminalRunStatus(raw: unknown): boolean {
+  const n = normalizeRunStatus(raw)
+  return n === 'completed' || n === 'failed' || n === 'cancelled'
+}
+
 export function statusMatchesFilter(raw: unknown, filter: string): boolean {
   const needle = filter.trim().toLowerCase()
   if (!needle || needle === 'all') return true

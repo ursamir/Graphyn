@@ -267,12 +267,18 @@ def assemble_trace(
                 nid = str(s.get("node_id") or "").strip()
                 if not nid:
                     continue
+                duration_ms = s.get("duration_ms")
+                if duration_ms is None and s.get("duration_s") is not None:
+                    try:
+                        duration_ms = round(float(s["duration_s"]) * 1000, 2)
+                    except (TypeError, ValueError):
+                        duration_ms = None
                 nodes_executed.append(
                     {
                         "id": nid,
                         "node_type": s.get("node_type"),
                         "status": s.get("status") or "completed",
-                        "duration_ms": s.get("duration_ms"),
+                        "duration_ms": duration_ms,
                         "cache_hit": s.get("cache_hit"),
                         "error": s.get("error"),
                     }
@@ -297,6 +303,11 @@ def assemble_trace(
                     }
                 )
 
+        prov_by_artifact: dict[str, dict] = {}
+        for p in run_provenance:
+            aid = str(p.get("artifact_id") or "").strip()
+            if aid:
+                prov_by_artifact[aid] = p
         seen_in: set[str] = set()
         for p in run_provenance:
             for iid in p.get("input_artifact_ids") or []:
@@ -304,12 +315,13 @@ def assemble_trace(
                 if not sid or sid in seen_in:
                     continue
                 seen_in.add(sid)
+                producer = prov_by_artifact.get(sid, {})
                 inputs.append(
                     {
                         "artifact_id": sid,
-                        "run_id": p.get("run_id"),
-                        "node_id": p.get("node_id"),
-                        "node_type": p.get("node_type"),
+                        "run_id": producer.get("run_id") or p.get("run_id"),
+                        "node_id": producer.get("node_id"),
+                        "node_type": producer.get("node_type"),
                         "error": None,
                     }
                 )

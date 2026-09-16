@@ -309,7 +309,14 @@ class Pipeline:
             n = len(ir_nodes)
             for edge in self._explicit_edges:
                 src_idx, src_port, dst_idx, dst_port = edge
-                if src_idx >= n or dst_idx >= n:
+                if (
+                    not isinstance(src_idx, int)
+                    or not isinstance(dst_idx, int)
+                    or src_idx < 0
+                    or dst_idx < 0
+                    or src_idx >= n
+                    or dst_idx >= n
+                ):
                     raise ValueError(
                         f"Edge ({src_idx}, {src_port!r}, {dst_idx}, {dst_port!r}): "
                         f"node index out of range (pipeline has {n} node(s))"
@@ -472,15 +479,22 @@ class Pipeline:
     def _to_config_dict(self) -> dict:
         """Derive the legacy YAML config dict from the backing GraphIR."""
         graph = self._graph_ir
-        return {
-            "pipeline": {
-                "seed": graph.metadata.seed,
-                "nodes": [
-                    {"type": node.node_type, "config": dict(node.config)}
-                    for node in graph.nodes
-                ],
-            }
+        pipeline: dict = {
+            "seed": graph.metadata.seed,
+            "nodes": [
+                {"type": node.node_type, "config": dict(node.config)}
+                for node in graph.nodes
+            ],
         }
+        if graph.edges:
+            pipeline["edges"] = [
+                {
+                    "from": [edge.src_id, edge.src_port],
+                    "to": [edge.dst_id, edge.dst_port],
+                }
+                for edge in graph.edges
+            ]
+        return {"pipeline": pipeline}
 
     def run(
         self,

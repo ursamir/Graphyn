@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
 from app.core.plugins.errors import (
+    PluginAlreadyInstalledError,
     PluginNotFoundError,
 )
 from app.core.plugins.index import PluginIndexClient
@@ -202,12 +203,18 @@ class PluginManager:
                 existing = None
 
             if existing is not None and not upgrade:
-                log.info(
-                    "Plugin '%s' already installed (version %s); reusing existing installation.",
-                    _pre_name,
-                    existing.version,
-                )
-                return existing
+                # Ensure node types are registered even on a reuse path (P0-2).
+                try:
+                    install_path = Path(existing.install_path)
+                    if install_path.is_dir():
+                        self._loader.load(install_path)
+                except Exception as exc:
+                    log.warning(
+                        "Plugin '%s' already installed but reload failed: %s",
+                        _pre_name,
+                        exc,
+                    )
+                raise PluginAlreadyInstalledError(_pre_name, existing.version)
 
             # Step 3 — upgrade: uninstall existing first (best-effort name)
             if existing is not None and upgrade:
@@ -238,12 +245,17 @@ class PluginManager:
                     except PluginNotFoundError:
                         auth_existing = None
                     if auth_existing is not None and not upgrade:
-                        log.info(
-                            "Plugin '%s' already installed (version %s); reusing existing installation.",
-                            manifest.name,
-                            auth_existing.version,
-                        )
-                        return auth_existing
+                        try:
+                            auth_path = Path(auth_existing.install_path)
+                            if auth_path.is_dir():
+                                self._loader.load(auth_path)
+                        except Exception as exc:
+                            log.warning(
+                                "Plugin '%s' already installed but reload failed: %s",
+                                manifest.name,
+                                exc,
+                            )
+                        raise PluginAlreadyInstalledError(manifest.name, auth_existing.version)
                     if auth_existing is not None and upgrade:
                         # G4-UPGRADE fix: back up the old install dir before uninstalling
                         # so we can restore it if the new copy or load fails.
@@ -581,6 +593,46 @@ class PluginManager:
         names = {r.name for r in self._store.list()}
         return PluginVenvManager().gc_unused(names)
 
+    def _upgrade_bundled_plugins_on_version_drift(
+        self, package_root: Path | None = None
+    ) -> int:
+        """Reinstall bundled plugins when PluginPackage version exceeds the record."""
+        from app.core.config import plugin_package_dir as _plugin_package_dir
+
+        root = Path(package_root) if package_root is not None else _plugin_package_dir()
+        if not root.is_dir():
+            return 0
+        upgraded = 0
+        for toml_path in sorted(root.glob("*/*/plugin.toml")):
+            plugin_dir = toml_path.parent
+            try:
+                from app.core.plugins.manifest import load_manifest
+
+                manifest = load_manifest(plugin_dir)
+            except Exception:
+                continue
+            try:
+                record = self._store.get(manifest.name)
+            except Exception:
+                continue
+            if record.version != manifest.version:
+                log.info(
+                    "Bundled plugin '%s' drift %s → %s — upgrading",
+                    manifest.name,
+                    record.version,
+                    manifest.version,
+                )
+                try:
+                    self.install(str(plugin_dir), upgrade=True)
+                    upgraded += 1
+                except Exception as exc:
+                    log.warning(
+                        "Failed to upgrade bundled plugin '%s' on drift: %s",
+                        manifest.name,
+                        exc,
+                    )
+        return upgraded
+
     def install_bundled_plugins(
         self,
         package_root: Path | None = None,
@@ -652,6 +704,7 @@ class PluginManager:
         did_install = 0
         if auto_install_plugins() or not loadable:
             did_install = self.install_bundled_plugins(package_root, upgrade=True)
+        self._upgrade_bundled_plugins_on_version_drift(package_root)
         self.load_enabled_plugins()
         # If everything was stale/pruned and auto-install was off, the first
         # install may have been skipped when records *looked* enabled. After

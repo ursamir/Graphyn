@@ -208,7 +208,7 @@ export default function PluginsView() {
     pollRef.current = window.setInterval(() => {
       void apiJson<Plugin>(`/plugins/${encodeURIComponent(name)}`)
         .then(async (rec) => {
-          if (rec.status === 'installed' || rec.status === 'failed' || rec.enabled != null) {
+          if (rec.status === 'installed' || rec.status === 'failed') {
             if (pollRef.current) window.clearInterval(pollRef.current)
             setPkgInstalling(null)
             if (rec.status === 'failed') {
@@ -295,11 +295,18 @@ export default function PluginsView() {
       if (res.status === 'installing') {
         pushToast(`Installing ${name}…`, 'info')
         pollInstall(name)
-      } else {
+      } else if (res.status === 'installed' || res.status == null) {
         pushToast(`Installed ${name}`, 'success')
         setPkgInstalling(null)
         setMainTab('installed')
         await afterMutation({ announceCatalog: true })
+      } else if (res.status === 'failed') {
+        const msg = `Install failed for ${name}`
+        setPkgInstallError(msg)
+        pushToast(msg, 'error')
+      } else {
+        pushToast(`Install status: ${res.status ?? 'unknown'}`, 'info')
+        pollInstall(name)
       }
       setSource('')
     } catch (err) {

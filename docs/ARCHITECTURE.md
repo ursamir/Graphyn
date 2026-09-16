@@ -361,7 +361,7 @@ Application startup (API / CLI / MCP)
          │   │     (GRAPHYN_AUTO_INSTALL_PLUGINS or empty enabled list:
          │   │      install PluginPackage/*/*/plugin.toml with upgrade=True)
          │   │     then load_enabled_plugins(); skip if GRAPHYN_SKIP_PLUGIN_LOAD=1
-         │   │     isolated: required deps only unless GRAPHYN_ISOLATED_BOOT_HEAVY=1
+         │   │     isolated: required + TF/Keras/ONNX allowlist (opt out: BOOT_HEAVY=0)
          │   └── AutoDiscovery.run(
          │           nodes_dir="app/core/nodes",
          │           plugins_dir=plugins_home(),

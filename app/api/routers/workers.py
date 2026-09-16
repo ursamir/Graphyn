@@ -186,11 +186,25 @@ def cancel_job(job_id: str):
 
 
 @router.get("/jobs/{job_id}", summary="Get job status")
-def get_job(job_id: str):
-    job = get_job_queue().get(job_id)
+def get_job(
+    job_id: str,
+    worker_id: Optional[str] = Query(
+        None,
+        description="When set and matches job.claimed_by, renews the job lease (P1-11).",
+    ),
+):
+    queue = get_job_queue()
+    job = queue.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown job {job_id}")
-    result = get_job_queue().get_result(job_id)
+    if worker_id and job.claimed_by == worker_id and job.status in ("claimed", "running"):
+        try:
+            renewed = queue.renew_lease(job_id, worker_id=worker_id)
+            if renewed is not None:
+                job = renewed
+        except Exception as exc:
+            log.warning("get_job: lease renew failed for %s worker %s: %s", job_id, worker_id, exc)
+    result = queue.get_result(job_id)
     return {
         "job": job.model_dump(mode="json"),
         "result": result.model_dump(mode="json") if result else None,
@@ -198,6 +212,10 @@ def get_job(job_id: str):
 
 
 # ── Artifact blobs (P1 HTTP transfer) ─────────────────────────────────────────
+
+
+_MAX_BLOB_UPLOAD_BYTES = 100 * 1024 * 1024
+_BLOB_CHUNK_BYTES = 1024 * 1024
 
 
 @router.post("/artifacts/blob", summary="Upload an artifact blob")
@@ -214,7 +232,26 @@ async def put_artifact_blob(
     from app.core.artifact_uri import parse_artifact_uri
     from app.core.distributed.transfer import put_blob
 
-    body = await request.body()
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > _MAX_BLOB_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload too large")
+        except ValueError:
+            pass
+
+    hasher = hashlib.sha256()
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > _MAX_BLOB_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Upload too large")
+        hasher.update(chunk)
+        chunks.append(chunk)
+    body = b"".join(chunks)
     if not body:
         raise HTTPException(status_code=400, detail="Empty body")
     try:
@@ -222,26 +259,18 @@ async def put_artifact_blob(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     parsed = parse_artifact_uri(uri)
-    digest = hashlib.sha256(body).hexdigest()
+    digest = hasher.hexdigest()
     return {"uri": uri, "key": parsed.key, "sha256": digest, "bytes": len(body)}
 
 
 @router.get("/artifacts/blob/{key:path}", summary="Download an artifact blob")
 def get_artifact_blob(key: str):
-    from app.core.artifact_uri import build_artifact_uri, LOCAL_STORE_ID
-    from app.core.distributed.transfer import blob_root, get_blob
+    from app.core.distributed.transfer import blob_root
 
     key = (key or "").lstrip("/")
     if not key or not _BLOB_KEY_RE.match(key) or ".." in key.split("/"):
         raise HTTPException(status_code=400, detail="Invalid blob key")
-    uri = build_artifact_uri(LOCAL_STORE_ID, key)
-    try:
-        data = get_blob(uri)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Blob not found")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     path = blob_root() / key
-    if path.is_file():
-        return FileResponse(path, filename=path.name)
-    return Response(content=data, media_type="application/octet-stream")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Blob not found")
+    return FileResponse(path, filename=path.name)

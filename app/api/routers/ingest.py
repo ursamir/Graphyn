@@ -59,6 +59,14 @@ def start_url_job(body: UrlIngestBody):
     if not body.label:
         raise HTTPException(status_code=422, detail="label must not be empty")
 
+    from app.core.egress import HttpEgressError, validate_http_egress_url
+
+    for url in body.urls:
+        try:
+            validate_http_egress_url(url)
+        except HttpEgressError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     job_id = _svc.start_url_job(body.urls, body.label)
     return {"job_id": job_id}
 

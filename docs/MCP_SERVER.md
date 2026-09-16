@@ -1,6 +1,6 @@
 # MCP Server
 
-The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes 29 tools over stdio transport.
+The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes **28 tools by default** (29 when `GRAPHYN_MCP_HUMAN_APPROVAL=1`, which enables `accept_proposal`) over stdio transport.
 
 **File:** `app/mcp/`  
 **Transport:** stdio (JSON-RPC on stdin/stdout, logs to stderr)  
@@ -74,7 +74,7 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 | `propose_graph` | `proposals.py` | `create_proposal` (agentic store) |
 | `list_proposals` | `proposals.py` | `list_proposals` |
 | `get_proposal` | `proposals.py` | `get_proposal` |
-| `accept_proposal` | `proposals.py` | `accept_proposal` (same as UI) |
+| `accept_proposal` | `proposals.py` | `accept_proposal` (same as UI; **only registered when `GRAPHYN_MCP_HUMAN_APPROVAL=1`**) |
 | `reject_proposal` | `proposals.py` | `reject_proposal` (same as UI) |
 | `list_experiments` | `workspace.py` | `experiments.list_experiments` |
 | `get_trace` | `workspace.py` | `trace.assemble_trace` |
@@ -128,6 +128,8 @@ Node `id` and `event_trigger` and edge `condition` are preserved in the returned
 **Arguments:** `graph` (required) — a GraphIR JSON dict.
 
 **Returns:** `{"valid": true, "node_count": N, "errors": []}` or `{"valid": false, ...}`
+
+IR validation uses the shared helper `validate_graph_ir()` (registry types, configs, ports, cycles) — same depth as `graphyn validate --graph`.
 
 ---
 

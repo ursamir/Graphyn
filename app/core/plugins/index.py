@@ -243,34 +243,56 @@ class PluginIndexClient:
         _MAX_INDEX_BYTES = 10 * 1024 * 1024  # 10 MB
         chunks: list[bytes] = []
         total = 0
+        from urllib.parse import urljoin
+
+        from app.core.config import (
+            plugin_allowed_sources,
+            plugin_source_is_allowed,
+        )
+
         _timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
         try:
-            with httpx.stream("GET", url, timeout=_timeout, follow_redirects=True) as response:
-                if not response.is_success:
-                    raise PluginIndexError(
-                        f"Plugin index fetch from '{url}' returned HTTP {response.status_code}."
-                    )
-                from app.core.config import (
-                    plugin_allowed_sources,
-                    plugin_source_is_allowed,
-                )
-
-                if plugin_allowed_sources():
-                    for hop in (*response.history, response):
-                        hop_url = str(hop.url)
-                        if not plugin_source_is_allowed(hop_url):
-                            raise PluginIndexError(
-                                f"Plugin index redirect target {hop_url!r} is not in "
-                                "GRAPHYN_PLUGIN_ALLOWED_SOURCES."
-                            )
-                for chunk in response.iter_bytes(chunk_size=65_536):
-                    total += len(chunk)
-                    if total > _MAX_INDEX_BYTES:
+            current = url
+            with httpx.Client(timeout=_timeout, follow_redirects=False) as client:
+                for _hop in range(16):
+                    if plugin_allowed_sources() and not plugin_source_is_allowed(current):
                         raise PluginIndexError(
-                            f"Plugin index from '{url}' exceeds the maximum allowed size "
-                            f"of {_MAX_INDEX_BYTES // (1024 * 1024)} MB."
+                            f"Plugin index URL {current!r} is not in "
+                            "GRAPHYN_PLUGIN_ALLOWED_SOURCES."
                         )
-                    chunks.append(chunk)
+                    with client.stream("GET", current) as response:
+                        if response.status_code in (
+                            301,
+                            302,
+                            303,
+                            307,
+                            308,
+                        ):
+                            location = response.headers.get("location")
+                            if not location:
+                                raise PluginIndexError(
+                                    f"Plugin index redirect from {current!r} missing Location"
+                                )
+                            current = urljoin(current, location)
+                            continue
+                        if not response.is_success:
+                            raise PluginIndexError(
+                                f"Plugin index fetch from '{url}' returned HTTP "
+                                f"{response.status_code}."
+                            )
+                        for chunk in response.iter_bytes(chunk_size=65_536):
+                            total += len(chunk)
+                            if total > _MAX_INDEX_BYTES:
+                                raise PluginIndexError(
+                                    f"Plugin index from '{url}' exceeds the maximum allowed size "
+                                    f"of {_MAX_INDEX_BYTES // (1024 * 1024)} MB."
+                                )
+                            chunks.append(chunk)
+                        break
+                else:
+                    raise PluginIndexError(
+                        f"Too many redirects fetching plugin index from '{url}'"
+                    )
         except PluginIndexError:
             raise
         except Exception as exc:

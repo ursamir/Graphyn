@@ -83,28 +83,29 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
 
     out = dict(meta)
     run_id = str(out.get("run_id") or run_path.name)
-    # Many journals omit graph_name; recover from graph.json metadata.name.
-    if not (isinstance(out.get("graph_name"), str) and str(out.get("graph_name")).strip()):
-        try:
-            from app.core.run_outputs import _load_run_graph
-
-            graph = _load_run_graph(run_path)
-            gmeta = graph.get("metadata") if isinstance(graph, dict) else None
-            if isinstance(gmeta, dict) and gmeta.get("name"):
-                out["graph_name"] = str(gmeta["name"]).strip()
-        except Exception:
-            pass
-    # Soft upgrade: infer project / version_tag from graph.json when meta lacks them.
-    if not normalize_project_name(out.get("project")):
+    need_graph_name = not (
+        isinstance(out.get("graph_name"), str) and str(out.get("graph_name")).strip()
+    )
+    need_project = not normalize_project_name(out.get("project"))
+    need_version = not normalize_version_tag(out.get("version_tag"))
+    inferred = None
+    graph = None
+    if need_graph_name or need_project or need_version:
         inferred = infer_project_from_graph_file(run_path)
-        if inferred.get("project"):
+        if need_project and inferred.get("project"):
             out["project"] = inferred["project"]
-        if inferred.get("version_tag") and not normalize_version_tag(out.get("version_tag")):
+        if need_version and inferred.get("version_tag"):
             out["version_tag"] = inferred["version_tag"]
-    elif not normalize_version_tag(out.get("version_tag")):
-        inferred = infer_project_from_graph_file(run_path)
-        if inferred.get("version_tag"):
-            out["version_tag"] = inferred["version_tag"]
+        if need_graph_name:
+            try:
+                from app.core.run_outputs import _load_run_graph
+
+                graph = _load_run_graph(run_path)
+                gmeta = graph.get("metadata") if isinstance(graph, dict) else None
+                if isinstance(gmeta, dict) and gmeta.get("name"):
+                    out["graph_name"] = str(gmeta["name"]).strip()
+            except Exception:
+                pass
     slug = None
     artifacts = out.get("artifacts_dir")
     if isinstance(artifacts, str) and artifacts.strip():
