@@ -31,10 +31,12 @@ import {
   AlertTriangle,
   ExternalLink,
   X,
-  Database,
+  Clock,
+  Sparkles,
 } from 'lucide-react'
 import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
+import { goView } from '../../routes/nav'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import { ConfirmButton, EmptyState, ErrorBanner, NeedProjectPrompt, StatusBadge } from '../../components/ui'
 import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
@@ -48,6 +50,8 @@ import {
 } from '../../types/graph'
 import GraphynNode, { ConfigFieldEditor, categoryLook, normalizeExecStatus, type GraphynNodeData, type NodeExecStatus } from './GraphynNode'
 import DeletableEdge from './DeletableEdge'
+import TriggersDock from './TriggersDock'
+import AgentDrawer from './AgentDrawer'
 
 const nodeTypes = { graphyn: GraphynNode }
 const edgeTypes = { default: DeletableEdge }
@@ -182,8 +186,9 @@ function defaultsFromSchema(entry?: NodeCatalogEntry): Record<string, unknown> {
 
 function BuilderInner() {
   const catalog = useAppStore((s) => s.catalog)
-  const setView = useAppStore((s) => s.setView)
   const bootStatus = useAppStore((s) => s.bootStatus)
+  const bootError = useAppStore((s) => s.bootError)
+  const refreshCatalog = useAppStore((s) => s.refreshCatalog)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
   const seed = useAppStore((s) => s.seed)
   const setSeed = useAppStore((s) => s.setSeed)
@@ -196,6 +201,7 @@ function BuilderInner() {
   const setLastRunId = useAppStore((s) => s.setLastRunId)
   const setStatusMessage = useAppStore((s) => s.setStatusMessage)
   const setRunOutcome = useAppStore((s) => s.setRunOutcome)
+  const runOutcome = useAppStore((s) => s.runOutcome)
   const pushToast = useAppStore((s) => s.pushToast)
   const pendingProposalCount = useAppStore((s) => s.pendingProposalCount)
   const openProposals = useAppStore((s) => s.openProposals)
@@ -237,10 +243,28 @@ function BuilderInner() {
   >([])
   const [pipelinePick, setPipelinePick] = React.useState('')
   const [pipelineEnv, setPipelineEnv] = React.useState<'draft' | 'staging' | 'prod'>('draft')
+  const [triggersOpen, setTriggersOpen] = React.useState(false)
+  const [agentOpen, setAgentOpen] = React.useState(false)
+  const [secretNames, setSecretNames] = React.useState<string[]>([])
 
   React.useEffect(() => {
     setAdvancedOpen(false)
   }, [inspectorId])
+
+  React.useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const data = await apiJson<{ names?: string[] }>('/secrets')
+        if (!cancelled) setSecretNames(Array.isArray(data.names) ? data.names : [])
+      } catch {
+        if (!cancelled) setSecretNames([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Fetch project pipelines for env chips
 
@@ -773,7 +797,13 @@ function BuilderInner() {
         setRunCancelled(false)
         setRunOutcome('succeeded')
         setStatusMessage('Run succeeded')
-        pushToast('Run succeeded', 'success')
+        pushToast('Run succeeded', 'success', {
+          actionLabel: 'View outputs',
+          onAction: () => {
+            if (runId) openRun(runId, { panel: 'artifacts' })
+          },
+          ttlMs: 12000,
+        })
       }
       if (runId) setLastRunId(runId)
     } catch (err) {
@@ -1087,7 +1117,11 @@ function BuilderInner() {
   }
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-950 md:hidden">
+        Editor works best on a wide screen — collapse the catalog or rotate to landscape if the canvas feels cramped.
+      </div>
+      <div className="flex min-h-0 flex-1">
       <aside
         className={
           catalogOpen
@@ -1138,25 +1172,43 @@ function BuilderInner() {
           {catalog.length === 0 ? (
             <div className="px-1 py-2">
               <EmptyState
-                title={bootStatus === 401 || !getApiToken() ? 'Sign in to load the catalog' : 'No plugins installed'}
+                title={
+                  bootStatus === 401 || !getApiToken()
+                    ? 'Sign in to load the catalog'
+                    : bootError
+                      ? 'API unavailable'
+                      : 'No plugins installed'
+                }
                 description={
                   bootStatus === 401 || !getApiToken()
                     ? 'The API returned 401 or no token is set — paste your API token in Settings to load nodes.'
-                    : 'No node packs are installed yet — install a plugin to populate the catalog.'
+                    : bootError
+                      ? `${bootError} Fix the connection, then retry loading the catalog.`
+                      : 'No node packs are installed yet — install a plugin to populate the catalog.'
                 }
                 action={
                   bootStatus === 401 || !getApiToken() ? (
                     <button type="button" className="btn-primary" onClick={() => setSettingsOpen(true)}>
                       Open Settings
                     </button>
+                  ) : bootError ? (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void refreshCatalog?.()}
+                      >
+                        Retry catalog
+                      </button>
+                      <button type="button" className="btn-secondary" onClick={() => setSettingsOpen(true)}>
+                        Settings
+                      </button>
+                    </div>
                   ) : (
                     <button
                       type="button"
                       className="btn-primary"
-                      onClick={() => {
-                        setView('plugins')
-                        window.history.replaceState(null, '', '#/plugins')
-                      }}
+                      onClick={() => goView('plugins')}
                     >
                       Open Plugins
                     </button>
@@ -1405,9 +1457,6 @@ function BuilderInner() {
               <Square className="h-3.5 w-3.5" /> Cancel
             </button>
           )}
-          <button type="button" onClick={() => void handleValidate()} className="btn-secondary">
-            <CheckCircle2 className="h-3.5 w-3.5" /> Validate
-          </button>
           <button
             type="button"
             className="btn-secondary"
@@ -1453,6 +1502,57 @@ function BuilderInner() {
                 onMouseDown={(e) => e.stopPropagation()}
                 onPointerDown={(e) => e.stopPropagation()}
               >
+                <div className="mb-2 flex flex-col items-stretch gap-0.5 border-b border-ink-100 pb-2">
+                  <button
+                    type="button"
+                    className="btn-quiet w-full justify-start"
+                    onClick={() => {
+                      void handleValidate()
+                      setMoreOpen(false)
+                    }}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Validate
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-quiet w-full justify-start"
+                    onClick={() => {
+                      goView('templates')
+                      setMoreOpen(false)
+                    }}
+                  >
+                    Templates
+                  </button>
+                  {activeProject ? (
+                    <button
+                      type="button"
+                      className={`btn-quiet w-full justify-start ${triggersOpen ? 'bg-accent-50' : ''}`}
+                      onClick={() => {
+                        setTriggersOpen((v) => !v)
+                        setAgentOpen(false)
+                        setMoreOpen(false)
+                      }}
+                    >
+                      <Clock className="h-3.5 w-3.5" /> Triggers
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`btn-quiet w-full justify-start ${agentOpen ? 'bg-accent-50' : ''}`}
+                    onClick={() => {
+                      setAgentOpen((v) => !v)
+                      setTriggersOpen(false)
+                      setMoreOpen(false)
+                    }}
+                  >
+                    <Sparkles className="h-3.5 w-3.5" /> Agent
+                    {pendingProposalCount > 0 ? (
+                      <span className="ml-auto rounded-full bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-900">
+                        {pendingProposalCount}
+                      </span>
+                    ) : null}
+                  </button>
+                </div>
                 <div className="mb-2 space-y-1 border-b border-ink-100 px-1 pb-2">
                   <input
                     value={templateName}
@@ -1489,20 +1589,44 @@ function BuilderInner() {
 
         {actionError && (
           <div className="border-b border-rose-100 px-3 py-2">
-            <ErrorBanner
-              title={actionError.title}
-              message={actionError.message}
-              detail={actionError.detail}
-              onDismiss={() => setActionError(null)}
-              onRetry={runHadErrors || actionError.title.toLowerCase().includes('run') ? () => void handleRun() : undefined}
-              actions={
-                lastRunId ? (
-                  <button type="button" className="btn-secondary" onClick={() => openRun(lastRunId)}>
-                    Open run
-                  </button>
-                ) : null
-              }
-            />
+            {(() => {
+              const title = actionError.title.toLowerCase()
+              const isValidateOrPath =
+                title.includes('validation') ||
+                title.includes('missing path') ||
+                title.startsWith('cannot run')
+              const isRunFailure =
+                !isValidateOrPath &&
+                (runHadErrors ||
+                  title === 'run failed' ||
+                  title.includes('background run') ||
+                  /\brun\b/.test(title))
+              const showRetry = isRunFailure
+              const showViewOutputs =
+                Boolean(lastRunId) &&
+                !isValidateOrPath &&
+                (runOutcome === 'succeeded' || isRunFailure)
+              return (
+                <ErrorBanner
+                  title={actionError.title}
+                  message={actionError.message}
+                  detail={actionError.detail}
+                  onDismiss={() => setActionError(null)}
+                  onRetry={showRetry ? () => void handleRun() : undefined}
+                  actions={
+                    showViewOutputs ? (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => openRun(lastRunId!, { panel: 'artifacts' })}
+                      >
+                        View outputs
+                      </button>
+                    ) : null
+                  }
+                />
+              )
+            })()}
           </div>
         )}
         <div className="relative flex min-h-0 flex-1 bg-canvas">
@@ -1512,6 +1636,32 @@ function BuilderInner() {
               Drag from a teal output handle to a dark input handle to connect. Hover a handle for port type.
             </div>
           )}
+          {backendMode !== 'distributed' &&
+            nodes.some((n) => {
+              const p = n.data.placement
+              if (!p) return false
+              return Boolean(
+                (p.mode && p.mode !== 'auto') ||
+                  (p.tags && p.tags.length > 0) ||
+                  p.require_gpu ||
+                  p.pool ||
+                  p.worker,
+              )
+            }) && (
+              <button
+                type="button"
+                className="pointer-events-auto absolute right-3 top-3 z-10 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-950 shadow-sm hover:bg-amber-100"
+                title="Placement fields are present but Local mode ignores them"
+                onClick={() =>
+                  pushToast(
+                    'Placement ignored in Mode A — Header Mode chip explains Local vs Distributed',
+                    'info',
+                  )
+                }
+              >
+                Placement ignored in Mode A
+              </button>
+            )}
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1558,33 +1708,27 @@ function BuilderInner() {
                   <button
                     type="button"
                     className="btn-primary"
-                    onClick={() => {
-                      setView('templates')
-                      window.history.replaceState(null, '', '#/templates')
-                    }}
+                    onClick={() => goView('templates')}
                   >
                     Open Templates
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={() =>
-                      openData({
-                        mode: 'outputs',
-                        project: builderDataset?.project,
-                        version: builderDataset?.version,
-                      })
-                    }
-                  >
-                    <Database className="h-3.5 w-3.5" /> Open Datasets
                   </button>
                 </div>
               </div>
             </div>
           )}
+          {activeProject ? (
+            <TriggersDock
+              open={triggersOpen}
+              onClose={() => setTriggersOpen(false)}
+              project={activeProject}
+              pipelines={projectPipelineList.map((p) => p.name)}
+              defaultPipeline={pipelinePick || graphName}
+            />
+          ) : null}
           </div>
-          <aside className="z-20 flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur">
-            {(() => {
+          <aside className="relative z-20 flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur">
+            <AgentDrawer open={agentOpen} onClose={() => setAgentOpen(false)} />
+            {!agentOpen && (() => {
               const node = inspectorId ? nodes.find((n) => n.id === inspectorId) : null
               const edge = selectedEdgeId ? edges.find((e) => e.id === selectedEdgeId) : null
               const mode: 'node' | 'edge' | 'graph' = node ? 'node' : edge ? 'edge' : 'graph'
@@ -1691,6 +1835,9 @@ function BuilderInner() {
                             <div className="mt-1">Select a node or connection to inspect details.</div>
                           )}
                         </div>
+                        <p className="rounded-lg border border-dashed border-ink-200 bg-ink-50/50 px-2.5 py-2 text-[11px] leading-snug text-ink-500">
+                          Per-node retry/timeout live in node Config when the plugin exposes them.
+                        </p>
                       </>
                     )}
 
@@ -1857,14 +2004,23 @@ function BuilderInner() {
                             type="button"
                             className="text-[11px] font-medium text-accent-800 hover:underline"
                             onClick={() => {
-                              useAppStore.getState().setView('workers')
-                              window.history.replaceState(null, '', '#/workers')
+                              pushToast(
+                                'Header Mode chip explains Local vs Distributed',
+                                'info',
+                              )
                             }}
                           >
-                            Open Workers
+                            Header Mode chip explains Local vs Distributed
                           </button>
                         </div>
                         )}
+
+                        {/wait/i.test(node.data.nodeType) ? (
+                          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-2 text-[11px] leading-snug text-amber-950">
+                            Delay/wait node — for human-in-the-loop approval use a pause pattern / Ops;
+                            dedicated HITL node TBD.
+                          </div>
+                        ) : null}
 
                         {(() => {
                           const entries = Object.entries(node.data.schemaProps ?? {}) as [string, Record<string, unknown>][]
@@ -1892,6 +2048,7 @@ function BuilderInner() {
                                 def={def}
                                 value={node.data.config?.[key] ?? def.default}
                                 onChange={(v) => node.data.onChangeConfig?.(key, v)}
+                                secretNames={secretNames}
                               />
                             </label>
                           )
@@ -1958,9 +2115,9 @@ function BuilderInner() {
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 text-[11px] font-medium text-accent-300 hover:text-accent-200"
-                  onClick={() => openRun(lastRunId)}
+                  onClick={() => openRun(lastRunId, { panel: 'artifacts' })}
                 >
-                  <ExternalLink className="h-3 w-3" /> Open run
+                  <ExternalLink className="h-3 w-3" /> View outputs
                 </button>
               ) : null}
               <button
@@ -2023,6 +2180,7 @@ function BuilderInner() {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   )

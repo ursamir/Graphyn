@@ -85,7 +85,12 @@ def _safe_child(root: Path, *parts: str) -> Path:
 
 @router.get("/inputs", summary="List input dataset labels")
 def list_input_datasets():
-    """Return a list of input dataset labels with file counts."""
+    """Return a list of input dataset labels with file counts.
+
+    Labels that resolve outside the input root (external symlinks) are still
+    listed with ``accessible: false`` so the UI does not pretend they are
+    browseable unless ``GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS`` is enabled.
+    """
     input_root = _input_root()
     if not input_root.exists():
         return []
@@ -94,11 +99,16 @@ def list_input_datasets():
         label_path = input_root / label
         if not label_path.is_dir():
             continue
+        accessible = True
+        try:
+            _safe_child(input_root, label)
+        except HTTPException:
+            accessible = False
         count = sum(
             1 for _, _, files in os.walk(label_path, followlinks=True)
             for f in files if f.lower().endswith(SUPPORTED_AUDIO_EXTENSIONS)
         )
-        labels.append({"label": label, "file_count": count})
+        labels.append({"label": label, "file_count": count, "accessible": accessible})
     return labels
 
 
@@ -142,7 +152,19 @@ def download_input_file(
 def get_input_dataset(label: str):
     """Return a list of audio files for a specific input label."""
     input_root = _input_root()
-    label_path = _safe_child(input_root, label)
+    try:
+        label_path = _safe_child(input_root, label)
+    except HTTPException as exc:
+        if exc.status_code == 400 and "outside workspace" in str(exc.detail).lower():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Path is outside workspace. This label is an external symlink; "
+                    "set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API to browse it, "
+                    "or use a label inside the Graphyn datasets/input tree."
+                ),
+            ) from exc
+        raise
     if not label_path.is_dir():
         raise HTTPException(status_code=404, detail=f"Label '{label}' not found")
 

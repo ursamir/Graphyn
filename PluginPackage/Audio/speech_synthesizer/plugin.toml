@@ -28,6 +28,7 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+runtime = "isolated"
 node_types = ["speech_synthesizer"]
 
 [config_schema.speech_synthesizer]

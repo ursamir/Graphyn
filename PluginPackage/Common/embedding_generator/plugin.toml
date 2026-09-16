@@ -32,6 +32,7 @@ optional_dependencies = [
     "openl3>=0.4",
 ]
 
+runtime = "isolated"
 node_types = ["embedding_generator"]
 
 [config_schema.embedding_generator]

@@ -4,6 +4,8 @@ import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { CollapsibleJson, CopyableMono, EmptyState, ErrorBanner, LoadingBlock, StatusBadge } from '../../components/ui'
+import { ReproPackButton } from '../../components/ReproPackButton'
+import { goView } from '../../routes/nav'
 import { humanNodeLabel, shortRunId } from '../../lib/format'
 
 type TraceChainStep = {
@@ -44,8 +46,13 @@ const STEP_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 }
 
 /** Run-scoped provenance: executed nodes → run → graph (Prefect-style accountability). */
-export function RunLineagePanel({ runId }: { runId: string }) {
-  const setView = useAppStore((s) => s.setView)
+export function RunLineagePanel({
+  runId,
+  runMeta,
+}: {
+  runId: string
+  runMeta?: Record<string, unknown> | null
+}) {
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
@@ -85,15 +92,36 @@ export function RunLineagePanel({ runId }: { runId: string }) {
   const nodeSteps = chain.filter((s) => s.step === 'node')
   const contextSteps = chain.filter((s) => s.step !== 'node')
 
+  const meta = runMeta && typeof runMeta === 'object' ? runMeta : {}
+  const graphHash =
+    (typeof trace?.graph?.hash === 'string' && trace.graph.hash) ||
+    (typeof meta.graph_hash === 'string' && meta.graph_hash) ||
+    (typeof meta.graphHash === 'string' && meta.graphHash) ||
+    (typeof (meta.graph as { hash?: string } | undefined)?.hash === 'string'
+      ? (meta.graph as { hash: string }).hash
+      : '') ||
+    ''
+  const pluginVersionsRaw =
+    meta.plugin_versions ?? meta.pluginVersions ?? meta.plugins ?? meta.plugin_version ?? null
+  const pluginVersionsLabel = (() => {
+    if (pluginVersionsRaw == null) return ''
+    if (typeof pluginVersionsRaw === 'string') return pluginVersionsRaw
+    if (Array.isArray(pluginVersionsRaw)) return pluginVersionsRaw.map(String).join(', ')
+    if (typeof pluginVersionsRaw === 'object') {
+      return Object.entries(pluginVersionsRaw as Record<string, unknown>)
+        .map(([k, v]) => `${k}@${String(v)}`)
+        .join(', ')
+    }
+    return String(pluginVersionsRaw)
+  })()
+
   const openEditor = () => {
     void (async () => {
       try {
         const g = await fetchRunGraph(runId)
         if (g) {
           loadGraphIntoBuilder(g)
-          setView('builder')
-          window.history.replaceState(null, '', '#/builder')
-          window.dispatchEvent(new HashChangeEvent('hashchange'))
+          goView('builder')
         } else {
           pushToast('No graph snapshot for this run', 'error')
         }
@@ -107,15 +135,59 @@ export function RunLineagePanel({ runId }: { runId: string }) {
   if (error) return <ErrorBanner message={error} onRetry={() => void load()} />
   if (!trace) {
     return (
-      <EmptyState
-        title="No lineage for this run"
-        description="Lineage answers: which nodes ran, what they produced, and which graph/worker. It is not the log."
-      />
+      <div className="space-y-4">
+        <div className="rounded-xl border border-ink-100 bg-ink-50/70 px-3 py-2 text-[12px] text-ink-700">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+            Graph / plugins
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px]">
+            {graphHash ? (
+              <span title={graphHash}>
+                hash {graphHash.length > 16 ? `${graphHash.slice(0, 12)}…` : graphHash}
+              </span>
+            ) : (
+              <span className="text-ink-500">(from run meta)</span>
+            )}
+            {pluginVersionsLabel ? (
+              <span className="text-ink-600">plugins {pluginVersionsLabel}</span>
+            ) : (
+              <span className="text-ink-400">plugins —</span>
+            )}
+          </div>
+        </div>
+        <EmptyState
+          title="No lineage for this run"
+          description="Lineage answers: which nodes ran, what they produced, and which graph/worker. It is not the log."
+        />
+      </div>
     )
   }
 
   return (
     <div className="space-y-4">
+      <div className="rounded-xl border border-ink-100 bg-ink-50/70 px-3 py-2 text-[12px] text-ink-700">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+          Graph / plugins
+        </div>
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px]">
+          {graphHash ? (
+            <span title={graphHash}>
+              hash {graphHash.length > 16 ? `${graphHash.slice(0, 12)}…` : graphHash}
+            </span>
+          ) : (
+            <span className="text-ink-500">(from run meta)</span>
+          )}
+          {pluginVersionsLabel ? (
+            <span className="text-ink-600" title={pluginVersionsLabel}>
+              plugins {pluginVersionsLabel.length > 80 ? `${pluginVersionsLabel.slice(0, 72)}…` : pluginVersionsLabel}
+            </span>
+          ) : (
+            <span className="text-ink-400">plugins —</span>
+          )}
+          {trace?.graph?.name ? <span className="text-ink-500">{trace.graph.name}</span> : null}
+        </div>
+      </div>
+
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-sm font-medium text-ink-900">What ran, in order</p>
@@ -130,10 +202,27 @@ export function RunLineagePanel({ runId }: { runId: string }) {
             . Not a substitute for Logs.
           </p>
         </div>
-        <button type="button" className="btn-quiet" aria-label="Refresh lineage" onClick={() => void load()}>
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <ReproPackButton runId={runId} />
+          <button type="button" className="btn-quiet" aria-label="Refresh lineage" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
+
+      {(trace.graph?.hash || trace.graph?.name) && (
+        <div className="rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-700">
+          <span className="font-semibold text-ink-900">Graph</span>
+          {trace.graph?.name ? ` · ${trace.graph.name}` : ''}
+          {trace.graph?.hash ? (
+            <>
+              {' '}
+              · hash <CopyableMono value={String(trace.graph.hash)} />
+            </>
+          ) : null}
+          {typeof trace.graph?.node_count === 'number' ? ` · ${trace.graph.node_count} nodes` : ''}
+        </div>
+      )}
 
       {Array.isArray(trace.warnings) && trace.warnings.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -268,11 +357,7 @@ export function RunLineagePanel({ runId }: { runId: string }) {
               <button
                 type="button"
                 className="btn-secondary"
-                onClick={() => {
-                  setView('workers')
-                  window.history.replaceState(null, '', '#/workers')
-                  window.dispatchEvent(new HashChangeEvent('hashchange'))
-                }}
+                onClick={() => goView('workers')}
               >
                 <Server className="h-3.5 w-3.5" /> Workers
               </button>

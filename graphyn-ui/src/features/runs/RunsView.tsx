@@ -1,11 +1,12 @@
 import React from 'react'
-import { Download, FlaskConical, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
+import { Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, apiUrl, downloadOutputFile, fetchOutputBlobUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
+import { emptyGraph } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { runMatchesProject } from '../../lib/projectStamp'
-import { statusMatchesFilter } from '../../lib/runStatus'
+import { normalizeRunStatus, statusMatchesFilter } from '../../lib/runStatus'
 import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, LoadingBlock, NeedProjectPrompt, PageHeader, SlimProgress, StatusBadge } from '../../components/ui'
 import {
   formatExecutionLine,
@@ -17,6 +18,9 @@ import {
   shortRunId,
   skipConsecutiveByText,
 } from '../../lib/format'
+import { navigatePath } from '../../routes/parsePath'
+import { paths } from '../../routes/paths'
+import { goView } from '../../routes/nav'
 import { RunLineagePanel } from './RunLineagePanel'
 import ExperimentsView from '../experiments/ExperimentsView'
 
@@ -95,7 +99,7 @@ function runDisplayName(r: Pick<RunSummary, 'graph_name'>): string {
 
 const PANEL_LABELS: Record<string, string> = {
   logs: 'Logs',
-  artifacts: 'Files',
+  artifacts: 'Run outputs',
   lineage: 'Lineage',
   debug: 'Details',
   checkpoints: 'Checkpoints',
@@ -112,7 +116,113 @@ interface RunArtifact {
   metadata?: Record<string, unknown>
 }
 
+const LIVE_STATUSES = new Set(['running', 'queued', 'paused'])
 
+function isLiveStatus(status?: string | null): boolean {
+  return LIVE_STATUSES.has(normalizeRunStatus(status))
+}
+
+function metricNumeric(metrics: Record<string, unknown> | undefined, name: string): number | null {
+  if (!metrics || !name) return null
+  const raw = metrics[name]
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (Array.isArray(raw) && raw.length && typeof raw[raw.length - 1] === 'number') {
+    return raw[raw.length - 1] as number
+  }
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+type WaveBucket = { key: string; count: number; className: string }
+
+function waveBucketsFromNodeStats(
+  nodeStats: Array<Record<string, unknown>> | undefined,
+  currentNode?: string | null,
+): WaveBucket[] {
+  const WAVE_TONE: Record<string, string> = {
+    running: 'bg-sky-400',
+    queued: 'bg-amber-300',
+    pending: 'bg-amber-300',
+    paused: 'bg-violet-300',
+    failed: 'bg-rose-400',
+    error: 'bg-rose-400',
+    done: 'bg-emerald-400',
+    completed: 'bg-emerald-400',
+    succeeded: 'bg-emerald-400',
+    success: 'bg-emerald-400',
+    cancelled: 'bg-ink-300',
+  }
+  if (!nodeStats?.length) {
+    if (currentNode) return [{ key: 'running', count: 1, className: WAVE_TONE.running }]
+    return []
+  }
+  const counts: Record<string, number> = {}
+  for (const n of nodeStats) {
+    let st = String(n.status ?? n.state ?? '').toLowerCase().trim()
+    if (!st) {
+      st = currentNode && String(n.node_id || '') === String(currentNode) ? 'running' : 'done'
+    }
+    counts[st] = (counts[st] || 0) + 1
+  }
+  return Object.entries(counts).map(([key, count]) => ({
+    key,
+    count,
+    className: WAVE_TONE[key] || 'bg-ink-300',
+  }))
+}
+
+function NodeStatusWave({ buckets }: { buckets: WaveBucket[] }) {
+  const total = buckets.reduce((s, b) => s + b.count, 0)
+  if (total <= 0) return null
+  return (
+    <div className="space-y-1">
+      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-ink-100" role="img" aria-label="Node status wave">
+        {buckets.map((b) => (
+          <div
+            key={b.key}
+            className={`${b.className} h-full min-w-[2px]`}
+            style={{ width: `${(b.count / total) * 100}%` }}
+            title={`${b.key}: ${b.count}`}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] text-ink-500">
+        {buckets.map((b) => (
+          <span key={b.key}>
+            <span className={`mr-1 inline-block h-1.5 w-1.5 rounded-full ${b.className}`} />
+            {b.key} {b.count}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RunsTopTabs({
+  active,
+  onHistory,
+  onLive,
+  onCompare,
+}: {
+  active: 'history' | 'live' | 'compare'
+  onHistory: () => void
+  onLive: () => void
+  onCompare: () => void
+}) {
+  return (
+    <div className="flex rounded-xl bg-ink-100/80 p-1">
+      <button type="button" className={active === 'history' ? 'tab-pill tab-pill-on' : 'tab-pill'} onClick={onHistory}>
+        History
+      </button>
+      <button type="button" className={active === 'live' ? 'tab-pill tab-pill-on' : 'tab-pill'} onClick={onLive}>
+        Live
+      </button>
+      <button type="button" className={active === 'compare' ? 'tab-pill tab-pill-on' : 'tab-pill'} onClick={onCompare}>
+        Compare
+      </button>
+    </div>
+  )
+}
 
 export default function RunsView() {
   const focusRunId = useAppStore((s) => s.focusRunId)
@@ -123,6 +233,7 @@ export default function RunsView() {
   const lastRunId = useAppStore((s) => s.lastRunId)
   const pushToast = useAppStore((s) => s.pushToast)
   const openExperiments = useAppStore((s) => s.openExperiments)
+  const openProposals = useAppStore((s) => s.openProposals)
   const openProjects = useAppStore((s) => s.openProjects)
   const activeProject = useAppStore((s) => s.activeProject)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
@@ -145,27 +256,40 @@ export default function RunsView() {
   const [error, setError] = React.useState<string | null>(null)
   const [statusFilter, setStatusFilter] = React.useState<string>('all')
   const [nameQuery, setNameQuery] = React.useState('')
+  const [metricName, setMetricName] = React.useState('')
+  const [metricMin, setMetricMin] = React.useState('')
   const [promoteAlias, setPromoteAlias] = React.useState<'latest' | 'staging' | 'prod'>('latest')
+  const [regModelName, setRegModelName] = React.useState('')
+  const [regModelSlug, setRegModelSlug] = React.useState('')
+  const [registerBusy, setRegisterBusy] = React.useState(false)
+  const [explainBusy, setExplainBusy] = React.useState(false)
+  const [liveRuns, setLiveRuns] = React.useState<RunSummary[] | null>(null)
+  const [liveSelected, setLiveSelected] = React.useState<string | null>(null)
+  const [liveDetail, setLiveDetail] = React.useState<Record<string, unknown> | null>(null)
+  const [liveStatus, setLiveStatus] = React.useState<Record<string, unknown> | null>(null)
+  const [liveDebug, setLiveDebug] = React.useState<Record<string, unknown> | null>(null)
+  const [liveError, setLiveError] = React.useState<string | null>(null)
   const [runModels, setRunModels] = React.useState<
     Array<{ name: string; stages?: Record<string, { run_id?: string; slug?: string; updated_at?: string }> }>
   >([])
   const limit = 50
   const pendingPanelRef = React.useRef<'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage' | null>(null)
 
-  // Deep-link / last-run: open History vs Compare from hash (?tab=compare).
-  React.useEffect(() => {
-    const apply = () => {
-      const raw = window.location.hash.replace(/^#\/?/, '')
-      const qIdx = raw.indexOf('?')
-      if (qIdx < 0) return
-      const params = new URLSearchParams(raw.slice(qIdx + 1))
-      if (params.get('tab') === 'compare') setFocusRunsTab('compare')
-    }
-    apply()
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
-  }, [setFocusRunsTab])
+  const goHistoryTab = React.useCallback(() => {
+    setFocusRunsTab('history')
+    if (activeProject) navigatePath(paths.runs(activeProject))
+  }, [activeProject, setFocusRunsTab])
 
+  const goLiveTab = React.useCallback(() => {
+    setFocusRunsTab('live')
+    if (activeProject) navigatePath(paths.runsLive(activeProject))
+  }, [activeProject, setFocusRunsTab])
+
+  const goCompareTab = React.useCallback(() => {
+    openExperiments(selected ? { runIds: [selected] } : {})
+  }, [openExperiments, selected])
+
+  // Tab focus comes from store / pathname (/runs/live, /runs/compare) via App — no hash sync.
   React.useEffect(() => {
     if (!focusRunPanel) return
     pendingPanelRef.current = focusRunPanel
@@ -398,6 +522,96 @@ export default function RunsView() {
     }
   }
 
+  const registerModelFromRun = async () => {
+    if (!selected) return
+    const name = regModelName.trim()
+    const slug = regModelSlug.trim() || name || 'model'
+    if (!name) {
+      pushToast('Enter a model name', 'error')
+      return
+    }
+    setRegisterBusy(true)
+    try {
+      await apiJson('/models', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          run_id: selected,
+          slug,
+          stage: 'staging',
+        }),
+      })
+      pushToast(`Registered model ${name} @ staging`, 'success')
+      setRegModelName('')
+      setRegModelSlug('')
+      await loadRunModels(selected)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setRegisterBusy(false)
+    }
+  }
+
+  const explainFailure = async () => {
+    if (!selected) return
+    setExplainBusy(true)
+    try {
+      const recent = Array.isArray(debug?.recent_errors)
+        ? (debug!.recent_errors as Array<Record<string, unknown>>)
+        : []
+      const errFromDebug = recent.length
+        ? String(recent[recent.length - 1]?.message || JSON.stringify(recent[recent.length - 1]))
+        : ''
+      const runLogs = Array.isArray(detail?.logs) ? (detail!.logs as Array<Record<string, unknown>>) : []
+      const errFromLogs =
+        runLogs
+          .map((l) => String(l.message || ''))
+          .filter((m) => /fail|error/i.test(m))
+          .slice(-1)[0] || ''
+      const errText = (
+        errFromDebug ||
+        errFromLogs ||
+        String(detail?.error || status?.error || 'unknown error')
+      ).slice(0, 400)
+      const emb = (detail?.graph ?? (detail?.meta as { graph?: unknown } | undefined)?.graph) as
+        | GraphIR
+        | undefined
+      const baseGraph =
+        emb && Array.isArray(emb.nodes) && Array.isArray(emb.edges)
+          ? emb
+          : emptyGraph(`fix-${shortRunId(selected)}`)
+      const graph = {
+        schema_version: baseGraph.schema_version || '1.1',
+        nodes: Array.isArray(baseGraph.nodes) ? baseGraph.nodes : [],
+        edges: Array.isArray(baseGraph.edges) ? baseGraph.edges : [],
+        parameters: baseGraph.parameters || {},
+        metadata: {
+          ...(baseGraph.metadata || {}),
+          name: baseGraph.metadata?.name || `fix-${shortRunId(selected)}`,
+          seed: baseGraph.metadata?.seed ?? 42,
+          description: `Explain/fix failed run ${selected}`,
+          created_at: baseGraph.metadata?.created_at ?? null,
+          tags: [...(baseGraph.metadata?.tags || []), 'explain-failure'],
+          from_run: selected,
+        },
+      }
+      const created = await apiJson<{ id?: string }>('/proposals', {
+        method: 'POST',
+        body: JSON.stringify({
+          summary: `Explain / propose fix for failed run ${selected}: ${errText}`.slice(0, 280),
+          graph,
+          actor: 'ui-explain-failure',
+        }),
+      })
+      pushToast('Proposal created — review in Agent inbox', 'success')
+      openProposals(created?.id ? { id: String(created.id) } : {})
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setExplainBusy(false)
+    }
+  }
+
   const deleteRun = async () => {
     if (!selected) return
     try {
@@ -489,15 +703,97 @@ export default function RunsView() {
     if (!runs) return null
     const q = nameQuery.trim().toLowerCase()
     const statusNeedle = statusFilter === 'all' ? '' : statusFilter.toLowerCase()
+    const metricKey = metricName.trim()
+    const minRaw = metricMin.trim()
+    const minVal = minRaw === '' ? null : Number(minRaw)
     return runs.filter((r) => {
       if (activeProject && !runMatchesProject(r, activeProject)) return false
       if (statusNeedle && !statusMatchesFilter(r.status, statusNeedle)) return false
-      if (!q) return true
-      const rawName = String(r.graph_name ?? '')
-      const hay = `${rawName} ${runDisplayName(r)} ${r.run_id}`.toLowerCase()
-      return hay.includes(q)
+      if (q) {
+        const rawName = String(r.graph_name ?? '')
+        const hay = `${rawName} ${runDisplayName(r)} ${r.run_id}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      if (metricKey) {
+        const num = metricNumeric(r.metrics as Record<string, unknown> | undefined, metricKey)
+        if (num == null) return false
+        if (minVal != null && Number.isFinite(minVal) && num < minVal) return false
+      }
+      return true
     })
-  }, [runs, statusFilter, nameQuery, activeProject])
+  }, [runs, statusFilter, nameQuery, activeProject, metricName, metricMin])
+
+  const selectedHiddenByFilters = Boolean(
+    selected && filteredRuns && !filteredRuns.some((r) => r.run_id === selected),
+  )
+
+  const clearRunFilters = React.useCallback(() => {
+    setStatusFilter('all')
+    setNameQuery('')
+    setMetricName('')
+    setMetricMin('')
+  }, [])
+
+  const loadLive = React.useCallback(async () => {
+    if (!activeProject) return
+    try {
+      const rows = await apiJson<RunSummary[]>('/runs', {
+        query: { project: activeProject, limit: 50 },
+      })
+      const live = (Array.isArray(rows) ? rows : []).filter((r) => isLiveStatus(r.status))
+      setLiveRuns(live)
+      setLiveError(null)
+      setLiveSelected((prev) => {
+        if (prev && live.some((r) => r.run_id === prev)) return prev
+        return live[0]?.run_id ?? null
+      })
+    } catch (err) {
+      setLiveError(err instanceof Error ? err.message : String(err))
+      setLiveRuns([])
+    }
+  }, [activeProject])
+
+  React.useEffect(() => {
+    if (focusRunsTab !== 'live') return
+    void loadLive()
+    const t = window.setInterval(() => void loadLive(), 3000)
+    return () => window.clearInterval(t)
+  }, [focusRunsTab, loadLive])
+
+  React.useEffect(() => {
+    if (focusRunsTab !== 'live' || !liveSelected) {
+      setLiveDetail(null)
+      setLiveStatus(null)
+      setLiveDebug(null)
+      return
+    }
+    let cancelled = false
+    const fetchDetail = async () => {
+      try {
+        const [d, st, dbg] = await Promise.all([
+          apiJson<Record<string, unknown>>(`/runs/${liveSelected}`),
+          apiJson<Record<string, unknown>>(`/runs/${liveSelected}/status`).catch(() => null),
+          apiJson<Record<string, unknown>>(`/runs/${liveSelected}/debug-report`).catch(() => null),
+        ])
+        if (cancelled) return
+        setLiveDetail(d)
+        setLiveStatus(st)
+        setLiveDebug(dbg)
+      } catch {
+        if (!cancelled) {
+          setLiveDetail(null)
+          setLiveStatus(null)
+          setLiveDebug(null)
+        }
+      }
+    }
+    void fetchDetail()
+    const t = window.setInterval(() => void fetchDetail(), 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(t)
+    }
+  }, [focusRunsTab, liveSelected])
 
   if (!activeProject) {
     return (
@@ -509,6 +805,172 @@ export default function RunsView() {
     )
   }
 
+  if (focusRunsTab === 'live') {
+    const liveNodeStats = Array.isArray(liveDebug?.node_stats)
+      ? (liveDebug!.node_stats as Array<Record<string, unknown>>)
+      : Array.isArray((liveDetail?.meta as { node_stats?: unknown } | undefined)?.node_stats)
+        ? ((liveDetail!.meta as { node_stats: Array<Record<string, unknown>> }).node_stats)
+        : []
+    const currentNode = liveStatus?.current_node != null ? String(liveStatus.current_node) : null
+    const wave = waveBucketsFromNodeStats(liveNodeStats, currentNode)
+    const workers =
+      (liveDetail?.meta as { distributed_node_workers?: Record<string, string> } | undefined)
+        ?.distributed_node_workers ||
+      (liveStatus as { distributed_node_workers?: Record<string, string> } | null)?.distributed_node_workers
+    const workerEntries = workers && typeof workers === 'object' ? Object.entries(workers) : []
+
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="shrink-0 border-b border-ink-200/70 bg-white/80 px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h1 className="text-type-page text-ink-950">Runs</h1>
+              <p className="mt-0.5 text-type-meta text-ink-400">
+                Live running / pending for {activeProject}. Polls every 3s.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <RunsTopTabs active="live" onHistory={goHistoryTab} onLive={goLiveTab} onCompare={goCompareTab} />
+              <button type="button" onClick={() => void loadLive()} className="btn-secondary">
+                <RefreshCw className="h-3.5 w-3.5" /> Refresh
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2">
+          <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
+            {liveError && <ErrorBanner message={liveError} onRetry={() => void loadLive()} />}
+            {liveRuns === null ? (
+              <LoadingBlock label="Loading live runs…" />
+            ) : liveRuns.length === 0 ? (
+              <EmptyState
+                title="No running or pending runs"
+                description="Start a run from the Editor — active jobs appear here while they execute."
+                action={
+                  <button type="button" className="btn-primary" onClick={() => goView('builder')}>
+                    Open Editor
+                  </button>
+                }
+              />
+            ) : (
+              <ul className="space-y-1.5">
+                {liveRuns.map((r) => (
+                  <li key={r.run_id}>
+                    <button
+                      type="button"
+                      onClick={() => setLiveSelected(r.run_id)}
+                      className={`grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 rounded-xl border px-3 py-2.5 text-left shadow-sm transition ${
+                        liveSelected === r.run_id
+                          ? 'border-accent-200 bg-accent-50/80 shadow-soft'
+                          : 'border-ink-200/70 bg-white hover:border-ink-300'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-ink-900">{runDisplayName(r)}</div>
+                        <div className="font-mono text-[11px] text-ink-400">{shortRunId(r.run_id)}</div>
+                      </div>
+                      <StatusBadge status={String(r.status ?? 'unknown')} />
+                      <div className="text-[11px] text-ink-500" title={formatLocaleDateTime(r.created_at)}>
+                        {formatRelativeTime(r.created_at)}
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="overflow-y-auto space-y-4 p-5">
+            {!liveSelected ? (
+              <EmptyState title="Select a live run" description="Pick a running or pending run to see node wave and workers." />
+            ) : (
+              <>
+                <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm space-y-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <StatusBadge
+                      status={String(
+                        liveStatus?.status ??
+                          (liveDetail?.meta as { status?: string } | undefined)?.status ??
+                          liveRuns?.find((r) => r.run_id === liveSelected)?.status ??
+                          'unknown',
+                      )}
+                    />
+                    {liveStatus?.progress_pct != null && <SlimProgress pct={Number(liveStatus.progress_pct)} />}
+                    {currentNode ? (
+                      <span className="text-sm text-ink-600">
+                        Current{' '}
+                        <span className="font-medium text-ink-900">{humanNodeLabel(currentNode)}</span>
+                      </span>
+                    ) : null}
+                  </div>
+                  {wave.length > 0 ? (
+                    <div>
+                      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                        Node status wave
+                      </div>
+                      <NodeStatusWave buckets={wave} />
+                    </div>
+                  ) : (
+                    <p className="text-xs text-ink-500">No node_stats yet — wave appears as nodes report status.</p>
+                  )}
+                  {workerEntries.length > 0 ? (
+                    <div>
+                      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                        Worker map
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 text-[11px] text-ink-600">
+                        {workerEntries.map(([nid, wid]) => (
+                          <span
+                            key={nid}
+                            className="rounded-md bg-ink-100 px-1.5 py-0.5 font-mono text-ink-800"
+                            title={`Node ${nid}`}
+                          >
+                            {humanNodeLabel(nid)} → {wid}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                {liveNodeStats.length > 0 ? (
+                  <div className="overflow-hidden rounded-xl border border-ink-200 bg-white">
+                    <div className="border-b border-ink-100 bg-ink-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                      node_stats
+                    </div>
+                    <ul className="divide-y divide-ink-100">
+                      {liveNodeStats.map((n, i) => (
+                        <li key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                          <span className="font-medium text-ink-900">
+                            {humanNodeLabel(String(n.node_type || n.node_id || `node-${i}`))}
+                          </span>
+                          <span className="font-mono text-[11px] text-ink-400">{String(n.node_id || '')}</span>
+                          {n.status != null ? <StatusBadge status={String(n.status)} /> : null}
+                          {n.duration_ms != null ? (
+                            <span className="tabular-nums text-[11px] text-ink-500">{String(n.duration_ms)} ms</span>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setFocusRunsTab('history')
+                    if (activeProject) navigatePath(paths.run(activeProject, liveSelected))
+                    void open(liveSelected)
+                  }}
+                >
+                  Open in History
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (focusRunsTab === 'compare') {
     return (
       <div className="flex h-full min-h-0 flex-col">
@@ -517,24 +979,11 @@ export default function RunsView() {
             <div>
               <h1 className="text-type-page text-ink-950">Runs</h1>
               <p className="mt-0.5 text-type-meta text-ink-400">
-                Compare params and metrics for {activeProject}. Prefer Runs → Compare when a workspace is open.
+                Pick 2–3 runs to compare params and metrics
+                {activeProject ? ` for ${activeProject}` : ''}.
               </p>
             </div>
-            <div className="flex rounded-xl bg-ink-100/80 p-1">
-              <button
-                type="button"
-                className="tab-pill"
-                onClick={() => {
-                  setFocusRunsTab('history')
-                  window.history.replaceState(null, '', selected ? `#/runs/${selected}` : '#/runs')
-                }}
-              >
-                History
-              </button>
-              <button type="button" className="tab-pill tab-pill-on">
-                Compare
-              </button>
-            </div>
+            <RunsTopTabs active="compare" onHistory={goHistoryTab} onLive={goLiveTab} onCompare={goCompareTab} />
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
@@ -549,21 +998,10 @@ export default function RunsView() {
       <div className="overflow-y-auto border-r border-ink-200/70 bg-white/40 p-5">
         <PageHeader
           title="Runs"
-          description={`History for ${activeProject}. One hub for History, per-run Files, Lineage, and Compare — not a separate Lineage tab.`}
+          description={`History for ${activeProject}. One hub for History, Live, Run outputs, Lineage, and Compare.`}
           actions={
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex rounded-xl bg-ink-100/80 p-1">
-                <button type="button" className="tab-pill tab-pill-on">
-                  History
-                </button>
-                <button
-                  type="button"
-                  className="tab-pill"
-                  onClick={() => openExperiments(selected ? { runIds: [selected] } : {})}
-                >
-                  Compare
-                </button>
-              </div>
+              <RunsTopTabs active="history" onHistory={goHistoryTab} onLive={goLiveTab} onCompare={goCompareTab} />
               <button type="button" onClick={() => void load()} className="btn-secondary">
                 <RefreshCw className="h-3.5 w-3.5" /> Refresh
               </button>
@@ -598,6 +1036,38 @@ export default function RunsView() {
                 className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
               />
             </label>
+            <label className="min-w-[7rem] text-[11px] font-medium text-ink-500">
+              Metric
+              <input
+                value={metricName}
+                onChange={(e) => setMetricName(e.target.value)}
+                placeholder="e.g. accuracy"
+                list="run-metric-keys"
+                className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
+              />
+            </label>
+            <label className="w-[5.5rem] text-[11px] font-medium text-ink-500">
+              Min
+              <input
+                type="number"
+                value={metricMin}
+                onChange={(e) => setMetricMin(e.target.value)}
+                placeholder="≥"
+                disabled={!metricName.trim()}
+                className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm disabled:opacity-50"
+              />
+            </label>
+            <datalist id="run-metric-keys">
+              {Array.from(
+                new Set(
+                  (runs || []).flatMap((r) => Object.keys((r.metrics as Record<string, unknown>) || {})),
+                ),
+              )
+                .sort()
+                .map((k) => (
+                  <option key={k} value={k} />
+                ))}
+            </datalist>
           </div>
         ) : null}
         {runs === null ? (
@@ -605,16 +1075,12 @@ export default function RunsView() {
         ) : runs.length === 0 ? (
           <EmptyState
             title="No runs in this workspace yet"
-            description="Open the Editor and run a graph — History, Files, Lineage, and Compare live here."
+            description="Open the Editor and run a graph — History, Run outputs, Lineage, and Compare live here."
             action={
               <button
                 type="button"
                 className="btn-primary"
-                onClick={() => {
-                  useAppStore.getState().setView('builder')
-                  window.history.replaceState(null, '', '#/builder')
-                  window.dispatchEvent(new HashChangeEvent('hashchange'))
-                }}
+                onClick={() => goView('builder')}
               >
                 Open Editor
               </button>
@@ -631,6 +1097,8 @@ export default function RunsView() {
                 onClick={() => {
                   setStatusFilter('all')
                   setNameQuery('')
+                  setMetricName('')
+                  setMetricMin('')
                 }}
               >
                 Clear filters
@@ -727,7 +1195,7 @@ export default function RunsView() {
         {!selected ? (
           <EmptyState
             title="Select a run"
-            description="Select a run on the left to inspect Logs, Files, Lineage, or Compare."
+            description="Select a run on the left to inspect Logs, Run outputs, Lineage, or Compare."
             action={
               runs && runs.length > 0 ? (
                 <button type="button" className="btn-secondary" onClick={() => void open(runs[0].run_id)}>
@@ -737,10 +1205,7 @@ export default function RunsView() {
                 <button
                   type="button"
                   className="btn-primary"
-                  onClick={() => {
-                    useAppStore.getState().setView('builder')
-                    window.history.replaceState(null, '', '#/builder')
-                  }}
+                  onClick={() => goView('builder')}
                 >
                   Open Editor
                 </button>
@@ -749,6 +1214,17 @@ export default function RunsView() {
           />
         ) : (
           <>
+            {selectedHiddenByFilters && (
+              <div
+                role="status"
+                className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] text-amber-950"
+              >
+                <span>Selected run hidden by filters</span>
+                <button type="button" className="btn-secondary !px-2 !py-0.5 text-[11px]" onClick={clearRunFilters}>
+                  Clear filters
+                </button>
+              </div>
+            )}
             <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm">
               <div className="flex flex-wrap items-center gap-3">
                 <StatusBadge status={runStatus} />
@@ -807,7 +1283,6 @@ export default function RunsView() {
 
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Bridges</span>
                 {canOpenGraph && (
                   <button
                     type="button"
@@ -817,19 +1292,6 @@ export default function RunsView() {
                     <Workflow className="h-3.5 w-3.5" /> Open in Editor
                   </button>
                 )}
-                <button type="button" className="btn-quiet" onClick={() => setPanel('lineage')}>
-                  Lineage
-                </button>
-                <button type="button" className="btn-quiet" onClick={() => setPanel('artifacts')}>
-                  Files
-                </button>
-                <button
-                  type="button"
-                  className="btn-quiet"
-                  onClick={() => openExperiments({ runIds: [selected] })}
-                >
-                  <FlaskConical className="h-3.5 w-3.5" /> Compare
-                </button>
                 {(() => {
                   const st = (runStatus || '').toLowerCase()
                   const ok = st === 'succeeded' || st === 'completed' || st === 'success'
@@ -935,6 +1397,16 @@ export default function RunsView() {
                       >
                         View logs
                       </button>
+                      {failed ? (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          disabled={explainBusy}
+                          onClick={() => void explainFailure()}
+                        >
+                          {explainBusy ? 'Creating…' : 'Explain / propose fix'}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 )
@@ -995,9 +1467,37 @@ export default function RunsView() {
                       </button>
                     </div>
                   </div>
+                  <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-accent-200/50 pt-3">
+                    <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
+                      Name
+                      <input
+                        className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                        value={regModelName}
+                        onChange={(e) => setRegModelName(e.target.value)}
+                        placeholder="my-model"
+                      />
+                    </label>
+                    <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
+                      Slug
+                      <input
+                        className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                        value={regModelSlug}
+                        onChange={(e) => setRegModelSlug(e.target.value)}
+                        placeholder="artifact slug"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={registerBusy}
+                      onClick={() => void registerModelFromRun()}
+                    >
+                      {registerBusy ? 'Registering…' : 'Register model'}
+                    </button>
+                  </div>
                   {runModels.length === 0 ? (
                     <p className="mt-2 text-[12px] text-ink-500">
-                      No registry models linked yet. Promote with staging to register one.
+                      No registry models linked yet. Promote with staging or register above.
                     </p>
                   ) : (
                     <ul className="mt-2 space-y-1.5">
@@ -1037,7 +1537,7 @@ export default function RunsView() {
             {panel === 'logs' && (
               <div className="space-y-2">
                 <p className="text-xs text-ink-500">
-                  Chronological execution log — what each step printed while the pipeline ran. Use Lineage for node order; Files for outputs.
+                  Chronological execution log — what each step printed while the pipeline ran. Use Lineage for node order; Run outputs for downloads.
                 </p>
                 <div className="max-h-[28rem] overflow-auto rounded-2xl bg-ink-950 p-4 font-mono text-[11px] leading-5 text-ink-100 shadow-soft">
                   {logs.length === 0 ? (
@@ -1151,7 +1651,7 @@ export default function RunsView() {
             {panel === 'artifacts' && (
               <div className="space-y-3">
                 <p className="text-xs text-ink-500">
-                  Downloadable outputs for this run, grouped by producing node when known. Datasets → Outputs is the shared library — different from these per-run Files.
+                  Downloadable outputs for this run, grouped by producing node when known. Datasets → Outputs is the shared library — different from these per-run downloads.
                 </p>
                 {(() => {
                   const artifactsDir =
@@ -1285,7 +1785,17 @@ export default function RunsView() {
                 })()}
               </div>
             )}
-            {panel === 'lineage' && selected ? <RunLineagePanel runId={selected} /> : null}
+            {panel === 'lineage' && selected ? (
+              <RunLineagePanel
+                runId={selected}
+                runMeta={
+                  (detail?.meta && typeof detail.meta === 'object'
+                    ? (detail.meta as Record<string, unknown>)
+                    : null) ||
+                  (detail as Record<string, unknown> | null)
+                }
+              />
+            ) : null}
           </>
         )}
       </div>

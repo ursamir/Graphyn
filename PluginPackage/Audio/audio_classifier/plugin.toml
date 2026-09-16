@@ -29,6 +29,7 @@ optional_dependencies = [
     "onnxruntime>=1.16",
 ]
 
+runtime = "isolated"
 node_types = ["audio_classifier"]
 
 [config_schema.audio_classifier]

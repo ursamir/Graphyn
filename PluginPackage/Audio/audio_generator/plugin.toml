@@ -26,6 +26,7 @@ optional_dependencies = [
     "soundfile>=0.12",
 ]
 
+runtime = "isolated"
 node_types = ["audio_generator"]
 
 [config_schema.audio_generator]

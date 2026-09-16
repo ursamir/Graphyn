@@ -20,6 +20,8 @@ import {
   PanelLeftClose,
   Eye,
   EyeOff,
+  Box,
+  Shield,
 } from 'lucide-react'
 import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
 import { useAppStore, type AppView } from './store/appStore'
@@ -42,6 +44,15 @@ import TraceView from './features/trace/TraceView'
 import EdgeWizardView from './features/edge/EdgeWizardView'
 import ExperimentsView from './features/experiments/ExperimentsView'
 import ProposalsView from './features/proposals/ProposalsView'
+import ModelsView from './features/models/ModelsView'
+import AccessView from './features/access/AccessView'
+import DevicesView from './features/ship/DevicesView'
+import LoginView from './features/auth/LoginView'
+import { HashRedirect } from './routes/HashRedirect'
+import { resolveLegacyHash } from './routes/legacyHash'
+import { paths } from './routes/paths'
+import { pathForView } from './routes/viewMap'
+import { navigatePath, parsePathname, panelToFocus, stripLegacyAppHash } from './routes/parsePath'
 
 type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }
 type NavGroup = { title: string; items: NavItem[] }
@@ -56,7 +67,7 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
     title: 'Build',
     items: [
       { id: 'templates', label: 'Templates', icon: BookOpen },
-      { id: 'proposals', label: 'Proposals', icon: GitPullRequest },
+      { id: 'proposals', label: 'Agent inbox', icon: GitPullRequest },
     ],
   },
   {
@@ -64,12 +75,14 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'data', label: 'Datasets', icon: Database },
       { id: 'plugins', label: 'Plugins', icon: Package },
+      { id: 'models', label: 'Models', icon: Box },
+      { id: 'artifacts', label: 'Artifacts', icon: Archive },
     ],
   },
   {
     title: 'Deploy',
     items: [
-      { id: 'edge', label: 'Edge package', icon: Cpu },
+      { id: 'edge', label: 'Ship', icon: Cpu },
       { id: 'workers', label: 'Worker fleet', icon: Server },
     ],
   },
@@ -78,33 +91,22 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'secrets', label: 'Secrets', icon: KeyRound },
       { id: 'system', label: 'Ops', icon: Activity },
+      { id: 'access', label: 'Access', icon: Shield },
     ],
   },
 ]
 
 /**
- * Project activity strip. Lineage / Compare live under Runs (tabs + deep links);
- * `#/trace` and `#/experiments` remain valid routes.
+ * Project activity strip. Lineage / Compare live under Runs (tabs + path deep links).
  */
 const PROJECT_NAV_ITEMS: NavItem[] = [
   { id: 'projects', label: 'Home', icon: FolderKanban },
   { id: 'builder', label: 'Editor', icon: Workflow },
   { id: 'runs', label: 'Runs', icon: History },
+  { id: 'models', label: 'Models', icon: Box },
+  { id: 'edge', label: 'Ship', icon: Cpu },
+  { id: 'data', label: 'Datasets', icon: Database },
 ]
-
-const ALL_NAV_ITEMS: NavItem[] = [
-  ...GLOBAL_NAV_GROUPS.flatMap((g) => g.items),
-  ...PROJECT_NAV_ITEMS,
-  { id: 'artifacts', label: 'Artifacts', icon: Archive },
-]
-
-/** Deep-link-only views (not in the primary activity strip). */
-const DEEP_LINK_VIEWS: AppView[] = ['trace', 'experiments']
-
-const VIEW_IDS = new Set<AppView>([
-  ...ALL_NAV_ITEMS.map((n) => n.id),
-  ...DEEP_LINK_VIEWS,
-])
 
 const VIEW_LABEL: Record<AppView, string> = {
   builder: 'Editor',
@@ -114,30 +116,36 @@ const VIEW_LABEL: Record<AppView, string> = {
   data: 'Datasets',
   artifacts: 'Artifacts',
   trace: 'Lineage',
-  edge: 'Edge package',
+  edge: 'Ship',
   experiments: 'Compare runs',
-  proposals: 'Proposals',
+  proposals: 'Agent inbox',
   projects: 'Home',
   secrets: 'Secrets',
   system: 'Ops',
   workers: 'Worker fleet',
+  models: 'Models',
+  access: 'Access',
+  devices: 'Devices',
 }
 
 const NAV_HINTS: Partial<Record<AppView, string>> = {
   builder: 'Editor — design Graph IR pipelines on the canvas',
   templates: 'Templates — stamp a starter graph into a workspace',
-  proposals: 'Proposals — review agent GraphIR before it enters the Editor',
-  runs: 'Runs — history; open a run for Files, Lineage, and Compare',
+  proposals: 'Agent inbox — review agent GraphIR before it enters the Editor',
+  runs: 'Runs — history; open a run for Outputs, Lineage, and Compare',
   trace: 'Lineage — artifact deep links; for a run use Runs → Lineage',
   experiments: 'Compare runs — prefer Runs → Compare when a workspace is open',
-  artifacts: 'Artifacts — cross-run registry; for one run use Runs → Files',
+  artifacts: 'Artifacts — cross-run registry; for one run use Runs → Run outputs',
   plugins: 'Plugins — install node packs for the Editor catalog',
   data: 'Datasets — shared Inputs/Outputs library (not run downloads)',
-  edge: 'Edge package — optimize and download an on-device package',
+  edge: 'Ship — edge package and devices',
   workers: 'Worker fleet — distributed workers (Mode B only)',
   projects: 'Home — workspace status, pipelines, linked data, runs',
   secrets: 'Secrets — named credentials for graphs',
   system: 'Ops — health, schedules, webhooks, cleanup, audit',
+  models: 'Models — registry stages and prod approve',
+  access: 'Access — actor identity and future RBAC',
+  devices: 'Devices — fleet inventory (API pending)',
 }
 
 const JUMP_KEYS: Record<string, AppView> = {
@@ -155,16 +163,6 @@ const JUMP_KEYS: Record<string, AppView> = {
   l: 'plugins',
   k: 'secrets',
   s: 'system',
-}
-
-function parseHash(): { view?: AppView; runId?: string } {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  if (!raw) return {}
-  const pathOnly = raw.split('?')[0]
-  const [viewPart, runPart] = pathOnly.split('/')
-  const view = VIEW_IDS.has(viewPart as AppView) ? (viewPart as AppView) : undefined
-  if (view === 'runs' && runPart) return { view, runId: runPart }
-  return { view }
 }
 
 /** Compact last-run observe control — Trace / Artifacts / Compare live in a menu. (ux-pass) */
@@ -207,7 +205,7 @@ function LastRunMenu({
         className="rounded-l-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"
         onClick={onOpenRun}
       >
-        Run {shortRunId(runId)}
+        Last {shortRunId(runId)}
       </button>
       <button
         type="button"
@@ -244,7 +242,7 @@ function LastRunMenu({
               onOpenArtifacts()
             }}
           >
-            Artifacts
+            Run outputs
           </button>
           {showCompare && (
             <button
@@ -317,9 +315,48 @@ export default function App() {
   )
   /** When a project is open, Global/Admin is collapsed by default (IDE-first). */
   const [globalNavOpen, setGlobalNavOpen] = React.useState(false)
+  const [locationKey, setLocationKey] = React.useState(
+    () => `${window.location.pathname}${window.location.search}`,
+  )
   React.useEffect(() => {
-    if (activeProject) setGlobalNavOpen(false)
-  }, [activeProject])
+    const bump = () => setLocationKey(`${window.location.pathname}${window.location.search}`)
+    window.addEventListener('popstate', bump)
+    return () => window.removeEventListener('popstate', bump)
+  }, [])
+
+  const parsedLocation = React.useMemo(
+    () => parsePathname(window.location.pathname, window.location.search),
+    [locationKey],
+  )
+  /** Workspace chrome only when the URL carries a workspace id (not localStorage alone). */
+  const workspaceOpen = Boolean(parsedLocation.workspaceId)
+
+  React.useEffect(() => {
+    if (workspaceOpen) setGlobalNavOpen(false)
+  }, [workspaceOpen])
+
+  /** Reconcile legacy `#/…` on path URLs and restore last workspace when landing on picker. */
+  React.useEffect(() => {
+    const { pathname, search, hash } = window.location
+    if (hash && /^#\//.test(hash)) {
+      const target = resolveLegacyHash(hash, { activeProject: useAppStore.getState().activeProject })
+      if (target) {
+        navigatePath(target, true)
+        return
+      }
+      stripLegacyAppHash()
+    }
+    const parsed = parsePathname(pathname, search)
+    if (parsed.workspaceId) return
+    const barePicker = pathname === '/' || pathname === '/workspaces'
+    if (!barePicker) return
+    const stored = useAppStore.getState().activeProject
+    if (stored?.trim()) {
+      navigatePath(paths.workspace(stored.trim()), true)
+      setActiveProject(stored.trim())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /** Prefer project's latest run (same API as Overview) for header chip / Last-run menu. */
   const [projectLatest, setProjectLatest] = React.useState<{
@@ -417,68 +454,45 @@ export default function App() {
     }
   }, [setPendingProposalCount, bootStatus])
 
+  /** Path ↔ store sync (HTML5 History). Hash handled by <HashRedirect />. */
   React.useEffect(() => {
     const apply = () => {
-      const { view: v, runId } = parseHash()
-      // Legacy #/experiments → Run Compare tab (unified surface).
-      if (v === 'experiments') {
-        const raw = window.location.hash.replace(/^#\/?/, '')
-        const qIdx = raw.indexOf('?')
-        const params = qIdx >= 0 ? new URLSearchParams(raw.slice(qIdx + 1)) : new URLSearchParams()
-        const runParam = (params.get('run_id') || params.get('run_ids') || '').trim()
-        const ids = runParam
-          ? runParam.split(',').map((s) => s.trim()).filter(Boolean)
-          : []
-        openExperiments(ids.length ? { runIds: ids } : {})
+      stripLegacyAppHash()
+      const parsed = parsePathname(window.location.pathname, window.location.search)
+      const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+      if (parts[0] === 'workspaces' && !parts[1]) {
+        setActiveProject(null)
+      } else if (parsed.workspaceId) {
+        const cur = useAppStore.getState().activeProject
+        if (cur !== parsed.workspaceId) setActiveProject(parsed.workspaceId)
+      }
+      if (parsed.runsTab === 'compare' || parsed.view === 'experiments') {
+        openExperiments(parsed.compareIds?.length ? { runIds: parsed.compareIds } : {})
         return
       }
-      if (runId) openRun(runId)
-      else if (v) setView(v)
-      // Sync active project from #/projects?project= without breaking other deep links.
-      const raw = window.location.hash.replace(/^#\/?/, '')
-      const qIdx = raw.indexOf('?')
-      if (qIdx >= 0) {
-        const params = new URLSearchParams(raw.slice(qIdx + 1))
-        const proj = (params.get('project') || '').trim()
-        if (proj && (v === 'projects' || raw.startsWith('projects'))) {
-          const cur = useAppStore.getState().activeProject
-          if (cur !== proj) setActiveProject(proj)
-        }
+      if (parsed.runId) {
+        openRun(parsed.runId, {
+          project: parsed.workspaceId,
+          panel: panelToFocus(parsed.panel) ?? undefined,
+        })
+        return
+      }
+      if (parsed.view) setView(parsed.view)
+      if (parsed.runsTab === 'live') useAppStore.getState().setFocusRunsTab('live')
+      else if (parsed.runsTab === 'history' && parsed.view === 'runs') {
+        useAppStore.getState().setFocusRunsTab('history')
       }
     }
     apply()
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
+    window.addEventListener('popstate', apply)
+    return () => window.removeEventListener('popstate', apply)
   }, [openRun, openExperiments, setView, setActiveProject])
 
   React.useEffect(() => {
-    // Keep hash in sync with view — but never stomp a deep-link that names another view
-    // (cold start often has view=builder while URL is still #/projects?project=…).
-    const PRESERVE_QUERY = new Set<AppView>(['trace', 'edge', 'experiments', 'proposals', 'artifacts', 'data', 'projects'])
-    const focus = useAppStore.getState().focusRunId
-    const raw = window.location.hash.replace(/^#\/?/, '')
-    const pathOnly = raw.split('?')[0] || ''
-    const hashView = pathOnly.split('/')[0]
-    const hashClaimsOtherView =
-      !!hashView && VIEW_IDS.has(hashView as AppView) && hashView !== view
-
-    if (view === 'runs' && (raw.includes('tab=compare') || useAppStore.getState().focusRunsTab === 'compare')) {
-      return
-    }
-    if (PRESERVE_QUERY.has(view)) {
-      if (pathOnly === view || pathOnly.startsWith(`${view}/`)) return
-      if (hashClaimsOtherView) return
-      window.history.replaceState(null, '', `#/${view}`)
-      window.dispatchEvent(new HashChangeEvent('hashchange'))
-      return
-    }
-    const next = view === 'runs' && focus ? `#/runs/${focus}` : `#/${view}`
-    if (window.location.hash === next) return
-    if (pathOnly === view || pathOnly.startsWith(`${view}/`)) return
-    if (hashClaimsOtherView) return
-    window.history.replaceState(null, '', next)
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
-  }, [view])
+    const label = VIEW_LABEL[view] || 'Console'
+    const ws = activeProject ? ` · ${activeProject}` : ''
+    document.title = `Graphyn · ${label}${ws}`
+  }, [view, activeProject])
 
   React.useEffect(() => {
     if (settingsOpen) {
@@ -534,65 +548,17 @@ export default function App() {
 
   const go = (id: AppView) => {
     setView(id)
-    // Only carry query keys the destination understands (avoid #/trace?run_id= → #/edge?run_id=).
-    const ALLOWED_QUERY: Partial<Record<AppView, readonly string[]>> = {
-      trace: ['run_id', 'artifact_id'],
-      artifacts: ['run_id', 'artifact_id'],
-      experiments: ['run_id', 'run_ids'],
-      proposals: ['id'],
-      data: ['mode', 'manage', 'project', 'version', 'label'],
-      projects: ['project', 'tab'],
-      edge: ['project', 'version', 'run_id'],
-    }
-    const raw = window.location.hash.replace(/^#\/?/, '')
-    const qIdx = raw.indexOf('?')
-    const prevParams = qIdx >= 0 ? new URLSearchParams(raw.slice(qIdx + 1)) : new URLSearchParams()
-    // replaceState does not fire hashchange — notify views (ProjectsView, etc.).
-    const setHash = (hash: string) => {
-      window.history.replaceState(null, '', hash)
-      window.dispatchEvent(new HashChangeEvent('hashchange'))
-    }
-    if (id === 'projects') {
-      const ap = useAppStore.getState().activeProject
-      const params = new URLSearchParams()
-      const project = (prevParams.get('project') || ap || '').trim()
-      if (project) params.set('project', project)
-      const tab = (prevParams.get('tab') || '').trim()
-      if (tab && ALLOWED_QUERY.projects?.includes('tab')) params.set('tab', tab)
-      const qs = params.toString()
-      setHash(qs ? `#/projects?${qs}` : '#/projects')
-    } else {
-      const allowed = ALLOWED_QUERY[id]
-      const params = new URLSearchParams()
-      if (allowed) {
-        for (const key of allowed) {
-          for (const val of prevParams.getAll(key)) {
-            if (val.trim()) params.append(key, val)
-          }
-        }
-      }
-      const qs = params.toString()
-      setHash(qs ? `#/${id}?${qs}` : `#/${id}`)
-    }
-    if (narrow) setNavOpen(false)
-  }
-
-  /** Switch workspace: show Projects picker without forcing the active project open. */
-  const switchProject = () => {
-    setView('projects')
-    window.history.replaceState(null, '', '#/projects')
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
-    if (narrow) setNavOpen(false)
-  }
-
-  const goLinkedData = () => {
     const ap = useAppStore.getState().activeProject
-    if (ap) {
-      // Distinct from Overview: shared library Outputs for this project (not Overview facets).
-      openData({ mode: 'outputs', project: ap })
-    } else {
-      go('data')
-    }
+    const path = pathForView(id, { workspaceId: ap }) || paths.workspaces()
+    navigatePath(path)
+    if (narrow) setNavOpen(false)
+  }
+
+  /** Switch workspace: clear active project, then show the Projects picker. */
+  const switchProject = () => {
+    closeProject()
+    setView('projects')
+    navigatePath(paths.workspaces())
     if (narrow) setNavOpen(false)
   }
 
@@ -713,6 +679,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      <HashRedirect activeProject={activeProject} />
       <div className="flex h-full flex-col bg-mesh">
         <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-200/70 bg-white/80 px-4 backdrop-blur-md">
           <div className="flex min-w-0 items-center gap-2">
@@ -738,7 +705,9 @@ export default function App() {
             <div className="min-w-0 leading-tight">
               <div className="text-[15px] font-semibold text-ink-950">Graphyn</div>
               <div className="truncate text-[11px] text-ink-500">
-                {view === 'projects' && activeProject ? 'Overview' : VIEW_LABEL[view]}
+                {workspaceOpen && parsedLocation.workspaceId
+                  ? `${VIEW_LABEL[view]} · ${parsedLocation.workspaceId}`
+                  : VIEW_LABEL[view]}
               </div>
             </div>
           </div>
@@ -798,16 +767,19 @@ export default function App() {
               }
               return null
             })()}
-            {activeProject && (
+            {workspaceOpen && parsedLocation.workspaceId && (
               <div className="inline-flex max-w-[15rem] items-center gap-0.5">
                 <button
                   type="button"
                   className="inline-flex max-w-[12rem] items-center gap-1 truncate rounded-l-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400"
-                  title="Open workspace Overview"
-                  onClick={() => openProject(activeProject)}
+                  title="Open workspace Home"
+                  onClick={() => {
+                    const W = parsedLocation.workspaceId || activeProject
+                    if (W) openProject(W)
+                  }}
                 >
                   <FolderKanban className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{activeProject}</span>
+                  <span className="truncate">{parsedLocation.workspaceId || activeProject}</span>
                 </button>
                 <button
                   type="button"
@@ -817,22 +789,16 @@ export default function App() {
                 >
                   Switch
                 </button>
-                <button
-                  type="button"
-                  className="ml-0.5 rounded-full border border-ink-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-500 hover:border-ink-300 hover:text-ink-800"
-                  title="Close workspace — clear active project"
-                  aria-label="Close workspace"
-                  onClick={() => closeProject()}
-                >
-                  <X className="h-3 w-3" />
-                </button>
               </div>
             )}
-            {!activeProject && (
+            {(!activeProject || !workspaceOpen) && (
               <button
                 type="button"
                 className="inline-flex items-center rounded-full border border-dashed border-ink-300 bg-white/80 px-2.5 py-0.5 text-[11px] text-ink-500 hover:border-accent-300 hover:text-accent-800"
-                onClick={() => go('projects')}
+                onClick={() => {
+                  if (activeProject) openProject(activeProject)
+                  else go('projects')
+                }}
               >
                 Open workspace
               </button>
@@ -901,11 +867,11 @@ export default function App() {
               )}
             >
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
-                {activeProject && (
+                {workspaceOpen && parsedLocation.workspaceId && (
                   <div className="mb-3 space-y-0.5">
                     <div className="flex items-center justify-between px-2.5 pb-1">
-                      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-ink-400" title={activeProject}>
-                        {activeProject}
+                      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-ink-400" title={parsedLocation.workspaceId}>
+                        {parsedLocation.workspaceId}
                       </div>
                       <button
                         type="button"
@@ -925,7 +891,9 @@ export default function App() {
                             type="button"
                             title={NAV_HINTS[id]}
                             onClick={() => {
-                              if (id === 'projects') openProject(activeProject)
+                              const W = parsedLocation.workspaceId || activeProject
+                              if (id === 'projects' && W) openProject(W)
+                              else if (id === 'data' && W) openData({ project: W })
                               else go(id)
                             }}
                             className={clsx(
@@ -938,51 +906,13 @@ export default function App() {
                           >
                             <Icon className={clsx('h-4 w-4', active ? 'text-accent-800' : 'text-ink-400')} />
                             <span className="flex-1 truncate">{label}</span>
-                            {id === 'builder' && pendingProposalCount > 0 && (
-                              <span
-                                className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900"
-                                title={`${pendingProposalCount} pending proposal${pendingProposalCount === 1 ? '' : 's'}`}
-                              >
-                                {pendingProposalCount}
-                              </span>
-                            )}
                           </button>
                         )
                       })}
-                      <button
-                        type="button"
-                        title={NAV_HINTS.artifacts}
-                        onClick={() => openArtifacts({ project: activeProject })}
-                        className={clsx(
-                          'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                          view === 'artifacts'
-                            ? 'bg-white font-medium text-ink-950 shadow-sm'
-                            : 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
-                        )}
-                        aria-current={view === 'artifacts' ? 'page' : undefined}
-                      >
-                        <Archive className={clsx('h-4 w-4', view === 'artifacts' ? 'text-accent-800' : 'text-ink-400')} />
-                        <span className="flex-1 truncate">Artifacts</span>
-                      </button>
-                      <button
-                        type="button"
-                        title={NAV_HINTS.data}
-                        onClick={goLinkedData}
-                        className={clsx(
-                          'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                          view === 'data'
-                            ? 'bg-white font-medium text-ink-950 shadow-sm'
-                            : 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
-                        )}
-                        aria-current={view === 'data' ? 'page' : undefined}
-                      >
-                        <Database className={clsx('h-4 w-4', view === 'data' ? 'text-accent-800' : 'text-ink-400')} />
-                        <span className="flex-1 truncate">Datasets</span>
-                      </button>
                     </div>
                   </div>
                 )}
-                {activeProject ? (
+                {workspaceOpen ? (
                   <div className="mb-4 rounded-xl border border-ink-200/70 bg-white/40">
                     <button
                       type="button"
@@ -1007,22 +937,15 @@ export default function App() {
                       {(
                         [
                           { id: 'templates' as AppView, label: 'Templates', icon: BookOpen },
-                          { id: 'proposals' as AppView, label: 'Proposals', icon: GitPullRequest },
-                          { id: 'data' as AppView, label: 'Datasets', icon: Database },
+                          { id: 'proposals' as AppView, label: 'Agent inbox', icon: GitPullRequest },
+                          { id: 'artifacts' as AppView, label: 'Artifacts', icon: Archive },
                           { id: 'plugins' as AppView, label: 'Plugins', icon: Package },
-                          { id: 'edge' as AppView, label: 'Edge package', icon: Cpu },
                           { id: 'workers' as AppView, label: 'Worker fleet', icon: Server },
                           { id: 'secrets' as AppView, label: 'Secrets', icon: KeyRound },
                           { id: 'system' as AppView, label: 'Ops', icon: Activity },
+                          { id: 'access' as AppView, label: 'Access', icon: Shield },
                         ] as const
-                      )
-                        .filter(
-                          (item) =>
-                            item.id !== 'proposals' ||
-                            pendingProposalCount > 0 ||
-                            view === 'proposals',
-                        )
-                        .map(({ id, label, icon: Icon }) => {
+                      ).map(({ id, label, icon: Icon }) => {
                         const active = view === id
                         return (
                           <button
@@ -1103,6 +1026,10 @@ export default function App() {
           )}
 
           <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+            {window.location.pathname.startsWith('/login') ? (
+              <LoginView />
+            ) : (
+              <>
             {view === 'builder' && <BuilderView />}
             {view === 'runs' && <RunsView />}
             {view === 'artifacts' && <ArtifactsView />}
@@ -1117,6 +1044,11 @@ export default function App() {
             {view === 'experiments' && <ExperimentsView />}
             {view === 'proposals' && <ProposalsView />}
             {view === 'secrets' && <SecretsView />}
+            {view === 'models' && <ModelsView />}
+            {view === 'access' && <AccessView />}
+            {view === 'devices' && <DevicesView workspaceId={activeProject} />}
+              </>
+            )}
           </main>
         </div>
 
@@ -1163,19 +1095,39 @@ export default function App() {
                 )}
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    setModeExplainerOpen(false)
-                    go('workers')
-                  }}
-                >
-                  Open Worker fleet
-                </button>
-                <button type="button" className="btn-primary" onClick={() => setModeExplainerOpen(false)}>
-                  Got it
-                </button>
+                {backendMode === 'distributed' ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => {
+                        setModeExplainerOpen(false)
+                        go('workers')
+                      }}
+                    >
+                      Open Worker fleet
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={() => setModeExplainerOpen(false)}>
+                      Got it
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="btn-primary" onClick={() => setModeExplainerOpen(false)}>
+                      Got it
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setModeExplainerOpen(false)
+                        go('workers')
+                      }}
+                    >
+                      Mode B · Worker fleet
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>

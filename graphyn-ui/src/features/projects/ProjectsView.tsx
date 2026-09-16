@@ -1,5 +1,5 @@
 import React from 'react'
-import { RefreshCw, Copy, Pencil, Workflow, History, ChevronRight, CalendarClock, Play } from 'lucide-react'
+import { RefreshCw, Copy, Pencil, Workflow, History, ChevronRight, CalendarClock, Play, Star } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
@@ -10,6 +10,8 @@ import {
   KeyValue,
   LoadingBlock,
 } from '../../components/ui'
+import { paths } from '../../routes/paths'
+import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 
 interface Project {
   name: string
@@ -34,12 +36,16 @@ function normalizeProjectStatus(raw: unknown): ProjectStatus {
 }
 
 
-function parseProjectsHash(): { project?: string; tab?: Tab } {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return {}
-  const params = new URLSearchParams(raw.slice(qIdx + 1))
-  const project = (params.get('project') || '').trim() || undefined
+function parseProjectsLocation(): { project?: string; tab?: Tab } {
+  const { pathname } = window.location
+  const params = readSearchParams()
+  const parts = pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+  let project: string | undefined
+  if (parts[0] === 'workspaces' && parts[1]) {
+    project = decodeURIComponent(parts[1])
+  } else {
+    project = (params.get('project') || '').trim() || undefined
+  }
   const tabRaw = (params.get('tab') || '').trim()
   const tab = TABS.includes(tabRaw as Tab) ? (tabRaw as Tab) : undefined
   return { project, tab }
@@ -54,19 +60,42 @@ function lineageIds(lineage: unknown): { runId?: string; artifactId?: string } {
   return { runId, artifactId }
 }
 
+function pinnedKey(project: string) {
+  return `graphyn.pinnedPipelines.${project}`
+}
+
+function readPinnedPipelines(project: string): string[] {
+  try {
+    const raw = localStorage.getItem(pinnedKey(project))
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+function writePinnedPipelines(project: string, names: string[]) {
+  try {
+    localStorage.setItem(pinnedKey(project), JSON.stringify(names))
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function ProjectsView() {
+  const activeProject = useAppStore((s) => s.activeProject)
   const pushToast = useAppStore((s) => s.pushToast)
   const openData = useAppStore((s) => s.openData)
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openEdge = useAppStore((s) => s.openEdge)
-  const setView = useAppStore((s) => s.setView)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen)
-  const initialHash = React.useMemo(() => parseProjectsHash(), [])
+  const initialLoc = React.useMemo(() => parseProjectsLocation(), [])
   const [projects, setProjects] = React.useState<Project[] | null>(null)
-  const [selected, setSelected] = React.useState<string | null>(initialHash.project ?? null)
-  const [tab, setTab] = React.useState<Tab>(initialHash.tab ?? 'versions')
+  const [selected, setSelected] = React.useState<string | null>(initialLoc.project ?? null)
+  const [tab, setTab] = React.useState<Tab>(initialLoc.tab ?? 'versions')
   const [newName, setNewName] = React.useState('')
   const nameRef = React.useRef<HTMLInputElement | null>(null)
   const [renameTo, setRenameTo] = React.useState('')
@@ -144,13 +173,10 @@ export default function ProjectsView() {
     setRenameTo(name)
     setCloneTo(`${name}-copy`)
     setError(null)
-    {
-      const params = new URLSearchParams()
-      params.set('project', name)
-      if (tab && tab !== 'versions') params.set('tab', tab)
-      // Prefer replaceHash path in store for navigation; here we own selected state.
-      window.history.replaceState(null, '', `#/projects?${params.toString()}`)
-    }
+    replacePathSearch(
+      tab && tab !== 'versions' ? { tab } : {},
+      paths.workspace(name),
+    )
     setVersionStats(null)
     setVersionSamples(null)
     setDiffResult(null)
@@ -211,8 +237,7 @@ export default function ProjectsView() {
             last_run_id?: string
             last_error?: string
           }>
-          const forProject = typed.filter((s) => String(s.project || '') === name)
-          setSchedules(forProject.length ? forProject : typed)
+          setSchedules(typed)
         }
         setLinks({
           inputs: Array.isArray(linkData?.inputs) ? linkData.inputs : [],
@@ -238,36 +263,60 @@ export default function ProjectsView() {
       setDiffB(typeof vers[1] === 'string' ? vers[1] : first)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      // Keep selected, but clear Home payload so we don't pretend load succeeded.
+      setVersions([])
+      setSpec('')
+      setTaxonomy('[]')
+      setContract('{}')
+      setSnapshots([])
+      setLineage(null)
+      setRecentRuns([])
+      setProjectPipelines([])
+      setSchedules([])
+      setLinks({ inputs: [], outputs: [] })
+      setVersionFocus('')
+      setDiffA('')
+      setDiffB('')
     }
   }
 
   React.useEffect(() => {
     const apply = () => {
-      const h = parseProjectsHash()
+      const h = parseProjectsLocation()
       if (h.tab) {
         setTab(h.tab)
         setDatasetOpen(true)
       }
-      setSelected((cur) => {
-        if (h.project) {
+      if (h.project) {
+        setSelected((cur) => {
           if (h.project !== cur) {
-            // Defer open so we do not nest setState updates incorrectly
             queueMicrotask(() => void open(h.project!))
           }
-          return cur
-        }
-        return null
-      })
+          return h.project!
+        })
+      } else {
+        setSelected(null)
+      }
     }
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
+    return onPathChange(apply)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   React.useEffect(() => {
-    if (initialHash.project) void open(initialHash.project)
+    if (initialLoc.project) void open(initialLoc.project)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  /** URL/store sync: workspace chip can set activeProject before ProjectsView selected catches up. */
+  React.useEffect(() => {
+    const fromUrl = parseProjectsLocation().project
+    const name = fromUrl || activeProject
+    if (!name || selected === name) return
+    if (fromUrl || (activeProject && window.location.pathname.startsWith('/workspaces/'))) {
+      void open(name)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject])
 
   const useInEdge = () => {
     openEdge({
@@ -335,6 +384,34 @@ export default function ProjectsView() {
           : `Promoted to ${opts.to_env}`,
         'success',
       )
+      await open(selected)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const rollbackPipeline = async (
+    pipelineName: string,
+    defaultVersion?: string | null,
+  ) => {
+    if (!selected) return
+    const suggested = (defaultVersion || '').trim()
+    const version = window
+      .prompt('Rollback draft to version (required):', suggested)
+      ?.trim()
+    if (!version) {
+      pushToast('Rollback cancelled — version is required', 'info')
+      return
+    }
+    try {
+      await apiJson(
+        `/projects/${encodeURIComponent(selected)}/pipelines/${encodeURIComponent(pipelineName)}/rollback`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ version }),
+        },
+      )
+      pushToast(`Rolled draft back to ${version}`, 'success')
       await open(selected)
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -574,8 +651,36 @@ export default function ProjectsView() {
     }
   }
 
-  const [datasetOpen, setDatasetOpen] = React.useState(() => Boolean(initialHash.tab))
+  const [datasetOpen, setDatasetOpen] = React.useState(() => Boolean(initialLoc.tab))
   const [projectFilter, setProjectFilter] = React.useState('')
+  const [pinnedPipelines, setPinnedPipelines] = React.useState<string[]>([])
+
+  React.useEffect(() => {
+    if (!selected) {
+      setPinnedPipelines([])
+      return
+    }
+    setPinnedPipelines(readPinnedPipelines(selected))
+  }, [selected])
+
+  const togglePinPipeline = (name: string) => {
+    if (!selected) return
+    setPinnedPipelines((prev) => {
+      const next = prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+      writePinnedPipelines(selected, next)
+      return next
+    })
+  }
+
+  const sortedPipelines = React.useMemo(() => {
+    const pinSet = new Set(pinnedPipelines)
+    return [...projectPipelines].sort((a, b) => {
+      const ap = pinSet.has(a.name) ? 0 : 1
+      const bp = pinSet.has(b.name) ? 0 : 1
+      if (ap !== bp) return ap - bp
+      return a.name.localeCompare(b.name)
+    })
+  }, [projectPipelines, pinnedPipelines])
 
   const versionOptions = versions.map((v) =>
     typeof v === 'string' ? v : String((v as { version?: string }).version ?? JSON.stringify(v)),
@@ -595,26 +700,16 @@ export default function ProjectsView() {
   }, [projects, projectFilter])
 
   const authBlocked = /unauthorized|401|api token/i.test(error || '')
-  const goEditor = () => {
-    setView('builder')
-    window.history.replaceState(null, '', '#/builder')
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
-  }
-  const goTemplates = () => {
-    setView('templates')
-    window.history.replaceState(null, '', '#/templates')
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
-  }
+  const goEditor = () => goView('builder')
+  const goTemplates = () => goView('templates')
   const openLastRun = () => {
     const id = recentRuns[0]?.run_id
     if (id) useAppStore.getState().openRun(id)
   }
   const goLinkDataset = () => {
     if (!selected) return
-    setView('data')
-    const params = new URLSearchParams({ mode: 'inputs', manage: '1', project: selected })
-    window.history.replaceState(null, '', `#/data?${params.toString()}`)
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    openData({ project: selected })
+    replacePathSearch({ mode: 'inputs', manage: '1' })
   }
   const workspaceEmpty = projectPipelines.length === 0 && recentRuns.length === 0
 
@@ -700,7 +795,7 @@ export default function ProjectsView() {
             <ol className="mt-6 space-y-2 text-left text-[13px] text-ink-600">
               <li className="flex gap-2"><span className="font-mono text-ink-400">1</span> Open or create a project</li>
               <li className="flex gap-2"><span className="font-mono text-ink-400">2</span> Start from a template or build in Editor</li>
-              <li className="flex gap-2"><span className="font-mono text-ink-400">3</span> Run from Editor, then inspect Files and Lineage under Runs</li>
+              <li className="flex gap-2"><span className="font-mono text-ink-400">3</span> Run from Editor, then inspect Run outputs and Lineage under Runs</li>
             </ol>
             <button type="button" className="btn-secondary mt-6" onClick={() => openData({ mode: 'inputs' })}>
               Browse Datasets
@@ -784,17 +879,8 @@ export default function ProjectsView() {
         <div className="mx-auto max-w-3xl space-y-6">
           {error && <ErrorBanner message={error} onRetry={() => void open(selected)} />}
 
-          {workspaceEmpty ? (
-            <section className="grid gap-3 sm:grid-cols-3">
-              <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
-                <h2 className="text-sm font-semibold text-ink-950">Open Editor</h2>
-                <p className="mt-1 flex-1 text-[12px] leading-relaxed text-ink-500">
-                  Design a graph in the canvas, validate, and run from the workspace toolbar.
-                </p>
-                <button type="button" className="btn-primary mt-3 w-full" onClick={goEditor}>
-                  <Workflow className="h-3.5 w-3.5" /> Open Editor
-                </button>
-              </div>
+          {workspaceEmpty && !error ? (
+            <section className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-semibold text-ink-950">Start from template</h2>
                 <p className="mt-1 flex-1 text-[12px] leading-relaxed text-ink-500">
@@ -880,16 +966,28 @@ export default function ProjectsView() {
                   No pipelines yet.{' '}
                   <button type="button" className="font-medium text-accent-800 hover:underline" onClick={goTemplates}>
                     Start from a template
-                  </button>{' '}
-                  or open the Editor and save a graph.
+                  </button>
+                  .
                 </div>
               ) : (
                 <ul className="divide-y divide-ink-100">
-                  {projectPipelines.slice(0, 5).map((p) => {
+                  {sortedPipelines.slice(0, 8).map((p) => {
                     const envs = p.environments || {}
+                    const pinned = pinnedPipelines.includes(p.name)
                     return (
                       <li key={p.name} className="px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            className="shrink-0 rounded p-0.5 text-ink-300 hover:text-amber-500"
+                            aria-label={pinned ? `Unpin ${p.name}` : `Pin ${p.name}`}
+                            title={pinned ? 'Unpin favorite' : 'Pin favorite'}
+                            onClick={() => togglePinPipeline(p.name)}
+                          >
+                            <Star
+                              className={`h-3.5 w-3.5 ${pinned ? 'fill-amber-400 text-amber-500' : ''}`}
+                            />
+                          </button>
                           <button
                             type="button"
                             className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-ink-900 hover:text-accent-800"
@@ -949,9 +1047,32 @@ export default function ProjectsView() {
                                   Open prod
                                 </button>
                               ) : null}
+                              <button
+                                type="button"
+                                className="btn-secondary !px-2 !py-0.5 text-[10px]"
+                                onClick={() =>
+                                  void rollbackPipeline(
+                                    p.name,
+                                    envs.staging || envs.prod || p.latest_version || undefined,
+                                  )
+                                }
+                              >
+                                Rollback
+                              </button>
                             </div>
                           </details>
                         )}
+                        {!(envs.staging || envs.prod || envs.pending_prod) && p.latest_version ? (
+                          <div className="mt-1.5">
+                            <button
+                              type="button"
+                              className="btn-secondary !px-2 !py-0.5 text-[10px]"
+                              onClick={() => void rollbackPipeline(p.name, p.latest_version)}
+                            >
+                              Rollback draft
+                            </button>
+                          </div>
+                        ) : null}
                       </li>
                     )
                   })}
@@ -960,46 +1081,54 @@ export default function ProjectsView() {
             </div>
           </section>
 
-          {/* Schedules (project-scoped when possible) */}
+          {/* Always-on — schedules filtered by project when possible */}
           <section className="ide-section">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="ide-section-title">Schedules</div>
+              <div className="ide-section-title">Always-on</div>
               <button
                 type="button"
                 className="ide-quiet-btn text-[11px]"
-                onClick={() => {
-                  setView('system')
-                  window.history.replaceState(null, '', '#/system')
-                }}
+                onClick={() => goView('system')}
               >
-                Manage in System
+                Manage in Ops
               </button>
             </div>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
-              {schedules.length === 0 ? (
-                <div className="px-4 py-4 text-[13px] text-ink-500">
-                  No schedules for this workspace. Create them under System, or run on demand from the Editor.
-                </div>
-              ) : (
-                <ul className="divide-y divide-ink-100">
-                  {schedules.slice(0, 6).map((s) => {
-                    const scoped = String(s.project || '') === selected
-                    return (
+              {(() => {
+                const projectSchedules = schedules.filter((s) => String(s.project || '') === selected)
+                if (projectSchedules.length === 0) {
+                  return (
+                    <div className="px-4 py-4 text-[13px] text-ink-500">
+                      {schedules.length === 0
+                        ? 'No schedules yet. Create them under Ops, or run on demand from the Editor.'
+                        : `${schedules.length} schedule${schedules.length === 1 ? '' : 's'} on this API — none bound to this project.`}{' '}
+                      <button
+                        type="button"
+                        className="font-medium text-accent-800 hover:underline"
+                        onClick={() => goView('system')}
+                      >
+                        Open Ops
+                      </button>
+                    </div>
+                  )
+                }
+                return (
+                  <ul className="divide-y divide-ink-100">
+                    {projectSchedules.slice(0, 6).map((s) => (
                       <li key={s.id || s.name} className="flex flex-wrap items-center gap-2 px-3 py-2">
                         <CalendarClock className="h-3.5 w-3.5 shrink-0 text-ink-400" />
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-[13px] font-medium text-ink-900">
-                            {s.name || s.id}
-                            {!scoped ? (
-                              <span className="ml-1.5 font-normal text-ink-400">(global)</span>
-                            ) : null}
-                          </div>
+                          <div className="truncate text-[13px] font-medium text-ink-900">{s.name || s.id}</div>
                           <div className="truncate text-[11px] text-ink-500">
                             {s.project}/{s.pipeline}
                             {s.interval_minutes != null ? ` · every ${s.interval_minutes}m` : ''}
                             {s.enabled === false ? ' · disabled' : ''}
-                            {s.last_error ? ` · err: ${s.last_error}` : ''}
                           </div>
+                          {s.last_error ? (
+                            <div className="mt-0.5 truncate text-[11px] text-rose-700" title={s.last_error}>
+                              last_error: {s.last_error}
+                            </div>
+                          ) : null}
                         </div>
                         {s.id ? (
                           <button
@@ -1011,10 +1140,10 @@ export default function ProjectsView() {
                           </button>
                         ) : null}
                       </li>
-                    )
-                  })}
-                </ul>
-              )}
+                    ))}
+                  </ul>
+                )
+              })()}
             </div>
           </section>
 
@@ -1028,7 +1157,7 @@ export default function ProjectsView() {
                   className="ide-quiet-btn text-[11px]"
                   onClick={() => useAppStore.getState().openArtifacts({ project: selected })}
                 >
-                  Browse files
+                  Browse Artifacts
                 </button>
                 <span className="text-type-meta text-ink-400">
                   {links.inputs.length} pinned
@@ -1037,7 +1166,7 @@ export default function ProjectsView() {
               </div>
             </div>
             <p className="mb-2 text-[12px] text-ink-500">
-              Pin Data-library input labels here so Editor runs know which folders to use. Completing a run does not auto-link.
+              Pin Datasets input labels here so Editor runs know which folders to use. Completing a run does not auto-link.
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <select
@@ -1261,7 +1390,7 @@ export default function ProjectsView() {
               <button type="button" className="btn-secondary" onClick={() => void clone()}>
                 <Copy className="h-3.5 w-3.5" /> Clone
               </button>
-              <button type="button" className="btn-secondary" onClick={useInEdge}>Use in Edge</button>
+              <button type="button" className="btn-secondary" onClick={useInEdge}>Use in Ship</button>
               <ConfirmButton label="Delete" confirmLabel={`Delete ${selected}?`} danger onConfirm={() => void remove()} />
             </div>
           </details>

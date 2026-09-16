@@ -3,7 +3,9 @@ import { ExternalLink, RefreshCw, Server, X } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { formatLocaleDateTime, formatRelativeTime } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
+import { goView } from '../../routes/nav'
 import {
+  ConfirmButton,
   CopyableMono,
   EmptyState,
   ErrorBanner,
@@ -72,6 +74,11 @@ export default function WorkersView() {
   const [filterPool, setFilterPool] = React.useState('')
   const [filterStatus, setFilterStatus] = React.useState('')
   const [selected, setSelected] = React.useState<WorkerRow | null>(null)
+  const [fleetTab, setFleetTab] = React.useState<'workers' | 'queue'>('workers')
+  const [recentRuns, setRecentRuns] = React.useState<
+    Array<{ run_id: string; status?: string; created_at?: string; graph_name?: string }>
+  >([])
+  const [queueNote, setQueueNote] = React.useState<string | null>(null)
 
   const refresh = React.useCallback(async () => {
     setError(null)
@@ -82,6 +89,16 @@ export default function WorkersView() {
       })
       setWorkers(Array.isArray(rows) ? rows : [])
       setLastRefresh(new Date())
+      try {
+        const runs = await apiJson<
+          Array<{ run_id: string; status?: string; created_at?: string; graph_name?: string }>
+        >('/runs', { query: { limit: 12 } })
+        setRecentRuns(Array.isArray(runs) ? runs.slice(0, 12) : [])
+        setQueueNote(null)
+      } catch {
+        setRecentRuns([])
+        setQueueNote('Could not load recent runs as a queue proxy.')
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
@@ -158,7 +175,104 @@ export default function WorkersView() {
 
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
 
-      {loading && workers === null ? (
+      <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1 w-fit">
+        <button
+          type="button"
+          className={fleetTab === 'workers' ? 'tab-pill tab-pill-on' : 'tab-pill'}
+          onClick={() => setFleetTab('workers')}
+        >
+          Workers
+        </button>
+        <button
+          type="button"
+          className={fleetTab === 'queue' ? 'tab-pill tab-pill-on' : 'tab-pill'}
+          onClick={() => setFleetTab('queue')}
+        >
+          Queue
+        </button>
+      </div>
+
+      {fleetTab === 'queue' ? (
+        <section className="space-y-4 rounded-2xl border border-ink-200 bg-white p-4 shadow-sm">
+          <div>
+            <h3 className="text-sm font-semibold text-ink-900">Job queue</h3>
+            <p className="mt-1 text-xs text-ink-500 max-w-2xl">
+              There is no list-all jobs API — only <code className="font-mono text-[11px]">GET /jobs/{'{id}'}</code>{' '}
+              plus claim/complete/cancel. Mode B (
+              <code className="font-mono text-[11px]">GRAPHYN_BACKEND=distributed</code>): workers claim eligible
+              jobs from this control plane by label/pool; this tab cannot show a live lease queue.
+            </p>
+            {backendMode === 'distributed' ? (
+              <p className="text-xs text-accent-800 bg-accent-50/80 border border-accent-100 rounded-lg px-3 py-2">
+                Mode B active — queue depth is worker-side. Use heartbeats on Workers and recent run statuses below as
+                a proxy until a list-jobs API exists.
+              </p>
+            ) : (
+              <p className="text-xs text-ink-500 bg-ink-50 border border-ink-100 rounded-lg px-3 py-2">
+                Mode A (local) runs in-process — the claim queue is unused unless you switch the control plane to
+                distributed.
+              </p>
+            )}
+            <a
+              href="https://github.com/ursamir/Graphyn/blob/main/docs/DISTRIBUTED_EXECUTION.md"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-900"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Distributed execution · claim protocol
+            </a>
+          </div>
+          {queueNote && <p className="text-sm text-amber-800">{queueNote}</p>}
+          {recentRuns.length === 0 ? (
+            <EmptyState
+              title="No queue listing available"
+              description="Use recent run statuses below as a rough proxy once runs exist, or inspect a job by id via the API."
+              action={
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => goView('runs')}
+                >
+                  Open Runs
+                </button>
+              }
+            />
+          ) : (
+            <div>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                Recent run statuses (proxy)
+              </div>
+              <div className="overflow-hidden rounded-xl border border-ink-100">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-ink-100 bg-ink-50/80 text-[11px] uppercase tracking-wide text-ink-500">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Run</th>
+                      <th className="px-3 py-2 font-semibold">Status</th>
+                      <th className="px-3 py-2 font-semibold">Graph</th>
+                      <th className="px-3 py-2 font-semibold">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentRuns.map((r) => (
+                      <tr key={r.run_id} className="border-b border-ink-50 last:border-0">
+                        <td className="px-3 py-1.5 font-mono text-xs">{r.run_id.slice(0, 10)}…</td>
+                        <td className="px-3 py-1.5">
+                          <StatusBadge status={String(r.status || 'unknown')} />
+                        </td>
+                        <td className="px-3 py-1.5 text-ink-600">{r.graph_name || '—'}</td>
+                        <td className="px-3 py-1.5 text-xs text-ink-500 whitespace-nowrap">
+                          {r.created_at ? formatRelativeTime(r.created_at) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
+      ) : loading && workers === null ? (
         <LoadingBlock label="Loading workers…" />
       ) : !workers || workers.length === 0 ? (
         <EmptyState
@@ -335,7 +449,9 @@ export default function WorkersView() {
                 )}
               </div>
               <div>
-                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Labels</div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                  Labels <span className="font-normal normal-case tracking-normal text-ink-400">(display-only)</span>
+                </div>
                 <div className="flex flex-wrap gap-1">
                   {(selected.labels ?? []).length === 0 ? (
                     <span className="text-ink-400">—</span>
@@ -347,9 +463,14 @@ export default function WorkersView() {
                     ))
                   )}
                 </div>
+                <p className="mt-1 text-[11px] text-ink-400">
+                  Set at <code className="font-mono">graphyn worker start --labels</code> — no PATCH API yet.
+                </p>
               </div>
               <div>
-                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Pools</div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                  Pools <span className="font-normal normal-case tracking-normal text-ink-400">(display-only)</span>
+                </div>
                 <div className="flex flex-wrap gap-1">
                   {(selected.pools ?? []).length === 0 ? (
                     <span className="text-ink-400">—</span>
@@ -361,6 +482,9 @@ export default function WorkersView() {
                     ))
                   )}
                 </div>
+                <p className="mt-1 text-[11px] text-ink-400">
+                  Set with <code className="font-mono">--pool</code> on worker start.
+                </p>
               </div>
               <div>
                 <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">Resources</div>
@@ -397,6 +521,25 @@ export default function WorkersView() {
                   <p className="text-ink-700">{selected.plugins.join(', ')}</p>
                 </div>
               )}
+            </div>
+            <div className="border-t border-ink-100 px-4 py-3">
+              <ConfirmButton
+                label="Deregister"
+                confirmLabel="Confirm deregister"
+                danger
+                onConfirm={() => {
+                  const id = selected.worker_id
+                  void apiJson(`/workers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+                    .then(() => {
+                      pushToast(`Deregistered ${id}`, 'success')
+                      setSelected(null)
+                      void refresh()
+                    })
+                    .catch((err) =>
+                      pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                    )
+                }}
+              />
             </div>
           </aside>
         </div>

@@ -2,6 +2,7 @@ import React from 'react'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, ChevronRight, Copy, Info, X } from 'lucide-react'
 import { prettyScalar, startCase } from '../lib/format'
+import { goView } from '../routes/nav'
 
 export function EmptyState({
   title,
@@ -160,9 +161,14 @@ export function ConfirmButton({
       ref={btnRef}
       type="button"
       disabled={disabled}
-      className={danger ? 'btn-danger' : 'btn-secondary'}
+      className={clsx(
+        danger ? 'btn-danger' : 'btn-secondary',
+        armed && 'ring-2 ring-offset-1',
+        armed && (danger ? 'ring-rose-400' : 'ring-accent-400'),
+      )}
       aria-pressed={armed}
-      aria-label={armed ? confirmLabel : label}
+      aria-label={armed ? `${confirmLabel} — click again to confirm, Esc cancels` : label}
+      title={armed ? 'Click again to confirm · Esc cancels' : undefined}
       onClick={() => {
         if (!armed) {
           setArmed(true)
@@ -188,7 +194,13 @@ export function ToastHost({
   onDismiss,
   onDismissAll,
 }: {
-  toasts: Array<{ id: string; message: string; tone: 'info' | 'success' | 'error' }>
+  toasts: Array<{
+    id: string
+    message: string
+    tone: 'info' | 'success' | 'error'
+    actionLabel?: string
+    onAction?: () => void
+  }>
   onDismiss: (id: string) => void
   onDismissAll?: () => void
 }) {
@@ -234,7 +246,21 @@ export function ToastHost({
           ) : (
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
           )}
-          <div className="min-w-0 flex-1 break-words text-sm">{t.message}</div>
+          <div className="min-w-0 flex-1">
+            <div className="break-words text-sm">{t.message}</div>
+            {t.actionLabel && t.onAction ? (
+              <button
+                type="button"
+                className="mt-1.5 text-[12px] font-semibold underline underline-offset-2 hover:opacity-80"
+                onClick={() => {
+                  t.onAction?.()
+                  onDismiss(t.id)
+                }}
+              >
+                {t.actionLabel}
+              </button>
+            ) : null}
+          </div>
           <button
             type="button"
             className="text-ink-400 hover:text-ink-700"
@@ -269,8 +295,7 @@ export class ErrorBoundary extends React.Component<
               className="btn-primary"
               onClick={() => {
                 this.setState({ error: null })
-                window.location.hash = '#/projects'
-                window.dispatchEvent(new HashChangeEvent('hashchange'))
+                goView('projects')
               }}
             >
               Back to Projects
@@ -315,12 +340,12 @@ export function NeedProjectPrompt({
   return (
     <div className="flex h-full items-center justify-center p-6">
       <div className="mx-auto max-w-sm empty-state-shell py-10">
-        <p className="text-base font-semibold tracking-tight text-ink-950">Open a project first</p>
+        <p className="text-base font-semibold tracking-tight text-ink-950">Open a workspace first</p>
         <p className="mt-2 text-sm leading-relaxed text-ink-500">
           Editor, Runs, and Compare need an active workspace.
         </p>
         <button type="button" className="btn-primary mt-5" onClick={onOpenProjects}>
-          Open Projects
+          Projects
         </button>
       </div>
     </div>
@@ -356,12 +381,19 @@ export function PageHeader({
 export function CollapsibleJson({
   value,
   label = 'JSON',
+  defaultOpen = false,
 }: {
   value: unknown
   label?: string
+  defaultOpen?: boolean
 }) {
+  const [open, setOpen] = React.useState(defaultOpen)
   return (
-    <details className="rounded-lg border border-ink-100 bg-ink-50">
+    <details
+      className="rounded-lg border border-ink-100 bg-ink-50"
+      open={open}
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+    >
       <summary className="cursor-pointer select-none px-2.5 py-1.5 text-xs font-medium text-ink-500">
         {label}
       </summary>

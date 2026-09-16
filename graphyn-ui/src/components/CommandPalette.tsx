@@ -3,6 +3,9 @@ import { Search, X } from 'lucide-react'
 import { useAppStore, type AppView } from '../store/appStore'
 import { apiJson } from '../api/client'
 import { shortRunId } from '../lib/format'
+import { pathForView } from '../routes/viewMap'
+import { navigatePath } from '../routes/parsePath'
+import { paths } from '../routes/paths'
 
 type PaletteItem = {
   id: string
@@ -17,15 +20,17 @@ const VIEW_JUMPS: Array<{ id: AppView; label: string; keywords?: string }> = [
   { id: 'projects', label: 'Home', keywords: 'home workspace projects j overview' },
   { id: 'builder', label: 'Editor', keywords: 'builder canvas pipeline b' },
   { id: 'runs', label: 'Runs', keywords: 'runs history r' },
+  { id: 'models', label: 'Models', keywords: 'models registry mlflow m' },
   { id: 'data', label: 'Datasets', keywords: 'datasets inputs outputs d library' },
   { id: 'artifacts', label: 'Artifacts', keywords: 'artifacts files a browse registry' },
   { id: 'templates', label: 'Templates', keywords: 'starter build t' },
-  { id: 'proposals', label: 'Proposals', keywords: 'pr agent p' },
+  { id: 'proposals', label: 'Agent inbox', keywords: 'pr agent proposals p' },
   { id: 'plugins', label: 'Library · Plugins', keywords: 'catalog library plugins l' },
-  { id: 'edge', label: 'Edge package', keywords: 'tflite deploy g edge' },
+  { id: 'edge', label: 'Ship', keywords: 'tflite deploy g edge ship' },
   { id: 'workers', label: 'Worker fleet', keywords: 'distributed gpu w workers fleet' },
   { id: 'secrets', label: 'Secrets', keywords: 'credentials k' },
   { id: 'system', label: 'Ops', keywords: 'health schedules admin s system ops' },
+  { id: 'access', label: 'Access', keywords: 'rbac actor roles access' },
 ]
 
 function fuzzyScore(query: string, text: string): number {
@@ -71,6 +76,7 @@ export function CommandPalette({
   const openData = useAppStore((s) => s.openData)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openEdge = useAppStore((s) => s.openEdge)
+  const openTrace = useAppStore((s) => s.openTrace)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const activeProject = useAppStore((s) => s.activeProject)
 
@@ -126,7 +132,8 @@ export function CommandPalette({
   const goView = React.useCallback(
     (id: AppView) => {
       setView(id)
-      window.history.replaceState(null, '', `#/${id}`)
+      const path = pathForView(id, { workspaceId: useAppStore.getState().activeProject }) || paths.workspaces()
+      navigatePath(path)
       setOpen(false)
     },
     [setView, setOpen],
@@ -143,8 +150,7 @@ export function CommandPalette({
         keywords: 'switch change workspace leave picker',
         run: () => {
           setView('projects')
-          window.history.replaceState(null, '', '#/projects')
-          window.dispatchEvent(new HashChangeEvent('hashchange'))
+          navigatePath(paths.workspaces())
           setOpen(false)
         },
       })
@@ -157,8 +163,7 @@ export function CommandPalette({
         run: () => {
           closeProject()
           setView('projects')
-          window.history.replaceState(null, '', '#/projects')
-          window.dispatchEvent(new HashChangeEvent('hashchange'))
+          navigatePath(paths.workspaces())
           setOpen(false)
         },
       })
@@ -197,10 +202,10 @@ export function CommandPalette({
       })
       out.push({
         id: 'workspace:edge',
-        label: 'Edge package',
+        label: 'Ship',
         hint: activeProject,
         group: 'Workspace',
-        keywords: 'edge tflite deploy package',
+        keywords: 'edge tflite deploy package ship',
         run: () => {
           openEdge({ project: activeProject })
           setOpen(false)
@@ -210,28 +215,33 @@ export function CommandPalette({
     out.push({
       id: 'runs:lineage',
       label: 'Runs → Lineage',
-      hint: '#/trace',
+      hint: lastRunId ? shortRunId(lastRunId) : 'last run',
       group: 'Runs panels',
       keywords: 'lineage trace provenance deep link o',
-      run: () => goView('trace'),
+      run: () => {
+        const rid = useAppStore.getState().lastRunId
+        if (rid) openTrace({ runId: rid })
+        else goView('runs')
+      },
     })
     out.push({
       id: 'runs:compare',
       label: 'Runs → Compare runs',
-      hint: '#/runs?tab=compare',
+      hint: '/runs/compare',
       group: 'Runs panels',
       keywords: 'compare experiments metrics e',
       run: () => {
+        const W = useAppStore.getState().activeProject
         setFocusRunsTab('compare')
-        goView('runs')
-        window.history.replaceState(null, '', '#/runs?tab=compare')
+        if (W) navigatePath(paths.runsCompare(W))
+        else goView('runs')
       },
     })
     for (const v of VIEW_JUMPS) {
       out.push({
         id: `view:${v.id}`,
         label: v.label,
-        hint: `#/${v.id}`,
+        hint: pathForView(v.id, { workspaceId: activeProject }) || `/${v.id}`,
         group: 'Views',
         keywords: v.keywords,
         run: () => goView(v.id),

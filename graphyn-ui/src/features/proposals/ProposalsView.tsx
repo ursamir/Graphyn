@@ -3,12 +3,15 @@ import {
   Check,
   ExternalLink,
   RefreshCw,
+  Save,
   Search,
+  Sparkles,
   X,
 } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
+import { emptyGraph } from '../../types/graph'
 import {
   CollapsibleJson,
   EmptyState,
@@ -18,12 +21,48 @@ import {
   StatusBadge,
 } from '../../components/ui'
 import { formatLocaleDateTime } from '../../lib/format'
+import { paths } from '../../routes/paths'
+import { navigatePath } from '../../routes/parsePath'
+import { onPathChange, readSearchParams } from '../../routes/nav'
 
 /** MCP propose_graph docs — console has no create-proposal form (POST needs full GraphIR). */
 const DOCS_MCP_PROPOSE =
   'https://github.com/ursamir/Graphyn/blob/main/docs/MCP_SERVER.md#propose_graph'
 
 const BANNER_DISMISS_KEY = 'graphyn.proposals.bannerDismissed'
+const chatKey = (id: string) => `graphyn.proposal.chat.${id}`
+
+type ChatTurn = { role: 'user' | 'assistant'; text: string; at: string }
+
+function readChat(id: string): ChatTurn[] {
+  try {
+    const raw = localStorage.getItem(chatKey(id))
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    return Array.isArray(parsed) ? (parsed as ChatTurn[]) : []
+  } catch {
+    return []
+  }
+}
+
+function appendChat(id: string, turn: ChatTurn) {
+  try {
+    const next = [...readChat(id), turn].slice(-50)
+    localStorage.setItem(chatKey(id), JSON.stringify(next))
+  } catch {
+    /* ignore */
+  }
+}
+
+function pipelineSlugFromSummary(summary?: string): string {
+  const base = (summary || 'proposal')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40)
+  return base || 'proposal'
+}
 
 type DiffSummary = {
   nodes_added?: string[]
@@ -62,9 +101,14 @@ type ProposalSummary = {
 
 type ProposalDetail = ProposalSummary & {
   proposed_graph?: GraphIR
+  /** Optional alias / MCP payload field. */
+  graph?: GraphIR
+  /** Present when create included a base graph (side-by-side diff). */
+  base_graph?: GraphIR
   diff_summary?: DiffSummary
   resolved_by?: string
   reject_reason?: string
+  metadata?: Record<string, unknown>
 }
 
 function countLine(p: ProposalSummary): string {
@@ -95,12 +139,12 @@ function writeBannerDismissed() {
   }
 }
 
-function parseProposalsHash(): { id?: string } {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return {}
-  const params = new URLSearchParams(raw.slice(qIdx + 1))
-  const id = (params.get('id') || '').trim()
+function parseProposalsLocation(): { id?: string } {
+  const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+  if (parts[0] === 'agent' && parts[1] === 'inbox' && parts[2]) {
+    return { id: decodeURIComponent(parts[2]) }
+  }
+  const id = (readSearchParams().get('id') || '').trim()
   return id ? { id } : {}
 }
 
@@ -108,17 +152,22 @@ export default function ProposalsView() {
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
   const setPendingProposalCount = useAppStore((s) => s.setPendingProposalCount)
+  const activeProject = useAppStore((s) => s.activeProject)
 
   const [items, setItems] = React.useState<ProposalSummary[] | null>(null)
   const [filter, setFilter] = React.useState<'pending' | 'all' | 'accepted' | 'rejected'>('pending')
   const [search, setSearch] = React.useState('')
-  const [selectedId, setSelectedId] = React.useState<string | null>(() => parseProposalsHash().id ?? null)
+  const [selectedId, setSelectedId] = React.useState<string | null>(() => parseProposalsLocation().id ?? null)
   const [detail, setDetail] = React.useState<ProposalDetail | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [detailLoading, setDetailLoading] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
   const [bannerDismissed, setBannerDismissed] = React.useState(() => readBannerDismissed())
+  const [generatePrompt, setGeneratePrompt] = React.useState('')
+  const [generateBusy, setGenerateBusy] = React.useState(false)
+  const [generateOpen, setGenerateOpen] = React.useState(false)
+  const [chatTurns, setChatTurns] = React.useState<ChatTurn[]>([])
 
   const refresh = React.useCallback(async () => {
     setError(null)
@@ -129,8 +178,8 @@ export default function ProposalsView() {
       const list = Array.isArray(data?.proposals) ? data.proposals : []
       setItems(list)
       setSelectedId((prev) => {
-        const fromHash = parseProposalsHash().id
-        if (fromHash && list.some((p) => p.id === fromHash)) return fromHash
+        const fromPath = parseProposalsLocation().id
+        if (fromPath && list.some((p) => p.id === fromPath)) return fromPath
         if (prev && list.some((p) => p.id === prev)) return prev
         return list[0]?.id ?? null
       })
@@ -152,28 +201,25 @@ export default function ProposalsView() {
 
   React.useEffect(() => {
     const apply = () => {
-      const id = parseProposalsHash().id
+      const id = parseProposalsLocation().id
       if (id) setSelectedId(id)
     }
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
+    return onPathChange(apply)
   }, [])
 
   React.useEffect(() => {
-    const params = new URLSearchParams()
-    if (selectedId) params.set('id', selectedId)
-    const qs = params.toString()
-    const next = qs ? `#/proposals?${qs}` : '#/proposals'
-    if (window.location.hash !== next) {
-      window.history.replaceState(null, '', next)
-    }
+    const next = selectedId ? paths.proposal(selectedId) : paths.agentInbox()
+    const cur = `${window.location.pathname}${window.location.search}`
+    if (cur !== next) navigatePath(next, true)
   }, [selectedId])
 
   React.useEffect(() => {
     if (!selectedId) {
       setDetail(null)
+      setChatTurns([])
       return
     }
+    setChatTurns(readChat(selectedId))
     let cancelled = false
     setDetailLoading(true)
     void (async () => {
@@ -205,12 +251,81 @@ export default function ProposalsView() {
     })
   }, [items, search])
 
+  // When search filters out the current selection, snap to first visible (or clear).
+  React.useEffect(() => {
+    if (!items || loading) return
+    if (!selectedId) return
+    if (visibleItems.some((p) => p.id === selectedId)) return
+    setSelectedId(visibleItems[0]?.id ?? null)
+  }, [items, loading, selectedId, visibleItems])
+
   const dismissBanner = () => {
     writeBannerDismissed()
     setBannerDismissed(true)
   }
 
-  const onAccept = async () => {
+  const onGenerate = async () => {
+    const prompt = generatePrompt.trim()
+    if (!prompt) {
+      pushToast('Enter a prompt / summary for the proposal', 'error')
+      return
+    }
+    setGenerateBusy(true)
+    try {
+      const stub = emptyGraph('agent-proposal')
+      const projectTag = activeProject?.trim() || ''
+      stub.metadata = {
+        ...stub.metadata,
+        description: prompt.slice(0, 500),
+        tags: [
+          ...(stub.metadata.tags || []),
+          'agent-inbox',
+          ...(projectTag ? [`project:${projectTag}`] : []),
+        ],
+        ...(projectTag ? { project: projectTag } : {}),
+      }
+      const summaryParts = [
+        prompt.slice(0, 240),
+        projectTag ? `[project:${projectTag}]` : null,
+      ].filter(Boolean)
+      const created = await apiJson<ProposalDetail>('/proposals', {
+        method: 'POST',
+        body: JSON.stringify({
+          summary: summaryParts.join(' ').slice(0, 280),
+          graph: stub,
+          actor: 'ui-generate',
+        }),
+      })
+      if (created?.id) {
+        appendChat(created.id, {
+          role: 'user',
+          text: prompt,
+          at: new Date().toISOString(),
+        })
+        setSelectedId(created.id)
+        setChatTurns(readChat(created.id))
+      }
+      pushToast('Proposal created — review in the inbox', 'success')
+      setGeneratePrompt('')
+      setGenerateOpen(false)
+      setFilter('pending')
+      await refresh()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setGenerateBusy(false)
+    }
+  }
+
+  const resolveAcceptedGraph = (accepted: ProposalDetail): GraphIR => {
+    const graph = accepted.proposed_graph || accepted.graph
+    if (!graph || typeof graph !== 'object') {
+      throw new Error('Accepted proposal did not include a proposed_graph')
+    }
+    return graph as GraphIR
+  }
+
+  const onAccept = async (andSave: boolean) => {
     if (!detail?.id || busy) return
     setBusy(true)
     try {
@@ -218,12 +333,23 @@ export default function ProposalsView() {
         method: 'POST',
         body: JSON.stringify({ actor: 'ui' }),
       })
-      const graph = accepted.proposed_graph
-      if (!graph || typeof graph !== 'object') {
-        throw new Error('Accepted proposal did not include a proposed_graph')
+      const graph = resolveAcceptedGraph(accepted)
+      loadGraphIntoBuilder(graph)
+      if (andSave) {
+        const project = (activeProject || '').trim()
+        if (!project) {
+          pushToast('Accepted → Editor. Open a project workspace to save as a pipeline.', 'info')
+        } else {
+          const name = pipelineSlugFromSummary(detail.summary || accepted.summary)
+          await apiJson(`/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(name)}`, {
+            method: 'PUT',
+            body: JSON.stringify(graph),
+          })
+          pushToast(`Accepted & saved draft ${project}/${name}`, 'success')
+        }
+      } else {
+        pushToast('Applied to Editor — review the graph, then Run', 'success')
       }
-      pushToast('Applied to Editor — review the graph, then Run', 'success')
-      loadGraphIntoBuilder(graph as GraphIR)
       void refresh()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -250,15 +376,26 @@ export default function ProposalsView() {
   }
 
   const diff = detail?.diff_summary
+  const proposedGraph = detail?.proposed_graph || detail?.graph
+  const baseGraph = detail?.base_graph
+  const showSideBySide = !!(baseGraph && proposedGraph)
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="shrink-0 border-b border-ink-100 px-4 py-4 sm:px-6">
         <PageHeader
-          title="Proposals"
-          description="Review agent GraphIR here — agents create proposals via MCP; this console only reviews and accepts."
+          title="Agent inbox"
+          description="Generate stub proposals via POST /proposals, or review agent GraphIR from MCP propose_graph."
           actions={
             <>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setGenerateOpen((o) => !o)}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Generate proposal
+              </button>
               <button type="button" className="btn-quiet" onClick={() => void refresh()} disabled={loading}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                 Refresh
@@ -266,10 +403,49 @@ export default function ProposalsView() {
             </>
           }
         />
+        {generateOpen && (
+          <div className="mt-3 space-y-2 rounded-xl border border-ink-200 bg-white p-3">
+            <label className="block text-[12px] font-medium text-ink-700">
+              Prompt / summary
+              <textarea
+                className="field-control mt-1 min-h-[4.5rem] w-full text-sm"
+                value={generatePrompt}
+                onChange={(e) => setGeneratePrompt(e.target.value)}
+                placeholder="Describe the graph change (creates a stub GraphIR proposal for review)…"
+              />
+            </label>
+            <p className="text-[11px] text-ink-500">
+              Uses <code className="font-mono">POST /api/v1/proposals</code> with an empty-graph stub. Richer
+              generation still lives in MCP <code className="font-mono">propose_graph</code> /{' '}
+              <code className="font-mono">generate_graph</code>.
+              {activeProject ? (
+                <>
+                  {' '}
+                  Will bind to workspace <code className="font-mono">{activeProject}</code>.
+                </>
+              ) : (
+                <> Open a project workspace to auto-bind the proposal.</>
+              )}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={generateBusy}
+                onClick={() => void onGenerate()}
+              >
+                {generateBusy ? 'Creating…' : 'Create proposal'}
+              </button>
+              <button type="button" className="btn-quiet" onClick={() => setGenerateOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {!bannerDismissed && (
           <div className="mt-3 flex flex-wrap items-start gap-3 rounded-xl border border-accent-200 bg-accent-50/60 px-3 py-2.5 text-sm text-ink-800">
             <p className="min-w-0 flex-1">
-              Create proposals via MCP <code className="font-mono text-[12px]">propose_graph</code> or{' '}
+              Agents create proposals via MCP <code className="font-mono text-[12px]">propose_graph</code> or{' '}
               <code className="font-mono text-[12px]">POST /api/v1/proposals</code>; review and accept them here.
             </p>
             <div className="flex shrink-0 items-center gap-2">
@@ -330,20 +506,15 @@ export default function ProposalsView() {
                 title="No proposals yet"
                 description={
                   filter === 'pending'
-                    ? 'Agents create proposals via MCP propose_graph or POST /api/v1/proposals. This console only reviews and accepts them into the Editor — it does not create proposals here.'
+                    ? 'Generate a stub proposal above, or create via MCP propose_graph / POST /api/v1/proposals. Accept loads GraphIR into the Editor.'
                     : 'Nothing matches this filter.'
                 }
                 action={
                   filter === 'pending' ? (
-                    <a
-                      href={DOCS_MCP_PROPOSE}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-primary inline-flex items-center gap-1"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      MCP propose_graph docs
-                    </a>
+                    <button type="button" className="btn-primary inline-flex items-center gap-1" onClick={() => setGenerateOpen(true)}>
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Generate proposal
+                    </button>
                   ) : undefined
                 }
               />
@@ -376,8 +547,14 @@ export default function ProposalsView() {
                         </span>
                         <StatusBadge status={p.status} />
                       </div>
-                      <div className="text-[11px] text-ink-500">
-                        {p.actor || 'unknown'} · {formatLocaleDateTime(p.created_at)}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span
+                          className="inline-flex max-w-full truncate rounded-md bg-ink-100 px-1.5 py-0.5 text-[10px] font-medium text-ink-700"
+                          title={p.actor || 'unknown'}
+                        >
+                          {p.actor || 'unknown'}
+                        </span>
+                        <span className="text-[11px] text-ink-500">{formatLocaleDateTime(p.created_at)}</span>
                       </div>
                       <div className="font-mono text-[10px] text-ink-400">{countLine(p)}</div>
                     </button>
@@ -407,7 +584,10 @@ export default function ProposalsView() {
                     <StatusBadge status={detail.status} />
                   </div>
                   <p className="mt-1 text-sm text-ink-500">
-                    Proposed by <span className="font-medium text-ink-700">{detail.actor || 'unknown'}</span>
+                    Proposed by{' '}
+                    <span className="inline-flex items-center rounded-md bg-ink-100 px-1.5 py-0.5 text-[12px] font-medium text-ink-800">
+                      {detail.actor || 'unknown'}
+                    </span>
                     {detail.created_at ? ` · ${formatLocaleDateTime(detail.created_at)}` : ''}
                     <span className="ml-2 font-mono text-[11px] text-ink-400">{detail.id}</span>
                   </p>
@@ -416,15 +596,43 @@ export default function ProposalsView() {
                   ) : null}
                 </div>
                 {detail.status === 'pending' && (
-                  <div className="flex gap-2">
-                    <button type="button" className="btn-secondary" onClick={() => void onReject()} disabled={busy}>
-                      <X className="h-3.5 w-3.5" />
-                      Reject
-                    </button>
-                    <button type="button" className="btn-primary" onClick={() => void onAccept()} disabled={busy}>
-                      <Check className="h-3.5 w-3.5" />
-                      Accept → Editor
-                    </button>
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button type="button" className="btn-secondary" onClick={() => void onReject()} disabled={busy}>
+                        <X className="h-3.5 w-3.5" />
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => void onAccept(false)}
+                        disabled={busy}
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        Accept → Editor
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => void onAccept(true)}
+                        disabled={busy}
+                        title={
+                          activeProject
+                            ? `Save draft under ${activeProject}/${pipelineSlugFromSummary(detail.summary)}`
+                            : 'Accept then save requires an open project workspace'
+                        }
+                      >
+                        <Save className="h-3.5 w-3.5" />
+                        Accept then save…
+                      </button>
+                    </div>
+                    <label
+                      className="flex cursor-not-allowed items-center gap-1.5 text-[11px] text-ink-400"
+                      title="Partial apply is not supported by the API yet"
+                    >
+                      <input type="checkbox" checked={false} disabled className="rounded border-ink-300" />
+                      Partial apply (coming)
+                    </label>
                   </div>
                 )}
               </div>
@@ -485,7 +693,38 @@ export default function ProposalsView() {
                 </p>
               )}
 
-              <CollapsibleJson value={detail.proposed_graph} label="Proposed GraphIR" />
+              {showSideBySide ? (
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <CollapsibleJson value={baseGraph} label="Base GraphIR" defaultOpen />
+                  <CollapsibleJson value={proposedGraph} label="Proposed GraphIR" defaultOpen />
+                </div>
+              ) : (
+                <CollapsibleJson value={proposedGraph} label="Proposed GraphIR" />
+              )}
+
+              {chatTurns.length > 0 ? (
+                <div className="rounded-xl border border-ink-200 bg-white p-4 shadow-sm">
+                  <h4 className="mb-2 text-sm font-semibold text-ink-900">Chat transcript</h4>
+                  <ul className="space-y-2">
+                    {chatTurns.map((t, i) => (
+                      <li
+                        key={`${t.at}-${i}`}
+                        className={
+                          t.role === 'user'
+                            ? 'rounded-lg border border-accent-100 bg-accent-50/60 px-3 py-2 text-[13px] text-ink-800'
+                            : 'rounded-lg border border-ink-100 bg-ink-50/80 px-3 py-2 text-[13px] text-ink-700'
+                        }
+                      >
+                        <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                          {t.role} · {formatLocaleDateTime(t.at)}
+                        </div>
+                        <div className="whitespace-pre-wrap">{t.text}</div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
               <CollapsibleJson value={detail} label="Full proposal JSON" />
             </div>
           )}

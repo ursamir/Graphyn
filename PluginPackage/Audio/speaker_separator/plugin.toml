@@ -27,6 +27,7 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+runtime = "isolated"
 node_types = ["speaker_separator"]
 
 [config_schema.speaker_separator]

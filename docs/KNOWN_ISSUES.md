@@ -101,7 +101,7 @@
 
 - **CI-UI-BUILD-1 / CI-GATE-1:** `scripts/ui_build.sh` cds into `graphyn-ui/`; `.github/workflows/ci.yml` + expanded `ci_smoke.sh`.
 - **SEC-INLINE-EXEC-1 / YAML validate:** `assert_no_inline_secrets` on `LocalPythonBackend` / `DistributedBackend.execute`, MCP execute, YAML validate branch.
-- **SEC input symlink:** resolve jail by default; `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1` for Docker; `/input-files` `follow_symlink=False`.
+- **SEC input symlink:** resolve jail by default; Compose sets `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1` so bind-mounted host dataset symlinks browse. Override to `0` to fail closed. `GET /data/inputs` returns `accessible: false` when still blocked.
 - **Plugin allowlist prod:** empty allowlist denies remotes when `auth_required()`.
 - **ASR/LLM egress:** share `validate_http_egress_url`.
 - **SCHED-RACE-1:** flock + claim-before-tick; corrupt `schedules.json` fail-closed.

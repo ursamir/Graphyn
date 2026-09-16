@@ -28,6 +28,7 @@ optional_dependencies = [
     "soundfile>=0.12",
 ]
 
+runtime = "isolated"
 node_types = ["voice_converter"]
 
 [config_schema.voice_converter]

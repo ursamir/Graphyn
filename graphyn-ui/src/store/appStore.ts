@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import type { GraphIR, NodeCatalogEntry } from '../types/graph'
+import { paths } from '../routes/paths'
+import { navigatePath, parsePathname } from '../routes/parsePath'
 
 export type AppView =
   | 'builder'
@@ -16,16 +18,28 @@ export type AppView =
   | 'edge'
   | 'experiments'
   | 'proposals'
+  | 'models'
+  | 'access'
+  | 'devices'
 
 export type ToastTone = 'info' | 'success' | 'error'
 
 export type RunOutcome = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
-interface Toast {
+export interface Toast {
   id: string
   message: string
   tone: ToastTone
   createdAt: number
+  actionLabel?: string
+  onAction?: () => void
+}
+
+export type PushToastOpts = {
+  actionLabel?: string
+  onAction?: () => void
+  /** Override auto-dismiss ms (default by tone). */
+  ttlMs?: number
 }
 
 const MAX_TOASTS = 3
@@ -70,7 +84,7 @@ function persistActiveProject(name: string | null) {
 export type FocusRunPanel = 'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage'
 
 /** Top-level mode on the Run page — History vs Compare (W&B/MLflow pattern). */
-export type FocusRunsTab = 'history' | 'compare'
+export type FocusRunsTab = 'history' | 'compare' | 'live'
 
 interface AppState {
   view: AppView
@@ -122,7 +136,7 @@ interface AppState {
   runOutcome: RunOutcome
   setRunOutcome: (outcome: RunOutcome) => void
   toasts: Toast[]
-  pushToast: (message: string, tone?: ToastTone) => void
+  pushToast: (message: string, tone?: ToastTone, opts?: PushToastOpts) => void
   dismissToast: (id: string) => void
   dismissAllToasts: () => void
   /** Clear active project and strip ?project= from Data/Projects hash so global library is unscoped. */
@@ -149,58 +163,36 @@ interface AppState {
 }
 
 
-/** Strip ?project= from Data/Projects hashes so global library is not left scoped. */
+/** Close workspace: leave /workspaces/:id for picker or library. */
 function stripProjectFromWorkspaceHash() {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const pathOnly = raw.split('?')[0] || ''
-  const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return
-  const params = new URLSearchParams(raw.slice(qIdx + 1))
-  if (!params.has('project')) return
-  params.delete('project')
-  if (
-    pathOnly === 'data' ||
-    pathOnly.startsWith('data/') ||
-    pathOnly === 'projects' ||
-    pathOnly.startsWith('projects/')
-  ) {
-    const qs = params.toString()
-    replaceHash(qs ? `#/${pathOnly}?${qs}` : `#/${pathOnly}`)
+  const { pathname } = window.location
+  if (pathname.startsWith('/workspaces/')) {
+    navigatePath(paths.workspaces(), true)
+    return
+  }
+  if (pathname.startsWith('/library/datasets')) {
+    navigatePath(paths.libraryDatasets(), true)
   }
 }
 
-/** replaceState does not fire hashchange — notify mounted views to re-parse query. */
-function replaceHash(hash: string) {
-  window.history.replaceState(null, '', hash)
-  window.dispatchEvent(new HashChangeEvent('hashchange'))
+function panelPathSegment(
+  panel?: 'logs' | 'artifacts' | 'lineage' | 'debug' | 'checkpoints' | null,
+): 'logs' | 'outputs' | 'lineage' | 'details' | 'checkpoints' | undefined {
+  if (!panel) return undefined
+  if (panel === 'artifacts') return 'outputs'
+  if (panel === 'debug') return 'details'
+  return panel
 }
 
 function readInitialView(): AppView {
   if (typeof window === 'undefined') return 'projects'
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const pathOnly = (raw.split('?')[0] || '').split('/')[0]
-  const known: AppView[] = [
-    'builder',
-    'runs',
-    'artifacts',
-    'plugins',
-    'templates',
-    'data',
-    'projects',
-    'system',
-    'secrets',
-    'workers',
-    'trace',
-    'edge',
-    'experiments',
-    'proposals',
-  ]
-  if (known.includes(pathOnly as AppView)) return pathOnly as AppView
+  if (window.location.pathname && window.location.pathname !== '/') {
+    return parsePathname(window.location.pathname, window.location.search).view
+  }
   return readStoredActiveProject() ? 'builder' : 'projects'
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
-  // Prefer hash deep-link; else Builder if a workspace is open, else Projects picker.
   view: readInitialView(),
   setView: (view) => set({ view }),
   focusRunId: null,
@@ -215,7 +207,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       persistActiveProject(proj)
       set({ activeProject: proj })
     }
-    replaceHash(`#/runs/${id}`)
+    const W = proj || get().activeProject || ''
+    const seg = panelPathSegment(opts?.panel)
+    if (W) navigatePath(seg ? paths.runPanel(W, id, seg) : paths.run(W, id))
+    else navigatePath(paths.workspaces())
     set({
       view: 'runs',
       focusRunId: id,
@@ -231,12 +226,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       persistActiveProject(proj)
       set({ activeProject: proj })
     }
-    // Preserve existing activeProject when deep-linking without an explicit project.
     const aid = artifactId?.trim() || ''
     const rid = runId?.trim() || ''
-    // Run-scoped lineage stays on the Run page (no Trace app hop).
+    const W = get().activeProject || ''
     if (rid && !aid) {
-      replaceHash(`#/runs/${rid}`)
+      if (W) navigatePath(paths.runPanel(W, rid, 'lineage'))
       set({
         view: 'runs',
         focusRunId: rid,
@@ -247,12 +241,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
       return
     }
-    const params = new URLSearchParams()
-    if (aid) params.set('artifact_id', aid)
-    if (rid) params.set('run_id', rid)
-    const qs = params.toString()
-    replaceHash(qs ? `#/trace?${qs}` : '#/trace')
-    set({ view: 'trace' })
+    navigatePath(paths.libraryArtifacts(aid ? { artifactId: aid } : undefined))
+    set({ view: aid ? 'artifacts' : 'trace', focusArtifactId: aid || null })
   },
   openArtifacts: ({ runId, artifactId, project } = {}) => {
     const proj = project?.trim() || ''
@@ -262,9 +252,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const aid = artifactId?.trim() || ''
     const rid = runId?.trim() || ''
-    // Run-scoped files stay on Runs → Files (Artifacts library is for ids / cross-run).
+    const W = get().activeProject || ''
     if (rid && !aid) {
-      replaceHash(`#/runs/${rid}`)
+      if (W) navigatePath(paths.runPanel(W, rid, 'outputs'))
       set({
         view: 'runs',
         focusRunId: rid,
@@ -275,64 +265,57 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
       return
     }
-    const params = new URLSearchParams()
-    if (rid) params.set('run_id', rid)
-    if (aid) params.set('artifact_id', aid)
-    const qs = params.toString()
-    replaceHash(qs ? `#/artifacts?${qs}` : '#/artifacts')
+    navigatePath(paths.libraryArtifacts(aid ? { artifactId: aid } : undefined))
     set({ view: 'artifacts', focusArtifactId: aid || null })
   },
   openExperiments: ({ runIds } = {}) => {
-    const params = new URLSearchParams()
-    params.set('tab', 'compare')
+    const W = get().activeProject || ''
     const ids = (runIds ?? []).map((id) => id.trim()).filter(Boolean)
-    if (ids.length === 1) params.set('run_id', ids[0])
-    else if (ids.length > 1) params.set('run_id', ids.join(','))
-    replaceHash(`#/runs?${params.toString()}`)
+    if (W) navigatePath(paths.runsCompare(W, ids.length ? ids : undefined))
+    else navigatePath(paths.workspaces())
     set({ view: 'runs', focusRunsTab: 'compare' })
   },
   openProposals: ({ id } = {}) => {
-    const params = new URLSearchParams()
-    if (id?.trim()) params.set('id', id.trim())
-    const qs = params.toString()
-    replaceHash(qs ? `#/proposals?${qs}` : '#/proposals')
+    navigatePath(id?.trim() ? paths.proposal(id.trim()) : paths.agentInbox())
     set({ view: 'proposals' })
   },
-  openEdge: ({ project, version, runId } = {}) => {
+  openEdge: ({ project } = {}) => {
     const proj = project?.trim() || ''
     if (proj) {
       persistActiveProject(proj)
       set({ activeProject: proj })
     }
-    const params = new URLSearchParams()
-    if (proj) params.set('project', proj)
-    if (version?.trim()) params.set('version', version.trim())
-    if (runId?.trim()) params.set('run_id', runId.trim())
-    const qs = params.toString()
-    replaceHash(qs ? `#/edge?${qs}` : '#/edge')
+    const W = proj || get().activeProject || ''
+    navigatePath(W ? paths.ship(W) : paths.deployShip())
     set({ view: 'edge' })
   },
   openData: ({ mode, project, version, label } = {}) => {
-    const params = new URLSearchParams()
-    if (mode) params.set('mode', mode)
-    if (project?.trim()) params.set('project', project.trim())
-    if (version?.trim()) params.set('version', version.trim())
-    if (label?.trim()) params.set('label', label.trim())
-    const qs = params.toString()
-    replaceHash(qs ? `#/data?${qs}` : '#/data')
-    set({ view: 'data' })
+    const proj = project?.trim() || ''
+    if (proj) {
+      persistActiveProject(proj)
+      set({ activeProject: proj, view: 'data' })
+    } else {
+      set({ view: 'data' })
+    }
+    const W = proj || get().activeProject || ''
+    const base = W ? paths.datasets(W) : paths.libraryDatasets()
+    const qs = new URLSearchParams()
+    if (mode) qs.set('mode', mode)
+    if (version?.trim()) qs.set('version', version.trim())
+    if (label?.trim()) qs.set('label', label.trim())
+    if (mode === 'ingest' || mode === 'merge') qs.set('manage', '1')
+    const s = qs.toString()
+    navigatePath(s ? `${base}?${s}` : base)
   },
-  openProjects: ({ project, tab } = {}) => {
-    const params = new URLSearchParams()
+  openProjects: ({ project } = {}) => {
     const name = project?.trim()
     if (name) {
-      params.set('project', name)
       persistActiveProject(name)
       set({ activeProject: name })
+      navigatePath(paths.workspace(name))
+    } else {
+      navigatePath(paths.workspaces())
     }
-    if (tab?.trim()) params.set('tab', tab.trim())
-    const qs = params.toString()
-    replaceHash(qs ? `#/projects?${qs}` : '#/projects')
     set({ view: 'projects' })
   },
   activeProject: readStoredActiveProject(),
@@ -407,10 +390,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   runOutcome: 'idle',
   setRunOutcome: (runOutcome) => set({ runOutcome }),
   toasts: [],
-  pushToast: (message, tone = 'info') => {
+  pushToast: (message, tone = 'info', opts) => {
     const id = crypto.randomUUID()
     set((s) => ({
-      toasts: [...s.toasts, { id, message, tone, createdAt: Date.now() }].slice(-MAX_TOASTS),
+      toasts: [
+        ...s.toasts,
+        {
+          id,
+          message,
+          tone,
+          createdAt: Date.now(),
+          actionLabel: opts?.actionLabel,
+          onAction: opts?.onAction,
+        },
+      ].slice(-MAX_TOASTS),
     }))
     // Drop oldest timers when capped
     const remaining = new Set(get().toasts.map((t) => t.id))
@@ -418,7 +411,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!remaining.has(tid)) clearToastTimer(tid)
     }
     clearToastTimer(id)
-    const ttl = TOAST_TTL_MS[tone] ?? 3500
+    const ttl = opts?.ttlMs ?? (opts?.actionLabel ? 10000 : TOAST_TTL_MS[tone] ?? 3500)
     toastTimers.set(
       id,
       setTimeout(() => {
@@ -446,7 +439,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setGetCanvasGraph: (fn) => set({ getCanvasGraph: fn }),
   pendingGraph: null,
   loadGraphIntoBuilder: (graph) => {
-    window.history.replaceState(null, '', '#/builder')
+    navigatePath(paths.editor(get().activeProject || 'workspace'), true)
     set({ pendingGraph: graph, view: 'builder' })
   },
   consumePendingGraph: () => {

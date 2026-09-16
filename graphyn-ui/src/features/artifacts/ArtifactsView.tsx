@@ -5,6 +5,8 @@ import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
 import { formatLocaleDateTime, humanNodeLabel, humanizeTemplateName, shortRunId } from '../../lib/format'
+import { paths } from '../../routes/paths'
+import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 
 interface Artifact {
   artifact_id?: string
@@ -67,26 +69,22 @@ function formatBytes(n: unknown): string | null {
   return `${(num / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function parseArtifactsHash(): { runId: string; artifactId: string } {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return { runId: '', artifactId: '' }
-  const params = new URLSearchParams(raw.slice(qIdx + 1))
+function parseArtifactsLocation(): { runId: string; artifactId: string } {
+  const params = readSearchParams()
   return {
     runId: (params.get('run_id') || '').trim(),
-    artifactId: (params.get('artifact_id') || '').trim(),
+    artifactId: (params.get('artifactId') || params.get('artifact_id') || '').trim(),
   }
 }
 
-function writeArtifactsHash(runId: string, artifactId: string) {
-  const params = new URLSearchParams()
-  if (runId.trim()) params.set('run_id', runId.trim())
-  if (artifactId.trim()) params.set('artifact_id', artifactId.trim())
-  const qs = params.toString()
-  const next = qs ? `#/artifacts?${qs}` : '#/artifacts'
-  if (window.location.hash !== next) {
-    window.history.replaceState(null, '', next)
-  }
+function writeArtifactsLocation(runId: string, artifactId: string) {
+  replacePathSearch(
+    {
+      artifactId: artifactId.trim() || undefined,
+      run_id: runId.trim() || undefined,
+    },
+    paths.libraryArtifacts().split('?')[0],
+  )
 }
 
 export default function ArtifactsView() {
@@ -97,19 +95,22 @@ export default function ArtifactsView() {
   const pushToast = useAppStore((s) => s.pushToast)
   const focusArtifactId = useAppStore((s) => s.focusArtifactId)
   const activeProject = useAppStore((s) => s.activeProject)
-  const initialHash = React.useMemo(() => parseArtifactsHash(), [])
+  const initialLoc = React.useMemo(() => parseArtifactsLocation(), [])
   const [items, setItems] = React.useState<Artifact[] | null>(null)
   const [selected, setSelected] = React.useState<string | null>(
-    () => initialHash.artifactId || null,
+    () => initialLoc.artifactId || null,
   )
   const [detail, setDetail] = React.useState<unknown>(null)
-  const [runFilter, setRunFilter] = React.useState(() => initialHash.runId)
+  const [runFilter, setRunFilter] = React.useState(() => initialLoc.runId)
   const [nodeTypeFilter, setNodeTypeFilter] = React.useState('')
   const [artifactTypeFilter, setArtifactTypeFilter] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
   const [recentRuns, setRecentRuns] = React.useState<RecentRun[]>([])
   const [typeOptions, setTypeOptions] = React.useState<string[]>([])
+  const [regModelName, setRegModelName] = React.useState('')
+  const [regModelSlug, setRegModelSlug] = React.useState('')
+  const [registerBusy, setRegisterBusy] = React.useState(false)
 
   const idOf = (a: Artifact) => String(a.artifact_id ?? a.id ?? '')
 
@@ -203,6 +204,7 @@ export default function ArtifactsView() {
     const aid = id.trim()
     if (!aid) return
     setSelected(aid)
+    setDetail(null)
     try {
       const d = await apiJson(`/artifacts/${aid}`)
       setDetail(d)
@@ -215,22 +217,22 @@ export default function ArtifactsView() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+      // Keep selected id; detail already cleared so prior artifact is not shown.
     }
   }, [])
 
   React.useEffect(() => {
     const apply = () => {
-      const { runId, artifactId } = parseArtifactsHash()
+      const { runId, artifactId } = parseArtifactsLocation()
       setRunFilter((prev) => (prev === runId ? prev : runId))
       if (artifactId) void open(artifactId)
     }
     apply()
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
+    return onPathChange(apply)
   }, [open])
 
   React.useEffect(() => {
-    writeArtifactsHash(runFilter, selected ?? '')
+    writeArtifactsLocation(runFilter, selected ?? '')
   }, [runFilter, selected])
 
   React.useEffect(() => {
@@ -292,6 +294,38 @@ export default function ArtifactsView() {
     }
   }
 
+  const registerModelFromArtifact = async (runId: string) => {
+    const name = regModelName.trim()
+    const slug = regModelSlug.trim() || name || 'model'
+    if (!name) {
+      pushToast('Enter a model name', 'error')
+      return
+    }
+    if (!runId) {
+      pushToast('Artifact has no linked run', 'error')
+      return
+    }
+    setRegisterBusy(true)
+    try {
+      await apiJson('/models', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          run_id: runId,
+          slug,
+          stage: 'staging',
+        }),
+      })
+      pushToast(`Registered model ${name} @ staging`, 'success')
+      setRegModelName('')
+      setRegModelSlug('')
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setRegisterBusy(false)
+    }
+  }
+
   const runInPicker = recentRuns.some((r) => r.run_id === runFilter.trim())
 
   return (
@@ -299,7 +333,7 @@ export default function ArtifactsView() {
       <div className="overflow-y-auto border-r border-ink-300 bg-white p-4">
         <PageHeader
           title="Artifacts"
-          description="Cross-run artifact registry. For one run's outputs, use Runs → Files."
+          description="Cross-run artifact registry. For one run's downloads, use Runs → Run outputs."
         />
         <div className="mb-3 space-y-2">
           <div className="flex flex-wrap items-end gap-2">
@@ -365,12 +399,12 @@ export default function ArtifactsView() {
                   onChange={(e) => setRunFilter(e.target.value)}
                   placeholder="run id"
                   title={
-                    initialHash.runId && runFilter === initialHash.runId
+                    initialLoc.runId && runFilter === initialLoc.runId
                       ? 'Prefilled from Runs — edit to broaden filter'
                       : undefined
                   }
                   className={`mt-0.5 block rounded-lg border border-ink-200 px-2 py-1 font-mono text-[11px] ${
-                    initialHash.runId && runFilter === initialHash.runId
+                    initialLoc.runId && runFilter === initialLoc.runId
                       ? 'bg-ink-50 text-ink-500'
                       : ''
                   }`}
@@ -388,7 +422,7 @@ export default function ArtifactsView() {
             </div>
           </details>
           <p className="text-[11px] leading-relaxed text-ink-400">
-            Runs → Files shows outputs for one run. Use this registry only for cross-run search or a specific artifact id.
+            Runs → Run outputs shows downloads for one run. Use this registry only for cross-run search or a specific artifact id.
           </p>
         </div>
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
@@ -406,7 +440,7 @@ export default function ArtifactsView() {
                 ? runFilter.trim()
                   ? 'This filter produced no stored artifacts (common for failed or cancelled runs). Clear filters or open the run for logs.'
                   : 'Nothing matches. Clear filters to browse the full library.'
-                : 'Run a pipeline that produces node outputs, then refresh. Prefer Runs → Files for one run.'
+                : 'Run a pipeline that produces node outputs, then refresh. Prefer Runs → Run outputs for one run.'
             }
             action={
               hasActiveFilters ? (
@@ -417,11 +451,7 @@ export default function ArtifactsView() {
                 <button
                   type="button"
                   className="btn-primary"
-                  onClick={() => {
-                    useAppStore.getState().setView('runs')
-                    window.history.replaceState(null, '', '#/runs')
-                    window.dispatchEvent(new HashChangeEvent('hashchange'))
-                  }}
+                  onClick={() => goView('runs')}
                 >
                   Open Runs
                 </button>
@@ -473,11 +503,7 @@ export default function ArtifactsView() {
                 <button
                   type="button"
                   className="btn-primary"
-                  onClick={() => {
-                    useAppStore.getState().setView('runs')
-                    window.history.replaceState(null, '', '#/runs')
-                    window.dispatchEvent(new HashChangeEvent('hashchange'))
-                  }}
+                  onClick={() => goView('runs')}
                 >
                   Open Runs
                 </button>
@@ -608,8 +634,81 @@ export default function ArtifactsView() {
                 className="max-h-80 w-full rounded-xl border border-ink-200 object-contain bg-white"
               />
             )}
+            {(() => {
+              const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
+              const consumers =
+                rec.consumers ??
+                rec.downstream ??
+                rec.downstream_consumers ??
+                (rec.metadata && typeof rec.metadata === 'object' && !Array.isArray(rec.metadata)
+                  ? (rec.metadata as Record<string, unknown>).consumers ??
+                    (rec.metadata as Record<string, unknown>).downstream
+                  : undefined)
+              if (Array.isArray(consumers) && consumers.length > 0) {
+                return (
+                  <div className="rounded-xl border border-ink-200 bg-white px-3 py-2 space-y-1.5">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                      Downstream consumers
+                    </div>
+                    <ul className="space-y-1 text-sm text-ink-700">
+                      {consumers.map((c, i) => (
+                        <li key={i} className="font-mono text-[11px] break-all">
+                          {typeof c === 'string' ? c : JSON.stringify(c)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              }
+              return (
+                <div className="rounded-xl border border-dashed border-ink-200 bg-ink-50/50 px-3 py-2 text-sm text-ink-500">
+                  Downstream consumers — needs provenance API
+                </div>
+              )
+            })()}
+            {(() => {
+              const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
+              const runId = String(rec.run_id ?? '').trim()
+              if (!runId) return null
+              return (
+                <div className="rounded-2xl border border-accent-200/70 bg-accent-50/40 px-4 py-3 space-y-2">
+                  <div className="text-[13px] font-semibold text-ink-950">Register model</div>
+                  <p className="text-[12px] text-ink-600">
+                    Register a model from this artifact&apos;s run ({shortRunId(runId)}) into staging.
+                  </p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
+                      Name
+                      <input
+                        className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                        value={regModelName}
+                        onChange={(e) => setRegModelName(e.target.value)}
+                        placeholder="my-model"
+                      />
+                    </label>
+                    <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
+                      Slug
+                      <input
+                        className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                        value={regModelSlug}
+                        onChange={(e) => setRegModelSlug(e.target.value)}
+                        placeholder="artifact slug"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={registerBusy}
+                      onClick={() => void registerModelFromArtifact(runId)}
+                    >
+                      {registerBusy ? 'Registering…' : 'Register model'}
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
             <p className="rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-600">
-              Prefer Runs → Files for one run. Provenance lives on Runs → Lineage (or this deep link for artifact ids).
+              Prefer Runs → Run outputs for one run. Provenance lives on Runs → Lineage (or this deep link for artifact ids).
             </p>
           </>
         )}

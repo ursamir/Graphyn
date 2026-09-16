@@ -29,6 +29,7 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+runtime = "isolated"
 node_types = ["audio_event_detector"]
 
 [config_schema.audio_event_detector]

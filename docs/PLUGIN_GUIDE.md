@@ -51,7 +51,8 @@ runtime = "inprocess"                              # or "isolated" for conflicti
 - Core deps (numpy, librosa, scipy) → `dependencies`
 - Heavy deps (torch, tensorflow, transformers) → `optional_dependencies` only
 - Never put heavy deps in `dependencies` — blocks CPU-only installs
-- `runtime = "isolated"` — required **and** optional deps go to `~/.graphyn/plugins/venvs/<name>/` (or `$GRAPHYN_HOME/plugins/venvs/<name>/` in Docker); `process()` runs via `app.core.plugins.worker` (use for trainer / edge-optimizer / realtime-inference). Heavy extras stay out of the host API image.
+- `runtime = "isolated"` — required **and** optional deps go to `~/.graphyn/plugins/venvs/<name>/` (or `$GRAPHYN_HOME/plugins/venvs/<name>/` in Docker); `process()` runs via `app.core.plugins.worker` (use for trainer / edge-optimizer / realtime-inference **and** heavy Audio packs: classifier, TTS, enhancer, generator, aligner, etc.). Heavy extras stay out of the host API image.
+- `runtime = "inprocess"` (default) — deps install into the **shared API Python**. Optional TF/Torch extras often fail here; the Plugins UI labels this **shared env**.
 - `torch` in `optional_dependencies` is skipped unless `GRAPHYN_ISOLATED_INSTALL_TORCH=1` (default isolated extras are TensorFlow CPU + Keras).
 - Local ASR (`asr_transcribe` with `local_whisper` / `faster_whisper`): install host extra `pip install -e ".[asr]"` or declare `faster-whisper` in the plugin `optional_dependencies`.
 - Shared-env installs guarded by `PLATFORM_CONSTRAINTS`; UI/API: `GET|POST /plugins/{name}/dependencies`

@@ -104,10 +104,54 @@ function parseValue(def: Record<string, unknown>, raw: string): unknown {
   return raw
 }
 
-export function ConfigFieldEditor(
-  props: { fieldKey: string; def: Record<string, unknown>; value: unknown; onChange: (v: unknown) => void },
-) {
-  return fieldEditor(props.fieldKey, props.def, props.value, props.onChange)
+/** String config keys that should offer a named-secret picker (B8). */
+export function isSecretLikeConfigKey(key: string, title?: string): boolean {
+  const hay = `${key} ${title || ''}`.toLowerCase()
+  if (/timeout|retries?|max_|min_|count|length|status|path|dir|file|url_path/.test(hay)) {
+    return false
+  }
+  return /secret|credential|password|token|api[_-]?key/.test(hay)
+}
+
+export function ConfigFieldEditor(props: {
+  fieldKey: string
+  def: Record<string, unknown>
+  value: unknown
+  onChange: (v: unknown) => void
+  /** Named secrets from GET /secrets — names only. */
+  secretNames?: string[]
+}) {
+  return fieldEditor(props.fieldKey, props.def, props.value, props.onChange, props.secretNames)
+}
+
+function SecretNameSelect({
+  names,
+  value,
+  onPick,
+}: {
+  names: string[]
+  value: unknown
+  onPick: (name: string) => void
+}) {
+  const current = String(value ?? '')
+  return (
+    <select
+      className="field-control mt-1"
+      value={names.includes(current) ? current : ''}
+      title="Insert a named secret from Admin → Secrets"
+      onChange={(e) => {
+        if (e.target.value) onPick(e.target.value)
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <option value="">Use named secret…</option>
+      {names.map((n) => (
+        <option key={n} value={n}>
+          {n}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 function fieldEditor(
@@ -115,6 +159,7 @@ function fieldEditor(
   def: Record<string, unknown>,
   value: unknown,
   onChange: (v: unknown) => void,
+  secretNames?: string[],
 ) {
   const type = schemaType(def)
   if (type === 'boolean') {
@@ -151,6 +196,15 @@ function fieldEditor(
   }
 
   const widget = String(unwrapSchema(def).widget ?? '')
+  const title = String(unwrapSchema(def).title ?? '')
+  const secretLike =
+    type === 'string' &&
+    (widget === 'password' || widget === 'secret' || isSecretLikeConfigKey(key, title))
+  const secretPicker =
+    secretLike && secretNames && secretNames.length > 0 ? (
+      <SecretNameSelect names={secretNames} value={value} onPick={(n) => onChange(n)} />
+    ) : null
+
   if (widget === 'textarea' || widget === 'json') {
     return (
       <div className="code-field">
@@ -169,14 +223,17 @@ function fieldEditor(
   }
   if (widget === 'password' || widget === 'secret') {
     return (
-      <input
-        type="password"
-        className="field-control font-mono"
-        value={formatValue(def, value)}
-        title={schemaFieldHint(def)}
-        onChange={(e) => onChange(e.target.value)}
-        onMouseDown={(e) => e.stopPropagation()}
-      />
+      <div>
+        <input
+          type="password"
+          className="field-control font-mono"
+          value={formatValue(def, value)}
+          title={schemaFieldHint(def)}
+          onChange={(e) => onChange(e.target.value)}
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+        {secretPicker}
+      </div>
     )
   }
 
@@ -294,20 +351,23 @@ function fieldEditor(
   const pathish =
     k.includes('path') || k.includes('dir') || k.includes('file') || k.endsWith('_url') || k === 'url'
   return (
-    <input
-      className={pathish ? 'field-control' : 'field-control overflow-x-auto font-mono'}
-      value={formatValue(def, value)}
-      title={schemaFieldHint(def) || formatValue(def, value)}
-      placeholder={pathish ? 'workspace/ relative path' : undefined}
-      onChange={(e) => {
-        try {
-          onChange(parseValue(def, e.target.value))
-        } catch {
-          /* keep typing */
-        }
-      }}
-      onMouseDown={(e) => e.stopPropagation()}
-    />
+    <div>
+      <input
+        className={pathish ? 'field-control' : 'field-control overflow-x-auto font-mono'}
+        value={formatValue(def, value)}
+        title={schemaFieldHint(def) || formatValue(def, value)}
+        placeholder={pathish ? 'workspace/ relative path' : undefined}
+        onChange={(e) => {
+          try {
+            onChange(parseValue(def, e.target.value))
+          } catch {
+            /* keep typing */
+          }
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      />
+      {secretPicker}
+    </div>
   )
 }
 

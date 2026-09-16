@@ -19,6 +19,7 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
+runtime = "isolated"
 node_types = ["dataset_builder"]
 
 [config_schema.dataset_builder]

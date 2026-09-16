@@ -16,6 +16,9 @@ import {
   prettyScalar,
   shortRunId,
 } from '../../lib/format'
+import { MetricBars } from '../../components/MetricBars'
+import { paths } from '../../routes/paths'
+import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 
 type ExperimentRun = {
   run_id: string
@@ -25,6 +28,8 @@ type ExperimentRun = {
   parameters?: Record<string, unknown>
   metrics?: Record<string, unknown>
   tags?: unknown[]
+  code_hash?: string | null
+  data_version?: string | null
 }
 
 type ExperimentBlock = {
@@ -78,14 +83,64 @@ function valuesDiffer(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) !== JSON.stringify(b)
 }
 
+function csvEscape(v: unknown): string {
+  const s = v == null ? '' : String(v)
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
+}
 
-function parseExperimentsHash(): string[] {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return []
-  const params = new URLSearchParams(raw.slice(qIdx + 1))
+function downloadCompareCsv(compare: ComparePayload) {
+  const runs = compare.runs
+  const lines: string[] = []
+  const hasKeys = (compare.param_keys?.length || 0) + (compare.metric_keys?.length || 0) > 0
+  if (!hasKeys) {
+    lines.push(['run_id', 'status', 'graph_name', 'created_at'].map(csvEscape).join(','))
+    for (const r of runs) {
+      lines.push(
+        [r.run_id, r.status || '', r.graph_name || '', r.created_at || ''].map(csvEscape).join(','),
+      )
+    }
+  } else {
+    const header = ['section', 'key', ...runs.map((r) => r.run_id)]
+    lines.push(header.map(csvEscape).join(','))
+    for (const k of compare.param_keys || []) {
+      lines.push(
+        ['parameters', k, ...runs.map((r) => prettyScalar(r.parameters?.[k]))].map(csvEscape).join(','),
+      )
+    }
+    for (const k of compare.metric_keys || []) {
+      lines.push(['metrics', k, ...runs.map((r) => fmtMetric(r.metrics?.[k]))].map(csvEscape).join(','))
+    }
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `compare-${runs.map((r) => r.run_id.slice(0, 8)).join('-') || 'runs'}.csv`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+function runMetaField(r: ExperimentRun, key: 'code_hash' | 'data_version'): string | null {
+  const direct = r[key]
+  if (typeof direct === 'string' && direct.trim()) return direct.trim()
+  const fromParams = r.parameters?.[key]
+  if (typeof fromParams === 'string' && fromParams.trim()) return fromParams.trim()
+  if (fromParams != null && typeof fromParams !== 'object') return String(fromParams)
+  return null
+}
+
+function hasMetaColumn(runs: ExperimentRun[], key: 'code_hash' | 'data_version'): boolean {
+  return runs.some((r) => !!runMetaField(r, key))
+}
+
+
+function parseExperimentsLocation(): string[] {
+  const params = readSearchParams()
   const collected: string[] = []
-  for (const key of ['run_id', 'run_ids']) {
+  for (const key of ['ids', 'run_id', 'run_ids']) {
     for (const val of params.getAll(key)) {
       for (const part of val.split(',')) {
         const id = part.trim()
@@ -98,7 +153,7 @@ function parseExperimentsHash(): string[] {
 
 export default function ExperimentsView({ embedded = false }: { embedded?: boolean }) {
   const openRun = useAppStore((s) => s.openRun)
-  const setView = useAppStore((s) => s.setView)
+  const openExperiments = useAppStore((s) => s.openExperiments)
   const setFocusRunsTab = useAppStore((s) => s.setFocusRunsTab)
   const pushToast = useAppStore((s) => s.pushToast)
   const activeProject = useAppStore((s) => s.activeProject)
@@ -108,7 +163,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [selectedExp, setSelectedExp] = React.useState<string | null>(null)
-  const [selectedIds, setSelectedIds] = React.useState<string[]>(() => parseExperimentsHash().slice(0, 5))
+  const [selectedIds, setSelectedIds] = React.useState<string[]>(() => parseExperimentsLocation().slice(0, 5))
   const [compare, setCompare] = React.useState<ComparePayload | null>(null)
   const [compareLoading, setCompareLoading] = React.useState(false)
   const compareRef = React.useRef<HTMLDivElement | null>(null)
@@ -142,37 +197,28 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
 
   React.useEffect(() => {
     const apply = () => {
-      const ids = parseExperimentsHash().slice(0, 5)
+      const ids = parseExperimentsLocation().slice(0, 5)
       setSelectedIds((prev) => {
         if (ids.join(',') === prev.join(',')) return prev
-        // External deep-link / Compare handoff — adopt hash ids when present.
+        // External deep-link / Compare handoff — adopt path ids when present.
         if (ids.length) return ids
         return prev
       })
     }
     apply()
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
+    return onPathChange(apply)
   }, [])
 
-  // Write selection into the hash without dispatching hashchange (avoid echo loops).
+  // Write selection into /workspaces/:W/runs/compare?ids= (path search).
   React.useEffect(() => {
-    const params = new URLSearchParams()
-    if (embedded) params.set('tab', 'compare')
-    if (selectedIds.length === 1) params.set('run_id', selectedIds[0])
-    else if (selectedIds.length > 1) params.set('run_id', selectedIds.join(','))
-    const qs = params.toString()
-    const next = embedded
-      ? qs
-        ? `#/runs?${qs}`
-        : '#/runs?tab=compare'
-      : qs
-        ? `#/experiments?${qs}`
-        : '#/experiments'
-    if (window.location.hash !== next) {
-      window.history.replaceState(null, '', next)
-    }
-  }, [selectedIds, embedded])
+    const W = activeProject?.trim()
+    if (!W) return
+    const base = paths.runsCompare(W).split('?')[0]
+    const params: Record<string, string | undefined> = {}
+    if (selectedIds.length === 1) params.ids = selectedIds[0]
+    else if (selectedIds.length > 1) params.ids = selectedIds.join(',')
+    replacePathSearch(params, base)
+  }, [selectedIds, activeProject])
 
   const active =
     blocks?.find((b) => b.experiment_name === selectedExp) ??
@@ -184,6 +230,16 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
     : active?.runs ?? []
 
   const columns = React.useMemo(() => metricColumns(tableRuns), [tableRuns])
+  const showCodeHash = React.useMemo(() => hasMetaColumn(tableRuns, 'code_hash'), [tableRuns])
+  const showDataVersion = React.useMemo(() => hasMetaColumn(tableRuns, 'data_version'), [tableRuns])
+  const compareShowCodeHash = React.useMemo(
+    () => (compare ? hasMetaColumn(compare.runs, 'code_hash') : false),
+    [compare],
+  )
+  const compareShowDataVersion = React.useMemo(
+    () => (compare ? hasMetaColumn(compare.runs, 'data_version') : false),
+    [compare],
+  )
 
   const toggleSelect = (runId: string) => {
     setSelectedIds((prev) => {
@@ -231,7 +287,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
   // Deep-link handoff: if the URL already has 2+ run ids, run compare once.
   React.useEffect(() => {
     if (loading || !blocks) return
-    const ids = parseExperimentsHash().slice(0, 5)
+    const ids = parseExperimentsLocation().slice(0, 5)
     if (ids.length < 2) return
     const key = ids.join(',')
     if (autoComparedKey.current === key) return
@@ -280,10 +336,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
               type="button"
               className="font-medium text-accent-800 hover:underline"
               onClick={() => {
-                setFocusRunsTab('compare')
-                setView('runs')
-                window.history.replaceState(null, '', '#/runs?tab=compare')
-                window.dispatchEvent(new HashChangeEvent('hashchange'))
+                openExperiments(selectedIds.length ? { runIds: selectedIds } : {})
               }}
             >
               Runs → Compare
@@ -325,7 +378,12 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
         </div>
       ) : null}
 
-      {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
+      {error && (
+        <ErrorBanner
+          message={error}
+          onRetry={() => void (selectedIds.length >= 2 ? runCompare() : refresh())}
+        />
+      )}
 
       {selectedIds.length === 0 && tableRuns.length > 0 && !compare ? (
         <div role="status" className="rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-sm text-ink-700">
@@ -337,7 +395,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
           role="status"
           className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
         >
-          One run is preselected ({selectedIds[0].slice(0, 8)}…). Select a second run in the table, then Compare.
+          One run is preselected ({selectedIds[0].slice(0, 8)}…). Tick one more row in the table below, then Compare.
         </div>
       ) : null}
 
@@ -354,9 +412,7 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
               onClick={() => {
                 clearCompare()
                 setFocusRunsTab('history')
-                setView('runs')
-                window.history.replaceState(null, '', '#/runs')
-                window.dispatchEvent(new HashChangeEvent('hashchange'))
+                goView('runs')
               }}
             >
               Open Runs history
@@ -406,6 +462,12 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
                       <th className="px-3 py-2.5 font-medium">Status</th>
                       <th className="px-3 py-2.5 font-medium">Graph</th>
                       <th className="px-3 py-2.5 font-medium">Created</th>
+                      {showCodeHash ? (
+                        <th className="px-3 py-2.5 font-medium">code_hash</th>
+                      ) : null}
+                      {showDataVersion ? (
+                        <th className="px-3 py-2.5 font-medium">data_version</th>
+                      ) : null}
                       {columns.map((k) => (
                         <th key={k} className="px-3 py-2.5 font-medium tabular-nums">
                           {k}
@@ -452,6 +514,22 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
                           <td className="px-3 py-2 text-ink-500 whitespace-nowrap text-xs">
                             {formatLocaleDateTime(r.created_at)}
                           </td>
+                          {showCodeHash ? (
+                            <td
+                              className="px-3 py-2 font-mono text-[11px] text-ink-600 max-w-[8rem] truncate"
+                              title={runMetaField(r, 'code_hash') || undefined}
+                            >
+                              {runMetaField(r, 'code_hash') || '—'}
+                            </td>
+                          ) : null}
+                          {showDataVersion ? (
+                            <td
+                              className="px-3 py-2 font-mono text-[11px] text-ink-600 max-w-[8rem] truncate"
+                              title={runMetaField(r, 'data_version') || undefined}
+                            >
+                              {runMetaField(r, 'data_version') || '—'}
+                            </td>
+                          ) : null}
                           {columns.map((k) => (
                             <td key={k} className="px-3 py-2 tabular-nums text-ink-800">
                               {fmtMetric(r.metrics?.[k])}
@@ -500,11 +578,23 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
                       Side-by-side params & metrics — differing cells highlighted
                     </div>
                   </div>
-                  {compare.missing_run_ids && compare.missing_run_ids.length > 0 && (
-                    <div className="text-xs text-amber-700">
-                      Missing: {compare.missing_run_ids.join(', ')}
-                    </div>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {compare.missing_run_ids && compare.missing_run_ids.length > 0 && (
+                      <div className="text-xs text-amber-700">
+                        Missing: {compare.missing_run_ids.join(', ')}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        downloadCompareCsv(compare)
+                        pushToast('Compare CSV downloaded', 'success')
+                      }}
+                    >
+                      Export CSV
+                    </button>
+                  </div>
                 </div>
                 {(!compare.param_keys?.length && !compare.metric_keys?.length) || compare.runs.length === 0 ? (
                   <div className="px-4 py-6 space-y-2">
@@ -574,6 +664,37 @@ export default function ExperimentsView({ embedded = false }: { embedded?: boole
                       emptyLabel="No metrics recorded for these runs"
                       onOpenRun={openRun}
                     />
+                    {(compareShowCodeHash || compareShowDataVersion) && (
+                      <CompareTable
+                        title="Repro metadata"
+                        keys={[
+                          ...(compareShowCodeHash ? ['code_hash'] : []),
+                          ...(compareShowDataVersion ? ['data_version'] : []),
+                        ]}
+                        runs={compare.runs}
+                        getter={(r, k) =>
+                          runMetaField(r, k as 'code_hash' | 'data_version')
+                        }
+                        emptyLabel="No code_hash / data_version on these runs"
+                        onOpenRun={openRun}
+                      />
+                    )}
+                    {compare.metric_keys.length > 0 ? (
+                      <div className="grid gap-3 border-t border-ink-100 p-4 sm:grid-cols-2">
+                        {compare.metric_keys.map((key) => {
+                          const series = compare.runs
+                            .map((r) => {
+                              const raw = r.metrics?.[key]
+                              const n = typeof raw === 'number' ? raw : Number(raw)
+                              if (!Number.isFinite(n)) return null
+                              return { label: shortRunId(r.run_id), value: n }
+                            })
+                            .filter((s): s is { label: string; value: number } => !!s)
+                          if (series.length === 0) return null
+                          return <MetricBars key={key} title={key} series={series} />
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>

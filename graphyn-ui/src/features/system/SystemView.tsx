@@ -1,16 +1,18 @@
 import React from 'react'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Trash2 } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import {
   formatCleanupToast,
   formatLocaleDateTime,
   formatMetricsSummary,
   formatRelativeTime,
+  formatUptime,
   pickStatusFacts,
   prettyScalar,
   startCase,
 } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
+import { goView } from '../../routes/nav'
 import {
   CollapsibleJson,
   EmptyState,
@@ -71,7 +73,6 @@ function pipelineName(p: unknown): string {
 
 export default function SystemView() {
   const pushToast = useAppStore((s) => s.pushToast)
-  const setView = useAppStore((s) => s.setView)
   const [health, setHealth] = React.useState<unknown>(null)
   const [ready, setReady] = React.useState<unknown>(null)
   const [metrics, setMetrics] = React.useState<unknown>(null)
@@ -97,6 +98,8 @@ export default function SystemView() {
     }>
   >([])
   const [auditError, setAuditError] = React.useState<string | null>(null)
+  const [auditActorFilter, setAuditActorFilter] = React.useState('')
+  const [auditResourceFilter, setAuditResourceFilter] = React.useState('')
   const [authStatus, setAuthStatus] = React.useState<{
     auth_required?: boolean
     token_configured?: boolean
@@ -125,6 +128,31 @@ export default function SystemView() {
   const [projectsApiOk, setProjectsApiOk] = React.useState(true)
   const [pipelinesApiOk, setPipelinesApiOk] = React.useState(true)
   const [pipelinesLoading, setPipelinesLoading] = React.useState(false)
+  const [venvGcBusy, setVenvGcBusy] = React.useState(false)
+
+  const metricsObj = metrics && typeof metrics === 'object' && !Array.isArray(metrics)
+    ? (metrics as Record<string, unknown>)
+    : null
+  const latency =
+    metricsObj?.latency_s && typeof metricsObj.latency_s === 'object'
+      ? (metricsObj.latency_s as Record<string, unknown>)
+      : null
+
+  const runPluginVenvGc = () => {
+    setVenvGcBusy(true)
+    void apiJson<{ removed?: string[] }>('/plugins/venvs/gc', { method: 'POST' })
+      .then((res) => {
+        const n = Array.isArray(res?.removed) ? res.removed.length : 0
+        pushToast(
+          n
+            ? `Removed ${n} unused plugin venv${n === 1 ? '' : 's'}`
+            : 'No unused plugin venvs to remove',
+          'success',
+        )
+      })
+      .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
+      .finally(() => setVenvGcBusy(false))
+  }
 
   const refresh = React.useCallback(async () => {
     setError(null)
@@ -136,7 +164,7 @@ export default function SystemView() {
         apiJson('/system/readiness'),
         apiJson('/system/metrics'),
         apiJson<{ url?: string; events?: string[] }>('/system/webhooks'),
-        apiJson<{ events?: unknown[] }>('/audit', { query: { limit: 25 } }).catch((err) => {
+        apiJson<{ events?: unknown[] }>('/audit', { query: { limit: 100 } }).catch((err) => {
           setAuditError(err instanceof Error ? err.message : String(err))
           return { events: [] }
         }),
@@ -254,10 +282,31 @@ export default function SystemView() {
           ? backendId
           : ''
 
-  const goHash = (hash: string, view: 'workers' | 'proposals') => {
-    setView(view)
-    window.history.replaceState(null, '', hash)
-    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  const goNav = (view: 'workers' | 'proposals') => goView(view)
+
+  const filteredAuditEvents = React.useMemo(() => {
+    const actorQ = auditActorFilter.trim().toLowerCase()
+    const resourceQ = auditResourceFilter.trim().toLowerCase()
+    return auditEvents.filter((ev) => {
+      if (actorQ && !String(ev.actor || '').toLowerCase().includes(actorQ)) return false
+      if (resourceQ) {
+        const blob = `${ev.resource_type || ''} ${ev.resource_id || ''} ${ev.action || ''}`.toLowerCase()
+        if (!blob.includes(resourceQ)) return false
+      }
+      return true
+    })
+  }, [auditEvents, auditActorFilter, auditResourceFilter])
+
+  const exportAuditJson = () => {
+    const blob = new Blob([JSON.stringify(filteredAuditEvents, null, 2)], {
+      type: 'application/json',
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `audit-events-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   const tabs: Array<{ id: typeof systemTab; label: string }> = [
@@ -312,63 +361,124 @@ export default function SystemView() {
 
       {systemTab === 'status' && (
         <div className="space-y-4">
-          {(backendLabel || Number.isFinite(workerCount) || isDistributed) && (
-            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Backend</span>
-              {backendLabel ? (
-                <span
-                  className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[12px] font-medium text-ink-800"
-                  title={backendId || undefined}
-                >
-                  {backendLabel}
-                  {backendId && backendId !== backendMode ? (
-                    <span className="ml-1 font-mono text-[10px] text-ink-500">{backendId}</span>
-                  ) : null}
-                </span>
-              ) : null}
-              {isDistributed ? (
-                <button
-                  type="button"
-                  className="rounded-full border border-ink-200 bg-white px-2.5 py-0.5 text-[12px] text-ink-700 hover:border-accent-300 hover:text-accent-800"
-                  onClick={() => goHash('#/workers', 'workers')}
-                  title="Open Workers"
-                >
-                  {Number.isFinite(workerCount)
-                    ? `${workerCount} ${workerCount === 1 ? 'worker' : 'workers'}`
-                    : 'Workers'}
-                </button>
-              ) : null}
+          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Backend</span>
+            {backendLabel ? (
+              <span
+                className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[12px] font-medium text-ink-800"
+                title={backendId || undefined}
+              >
+                {backendLabel}
+                {backendId && backendId !== backendMode ? (
+                  <span className="ml-1 font-mono text-[10px] text-ink-500">{backendId}</span>
+                ) : null}
+              </span>
+            ) : (
+              <span className="text-[12px] text-ink-400">Unknown</span>
+            )}
+            {isDistributed ? (
               <button
                 type="button"
-                className="btn-secondary ml-auto"
-                disabled={reconciling}
-                onClick={() => {
-                  setReconciling(true)
-                  void apiJson('/system/cleanup', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      older_than_days: 36500,
-                      delete_cache: false,
-                      delete_artifacts: false,
-                      keep_latest: true,
-                      reconcile_abandoned: true,
-                      stale_after_hours: 1,
-                    }),
-                  })
-                    .then((res) => {
-                      pushToast(formatCleanupToast(res), 'success')
-                      void refresh()
-                    })
-                    .catch((err) =>
-                      pushToast(err instanceof Error ? err.message : String(err), 'error'),
-                    )
-                    .finally(() => setReconciling(false))
-                }}
+                className="rounded-full border border-ink-200 bg-white px-2.5 py-0.5 text-[12px] text-ink-700 hover:border-accent-300 hover:text-accent-800"
+                onClick={() => goNav('workers')}
+                title="Open Workers"
               >
-                {reconciling ? 'Reconciling…' : 'Reconcile abandoned runs'}
+                {Number.isFinite(workerCount)
+                  ? `${workerCount} ${workerCount === 1 ? 'worker' : 'workers'}`
+                  : 'Workers'}
               </button>
+            ) : null}
+            <span
+              className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[11px] text-ink-600"
+              title="MCP is a separate stdio process — not an HTTP health check"
+            >
+              MCP: use <code className="font-mono text-[10px]">graphyn mcp</code> CLI — 29 tools
+            </span>
+            <button
+              type="button"
+              className="btn-secondary ml-auto"
+              disabled={reconciling}
+              onClick={() => {
+                setReconciling(true)
+                void apiJson('/system/cleanup', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    older_than_days: 36500,
+                    delete_cache: false,
+                    delete_artifacts: false,
+                    keep_latest: true,
+                    reconcile_abandoned: true,
+                    stale_after_hours: 1,
+                  }),
+                })
+                  .then((res) => {
+                    pushToast(formatCleanupToast(res), 'success')
+                    void refresh()
+                  })
+                  .catch((err) =>
+                    pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                  )
+                  .finally(() => setReconciling(false))
+              }}
+            >
+              {reconciling ? 'Reconciling…' : 'Reconcile abandoned runs'}
+            </button>
+          </div>
+
+          {metricsObj ? (
+            <div className="flex flex-wrap items-stretch gap-2 rounded-2xl border border-ink-200 bg-white px-3 py-2.5 shadow-sm">
+              <span className="self-center text-[11px] font-semibold uppercase tracking-wide text-ink-400 px-1">
+                Metrics
+              </span>
+              {(
+                [
+                  [
+                    'Requests',
+                    typeof metricsObj.requests_total === 'number'
+                      ? String(metricsObj.requests_total)
+                      : '—',
+                  ],
+                  [
+                    'Uptime',
+                    typeof metricsObj.uptime_s === 'number'
+                      ? formatUptime(metricsObj.uptime_s) || '—'
+                      : '—',
+                  ],
+                  [
+                    'RPS',
+                    typeof metricsObj.requests_per_second === 'number'
+                      ? metricsObj.requests_per_second.toFixed(2)
+                      : '—',
+                  ],
+                  [
+                    '5xx',
+                    typeof metricsObj.errors_5xx_total === 'number'
+                      ? String(metricsObj.errors_5xx_total)
+                      : '0',
+                  ],
+                  [
+                    'p95',
+                    typeof latency?.p95 === 'number'
+                      ? `${Math.round(Number(latency.p95) * 1000)}ms`
+                      : '—',
+                  ],
+                ] as const
+              ).map(([label, value]) => (
+                <div
+                  key={label}
+                  className="min-w-[4.5rem] rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-1.5"
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                    {label}
+                  </div>
+                  <div className="font-mono text-sm font-semibold text-ink-900">{value}</div>
+                </div>
+              ))}
+              {metricsLine ? (
+                <p className="self-center text-[11px] text-ink-400 ml-auto">{metricsLine}</p>
+              ) : null}
             </div>
-          )}
+          ) : null}
 
           <div className="grid gap-4 md:grid-cols-2">
             {[
@@ -388,11 +498,25 @@ export default function SystemView() {
             ))}
           </div>
 
-          {metricsLine ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={venvGcBusy}
+              onClick={runPluginVenvGc}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {venvGcBusy ? 'Running GC…' : 'Run plugin venv GC'}
+            </button>
+            <span className="text-[11px] text-ink-400">
+              POST /plugins/venvs/gc — removes unused isolated plugin venvs
+            </span>
+          </div>
+
+          {metrics && !metricsObj ? null : metrics ? (
             <section className="rounded-2xl border border-ink-200 bg-white p-4">
-              <h3 className="mb-1 text-sm font-semibold">Metrics</h3>
-              <p className="text-sm text-ink-700">{metricsLine}</p>
-              <div className="mt-3">
+              <h3 className="mb-1 text-sm font-semibold">Metrics detail</h3>
+              <div className="mt-2">
                 <CollapsibleJson value={metrics} label="Raw JSON" />
               </div>
             </section>
@@ -402,9 +526,49 @@ export default function SystemView() {
 
       {systemTab === 'audit' && (
         <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
-          <div>
-            <h3 className="text-sm font-semibold">Recent audit events</h3>
-            <p className="text-xs text-ink-500">Append-only actor trail from GET /api/v1/audit.</p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">Recent audit events</h3>
+              <p className="text-xs text-ink-500">
+                Append-only actor trail from GET /api/v1/audit (limit 100). Filters are client-side.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={filteredAuditEvents.length === 0}
+              onClick={exportAuditJson}
+            >
+              Export JSON
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <input
+              value={auditActorFilter}
+              onChange={(e) => setAuditActorFilter(e.target.value)}
+              placeholder="Filter actor"
+              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+              aria-label="Filter audit by actor"
+            />
+            <input
+              value={auditResourceFilter}
+              onChange={(e) => setAuditResourceFilter(e.target.value)}
+              placeholder="Filter resource / action"
+              className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+              aria-label="Filter audit by resource"
+            />
+            {(auditActorFilter || auditResourceFilter) && (
+              <button
+                type="button"
+                className="btn-quiet"
+                onClick={() => {
+                  setAuditActorFilter('')
+                  setAuditResourceFilter('')
+                }}
+              >
+                Clear filters
+              </button>
+            )}
           </div>
           {auditError && <p className="text-sm text-amber-800">{auditError}</p>}
           {!auditError && auditEvents.length === 0 ? (
@@ -412,11 +576,13 @@ export default function SystemView() {
               title="No audit events yet"
               description="Accept/reject proposals or other audited mutations will appear here."
               action={
-                <button type="button" className="btn-secondary" onClick={() => goHash('#/proposals', 'proposals')}>
+                <button type="button" className="btn-secondary" onClick={() => goNav('proposals')}>
                   Open Proposals
                 </button>
               }
             />
+          ) : filteredAuditEvents.length === 0 ? (
+            <p className="py-4 text-center text-sm text-ink-500">No events match these filters.</p>
           ) : (
             <div className="overflow-hidden rounded-xl border border-ink-100">
               <table className="w-full text-left text-[12px]">
@@ -429,7 +595,7 @@ export default function SystemView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {auditEvents.map((ev, i) => (
+                  {filteredAuditEvents.map((ev, i) => (
                     <tr key={ev.event_id || `${ev.ts}-${i}`} className="border-b border-ink-50 last:border-0">
                       <td className="px-2 py-1 text-ink-600 whitespace-nowrap" title={formatLocaleDateTime(ev.ts)}>
                         {ev.ts ? formatRelativeTime(ev.ts) : '—'}
@@ -457,6 +623,10 @@ export default function SystemView() {
           <h3 className="text-sm font-semibold">Schedules</h3>
           <p className="text-xs text-ink-500">
             Interval jobs that run a project pipeline while the API process is up (always-on lite).
+          </p>
+          <p className="mt-1 rounded-lg border border-amber-100 bg-amber-50/80 px-2.5 py-1.5 text-[11px] text-amber-950">
+            Cron expressions are not in the API — schedules use <strong className="font-semibold">interval_minutes</strong> only.
+            Last error and enabled state are shown per row when present.
           </p>
         </div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -512,14 +682,20 @@ export default function SystemView() {
               onChange={(e) => setSchedPipeline(e.target.value)}
             />
           )}
-          <input
-            type="number"
-            min={1}
-            className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
-            placeholder="Interval (min)"
-            value={schedInterval}
-            onChange={(e) => setSchedInterval(Number(e.target.value) || 60)}
-          />
+          <label className="block text-sm text-ink-600">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+              Interval (minutes)
+            </span>
+            <input
+              type="number"
+              min={1}
+              className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              placeholder="e.g. 60"
+              value={schedInterval}
+              onChange={(e) => setSchedInterval(Number(e.target.value) || 60)}
+              aria-label="Interval in minutes"
+            />
+          </label>
         </div>
         {!projectsApiOk && (
           <p className="text-xs text-ink-500">Projects API unavailable — enter project and pipeline as text.</p>
@@ -575,23 +751,35 @@ export default function SystemView() {
           <p className="text-sm text-ink-500">No schedules yet.</p>
         ) : (
           <ul className="space-y-2">
-            {schedules.map((s) => (
+            {schedules.map((s) => {
+              const hasError = Boolean(s.last_error)
+              return (
               <li
                 key={s.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink-100 px-3 py-2 text-sm"
+                className={
+                  hasError
+                    ? 'flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-300 bg-rose-50/70 px-3 py-2 text-sm'
+                    : 'flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ink-100 px-3 py-2 text-sm'
+                }
               >
                 <div className="min-w-0">
-                  <div className="font-medium text-ink-900">
-                    {s.name}{' '}
+                  <div className="flex flex-wrap items-center gap-2 font-medium text-ink-900">
+                    <span>{s.name}</span>
                     <span className="font-mono text-[11px] text-ink-500">
                       {s.project}/{s.pipeline}
                     </span>
+                    <StatusBadge status={s.enabled ? 'enabled' : 'disabled'} />
                   </div>
                   <div className="text-[11px] text-ink-500">
-                    every {s.interval_minutes}m · {s.enabled ? 'enabled' : 'disabled'}
+                    every {s.interval_minutes ?? '—'} min
                     {s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
-                    {s.last_error ? ` · err: ${s.last_error}` : ''}
+                    {s.last_run_id ? ` · last run ${String(s.last_run_id).slice(0, 8)}…` : ''}
                   </div>
+                  {hasError ? (
+                    <div className="mt-1 text-[12px] font-medium text-rose-900" title={s.last_error}>
+                      last_error: {s.last_error}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   <button
@@ -647,7 +835,8 @@ export default function SystemView() {
                   </button>
                 </div>
               </li>
-            ))}
+              )
+            })}
           </ul>
         )}
       </section>

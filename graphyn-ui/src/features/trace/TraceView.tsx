@@ -22,6 +22,7 @@ import {
   StatusBadge,
 } from '../../components/ui'
 import { formatLocaleDateTime, humanNodeLabel, humanizeTemplateName, shortRunId } from '../../lib/format'
+import { goView, onPathChange, readSearchParams } from '../../routes/nav'
 
 type TraceChainStep = {
   step: string
@@ -66,25 +67,11 @@ type RecentRun = {
   created_at?: string
 }
 
-function parseTraceHash(): { artifactId: string; runId: string } {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return { artifactId: '', runId: '' }
-  const params = new URLSearchParams(raw.slice(qIdx + 1))
+function parseTraceLocation(): { artifactId: string; runId: string } {
+  const params = readSearchParams()
   return {
-    artifactId: (params.get('artifact_id') || '').trim(),
+    artifactId: (params.get('artifact_id') || params.get('artifactId') || '').trim(),
     runId: (params.get('run_id') || '').trim(),
-  }
-}
-
-function writeTraceHash(artifactId: string, runId: string) {
-  const params = new URLSearchParams()
-  if (artifactId.trim()) params.set('artifact_id', artifactId.trim())
-  if (runId.trim()) params.set('run_id', runId.trim())
-  const qs = params.toString()
-  const next = qs ? `#/trace?${qs}` : '#/trace'
-  if (window.location.hash !== next) {
-    window.history.replaceState(null, '', next)
   }
 }
 
@@ -99,12 +86,11 @@ const STEP_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
 export default function TraceView() {
   const openRun = useAppStore((s) => s.openRun)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
-  const setView = useAppStore((s) => s.setView)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
   const activeProject = useAppStore((s) => s.activeProject)
 
-  const initial = parseTraceHash()
+  const initial = parseTraceLocation()
   const [artifactId, setArtifactId] = React.useState(initial.artifactId)
   const [runId, setRunId] = React.useState(initial.runId)
   const [idsUnlocked, setIdsUnlocked] = React.useState(
@@ -143,12 +129,10 @@ export default function TraceView() {
       if (!a && !r) {
         setTrace(null)
         setError(null)
-        writeTraceHash('', '')
         return
       }
       setLoading(true)
       setError(null)
-      writeTraceHash(a, r)
       try {
         const data = await apiJson<TracePayload>('/trace', {
           query: {
@@ -173,14 +157,13 @@ export default function TraceView() {
 
   React.useEffect(() => {
     const apply = () => {
-      const { artifactId: a, runId: r } = parseTraceHash()
+      const { artifactId: a, runId: r } = parseTraceLocation()
       setArtifactId(a)
       setRunId(r)
       if (a || r) void load(a, r)
     }
     apply()
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
+    return onPathChange(apply)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -215,8 +198,7 @@ export default function TraceView() {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
       return
     }
-    setView('builder')
-    window.history.replaceState(null, '', '#/builder')
+    goView('builder')
     pushToast(graphName ? `Editor opened — graph ${graphName} not found on disk` : 'Opened Editor', 'info')
   }
 
@@ -318,10 +300,7 @@ export default function TraceView() {
           key="workers"
           type="button"
           className="btn-primary !px-2.5 !py-1 text-[12px]"
-          onClick={() => {
-            setView('workers')
-            window.history.replaceState(null, '', '#/workers')
-          }}
+          onClick={() => goView('workers')}
         >
           Workers
         </button>,
@@ -335,7 +314,7 @@ export default function TraceView() {
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
         title="Lineage"
-        description="Deep-link and advanced provenance (`#/trace`). Open lineage from Runs → Lineage for a selected run."
+        description="Advanced provenance deep-link. Prefer Runs → Lineage for a selected run."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -446,7 +425,6 @@ export default function TraceView() {
               setIdsUnlocked(true)
               setTrace(null)
               setError(null)
-              writeTraceHash('', '')
             }}
           >
             Clear
@@ -465,11 +443,7 @@ export default function TraceView() {
             <button
               type="button"
               className="btn-primary"
-              onClick={() => {
-                setView('runs')
-                window.history.replaceState(null, '', '#/runs')
-                window.dispatchEvent(new HashChangeEvent('hashchange'))
-              }}
+              onClick={() => goView('runs')}
             >
               Open Runs
             </button>

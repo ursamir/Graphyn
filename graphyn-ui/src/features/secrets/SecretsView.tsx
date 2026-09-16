@@ -6,6 +6,7 @@ import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from
 
 export default function SecretsView() {
   const pushToast = useAppStore((s) => s.pushToast)
+  const backendMode = useAppStore((s) => s.backendMode)
   const [names, setNames] = React.useState<string[]>([])
   const [name, setName] = React.useState('')
   const [value, setValue] = React.useState('')
@@ -86,9 +87,17 @@ export default function SecretsView() {
         }
       />
       <p className="mb-4 max-w-xl rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
-        Mode B: workers resolve secret <span className="font-medium text-ink-800">names</span> from the
-        control plane — do not embed values in Graph IR. Referenced by secret name in node config; usage
-        index not available yet.
+        {backendMode === 'distributed' ? (
+          <>
+            Mode B: workers resolve secret <span className="font-medium text-ink-800">names</span> from the
+            control plane — do not embed values in Graph IR.
+          </>
+        ) : (
+          <>
+            Graphs resolve secret <span className="font-medium text-ink-800">names</span> from this API —
+            never paste keys into Graph IR.
+          </>
+        )}
       </p>
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
       <form onSubmit={onSubmit} className="mb-6 max-w-xl rounded-2xl border border-ink-200 bg-white p-4">

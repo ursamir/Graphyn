@@ -32,8 +32,12 @@ import {
   type EdgeTarget,
 } from './edgeDeployTemplate'
 import { isTerminalFailure, isTerminalSuccess } from '../../lib/runStatus'
+import DevicesView from '../ship/DevicesView'
+import { paths } from '../../routes/paths'
+import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 
 type WizardStep = 1 | 2 | 3 | 4
+type ShipTab = 'package' | 'devices'
 
 const STEP_LABELS: Record<WizardStep, string> = {
   1: 'Graph',
@@ -42,20 +46,48 @@ const STEP_LABELS: Record<WizardStep, string> = {
   4: 'Download',
 }
 
+type RegistryModel = {
+  name: string
+  stages?: Record<string, { run_id?: string; slug?: string; path?: string }>
+}
+
 function cloneTemplate(): GraphIR {
   return structuredClone(EDGE_DEPLOY_TEMPLATE)
 }
 
-function parseEdgeHash(): { project?: string; version?: string; runId?: string } {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return {}
-  const params = new URLSearchParams(raw.slice(qIdx + 1))
+function parseEdgeLocation(): { project?: string; version?: string; runId?: string; tab?: ShipTab } {
+  const params = readSearchParams()
+  const pathname = window.location.pathname
+  const parts = pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+  const tabParam = (params.get('tab') || '').trim().toLowerCase()
+  const devicesPath =
+    pathname.includes('/devices') ||
+    (parts[0] === 'workspaces' && parts[2] === 'ship' && parts[3] === 'devices') ||
+    tabParam === 'devices'
+  let projectFromPath: string | undefined
+  if (parts[0] === 'workspaces' && parts[1] && parts[2] === 'ship') {
+    projectFromPath = decodeURIComponent(parts[1])
+  }
   return {
-    project: (params.get('project') || '').trim() || undefined,
+    project: (params.get('project') || '').trim() || projectFromPath || undefined,
     version: (params.get('version') || '').trim() || undefined,
     runId: (params.get('run_id') || '').trim() || undefined,
+    tab: devicesPath ? 'devices' : 'package',
   }
+}
+
+function pickChecksum(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  const o = data as Record<string, unknown>
+  for (const k of ['checksum', 'sha256', 'hash', 'content_hash', 'digest']) {
+    const v = o[k]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  const meta = o.metadata
+  if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
+    return pickChecksum(meta)
+  }
+  return null
 }
 
 export default function EdgeWizardView() {
@@ -64,11 +96,12 @@ export default function EdgeWizardView() {
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openProjects = useAppStore((s) => s.openProjects)
-  const setView = useAppStore((s) => s.setView)
   const pushToast = useAppStore((s) => s.pushToast)
   const setLastRunId = useAppStore((s) => s.setLastRunId)
+  const activeProject = useAppStore((s) => s.activeProject)
 
-  const initialEdge = React.useMemo(() => parseEdgeHash(), [])
+  const initialEdge = React.useMemo(() => parseEdgeLocation(), [])
+  const [shipTab, setShipTab] = React.useState<ShipTab>(initialEdge.tab ?? 'package')
   const [linkedProject, setLinkedProject] = React.useState(initialEdge.project ?? '')
   const [linkedVersion, setLinkedVersion] = React.useState(initialEdge.version ?? '')
   const [sourceRunId, setSourceRunId] = React.useState(initialEdge.runId ?? '')
@@ -76,10 +109,17 @@ export default function EdgeWizardView() {
     Array<{ run_id: string; status?: string; graph_name?: string }>
   >([])
   const [sourceArtifacts, setSourceArtifacts] = React.useState<
-    Array<{ artifact_id?: string; artifact_type?: string; uri?: string; path?: string; metadata?: Record<string, unknown> }>
+    Array<{
+      artifact_id?: string
+      artifact_type?: string
+      uri?: string
+      path?: string
+      metadata?: Record<string, unknown>
+    }>
   >([])
   const [sourceArtifactId, setSourceArtifactId] = React.useState('')
-  const activeProject = useAppStore((s) => s.activeProject)
+  const [registryModels, setRegistryModels] = React.useState<RegistryModel[]>([])
+  const [pickedModel, setPickedModel] = React.useState('')
 
   const [step, setStep] = React.useState<WizardStep>(1)
   const [graph, setGraph] = React.useState<GraphIR | null>(null)
@@ -104,9 +144,16 @@ export default function EdgeWizardView() {
   const [packageChecking, setPackageChecking] = React.useState(false)
   const [promoteAlias, setPromoteAlias] = React.useState<'staging' | 'prod'>('staging')
   const [promoting, setPromoting] = React.useState(false)
+  const [packageChecksum, setPackageChecksum] = React.useState<string | null>(null)
 
   const resolvedPackagePath = downloadPath || guessPackagePath(target, packageName)
   const runFailed = Boolean(runId && runStatus && isTerminalFailure(runStatus))
+
+  React.useEffect(() => {
+    void apiJson<{ models?: RegistryModel[] }>('/models')
+      .then((res) => setRegistryModels(Array.isArray(res?.models) ? res.models : []))
+      .catch(() => setRegistryModels([]))
+  }, [])
 
   // Probe model path: 404 => missing; 400 "directory" / 200 / other jailed hit => present.
   React.useEffect(() => {
@@ -127,7 +174,6 @@ export default function EdgeWizardView() {
           } else if (res.status === 400) {
             const body = await res.json().catch(() => ({} as { detail?: string }))
             const detail = String((body as { detail?: string }).detail || '')
-            // Directory is a valid SavedModel root — treat as present.
             setModelPathMissing(!/directory/i.test(detail))
           } else {
             setModelPathMissing(false)
@@ -183,14 +229,14 @@ export default function EdgeWizardView() {
 
   React.useEffect(() => {
     const apply = () => {
-      const h = parseEdgeHash()
+      const h = parseEdgeLocation()
+      if (h.tab) setShipTab(h.tab)
       if (h.project) setLinkedProject(h.project)
       if (h.version) setLinkedVersion(h.version)
       if (h.runId) setSourceRunId(h.runId)
       if (h.project) setPackageName((prev) => (prev === 'edge_model' ? `${h.project}_edge` : prev))
     }
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
+    return onPathChange(apply)
   }, [])
 
   React.useEffect(() => {
@@ -203,7 +249,13 @@ export default function EdgeWizardView() {
     void (async () => {
       try {
         const arts = await apiJson<
-          Array<{ artifact_id?: string; artifact_type?: string; uri?: string; path?: string; metadata?: Record<string, unknown> }>
+          Array<{
+            artifact_id?: string
+            artifact_type?: string
+            uri?: string
+            path?: string
+            metadata?: Record<string, unknown>
+          }>
         >('/artifacts', { query: { run_id: rid } })
         if (!cancelled) setSourceArtifacts(Array.isArray(arts) ? arts : [])
       } catch {
@@ -242,18 +294,25 @@ export default function EdgeWizardView() {
     }
   }, [linkedProject])
 
-  // Keep project/version/run_id in the hash across wizard steps so the chip survives navigation.
+  // Keep project/version/run_id on path search; devices tab via pathname segment.
   React.useEffect(() => {
-    if (!linkedProject && !linkedVersion && !sourceRunId) return
-    const params = new URLSearchParams()
-    if (linkedProject) params.set('project', linkedProject)
-    if (linkedVersion) params.set('version', linkedVersion)
-    if (sourceRunId.trim()) params.set('run_id', sourceRunId.trim())
-    const next = `#/edge?${params.toString()}`
-    if (window.location.hash !== next) {
-      window.history.replaceState(null, '', next)
-    }
-  }, [linkedProject, linkedVersion, sourceRunId, step])
+    const W = linkedProject.trim() || activeProject || ''
+    const base = W
+      ? shipTab === 'devices'
+        ? paths.shipDevices(W)
+        : paths.ship(W)
+      : shipTab === 'devices'
+        ? paths.deployShipDevices()
+        : paths.deployShip()
+    replacePathSearch(
+      {
+        project: linkedProject.trim() || undefined,
+        version: linkedVersion.trim() || undefined,
+        run_id: sourceRunId.trim() || undefined,
+      },
+      base,
+    )
+  }, [linkedProject, linkedVersion, sourceRunId, step, shipTab, activeProject])
 
   // Wire linked dataset into path-like fields when still at defaults.
   React.useEffect(() => {
@@ -265,6 +324,22 @@ export default function EdgeWizardView() {
         : prev,
     )
   }, [linkedProject])
+
+  const applyRegistryModel = (name: string) => {
+    setPickedModel(name)
+    const model = registryModels.find((m) => m.name === name)
+    if (!model) return
+    const stages = model.stages || {}
+    const stage =
+      stages.prod || stages.production || stages.staging || Object.values(stages)[0] || null
+    if (stage?.run_id) setSourceRunId(stage.run_id)
+    if (typeof stage?.path === 'string' && stage.path.trim()) {
+      setModelPath(stage.path.trim())
+    } else if (stage?.slug) {
+      setModelPath(`workspace/artifacts/${stage.slug}`)
+    }
+    pushToast(`Picked model ${name}`, 'info')
+  }
 
   const configuredGraph = React.useMemo(() => {
     const base = graph ?? EDGE_DEPLOY_TEMPLATE
@@ -308,6 +383,7 @@ export default function EdgeWizardView() {
     setRunStatus('starting')
     setDownloadPath(null)
     setPackageExists(false)
+    setPackageChecksum(null)
     try {
       const payload = {
         ...configuredGraph,
@@ -348,12 +424,26 @@ export default function EdgeWizardView() {
         if (cancelled) return
         const status = (st.status || '').toLowerCase()
         setRunStatus(status || 'unknown')
-        // Journal uses "completed"; distributed / UI may say "succeeded"
         if (isTerminalSuccess(status)) {
           const pkg = guessPackagePath(target, packageName)
           setDownloadPath(pkg)
           setPackageExists(true)
           setStep(4)
+          try {
+            const arts = await apiJson<Array<Record<string, unknown>>>('/artifacts', {
+              query: { run_id: runId },
+            })
+            if (!cancelled && Array.isArray(arts)) {
+              let found: string | null = null
+              for (const a of arts) {
+                found = pickChecksum(a)
+                if (found) break
+              }
+              setPackageChecksum(found)
+            }
+          } catch {
+            if (!cancelled) setPackageChecksum(null)
+          }
           return
         }
         if (isTerminalFailure(status)) {
@@ -409,13 +499,44 @@ export default function EdgeWizardView() {
 
   const ready = Boolean(graph)
 
+  const failureDiagnostics =
+    runFailed && runId ? (
+      <div className="space-y-2 rounded-xl border border-rose-300 bg-rose-50/80 px-3 py-3">
+        <div className="text-sm font-semibold text-rose-950">Package run diagnostics</div>
+        <p className="text-xs text-rose-900/90">
+          Run id <code className="font-mono text-[11px]">{runId}</code>
+          {runStatus ? (
+            <>
+              {' '}
+              · <StatusBadge status={runStatus} />
+            </>
+          ) : null}
+        </p>
+        {runError ? <p className="text-xs text-rose-900">{runError}</p> : null}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn-primary" onClick={() => openRun(runId)}>
+            <RefreshCw className="h-3.5 w-3.5" /> Open run
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => openTrace({ runId })}>
+            <GitBranch className="h-3.5 w-3.5" /> Open lineage
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => openArtifacts({ runId })}>
+            <Archive className="h-3.5 w-3.5" /> Open outputs
+          </button>
+          <button type="button" className="btn-quiet" onClick={openInBuilder}>
+            <Workflow className="h-3.5 w-3.5" /> Open Editor
+          </button>
+        </div>
+      </div>
+    ) : null
+
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
       <PageHeader
-        title="Edge package"
-        description="Deploy — package a trained run for on-device delivery. Use Worker fleet when Mode is Distributed."
+        title="Ship"
+        description="Deploy — package a trained run for on-device delivery, or browse the device fleet."
         actions={
-          packageExists ? (
+          shipTab === 'package' && packageExists ? (
             <button
               type="button"
               className="btn-secondary"
@@ -427,457 +548,540 @@ export default function EdgeWizardView() {
         }
       />
 
-      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-white/95 px-3 py-2 text-sm shadow-sm backdrop-blur">
-        <span className="text-ink-500">Lineage</span>
-        <input
-          className="rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
-          placeholder="project"
-          value={linkedProject}
-          onChange={(e) => setLinkedProject(e.target.value.trim())}
-          aria-label="Project"
-        />
-        <select
-          className="max-w-[16rem] rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
-          value={sourceRunId}
-          onChange={(e) => setSourceRunId(e.target.value)}
-          aria-label="Source run"
+      <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1 w-fit">
+        <button
+          type="button"
+          className={shipTab === 'package' ? 'tab-pill tab-pill-on' : 'tab-pill'}
+          onClick={() => setShipTab('package')}
         >
-          <option value="">Select source run…</option>
-          {projectRuns.map((r) => (
-            <option key={r.run_id} value={r.run_id}>
-              {r.run_id.slice(0, 8)}… {r.status || ''} {r.graph_name ? `· ${r.graph_name}` : ''}
-            </option>
-          ))}
-        </select>
-        <input
-          className="min-w-[12rem] flex-1 rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
-          placeholder="or paste run_id"
-          value={sourceRunId}
-          onChange={(e) => setSourceRunId(e.target.value.trim())}
-          aria-label="Source run id"
-        />
-        {sourceRunId ? (
-          <button type="button" className="btn-secondary" onClick={() => openRun(sourceRunId)}>
-            Open source run
-          </button>
-        ) : null}
-        {sourceRunId ? (
-          <button type="button" className="btn-quiet" onClick={() => openTrace({ runId: sourceRunId })}>
-            <GitBranch className="h-3.5 w-3.5" /> Lineage
-          </button>
-        ) : null}
+          Package
+        </button>
+        <button
+          type="button"
+          className={shipTab === 'devices' ? 'tab-pill tab-pill-on' : 'tab-pill'}
+          onClick={() => setShipTab('devices')}
+        >
+          Devices
+        </button>
       </div>
 
-      <ol className="flex flex-wrap gap-2">
-        {([1, 2, 3, 4] as WizardStep[]).map((n) => {
-          const active = step === n
-          const done = step > n
-          return (
-            <li key={n}>
+      {shipTab === 'devices' ? (
+        <DevicesView workspaceId={activeProject || linkedProject || null} embedded />
+      ) : (
+        <>
+          <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-white/95 px-3 py-2 text-sm shadow-sm backdrop-blur">
+            <span className="text-ink-500">Lineage</span>
+            <input
+              className="rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
+              placeholder="project"
+              value={linkedProject}
+              onChange={(e) => setLinkedProject(e.target.value.trim())}
+              aria-label="Project"
+            />
+            <select
+              className="max-w-[16rem] rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
+              value={sourceRunId}
+              onChange={(e) => setSourceRunId(e.target.value)}
+              aria-label="Source run"
+            >
+              <option value="">Select source run…</option>
+              {projectRuns.map((r) => (
+                <option key={r.run_id} value={r.run_id}>
+                  {r.run_id.slice(0, 8)}… {r.status || ''}{' '}
+                  {r.graph_name ? `· ${r.graph_name}` : ''}
+                </option>
+              ))}
+            </select>
+            <input
+              className="min-w-[12rem] flex-1 rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
+              placeholder="or paste run_id"
+              value={sourceRunId}
+              onChange={(e) => setSourceRunId(e.target.value.trim())}
+              aria-label="Source run id"
+            />
+            {sourceRunId ? (
+              <button type="button" className="btn-secondary" onClick={() => openRun(sourceRunId)}>
+                Open source run
+              </button>
+            ) : null}
+            {sourceRunId ? (
               <button
                 type="button"
-                onClick={() => setStep(n)}
-                className={[
-                  'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition',
-                  active
-                    ? 'border-accent-400 bg-white text-ink-950 shadow-sm'
-                    : done
-                      ? 'border-ink-200 bg-ink-50 text-ink-700'
-                      : 'border-ink-100 bg-white/60 text-ink-400',
-                ].join(' ')}
+                className="btn-quiet"
+                onClick={() => openTrace({ runId: sourceRunId })}
               >
-                <span
-                  className={[
-                    'inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px]',
-                    active || done ? 'bg-accent-500 text-ink-950' : 'bg-ink-100 text-ink-500',
-                  ].join(' ')}
-                >
-                  {done ? <Check className="h-3 w-3" /> : n}
-                </span>
-                {STEP_LABELS[n]}
+                <GitBranch className="h-3.5 w-3.5" /> Lineage
               </button>
-            </li>
-          )
-        })}
-      </ol>
+            ) : null}
+          </div>
 
-      {step === 1 && (
-        <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
-          <h3 className="text-sm font-semibold text-ink-900">Graph</h3>
-          <p className="text-sm text-ink-500">
-            This wizard is <strong className="font-medium text-ink-700">optimize → package → download</strong>
-            — not collect/train. Set project + source train run in the lineage bar above, then load the edge template.
-          </p>
-          {!linkedProject.trim() || !sourceRunId.trim() ? (
-            <EmptyState
-              title="Project + source run required"
-              description="Open a workspace, run a train pipeline from Templates/Editor, then return here with that run_id in the lineage bar."
-              action={
-                <div className="flex flex-wrap justify-center gap-2">
+          <ol className="flex flex-wrap gap-2">
+            {([1, 2, 3, 4] as WizardStep[]).map((n) => {
+              const active = step === n
+              const done = step > n
+              const hasLineage = Boolean(linkedProject.trim() && sourceRunId.trim())
+              const canJump =
+                n <= 2 ||
+                (n === 3 && hasLineage) ||
+                (n === 4 && hasLineage && Boolean(runId))
+              return (
+                <li key={n}>
+                  <button
+                    type="button"
+                    disabled={!canJump && n !== step}
+                    title={
+                      n >= 3 && !hasLineage
+                        ? 'Select project + source run first'
+                        : n === 4 && !runId
+                          ? 'Run package step first'
+                          : undefined
+                    }
+                    onClick={() => {
+                      if (n === step) return
+                      if (n >= 3 && !hasLineage) {
+                        pushToast('Select project + source run before packaging', 'error')
+                        return
+                      }
+                      if (n === 4 && !runId) {
+                        pushToast('Run the package step before download', 'error')
+                        return
+                      }
+                      setStep(n)
+                    }}
+                    className={[
+                      'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition',
+                      active
+                        ? 'border-accent-400 bg-white text-ink-950 shadow-sm'
+                        : done
+                          ? 'border-ink-200 bg-ink-50 text-ink-700'
+                          : 'border-ink-100 bg-white/60 text-ink-400',
+                      !canJump && n !== step ? 'cursor-not-allowed opacity-50' : '',
+                    ].join(' ')}
+                  >
+                    <span
+                      className={[
+                        'inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px]',
+                        active || done ? 'bg-accent-500 text-ink-950' : 'bg-ink-100 text-ink-500',
+                      ].join(' ')}
+                    >
+                      {done ? <Check className="h-3 w-3" /> : n}
+                    </span>
+                    {STEP_LABELS[n]}
+                  </button>
+                </li>
+              )
+            })}
+          </ol>
+
+          {step === 1 && (
+            <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
+              <h3 className="text-sm font-semibold text-ink-900">Graph</h3>
+              <p className="text-sm text-ink-500">
+                This wizard is{' '}
+                <strong className="font-medium text-ink-700">optimize → package → download</strong>
+                — not collect/train. Set project + source train run in the lineage bar above, then
+                load the edge template.
+              </p>
+              {!linkedProject.trim() || !sourceRunId.trim() ? (
+                <EmptyState
+                  title="Project + source run required"
+                  description="Open a workspace, run a train pipeline from Templates/Editor, then return here with that run_id in the lineage bar."
+                  action={
+                    <div className="flex flex-wrap justify-center gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => goView('templates')}
+                      >
+                        Open Templates
+                      </button>
+                      <button type="button" className="btn-secondary" onClick={() => openProjects()}>
+                        Projects
+                      </button>
+                    </div>
+                  }
+                />
+              ) : (
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    className="w-full rounded-xl border border-accent-300 bg-accent-50/40 p-4 text-left hover:border-accent-400 hover:bg-white"
+                    onClick={useEdgeTemplate}
+                  >
+                    <div className="flex items-center gap-2 text-sm font-semibold text-ink-900">
+                      <Cpu className="h-4 w-4 text-accent-700" /> Use edge template
+                    </div>
+                    <p className="mt-1 text-xs text-ink-500">
+                      Loads <code className="font-mono">edge-deploy</code> for source run{' '}
+                      <code className="font-mono">{sourceRunId.slice(0, 8)}…</code>
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    className="ide-quiet-btn text-[12px]"
+                    onClick={() => openTrace({ runId: sourceRunId })}
+                  >
+                    <GitBranch className="h-3.5 w-3.5" /> Inspect source lineage
+                  </button>
+                </div>
+              )}
+              {ready && (
+                <div className="flex justify-end">
+                  <button type="button" className="btn-primary" onClick={() => setStep(2)}>
+                    Configure <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
+              <h3 className="text-sm font-semibold text-ink-900">Configure</h3>
+              <p className="text-xs text-ink-500">
+                Required: a Keras SavedModel directory or <code className="font-mono">.keras</code>{' '}
+                file under <code className="font-mono">workspace/artifacts/…</code> (from trainer /
+                Example 06). INT8 needs <code className="font-mono">X_train_repr.npy</code> beside
+                the model.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block text-sm sm:col-span-2">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    Auto-pick from model registry
+                  </span>
+                  <select
+                    className="field-control mb-2 w-full text-xs"
+                    value={pickedModel}
+                    onChange={(e) => applyRegistryModel(e.target.value)}
+                    aria-label="Pick registered model"
+                  >
+                    <option value="">Select registered model…</option>
+                    {registryModels.map((m) => (
+                      <option key={m.name} value={m.name}>
+                        {m.name}
+                        {m.stages?.prod || m.stages?.production
+                          ? ' · prod'
+                          : m.stages?.staging
+                            ? ' · staging'
+                            : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {registryModels.length === 0 ? (
+                    <p className="mb-2 text-[11px] text-ink-400">
+                      No models in GET /models yet — register from Runs, or paste a path below.
+                    </p>
+                  ) : null}
+                </label>
+                <label className="block text-sm sm:col-span-2">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    Model path
+                  </span>
+                  {sourceArtifacts.length > 0 ? (
+                    <select
+                      className="field-control mb-2 w-full font-mono text-xs"
+                      value={sourceArtifactId}
+                      onChange={(e) => {
+                        const id = e.target.value
+                        setSourceArtifactId(id)
+                        const hit = sourceArtifacts.find((a) => String(a.artifact_id || '') === id)
+                        if (!hit) return
+                        const uri = String(hit.uri || hit.path || hit.metadata?.path || '').trim()
+                        if (uri) setModelPath(uri)
+                      }}
+                      aria-label="Source artifact"
+                    >
+                      <option value="">Pick artifact from source run…</option>
+                      {sourceArtifacts.map((a) => {
+                        const id = String(a.artifact_id || '')
+                        const typ = String(a.artifact_type || 'artifact')
+                        const uri = String(a.uri || a.path || '')
+                        return (
+                          <option key={id} value={id}>
+                            {id.slice(0, 10)}… · {typ}
+                            {uri ? ` · ${uri}` : ''}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  ) : (
+                    <p className="mb-2 text-[11px] text-ink-400">
+                      No artifacts listed for this run yet — paste a workspace model path below
+                      (fail-closed if missing).
+                    </p>
+                  )}
+                  <input
+                    className="field-control mt-0 w-full font-mono text-xs"
+                    value={modelPath}
+                    onChange={(e) => setModelPath(e.target.value)}
+                    placeholder="workspace/artifacts/models/saved_model"
+                  />
+                  {linkedProject ? (
+                    <span className="mt-1 block text-[11px] text-ink-400">
+                      Linked dataset <code className="font-mono">{linkedProject}</code>
+                      {linkedVersion ? (
+                        <>
+                          {' '}
+                          / <code className="font-mono">{linkedVersion}</code>
+                        </>
+                      ) : null}{' '}
+                      — adjust path if your trainer wrote elsewhere.
+                    </span>
+                  ) : null}
+                  {!modelPathChecking && modelPathMissing ? (
+                    <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                      <p className="font-medium">Model path not found on disk</p>
+                      <p className="mt-1 text-amber-900/90">
+                        <code className="font-mono">{modelPath || '(empty)'}</code> is missing. Train
+                        or export a model first — do not invent a fake path. Use Templates/Editor to
+                        train, or pick an existing artifact.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => goView('templates')}
+                        >
+                          Open Templates
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => goView('builder')}
+                        >
+                          Open Editor
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </label>
+                <label className="block text-sm sm:col-span-2">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    Labels (comma-separated)
+                  </span>
+                  <input
+                    className="field-control mt-0 w-full text-xs"
+                    value={labelsCsv}
+                    onChange={(e) => setLabelsCsv(e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    Optimizer backend
+                  </span>
+                  <select
+                    className="field-control mt-0 w-full text-xs"
+                    value={backend}
+                    onChange={(e) => setBackend(e.target.value as EdgeBackend)}
+                  >
+                    {EDGE_BACKENDS.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    Quantization
+                  </span>
+                  <select
+                    className="field-control mt-0 w-full text-xs"
+                    value={quantization}
+                    onChange={(e) => setQuantization(e.target.value as EdgeQuantization)}
+                  >
+                    {EDGE_QUANTIZATIONS.map((q) => (
+                      <option key={q} value={q}>
+                        {q}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    Package target
+                  </span>
+                  <select
+                    className="field-control mt-0 w-full text-xs"
+                    value={target}
+                    onChange={(e) => setTarget(e.target.value as EdgeTarget)}
+                  >
+                    {EDGE_TARGETS.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    Package name
+                  </span>
+                  <input
+                    className="field-control mt-0 w-full font-mono text-xs"
+                    value={packageName}
+                    onChange={(e) => setPackageName(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap justify-between gap-2">
+                <button type="button" className="btn-secondary" onClick={() => setStep(1)}>
+                  Back
+                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" className="btn-secondary" onClick={openInBuilder}>
+                    <Workflow className="h-3.5 w-3.5" /> Open in Editor
+                  </button>
                   <button
                     type="button"
                     className="btn-primary"
                     onClick={() => {
-                      setView('templates')
-                      window.history.replaceState(null, '', '#/templates')
+                      if (!graph) setGraph(cloneTemplate())
+                      setStep(3)
                     }}
                   >
-                    Open Templates
-                  </button>
-                  <button type="button" className="btn-secondary" onClick={() => openProjects()}>
-                    Projects
+                    Next: Package run <ChevronRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
-              }
-            />
-          ) : (
-            <div className="space-y-3">
-              <button
-                type="button"
-                className="w-full rounded-xl border border-accent-300 bg-accent-50/40 p-4 text-left hover:border-accent-400 hover:bg-white"
-                onClick={useEdgeTemplate}
-              >
-                <div className="flex items-center gap-2 text-sm font-semibold text-ink-900">
-                  <Cpu className="h-4 w-4 text-accent-700" /> Use edge template
-                </div>
-                <p className="mt-1 text-xs text-ink-500">
-                  Loads <code className="font-mono">edge-deploy</code> for source run{' '}
-                  <code className="font-mono">{sourceRunId.slice(0, 8)}…</code>
-                </p>
-              </button>
-              <button
-                type="button"
-                className="ide-quiet-btn text-[12px]"
-                onClick={() => openTrace({ runId: sourceRunId })}
-              >
-                <GitBranch className="h-3.5 w-3.5" /> Inspect source lineage
-              </button>
+              </div>
             </div>
           )}
-          {ready && (
-            <div className="flex justify-end">
-              <button type="button" className="btn-primary" onClick={() => setStep(2)}>
-                Configure <ChevronRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          )}
-        </div>
-      )}
 
-      {step === 2 && (
-        <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
-          <h3 className="text-sm font-semibold text-ink-900">Configure</h3>
-          <p className="text-xs text-ink-500">
-            Required: a Keras SavedModel directory or <code className="font-mono">.keras</code> file
-            under <code className="font-mono">workspace/artifacts/…</code> (from trainer / Example
-            06). INT8 needs <code className="font-mono">X_train_repr.npy</code> beside the model.
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm sm:col-span-2">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                Model path
-              </span>
-              {sourceArtifacts.length > 0 ? (
-                <select
-                  className="field-control mb-2 w-full font-mono text-xs"
-                  value={sourceArtifactId}
-                  onChange={(e) => {
-                    const id = e.target.value
-                    setSourceArtifactId(id)
-                    const hit = sourceArtifacts.find((a) => String(a.artifact_id || '') === id)
-                    if (!hit) return
-                    const uri = String(hit.uri || hit.path || hit.metadata?.path || '').trim()
-                    if (uri) setModelPath(uri)
-                  }}
-                  aria-label="Source artifact"
-                >
-                  <option value="">Pick artifact from source run…</option>
-                  {sourceArtifacts.map((a) => {
-                    const id = String(a.artifact_id || '')
-                    const typ = String(a.artifact_type || 'artifact')
-                    const uri = String(a.uri || a.path || '')
-                    return (
-                      <option key={id} value={id}>
-                        {id.slice(0, 10)}… · {typ}
-                        {uri ? ` · ${uri}` : ''}
-                      </option>
-                    )
-                  })}
-                </select>
-              ) : (
-                <p className="mb-2 text-[11px] text-ink-400">
-                  No artifacts listed for this run yet — paste a workspace model path below (fail-closed if missing).
-                </p>
-              )}
-              <input
-                className="field-control mt-0 w-full font-mono text-xs"
-                value={modelPath}
-                onChange={(e) => setModelPath(e.target.value)}
-                placeholder="workspace/artifacts/models/saved_model"
-              />
-              {linkedProject ? (
-                <span className="mt-1 block text-[11px] text-ink-400">
-                  Linked dataset <code className="font-mono">{linkedProject}</code>
-                  {linkedVersion ? (
-                    <>
-                      {' '}
-                      / <code className="font-mono">{linkedVersion}</code>
-                    </>
-                  ) : null}{' '}
-                  — adjust path if your trainer wrote elsewhere.
-                </span>
-              ) : null}
-              {!modelPathChecking && modelPathMissing ? (
-                <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
-                  <p className="font-medium">Model path not found on disk</p>
-                  <p className="mt-1 text-amber-900/90">
-                    <code className="font-mono">{modelPath || '(empty)'}</code> is missing. Train or
-                    export a model first — do not invent a fake path. Use Templates/Editor to train,
-                    or pick an existing artifact.
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <button type="button" className="btn-primary" onClick={() => setView('templates')}>
-                      Open Templates
-                    </button>
-                    <button type="button" className="btn-secondary" onClick={() => setView('builder')}>
-                      Open Editor
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </label>
-            <label className="block text-sm sm:col-span-2">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                Labels (comma-separated)
-              </span>
-              <input
-                className="field-control mt-0 w-full text-xs"
-                value={labelsCsv}
-                onChange={(e) => setLabelsCsv(e.target.value)}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                Optimizer backend
-              </span>
-              <select
-                className="field-control mt-0 w-full text-xs"
-                value={backend}
-                onChange={(e) => setBackend(e.target.value as EdgeBackend)}
-              >
-                {EDGE_BACKENDS.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                Quantization
-              </span>
-              <select
-                className="field-control mt-0 w-full text-xs"
-                value={quantization}
-                onChange={(e) => setQuantization(e.target.value as EdgeQuantization)}
-              >
-                {EDGE_QUANTIZATIONS.map((q) => (
-                  <option key={q} value={q}>
-                    {q}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                Package target
-              </span>
-              <select
-                className="field-control mt-0 w-full text-xs"
-                value={target}
-                onChange={(e) => setTarget(e.target.value as EdgeTarget)}
-              >
-                {EDGE_TARGETS.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                Package name
-              </span>
-              <input
-                className="field-control mt-0 w-full font-mono text-xs"
-                value={packageName}
-                onChange={(e) => setPackageName(e.target.value)}
-              />
-            </label>
-          </div>
-          <div className="flex flex-wrap justify-between gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setStep(1)}>
-              Back
-            </button>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="btn-secondary" onClick={openInBuilder}>
-                <Workflow className="h-3.5 w-3.5" /> Open in Editor
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => {
-                  if (!graph) setGraph(cloneTemplate())
-                  setStep(3)
-                }}
-              >
-                Next: Package run <ChevronRight className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {step === 3 && (
-        <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
-          <h3 className="text-sm font-semibold text-ink-900">Package run</h3>
-          <p className="text-sm text-ink-500">
-            Executes the configured optimize → package graph via{' '}
-            <code className="font-mono">POST /pipelines/run-async</code>. Needs TensorFlow (or ONNX stack) in the plugin runtime.
-          </p>
-          {runError && <ErrorBanner message={runError} />}
-          {runId && (
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-ink-500">Run</span>
-              <code className="font-mono text-xs text-ink-800">{runId}</code>
-              {runStatus && <StatusBadge status={runStatus} />}
-            </div>
-          )}
-          {running && <LoadingBlock label="Starting run…" />}
-          {runFailed && runId && (
-            <div className="flex flex-wrap gap-2 rounded-xl border border-rose-200 bg-rose-50/80 px-3 py-2">
-              <p className="w-full text-sm text-rose-900">Package run failed — open the run for logs, then fix in Editor.</p>
-              <button type="button" className="btn-primary" onClick={() => openRun(runId)}>
-                <RefreshCw className="h-3.5 w-3.5" /> Open run
-              </button>
-              <button type="button" className="btn-quiet" onClick={openInBuilder}>
-                <Workflow className="h-3.5 w-3.5" /> Open Editor
-              </button>
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setStep(2)}>
-              Back
-            </button>
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={running}
-              onClick={() => void startRun()}
-            >
-              <Play className="h-3.5 w-3.5" /> {runId ? 'Re-run' : 'Run pipeline'}
-            </button>
-            {runId && !runFailed && (
-              <button type="button" className="btn-secondary" onClick={() => openRun(runId)}>
-                <RefreshCw className="h-3.5 w-3.5" /> Open run
-              </button>
-            )}
-            {packageExists ? (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setStep(4)}
-                title="Package artifact found — skip to download"
-              >
-                Skip to download
-              </button>
-            ) : (
-              <p className="w-full text-xs text-ink-400">
-                {packageChecking
-                  ? 'Checking for package artifact…'
-                  : 'Skip to download is available after a package artifact exists — run the package step first.'}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {step === 4 && (
-        <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
-          <h3 className="text-sm font-semibold text-ink-900">Download package</h3>
-          {!packageExists && !packageChecking ? (
-            <EmptyState
-              title="Run package step first"
-              description="No package artifact at the expected path yet. Finish Configure → Package run, or adjust the path if the packager wrote elsewhere."
-              action={
-                <button type="button" className="btn-primary" onClick={() => setStep(3)}>
-                  Back to Package run
-                </button>
-              }
-            />
-          ) : (
-            <>
+          {step === 3 && (
+            <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
+              <h3 className="text-sm font-semibold text-ink-900">Package run</h3>
               <p className="text-sm text-ink-500">
-                Expected package path from packager config (adjust if your run wrote a different
-                name):
+                Executes the configured optimize → package graph via{' '}
+                <code className="font-mono">POST /pipelines/run-async</code>. Needs TensorFlow (or
+                ONNX stack) in the plugin runtime.
               </p>
-              <label className="block text-sm">
-                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                  Artifact path
-                </span>
-                <input
-                  className="field-control mt-0 w-full font-mono text-xs"
-                  value={resolvedPackagePath}
-                  onChange={(e) => setDownloadPath(e.target.value)}
-                />
-              </label>
-            </>
-          )}
-          {runError && <ErrorBanner message={runError} />}
-          {runFailed && runId && (
-            <div className="flex flex-wrap gap-2 rounded-xl border border-rose-200 bg-rose-50/80 px-3 py-2">
-              <button type="button" className="btn-primary" onClick={() => openRun(runId)}>
-                <RefreshCw className="h-3.5 w-3.5" /> Open run
-              </button>
-            </div>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={downloading || !packageExists}
-              onClick={() => void doDownload()}
-            >
-              <Download className="h-3.5 w-3.5" /> {downloading ? 'Downloading…' : 'Download'}
-            </button>
-            {runId && packageExists && (
-              <div className="inline-flex flex-wrap items-center gap-2">
-                <select
-                  className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
-                  value={promoteAlias}
-                  onChange={(e) => setPromoteAlias(e.target.value as 'staging' | 'prod')}
-                >
-                  <option value="staging">staging</option>
-                  <option value="prod">prod</option>
-                </select>
+              {runError && !runFailed && <ErrorBanner message={runError} />}
+              {runId && !runFailed && (
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-ink-500">Run</span>
+                  <code className="font-mono text-xs text-ink-800">{runId}</code>
+                  {runStatus && <StatusBadge status={runStatus} />}
+                </div>
+              )}
+              {running && <LoadingBlock label="Starting run…" />}
+              {failureDiagnostics}
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="btn-secondary" onClick={() => setStep(2)}>
+                  Back
+                </button>
                 <button
                   type="button"
-                  className="btn-secondary"
-                  disabled={promoting}
-                  onClick={() => void doPromote()}
+                  className="btn-primary"
+                  disabled={running}
+                  onClick={() => void startRun()}
                 >
-                  {promoting ? 'Promoting…' : 'Promote package'}
+                  <Play className="h-3.5 w-3.5" /> {runId ? 'Re-run' : 'Run pipeline'}
+                </button>
+                {runId && !runFailed && (
+                  <button type="button" className="btn-secondary" onClick={() => openRun(runId)}>
+                    <RefreshCw className="h-3.5 w-3.5" /> Open run
+                  </button>
+                )}
+                {packageExists ? (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setStep(4)}
+                    title="Package artifact found — skip to download"
+                  >
+                    Skip to download
+                  </button>
+                ) : (
+                  <p className="w-full text-xs text-ink-400">
+                    {packageChecking
+                      ? 'Checking for package artifact…'
+                      : 'Skip to download is available after a package artifact exists — run the package step first.'}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
+              <h3 className="text-sm font-semibold text-ink-900">Download package</h3>
+              {!packageExists && !packageChecking ? (
+                <EmptyState
+                  title="Run package step first"
+                  description="No package artifact at the expected path yet. Finish Configure → Package run, or adjust the path if the packager wrote elsewhere."
+                  action={
+                    <button type="button" className="btn-primary" onClick={() => setStep(3)}>
+                      Back to Package run
+                    </button>
+                  }
+                />
+              ) : (
+                <>
+                  <p className="text-sm text-ink-500">
+                    Expected package path from packager config (adjust if your run wrote a different
+                    name):
+                  </p>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                      Artifact path
+                    </span>
+                    <input
+                      className="field-control mt-0 w-full font-mono text-xs"
+                      value={resolvedPackagePath}
+                      onChange={(e) => setDownloadPath(e.target.value)}
+                    />
+                  </label>
+                  <div className="rounded-xl border border-ink-100 bg-ink-50/70 px-3 py-2 text-xs text-ink-700">
+                    <span className="font-semibold uppercase tracking-wide text-ink-400 text-[10px]">
+                      Checksum
+                    </span>
+                    <div className="mt-0.5 font-mono text-[11px] break-all">
+                      {packageChecksum || 'Checksum when packager emits it'}
+                    </div>
+                  </div>
+                </>
+              )}
+              {runError && !runFailed && <ErrorBanner message={runError} />}
+              {failureDiagnostics}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={downloading || !packageExists}
+                  onClick={() => void doDownload()}
+                >
+                  <Download className="h-3.5 w-3.5" /> {downloading ? 'Downloading…' : 'Download'}
+                </button>
+                {runId && packageExists && (
+                  <div className="inline-flex flex-wrap items-center gap-2">
+                    <select
+                      className="rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                      value={promoteAlias}
+                      onChange={(e) => setPromoteAlias(e.target.value as 'staging' | 'prod')}
+                    >
+                      <option value="staging">staging</option>
+                      <option value="prod">prod</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={promoting}
+                      onClick={() => void doPromote()}
+                    >
+                      {promoting ? 'Promoting…' : 'Promote package'}
+                    </button>
+                  </div>
+                )}
+                <button type="button" className="btn-secondary" onClick={openInBuilder}>
+                  <Workflow className="h-3.5 w-3.5" /> Open in Editor
+                </button>
+                <button type="button" className="btn-secondary" onClick={() => setStep(3)}>
+                  Back
                 </button>
               </div>
-            )}
-            <button type="button" className="btn-secondary" onClick={openInBuilder}>
-              <Workflow className="h-3.5 w-3.5" /> Open in Editor
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => setStep(3)}>
-              Back
-            </button>
-          </div>
-        </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   )

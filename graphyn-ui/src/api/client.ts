@@ -60,8 +60,16 @@ export function staticUrl(path: string): string {
 }
 
 function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {}
   const token = getApiToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  if (token) headers.Authorization = `Bearer ${token}`
+  try {
+    const actor = localStorage.getItem('graphyn.actor')?.trim()
+    if (actor) headers['X-Actor'] = actor
+  } catch {
+    /* ignore */
+  }
+  return headers
 }
 
 function requestId(): string {

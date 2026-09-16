@@ -111,23 +111,26 @@ A user (or agent) can:
 
 Still open from §3: full SSO/RBAC, device flash/OTA, full MLflow registry, durable cron across restarts, OTel; deepen agentic auto-apply guardrails. Docker smoke + pipeline envs close env proof + versioning pillars — not the full device/RBAC/OTel bar.
 
+**UI target (product):** [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) — path-based routes (`/workspaces/...`), Phase 0 production foundation, full pillar inventory, journeys J1–J6. Interactive: canvas `graphyn-ui-north-star`. **Hash `#/` routes are retired** in the target (compatibility redirects only).
+
 ### Console map
 
-Project-first Web IDE (activity bar when a workspace is open):
+Project-first Web IDE with **path routes** (see [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) §4.3):
 
-| Group | Views | Role |
+| Group | Path | Role |
 |---|---|---|
-| **Home** | Overview (`#/projects?project=…`) | Workspace home, pipelines, linked data |
-| **Editor** | Builder | Design Graph IR, run, validate, save |
-| **Runs** | Runs (`#/runs`) | History; per-run **Files**, **Lineage**, and **Compare** panels |
-| **Datasets** | Data (`#/data`) | Shared Inputs/Outputs under `workspace/datasets` |
-| **Artifacts** | Artifacts (`#/artifacts`) | Cross-run artifact registry (deep links) |
+| **Home** | `/workspaces/:id` | Workspace home, pipelines, linked data |
+| **Editor** | `/workspaces/:id/editor` | Design Graph IR, run, validate, save |
+| **Runs** | `/workspaces/:id/runs` | History; per-run outputs, lineage, compare |
+| **Models** | `/workspaces/:id/models` | Registry + stage promote/approve (target) |
+| **Datasets** | `/workspaces/:id/datasets` or `/library/datasets` | Shared Inputs/Outputs |
+| **Ship** | `/workspaces/:id/ship` | Edge package + devices (target) |
 
-**Global / Settings** (collapsed): Templates, Proposals (when pending), **Library · Plugins**, **Edge package**, **Worker fleet**, Secrets, **Ops** (`#/system`).
+**Global:** `/templates`, `/agent/inbox`, `/library/*`, `/deploy/workers`, `/admin/secrets`, `/admin/ops`, `/admin/access`.
 
-Deep links preserved: `#/trace` (Lineage), `#/experiments` (Compare runs) — prefer Runs panels when a workspace is open.
+**Legacy:** hash `#/...` redirects to paths for one release window, then removed.
 
-**Removed as primary map:** flat **Build / Observe / Library / Deploy / Admin** peer list (Lineage and Compare are not activity-bar peers; they live under Runs or as hash deep links).
+**Removed as primary map:** flat Build/Observe peers; hash-only navigation.
 
 
 ### Data vs Projects

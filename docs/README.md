@@ -10,6 +10,7 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 |---|---|
 | [GETTING_STARTED.md](./GETTING_STARTED.md) | Install + Mode A/B operations (single vs multi-machine) |
 | [PRODUCT_VISION.md](./PRODUCT_VISION.md) | Product north star and console IA |
+| [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) | Product UI plan — path routes, Phase 0 foundation, pillar checklist |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Docker Compose and production baseline |
 | [PLUGIN_GUIDE.md](./PLUGIN_GUIDE.md) | Author and ship plugins |
 | [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md) | Worker protocol, placement IR, env, runbook |
@@ -26,6 +27,7 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 | [MCP_SERVER.md](./MCP_SERVER.md) | MCP tools (29) and auth |
 | [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port types, workspace layout, artifacts |
 | [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Current limitations |
+| [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) | Path routes + production foundation + journeys J1–J6 + Phase 0–D |
 | [UI_UX_REVIEW.md](./UI_UX_REVIEW.md) | 2026-09-15 console UX / IA justification review |
 | [PROJECT_REVIEW.md](../PROJECT_REVIEW.md) | 2026-09-15 deep review — prioritized fix pack for agents/devs |
 | [TRUST_MODEL.md](./TRUST_MODEL.md) | Auth modes, resource authorization matrix, secrets, python_code + HTTP egress |

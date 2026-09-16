@@ -1,5 +1,7 @@
 # Graphyn Console — Project-first information architecture (Phase 1)
 
+> **URL strategy:** Superseded by [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) §4.3 — **path-based** `/workspaces/:id/...` routes. Hash `#/` is legacy redirect-only.
+>
 > **Status:** Phase 2 project scoping shipped (2026-09-10). Locked product Decision B: do **not** invent a second Project type — evolve current Projects into the full workspace. Dataset versions/snapshots remain a facet of the same project.
 >
 > **Supersedes for IA:** [UI_USER_REQUIREMENTS.md](./UI_USER_REQUIREMENTS.md) sections 0-1 sidebar / Observe peer layout and the "Projects = dataset workspace only" framing. **P0/P1 controls** (Trace prefill, Runs filters, Compare honesty, Mode A/B chips, etc.) remain valid **inside** this new shell.
@@ -34,7 +36,7 @@
 
 ### 2.2 Project open (project-local strip + global remainder)
 
-Header shows an **active project chip** (switch / clear). Sidebar prefers:
+Header shows a **workspace chip only when the URL is `/workspaces/:id`** (switch / open Home). Global Library with a stored `activeProject` but no workspace URL shows **Open workspace** (restore) — not the chip. Sidebar prefers:
 
 | Item | Destination | Role |
 |---|---|---|
@@ -59,7 +61,7 @@ Global **Build** (Templates, Proposals), **Library** (Data), **Deploy**, **Admin
 | Library: Plugins, Data, Projects | Projects → primary entry; Data stays Library; **Plugins → Admin** |
 | Admin: Secrets, System | Admin: Plugins, Secrets, System |
 
-**URL strategy (Phase 1):** Keep existing hash routes. Active project persists in `localStorage` (`graphyn.activeProject`) and is reflected on `#/projects?project=…`. Optional `?project=` on other views is progressive; do not break `#/runs/{id}` or Trace/Artifacts query deep links.
+**URL strategy:** Path routes (`/workspaces/:id/...`, `/library/...`, `/agent/inbox/:id`). Legacy `#/...` redirects one-way via `HashRedirect`. Active project persists in `localStorage` (`graphyn.activeProject`).
 
 ---
 
@@ -180,14 +182,14 @@ Shipped after Phase 2 to make **global vs project** and **viewer vs editor** obv
 Modeled on VS Code + Prefect run tabs + W&B/MLflow compare-in-runs:
 
 1. **Activity bar (project open):** **Home** / Editor / **Runs** / **Datasets** / **Artifacts** (optional). **Lineage** and **Compare runs** are Runs detail panels or deep links (`#/trace`, `#/experiments`) — not activity-bar peers. Global/Settings collapsed.
-2. **Header:** project chip + Switch / Close; last-run menu: **Artifacts** | **Compare runs…** (land on Runs panels).
+2. **Header:** workspace chip only on `/workspaces/:id` + Switch; else **Open workspace** when stored project or none; last-run menu: **Artifacts** | **Compare runs…** (land on Runs panels).
 3. **Projects picker** (`#/projects`): dense explorer + filter; welcome pane only.
 4. **Workspace Overview** (`#/projects?project=`): situation strip + Open Editor / From template / Last run; **Pinned inputs** are manual links (runs do not auto-link); Versions & taxonomy collapsed.
 5. **Editor:** Run | Validate | Save; placement only in Distributed mode.
 6. **Runs (unified observe):**
-   - Top: **History | Compare**.
-   - Detail panels: **Logs** (execution printout) | **Files** (downloadable outputs, type previews, grouped by node) | **Lineage** (executed nodes + provenance — enriched `/trace?run_id=`) | **Details** (counts, node_stats, errors) | **Checkpoints**.
-   - `openTrace({ runId })` → Runs → Lineage; `openArtifacts({ runId })` → Runs → Files.
+   - Top: **History | Live | Compare**.
+   - Detail panels: **Logs** (execution printout) | **Run outputs** (downloadable outputs, type previews, grouped by node) | **Lineage** (executed nodes + provenance — enriched `/trace?run_id=`) | **Details** (counts, node_stats, errors) | **Checkpoints**.
+   - `openTrace({ runId })` → Runs → Lineage; `openArtifacts({ runId })` → Runs → Run outputs.
 7. **Datasets vs Home:** sidebar **Datasets** = shared Inputs/Outputs library for the project; Home keeps workspace overview only.
 8. **Hash sync:** `replaceHash` / `go` dispatch `hashchange`; Switch clears `?project=`.
 9. **Auth:** 401 → Settings CTA.

@@ -12,6 +12,8 @@ import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
 import clsx from 'clsx'
 import { formatExecutionLine, formatMergeToast } from '../../lib/format'
+import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
+import { paths } from '../../routes/paths'
 
 interface OutputProject {
   project: string
@@ -20,6 +22,8 @@ interface OutputProject {
 interface InputLabel {
   label: string
   file_count: number
+  /** false when label resolves outside datasets/input (external symlink). */
+  accessible?: boolean
 }
 
 type DataMode = 'outputs' | 'inputs' | 'ingest' | 'merge'
@@ -35,17 +39,19 @@ function sanitizePathSeg(value: string | undefined | null): string | undefined {
   return v
 }
 
-function parseDataHash(): {
+function parseDataLocation(): {
   mode?: DataMode
   project?: string
   version?: string
   label?: string
   manage?: boolean
 } {
-  const raw = window.location.hash.replace(/^#\/?/, '')
-  const qIdx = raw.indexOf('?')
-  if (qIdx < 0) return {}
-  const params = new URLSearchParams(raw.slice(qIdx + 1))
+  const params = readSearchParams()
+  const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+  let projectFromPath: string | undefined
+  if (parts[0] === 'workspaces' && parts[1] && parts[2] === 'datasets') {
+    projectFromPath = decodeURIComponent(parts[1])
+  }
   const modeRaw = (params.get('mode') || '').trim()
   const mode = (['outputs', 'inputs', 'ingest', 'merge'] as const).includes(modeRaw as DataMode)
     ? (modeRaw as DataMode)
@@ -59,7 +65,11 @@ function parseDataHash(): {
         : undefined
   return {
     mode,
-    project: sanitizePathSeg(params.get('project')),
+    // Workspace path id seeds Outputs only; Inputs use ?label= / list pick.
+    project:
+      mode === 'inputs'
+        ? sanitizePathSeg(params.get('project'))
+        : sanitizePathSeg(params.get('project')) ?? sanitizePathSeg(projectFromPath),
     version: sanitizePathSeg(params.get('version')),
     label: sanitizePathSeg(params.get('label')),
     manage,
@@ -70,12 +80,30 @@ function isInvalidWorkspacePathError(detail: string): boolean {
   return /path is outside workspace|invalid path segment/i.test(detail)
 }
 
-function humanizeDataError(err: unknown): { message: string; detail: string; invalidPath: boolean } {
+function humanizeDataError(
+  err: unknown,
+  kind: 'inputs' | 'outputs' | 'list' = 'list',
+): { message: string; detail: string; invalidPath: boolean } {
   const detail = err instanceof Error ? err.message : String(err)
   if (isInvalidWorkspacePathError(detail)) {
+    if (kind === 'inputs') {
+      return {
+        message:
+          'This input label points outside the Graphyn datasets tree (often an external symlink). Pick another label, or set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API.',
+        detail,
+        invalidPath: true,
+      }
+    }
+    if (kind === 'outputs') {
+      return {
+        message:
+          'That output path is invalid or no longer inside the Graphyn workspace. Selection was cleared — pick a project/version again.',
+        detail,
+        invalidPath: true,
+      }
+    }
     return {
-      message:
-        'That dataset path is invalid or no longer inside the Graphyn workspace. Selection was cleared — pick a project/version again, or start fresh below.',
+      message: 'A dataset path was rejected by the API. Try refreshing the list.',
       detail,
       invalidPath: true,
     }
@@ -97,40 +125,49 @@ function matchesQuery(haystack: string, q: string): boolean {
 export default function DataView() {
   const pushToast = useAppStore((s) => s.pushToast)
   const openProjects = useAppStore((s) => s.openProjects)
-  const setView = useAppStore((s) => s.setView)
   const activeProject = useAppStore((s) => s.activeProject)
   const dataUnscopeEpoch = useAppStore((s) => s.dataUnscopeEpoch)
-  const initialHash = React.useMemo(() => parseDataHash(), [])
+  const initialLoc = React.useMemo(() => parseDataLocation(), [])
   const [outputs, setOutputs] = React.useState<OutputProject[]>([])
   const [inputs, setInputs] = React.useState<InputLabel[]>([])
-  const [mode, setMode] = React.useState<DataMode>(initialHash.mode ?? 'inputs')
+  const [mode, setMode] = React.useState<DataMode>(initialLoc.mode ?? 'inputs')
   const [uxMode, setUxMode] = React.useState<'browse' | 'manage'>(() => {
-    if (initialHash.manage === true) return 'manage'
-    if (initialHash.manage === false) return 'browse'
-    const m = initialHash.mode
+    if (initialLoc.manage === true) return 'manage'
+    if (initialLoc.manage === false) return 'browse'
+    const m = initialLoc.mode
     return m === 'ingest' || m === 'merge' ? 'manage' : 'browse'
   })
   const [manageTab, setManageTab] = React.useState<ManageTab>(() =>
-    manageTabFromMode(initialHash.mode ?? 'inputs'),
+    manageTabFromMode(initialLoc.mode ?? 'inputs'),
   )
-  const [project, setProject] = React.useState(initialHash.project ?? '')
-  const [version, setVersion] = React.useState(initialHash.version ?? '')
-  const [label, setLabel] = React.useState(initialHash.label ?? '')
+  const [project, setProject] = React.useState(initialLoc.project ?? '')
+  const [version, setVersion] = React.useState(initialLoc.version ?? '')
+  const [label, setLabel] = React.useState(initialLoc.label ?? '')
   const [rows, setRows] = React.useState<Array<Record<string, unknown>>>([])
   const [stats, setStats] = React.useState<unknown>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [errorDetail, setErrorDetail] = React.useState<string | null>(null)
   const [pathRecovery, setPathRecovery] = React.useState(false)
   const [listFilter, setListFilter] = React.useState('')
+  const [detailEpoch, setDetailEpoch] = React.useState(0)
   const skippedOutputKey = React.useRef<string | null>(null)
-  /** After closeProject: keep outputs dropdown empty; do not revive prior project via loadSources/hash-sync. */
+  /** Input labels that failed with invalid-path — do not auto-reselect after clear. */
+  const skippedInputLabels = React.useRef<Set<string>>(new Set())
+  /** After closeProject: keep outputs dropdown empty; do not revive prior project via loadSources/path-sync. */
   const libraryClearRef = React.useRef(false)
-  /** Omit project from hash while clearing — prevents stale React state from re-writing ?project=. */
+  /** Omit project from search while clearing — prevents stale React state from re-writing ?project=. */
   const skipProjectHashRef = React.useRef(false)
   const appliedUnscopeEpochRef = React.useRef<number | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const [storageHintDismissed, setStorageHintDismissed] = React.useState(() => {
+    try {
+      return localStorage.getItem('graphyn.datasets.storageHint') === '1'
+    } catch {
+      return false
+    }
+  })
 
-  // Layout before hash-sync effect: reset selection when workspace project is closed.
+  // Layout before path-sync effect: reset selection when workspace project is closed.
   React.useLayoutEffect(() => {
     const first = appliedUnscopeEpochRef.current === null
     const prevEpoch = appliedUnscopeEpochRef.current
@@ -138,7 +175,7 @@ export default function DataView() {
     if (first) {
       // Mounted after a close into global Data (no ?project=): prevent loadSources from auto-picking
       // the previous workspace project. Honor explicit openData({ project }) / deep links.
-      if (dataUnscopeEpoch > 0 && activeProject == null && !initialHash.project) {
+      if (dataUnscopeEpoch > 0 && activeProject == null && !initialLoc.project) {
         libraryClearRef.current = true
         skipProjectHashRef.current = true
         setProject('')
@@ -208,11 +245,17 @@ export default function DataView() {
       })
       setLabel((prev) => {
         const safe = sanitizePathSeg(prev) ?? ''
-        if (safe && inp.some((i) => i.label === safe)) return safe
-        return inp[0]?.label ?? ''
+        const skip = skippedInputLabels.current
+        const usable = inp.filter((i) => i.accessible !== false && !skip.has(i.label))
+        if (safe && usable.some((i) => i.label === safe)) return safe
+        // Prefer accessible labels; seed skip set from API so we never auto-pick blocked ones.
+        for (const i of inp) {
+          if (i.accessible === false) skip.add(i.label)
+        }
+        return usable[0]?.label ?? ''
       })
     } catch (err) {
-      const h = humanizeDataError(err)
+      const h = humanizeDataError(err, 'list')
       setError(h.message)
       setErrorDetail(h.detail)
     } finally {
@@ -226,7 +269,7 @@ export default function DataView() {
 
   React.useEffect(() => {
     const apply = () => {
-      const h = parseDataHash()
+      const h = parseDataLocation()
       if (h.mode) {
         setMode(h.mode)
         setManageTab(manageTabFromMode(h.mode))
@@ -234,62 +277,64 @@ export default function DataView() {
       if (h.manage === true) setUxMode('manage')
       else if (h.manage === false) setUxMode('browse')
       else if (h.mode === 'ingest' || h.mode === 'merge') setUxMode('manage')
-      const raw = window.location.hash
-      if (h.project) {
-        libraryClearRef.current = false
-        setProject(h.project)
-      } else if (raw.startsWith('#/data') && !/[?&]project=/.test(raw)) {
-        // Close-project stripped ?project= — unscope global library selection.
-        libraryClearRef.current = true
-        skipProjectHashRef.current = true
-        setProject('')
-        setVersion('')
+      const onDatasetsPath =
+        window.location.pathname.includes('/datasets') ||
+        window.location.pathname.startsWith('/library/datasets')
+      // Workspace path id only seeds Outputs selection — never Inputs labels.
+      const modeNow = h.mode ?? mode
+      if (modeNow === 'outputs' || !h.mode) {
+        if (h.project && !skipProjectHashRef.current) {
+          libraryClearRef.current = false
+          setProject(h.project)
+        } else if (onDatasetsPath && !readSearchParams().has('project') && !h.project) {
+          libraryClearRef.current = true
+          skipProjectHashRef.current = true
+          setProject('')
+          setVersion('')
+        }
       }
-      if (h.version) setVersion(h.version)
+      if (h.version && !skipProjectHashRef.current) setVersion(h.version)
       if (h.label) setLabel(h.label)
     }
-    window.addEventListener('hashchange', apply)
-    return () => window.removeEventListener('hashchange', apply)
+    return onPathChange(apply)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Mirror Projects: write selection into the hash (no hashchange — avoid echo loops).
+  // Mirror Projects: write selection into pathname search (no popstate — avoid echo loops via replacePathSearch).
   React.useEffect(() => {
-    const params = new URLSearchParams()
-    if (mode) params.set('mode', mode)
+    const params: Record<string, string | undefined> = {}
+    if (mode) params.mode = mode
     if (uxMode === 'manage' && (mode === 'inputs' || mode === 'outputs')) {
-      params.set('manage', '1')
+      params.manage = '1'
     }
-    // When activeProject was cleared, do not re-write stale project into the hash.
+    // When activeProject was cleared, do not re-write stale project into the search.
     if (skipProjectHashRef.current) {
       if (!project.trim()) {
         skipProjectHashRef.current = false
       }
       // omit project + version while clearing / stale
     } else if (project.trim()) {
-      params.set('project', project.trim())
-      if (version.trim()) params.set('version', version.trim())
+      params.project = project.trim()
+      if (version.trim()) params.version = version.trim()
     } else if (version.trim()) {
-      params.set('version', version.trim())
+      params.version = version.trim()
     }
-    if (label.trim()) params.set('label', label.trim())
-    const qs = params.toString()
-    const next = qs ? `#/data?${qs}` : '#/data'
-    if (window.location.hash !== next) {
-      window.history.replaceState(null, '', next)
-    }
+    if (label.trim()) params.label = label.trim()
+    replacePathSearch(params)
   }, [mode, uxMode, project, version, label, dataUnscopeEpoch])
 
   React.useEffect(() => {
     let cancelled = false
     const run = async () => {
-      setError(null)
-      setErrorDetail(null)
+      // Do not clear a banner from list-load while a detail retry is in flight for the same selection.
       if (mode === 'outputs') {
         if (!project || !version) {
           setRows([])
           setStats(null)
           return
         }
+        setError(null)
+        setErrorDetail(null)
         try {
           const [data, st] = await Promise.all([
             apiJson<Array<Record<string, unknown>>>(
@@ -305,7 +350,7 @@ export default function DataView() {
           setStats(st)
         } catch (err) {
           if (cancelled) return
-          const h = humanizeDataError(err)
+          const h = humanizeDataError(err, 'outputs')
           setError(h.message)
           setErrorDetail(h.detail)
           setRows([])
@@ -313,8 +358,14 @@ export default function DataView() {
           if (h.invalidPath) {
             skippedOutputKey.current = `${project}/${version}`
             setPathRecovery(true)
+            skipProjectHashRef.current = true
             setProject('')
             setVersion('')
+            // Leave workspace datasets URL without re-seeding Outputs from path id.
+            const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+            if (parts[0] === 'workspaces' && parts[2] === 'datasets') {
+              replacePathSearch({ mode: 'outputs' }, paths.libraryDatasets())
+            }
             void loadSources()
           }
         }
@@ -326,6 +377,8 @@ export default function DataView() {
           setStats(null)
           return
         }
+        setError(null)
+        setErrorDetail(null)
         try {
           const data = await apiJson<Array<Record<string, unknown>>>(
             `/data/inputs/${encodeURIComponent(label)}`,
@@ -335,11 +388,16 @@ export default function DataView() {
           setStats(null)
         } catch (err) {
           if (cancelled) return
-          const h = humanizeDataError(err)
+          const h = humanizeDataError(err, 'inputs')
           setError(h.message)
           setErrorDetail(h.detail)
           setRows([])
           setStats(null)
+          if (h.invalidPath) {
+            // Clear the lying selection so the dropdown matches the empty/error state.
+            skippedInputLabels.current.add(label)
+            setLabel('')
+          }
         }
         return
       }
@@ -350,7 +408,7 @@ export default function DataView() {
     return () => {
       cancelled = true
     }
-  }, [mode, project, version, label, loadSources])
+  }, [mode, project, version, label, loadSources, detailEpoch])
 
   const openFile = async (path: string, kind: 'files' | 'input-files') => {
     try {
@@ -535,10 +593,25 @@ export default function DataView() {
   }
 
   const browseTemplatesForDataPrep = () => {
-    setView('templates')
-    window.history.replaceState(null, '', '#/templates')
+    goView('templates')
     pushToast('Open a data-prep or ingest template in Editor', 'info')
   }
+
+  const blockedInputs = React.useMemo(
+    () => inputs.filter((i) => i.accessible === false),
+    [inputs],
+  )
+  const accessibleInputs = React.useMemo(
+    () => inputs.filter((i) => i.accessible !== false),
+    [inputs],
+  )
+
+  const showBrowseError = Boolean(
+    error &&
+      ((mode === 'inputs' && label.trim()) ||
+        (mode === 'outputs' && project.trim() && version.trim()) ||
+        (mode !== 'inputs' && mode !== 'outputs')),
+  )
 
   const versions = outputs.find((o) => o.project === project)?.versions ?? []
 
@@ -616,7 +689,7 @@ export default function DataView() {
     <div className="h-full overflow-y-auto p-6 space-y-4">
       <PageHeader
         title="Datasets"
-        description="Shared Inputs/Outputs under workspace/datasets. Not the same as Runs → Files (per-run downloads)."
+        description="Shared Inputs and Outputs for pipelines — not the same as per-run downloads under Runs."
         actions={
           <div className="flex gap-2">
             {uxMode === 'manage' && manageTab === 'upload' && (
@@ -630,7 +703,77 @@ export default function DataView() {
           </div>
         }
       />
-      {error && <ErrorBanner message={error} title={errorDetail ?? undefined} onRetry={() => void loadSources()} />}
+      {!storageHintDismissed ? (
+        <div
+          role="note"
+          className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-[12px] leading-relaxed text-ink-700"
+        >
+          <p>
+            <strong className="font-medium text-ink-900">Which storage?</strong> Datasets = shared
+            folders · Runs → Run outputs = one run · Artifacts = cross-run registry.
+          </p>
+          <button
+            type="button"
+            className="shrink-0 text-[11px] font-semibold text-ink-500 hover:text-ink-800"
+            onClick={() => {
+              try {
+                localStorage.setItem('graphyn.datasets.storageHint', '1')
+              } catch {
+                /* ignore */
+              }
+              setStorageHintDismissed(true)
+            }}
+          >
+            Got it
+          </button>
+        </div>
+      ) : null}
+      {uxMode === 'manage' ? (
+      <div
+        role="note"
+        className="rounded-xl border border-dashed border-ink-200 bg-white/80 px-3 py-2 text-[12px] leading-relaxed text-ink-700"
+      >
+        <span className="font-medium text-ink-900">Label lite:</span> use Outputs versions + Home pins;
+        full labeling studio is not available yet.{' '}
+        <button
+          type="button"
+          className="font-medium text-accent-800 hover:underline"
+          onClick={() => {
+            if (activeProject) openProjects({ project: activeProject })
+            else openProjects()
+          }}
+        >
+          Open Home
+        </button>
+      </div>
+      ) : null}
+      {showBrowseError ? (
+        <ErrorBanner
+          message={error!}
+          title={errorDetail ?? undefined}
+          onRetry={() => {
+            setDetailEpoch((n) => n + 1)
+            void loadSources()
+          }}
+          onDismiss={() => {
+            setError(null)
+            setErrorDetail(null)
+          }}
+        />
+      ) : null}
+      {mode === 'inputs' && blockedInputs.length > 0 && !showBrowseError ? (
+        <div
+          role="note"
+          className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 text-[12px] leading-relaxed text-amber-950"
+        >
+          <span className="font-medium">{blockedInputs.length} external label
+          {blockedInputs.length === 1 ? '' : 's'}</span>{' '}
+          (symlink outside datasets/input) — skipped in Browse.
+          {accessibleInputs.length === 0
+            ? ' Set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API (Compose default is on) and Refresh.'
+            : ' Pick an in-tree label below, or enable external symlinks on the API.'}
+        </div>
+      ) : null}
 
       <div
         className="inline-flex rounded-xl border border-ink-200 bg-ink-50/80 p-0.5"
@@ -723,7 +866,7 @@ export default function DataView() {
             <button type="button" className="btn-secondary" onClick={() => void startHfIngest()}>Start HF ingest</button>
           </section>
           <pre className="max-h-48 overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
-            {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') || 'No ingest events yet.'}
+            {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') || 'No ingest events yet — start a job to stream GET /ingest/url/{job_id}/stream progress here.'}
           </pre>
         </div>
       ) : uxMode === 'manage' && manageTab === 'merge' ? (
@@ -822,11 +965,7 @@ export default function DataView() {
                       <button
                         type="button"
                         className="btn-primary"
-                        onClick={() => {
-                          useAppStore.getState().setView('builder')
-                          window.history.replaceState(null, '', '#/builder')
-                          window.dispatchEvent(new HashChangeEvent('hashchange'))
-                        }}
+                        onClick={() => goView('builder')}
                         title="Open Editor with current workspace"
                       >
                         Open Editor
@@ -896,11 +1035,21 @@ export default function DataView() {
               {searchField}
               <select
                 value={label}
-                onChange={(e) => { setError(null); setErrorDetail(null); setLabel(e.target.value) }}
+                onChange={(e) => {
+                  const next = e.target.value
+                  if (next) skippedInputLabels.current.delete(next)
+                  setError(null)
+                  setErrorDetail(null)
+                  setLabel(next)
+                }}
                 className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
               >
+                {!label ? <option value="">Select a label…</option> : null}
                 {(listFilter.trim() ? filteredInputs : inputs).map((i) => (
-                  <option key={i.label} value={i.label}>{i.label} ({i.file_count})</option>
+                  <option key={i.label} value={i.label}>
+                    {i.label} ({i.file_count})
+                    {i.accessible === false ? ' — external (blocked)' : ''}
+                  </option>
                 ))}
               </select>
               {uxMode === 'manage' && label ? (
@@ -991,30 +1140,68 @@ export default function DataView() {
           ) : null}
 
           {showEmptyOutputs || showEmptyInputs ? null : stats != null && <KeyValue data={stats} />}
-          {showEmptyOutputs || showEmptyInputs ? null : filteredRows.length === 0 ? (
+          {showEmptyOutputs || showEmptyInputs ? null : showBrowseError && filteredRows.length === 0 ? (
             <EmptyState
-              title={listFilter.trim() ? 'No matches' : 'No rows'}
+              title="Couldn’t load files"
+              description="This selection isn’t browseable. Clear it and pick an accessible label or version."
+              action={
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    if (mode === 'inputs') setLabel('')
+                    else {
+                      setProject('')
+                      setVersion('')
+                    }
+                    setError(null)
+                    setErrorDetail(null)
+                  }}
+                >
+                  Clear selection
+                </button>
+              }
+            />
+          ) : filteredRows.length === 0 ? (
+            <EmptyState
+              title={
+                listFilter.trim()
+                  ? 'No matches'
+                  : mode === 'inputs' && !label
+                    ? accessibleInputs.length
+                      ? 'Pick an input label'
+                      : blockedInputs.length
+                        ? 'No browseable labels'
+                        : 'Pick an input label'
+                    : 'No rows'
+              }
               description={
                 listFilter.trim()
                   ? 'Nothing matches this filter. Clear it to see the full list.'
                   : mode === 'outputs'
                     ? 'This version has no files yet. Run a pipeline or merge datasets to populate it.'
-                    : 'Upload files or ingest URLs to see files here.'
+                    : !label
+                      ? accessibleInputs.length
+                        ? 'Choose a label from the dropdown to browse shared input files.'
+                        : blockedInputs.length
+                          ? 'All labels are external symlinks. Enable GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API (Compose defaults to on), then Refresh.'
+                          : 'Choose a label from the dropdown to browse shared input files.'
+                      : 'This label has no files yet. Upload or ingest to add some.'
               }
               action={
                 listFilter.trim() ? (
                   <button type="button" className="btn-primary" onClick={() => setListFilter('')}>
                     Clear filter
                   </button>
-                ) : mode === 'inputs' ? (
+                ) : mode === 'inputs' && label ? (
                   <button type="button" className="btn-primary" onClick={upload}>
                     Upload a file
                   </button>
-                ) : (
+                ) : mode === 'outputs' ? (
                   <button type="button" className="btn-primary" onClick={browseTemplatesForDataPrep}>
                     Browse Templates
                   </button>
-                )
+                ) : undefined
               }
             />
           ) : (

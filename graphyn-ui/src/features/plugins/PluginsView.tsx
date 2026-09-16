@@ -1,5 +1,6 @@
 import React from 'react'
-import { Download, RefreshCw, PackagePlus, MoreHorizontal } from 'lucide-react'
+import clsx from 'clsx'
+import { Download, RefreshCw, PackagePlus, MoreHorizontal, Trash2 } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
@@ -62,6 +63,20 @@ function formatElapsed(ms: number): string {
   return m > 0 ? `${m}m ${s.toString().padStart(2, '0')}s` : `${s}s`
 }
 
+/** One-line summary for pip logs — avoid duplicating walls of text in cards + toasts. */
+function shortenInstallError(msg: string, max = 200): string {
+  const trimmed = msg.trim()
+  if (!trimmed) return 'Install failed'
+  const interesting =
+    trimmed
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => /ERROR:|Could not find|No matching distribution|failed/i.test(l)) ||
+    trimmed.split('\n')[0] ||
+    trimmed
+  return interesting.length > max ? `${interesting.slice(0, max - 1)}…` : interesting
+}
+
 function pluginBucket(p: Plugin): StatusFilter {
   if (p.enabled === false) return 'disabled'
   const missingReq = p.dependency_summary?.missing_required?.length ?? 0
@@ -88,10 +103,11 @@ export default function PluginsView() {
   const [installingName, setInstallingName] = React.useState<string | null>(null)
   const [installingOptional, setInstallingOptional] = React.useState(false)
   const [installStartedAt, setInstallStartedAt] = React.useState<number | null>(null)
-  const [installError, setInstallError] = React.useState<string | null>(null)
+  const [depInstallErrors, setDepInstallErrors] = React.useState<Record<string, string>>({})
   const [pkgInstalling, setPkgInstalling] = React.useState<string | null>(null)
   const [pkgInstallError, setPkgInstallError] = React.useState<string | null>(null)
   const [elapsedTick, setElapsedTick] = React.useState(0)
+  const [venvGcBusy, setVenvGcBusy] = React.useState(false)
   const pollRef = React.useRef<number | null>(null)
   const depPollRef = React.useRef<number | null>(null)
 
@@ -166,10 +182,14 @@ export default function PluginsView() {
       setInstallingName(null)
       setInstallStartedAt(null)
       if (failed) {
-        setInstallError(failed)
-        pushToast(failed, 'error')
+        const short = shortenInstallError(failed)
+        setDepInstallErrors((prev) => ({ ...prev, [name]: short }))
       } else {
-        setInstallError(null)
+        setDepInstallErrors((prev) => {
+          const next = { ...prev }
+          delete next[name]
+          return next
+        })
         pushToast(
           includeOptional ? `Installed extras for ${name}` : `Installed required deps for ${name}`,
           'success',
@@ -268,7 +288,11 @@ export default function PluginsView() {
 
   const installDeps = async (name: string, includeOptional: boolean) => {
     if (installingName) return
-    setInstallError(null)
+    setDepInstallErrors((prev) => {
+      const next = { ...prev }
+      delete next[name]
+      return next
+    })
     setInstallingName(name)
     setInstallingOptional(includeOptional)
     setInstallStartedAt(Date.now())
@@ -308,8 +332,7 @@ export default function PluginsView() {
       clearDepPoll()
       setInstallingName(null)
       setInstallStartedAt(null)
-      setInstallError(msg)
-      pushToast(msg, 'error')
+      setDepInstallErrors((prev) => ({ ...prev, [name]: shortenInstallError(msg) }))
     }
   }
 
@@ -361,20 +384,52 @@ export default function PluginsView() {
         title="Plugins"
         description="Library — install node packs for the Editor catalog."
         actions={
-          <button type="button" className="btn-secondary" onClick={() => void load()}>
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={venvGcBusy}
+              onClick={() => {
+                setVenvGcBusy(true)
+                void apiJson<{ removed?: string[] }>('/plugins/venvs/gc', { method: 'POST' })
+                  .then((res) => {
+                    const n = Array.isArray(res?.removed) ? res.removed.length : 0
+                    pushToast(
+                      n
+                        ? `Removed ${n} unused plugin venv${n === 1 ? '' : 's'}`
+                        : 'No unused plugin venvs to remove',
+                      'success',
+                    )
+                  })
+                  .catch((err) =>
+                    pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                  )
+                  .finally(() => setVenvGcBusy(false))
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {venvGcBusy ? 'Cleaning…' : 'Clean unused venvs'}
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => void load()}>
+              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
+          </div>
         }
       />
       <p className="rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
-        Mode B: workers need the same plugins they claim, plus shared storage for datasets —{' '}
+        <span className="font-medium text-ink-800">Deps:</span>{' '}
+        <span className="font-mono text-[11px]">inprocess</span> installs into the shared API Python;{' '}
+        <span className="font-mono text-[11px]">isolated</span> creates{' '}
+        <span className="font-mono text-[11px]">~/.graphyn/plugins/venvs/&lt;name&gt;</span> (heavy ML
+        stacks). Reinstall/upgrade a plugin after changing its runtime. Mode B workers need the same
+        packs —{' '}
         <a
           href={DOCS_GETTING_STARTED_MODE_B}
           target="_blank"
           rel="noopener noreferrer"
           className="font-medium text-accent-700 hover:underline"
         >
-          Getting Started · Mode B
+          Getting Started
         </a>
         .
       </p>
@@ -526,6 +581,9 @@ export default function PluginsView() {
                   (p.manifest?.optional_dependencies?.length ?? 0) > 0
                 const busy = installingName === p.name
                 const anyBusy = installingName != null
+                const cardError =
+                  depInstallErrors[p.name] ||
+                  (p.status === 'failed' && p.error ? shortenInstallError(String(p.error)) : '')
                 return (
                   <li key={p.name} className="rounded-2xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm">
                     <div className="flex flex-wrap items-start justify-between gap-2">
@@ -535,7 +593,19 @@ export default function PluginsView() {
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-type-meta text-ink-500">
                           <StatusBadge status={p.enabled === false ? 'disabled' : p.status ?? 'enabled'} />
-                          <span className="rounded bg-ink-50 px-1.5 py-0.5 font-mono text-type-mono">{runtime}</span>
+                          <span
+                            className={clsx(
+                              'rounded px-1.5 py-0.5 font-mono text-type-mono',
+                              isolated ? 'bg-accent-50 text-accent-900' : 'bg-ink-50 text-ink-600',
+                            )}
+                            title={
+                              isolated
+                                ? 'Optional/required deps install into a per-plugin venv'
+                                : 'Deps install into the shared API Python environment'
+                            }
+                          >
+                            {isolated ? 'isolated venv' : 'shared env'}
+                          </span>
                           {p.node_types?.length ? `${p.node_types.length} nodes` : null}
                           {missingReq > 0 ? (
                             <span className="text-amber-700">{missingReq} missing required</span>
@@ -569,10 +639,11 @@ export default function PluginsView() {
                                 title={
                                   isolated
                                     ? 'Install optional extras into this plugin’s isolated venv'
-                                    : 'Install optional extras'
+                                    : 'Installs into the shared API Python — heavy ML extras often fail here; prefer isolated runtime'
                                 }
                               >
-                                <PackagePlus className="h-3.5 w-3.5" /> Install optional extras
+                                <PackagePlus className="h-3.5 w-3.5" />
+                                {isolated ? 'Install optional (venv)' : 'Install optional (shared)'}
                               </button>
                             ) : (
                               <button
@@ -658,9 +729,21 @@ export default function PluginsView() {
                         </div>
                       </div>
                     )}
-                    {installError && installingName == null && (
-                      <div className="mt-3">
-                        <ErrorBanner message={installError} onDismiss={() => setInstallError(null)} />
+                    {cardError && !busy && (
+                      <div className="mt-2 space-y-1">
+                        <p
+                          className="rounded-lg border border-rose-100 bg-rose-50/80 px-2.5 py-1.5 text-[12px] leading-snug text-rose-900"
+                          title={cardError}
+                        >
+                          {cardError}
+                        </p>
+                        {!isolated ? (
+                          <p className="text-[11px] text-ink-500">
+                            Shared-env installs often fail for TF/Torch stacks. After upgrading this
+                            plugin to <span className="font-mono">runtime=isolated</span>, use{' '}
+                            <span className="font-medium">Install optional (venv)</span>.
+                          </p>
+                        ) : null}
                       </div>
                     )}
                     {isExpanded && depStatus && (
@@ -705,7 +788,8 @@ export default function PluginsView() {
                               disabled={anyBusy}
                               onClick={() => void installDeps(p.name, true)}
                             >
-                              <PackagePlus className="h-3.5 w-3.5" /> Install optional extras
+                              <PackagePlus className="h-3.5 w-3.5" />
+                              {isolated ? 'Install optional (venv)' : 'Install optional (shared)'}
                             </button>
                           )}
                         </div>
