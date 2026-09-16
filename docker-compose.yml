@@ -31,8 +31,9 @@ services:
       GRAPHYN_AUTO_INSTALL_PLUGINS: "1"
       # Bind-mounted workspace often uses host symlinks under datasets/input.
       GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS: ${GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS:-1}
-      # First boot may take several minutes while isolated plugin venvs install (TF etc).
-      # API port will reset until uvicorn finishes loading.
+      # API binds immediately; plugins load in a background thread.
+      # Heavy TF/ONNX into every isolated venv at boot is OFF by default —
+      # use Plugins → Install optional (venv), or set GRAPHYN_ISOLATED_BOOT_HEAVY=1.
       CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}
     volumes:
       - graphyn-home:/data/graphyn-home

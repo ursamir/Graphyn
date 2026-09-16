@@ -368,7 +368,8 @@ class AudioClassifierNode(Node):
             except ImportError:
                 raise ImportError(
                     "AudioClassifierNode: TFLite runtime required for backend='tflite'. "
-                    "Install with: pip install tflite-runtime>=2.14"
+                    "Install with: pip install tflite-runtime>=2.14 "
+                    "(or use tensorflow which provides tensorflow.lite)."
                 )
 
         if self._model_obj is None:

@@ -64,17 +64,67 @@ function formatElapsed(ms: number): string {
 }
 
 /** One-line summary for pip logs — avoid duplicating walls of text in cards + toasts. */
-function shortenInstallError(msg: string, max = 200): string {
+function shortenInstallError(msg: string, max = 220): string {
   const trimmed = msg.trim()
   if (!trimmed) return 'Install failed'
+  const lines = trimmed
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  // Prefer pip's concrete reason over our wrapper "pip install failed for […]".
   const interesting =
-    trimmed
-      .split('\n')
-      .map((l) => l.trim())
-      .find((l) => /ERROR:|Could not find|No matching distribution|failed/i.test(l)) ||
-    trimmed.split('\n')[0] ||
+    [...lines]
+      .reverse()
+      .find((l) =>
+        /ERROR:|Could not find|No matching distribution|ResolutionImpossible|conflict|incompatible|Some optional packages failed/i.test(
+          l,
+        ),
+      ) ||
+    lines.find((l) => /failed|error/i.test(l) && !/^pip install failed for \[/i.test(l)) ||
+    lines[0] ||
     trimmed
   return interesting.length > max ? `${interesting.slice(0, max - 1)}…` : interesting
+}
+
+function installStatusLabel(status: string | null | undefined): string | null {
+  if (!status) return null
+  if (status === 'installing') return 'installing…'
+  if (status === 'installed') return 'install finished'
+  if (status === 'failed') return 'install failed'
+  return status
+}
+
+/** Bare package name from a requirement string (`torch>=2.0` → `torch`). */
+function reqPackageName(req: string): string {
+  const raw = req.trim().split(/\s+/)[0] || req
+  return raw.replace(/\[.*$/, '').split(/[<=>!~]/)[0].trim().toLowerCase()
+}
+
+/** Human list of packages for progress copy (no fake “PyTorch” when installing something else). */
+function summarizePackages(reqs: string[], maxNames = 3): string {
+  const names = Array.from(
+    new Set(reqs.map(reqPackageName).filter(Boolean)),
+  )
+  if (names.length === 0) return ''
+  if (names.length <= maxNames) return names.join(', ')
+  return `${names.slice(0, maxNames).join(', ')} +${names.length - maxNames} more`
+}
+
+function installProgressCopy(opts: {
+  includeOptional: boolean
+  packageNames: string[]
+  isolated: boolean
+}): { title: string; detail: string } {
+  const { includeOptional, packageNames, isolated } = opts
+  const what = includeOptional ? 'optional extras' : 'required deps'
+  const pkgs = summarizePackages(packageNames)
+  const title = pkgs
+    ? `Installing ${what}: ${pkgs}…`
+    : `Installing ${what}…`
+  const detail = isolated
+    ? 'Into this plugin’s isolated venv — large wheels can take several minutes.'
+    : 'Into the shared API Python — large wheels can take several minutes.'
+  return { title, detail }
 }
 
 function pluginBucket(p: Plugin): StatusFilter {
@@ -102,6 +152,7 @@ export default function PluginsView() {
   const [depStatus, setDepStatus] = React.useState<DepStatus | null>(null)
   const [installingName, setInstallingName] = React.useState<string | null>(null)
   const [installingOptional, setInstallingOptional] = React.useState(false)
+  const [installingPackages, setInstallingPackages] = React.useState<string[]>([])
   const [installStartedAt, setInstallStartedAt] = React.useState<number | null>(null)
   const [depInstallErrors, setDepInstallErrors] = React.useState<Record<string, string>>({})
   const [pkgInstalling, setPkgInstalling] = React.useState<string | null>(null)
@@ -181,6 +232,7 @@ export default function PluginsView() {
       clearDepPoll()
       setInstallingName(null)
       setInstallStartedAt(null)
+      setInstallingPackages([])
       if (failed) {
         const short = shortenInstallError(failed)
         setDepInstallErrors((prev) => ({ ...prev, [name]: short }))
@@ -293,8 +345,21 @@ export default function PluginsView() {
       delete next[name]
       return next
     })
+    const plug = plugins?.find((x) => x.name === name)
+    const runtime =
+      plug?.runtime ?? plug?.dependency_summary?.runtime ?? plug?.manifest?.runtime ?? 'inprocess'
+    const isolated = isIsolatedRuntime(runtime, name)
+    // Prefer currently-missing list; fall back to declared deps so the banner still names packages.
+    const missingOnly = includeOptional
+      ? plug?.dependency_summary?.missing_optional ?? []
+      : plug?.dependency_summary?.missing_required ?? []
+    const declared = includeOptional
+      ? plug?.manifest?.optional_dependencies ?? []
+      : plug?.manifest?.dependencies ?? []
+    const packageNames = (missingOnly.length ? missingOnly : declared).map(String)
     setInstallingName(name)
     setInstallingOptional(includeOptional)
+    setInstallingPackages(packageNames)
     setInstallStartedAt(Date.now())
     try {
       const res = await apiJson<DepStatus & { status?: string }>(
@@ -306,12 +371,12 @@ export default function PluginsView() {
         },
       )
       if (res.status === 'installing' || res.install_status === 'installing') {
-        pushToast(
-          includeOptional
-            ? `Installing optional extras for ${name}… this can take several minutes`
-            : `Installing required deps for ${name}…`,
-          'info',
-        )
+        const copy = installProgressCopy({
+          includeOptional,
+          packageNames,
+          isolated,
+        })
+        pushToast(`${copy.title} ${copy.detail}`, 'info')
         if (expanded !== name) {
           setExpanded(name)
         }
@@ -332,6 +397,7 @@ export default function PluginsView() {
       clearDepPoll()
       setInstallingName(null)
       setInstallStartedAt(null)
+      setInstallingPackages([])
       setDepInstallErrors((prev) => ({ ...prev, [name]: shortenInstallError(msg) }))
     }
   }
@@ -581,8 +647,14 @@ export default function PluginsView() {
                   (p.manifest?.optional_dependencies?.length ?? 0) > 0
                 const busy = installingName === p.name
                 const anyBusy = installingName != null
+                const apiInstallFailed =
+                  isExpanded &&
+                  depStatus?.install_status === 'failed' &&
+                  depStatus.install_error
+                    ? shortenInstallError(String(depStatus.install_error))
+                    : ''
                 const cardError =
-                  depInstallErrors[p.name] ||
+                  (busy ? '' : depInstallErrors[p.name] || apiInstallFailed) ||
                   (p.status === 'failed' && p.error ? shortenInstallError(String(p.error)) : '')
                 return (
                   <li key={p.name} className="rounded-2xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm">
@@ -713,19 +785,28 @@ export default function PluginsView() {
                     </div>
                     {isolated && !isExpanded && (
                       <p className="mt-2 text-type-meta text-ink-500">
-                        Optional extras (TensorFlow, …) install into this plugin’s isolated venv — they are not added to
-                        the API image.
+                        Optional packages install into this plugin’s isolated venv — not into the API image.
                       </p>
                     )}
                     {busy && (
                       <div className="mt-3 flex items-start gap-2 rounded-xl border border-accent-200 bg-accent-50/60 px-3 py-2 text-sm text-ink-700">
                         <span className="mt-0.5 inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
                         <div>
-                          <div className="font-medium">
-                            Installing{installingOptional ? ' optional extras' : ' required deps'}… this can take several
-                            minutes for PyTorch
-                          </div>
-                          <div className="text-type-meta text-ink-500">Elapsed {formatElapsed(liveElapsed)}</div>
+                          {(() => {
+                            const copy = installProgressCopy({
+                              includeOptional: installingOptional,
+                              packageNames: installingPackages,
+                              isolated,
+                            })
+                            return (
+                              <>
+                                <div className="font-medium">{copy.title}</div>
+                                <div className="text-type-meta text-ink-500">
+                                  {copy.detail} Elapsed {formatElapsed(liveElapsed)}
+                                </div>
+                              </>
+                            )
+                          })()}
                         </div>
                       </div>
                     )}
@@ -739,7 +820,7 @@ export default function PluginsView() {
                         </p>
                         {!isolated ? (
                           <p className="text-[11px] text-ink-500">
-                            Shared-env installs often fail for TF/Torch stacks. After upgrading this
+                            Shared-env installs often fail for heavy ML extras. After upgrading this
                             plugin to <span className="font-mono">runtime=isolated</span>, use{' '}
                             <span className="font-medium">Install optional (venv)</span>.
                           </p>
@@ -749,9 +830,14 @@ export default function PluginsView() {
                     {isExpanded && depStatus && (
                       <div className="mt-3 space-y-2 border-t border-ink-100 pt-3 text-sm">
                         <div className="text-type-meta text-ink-500">
-                          runtime={depStatus.runtime}
-                          {depStatus.python ? ` · ${depStatus.python}` : ''}
-                          {depStatus.install_status ? ` · install=${depStatus.install_status}` : ''}
+                          {depStatus.python ? (
+                            <span className="font-mono text-[11px]">{depStatus.python}</span>
+                          ) : (
+                            <span>runtime={depStatus.runtime}</span>
+                          )}
+                          {installStatusLabel(depStatus.install_status)
+                            ? ` · ${installStatusLabel(depStatus.install_status)}`
+                            : ''}
                         </div>
                         <ul className="space-y-1 font-mono text-type-mono">
                           {depStatus.dependencies.map((d) => (
@@ -795,8 +881,8 @@ export default function PluginsView() {
                         </div>
                         {isolated && (
                           <p className="text-type-meta text-ink-500">
-                            Optional extras (TensorFlow, …) install into this plugin’s isolated venv — they are not added
-                            to the API image.
+                            Optional packages listed above install into this plugin’s isolated venv — not into the API
+                            image.
                           </p>
                         )}
                       </div>

@@ -49,43 +49,85 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+# Optional packages safe to install into isolated venvs at plugin *load*.
+# Default is **empty** so API/Docker boot is not blocked for 10–30+ minutes
+# pip-installing TensorFlow into every ML plugin venv. Enable the heavy set with
+# ``GRAPHYN_ISOLATED_BOOT_HEAVY=1``. Otherwise use Plugins → Install optional
+# (venv), or ``GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1``.
+_ISOLATED_BOOT_OPTIONAL_HEAVY = frozenset(
+    {
+        "tensorflow",
+        "tensorflow-cpu",
+        "tensorflow-hub",
+        "keras",
+        "onnxruntime",
+        "onnx",
+        "tf2onnx",
+        "matplotlib",
+        "seaborn",
+    }
+)
+
+
 def isolated_venv_requirements(manifest: PluginManifest) -> list[str]:
-    """Requirements to pip-install into an isolated plugin venv.
+    """Requirements to pip-install into an isolated plugin venv at load time.
 
-    Isolated workers execute plugin ``process()`` without host site-packages,
-    so they need the plugin's ML stack. Those packages stay in
-    ``optional_dependencies`` so they are **not** installed into the host
-    API image.
+    Always includes required ``dependencies``. Optional ML stacks (TensorFlow /
+    Keras / ONNX) install at load only when ``GRAPHYN_ISOLATED_BOOT_HEAVY=1``.
+    Other optionals stay UI-on-demand unless
+    ``GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1``.
 
-    TensorFlow + Keras are always included. ``torch`` is skipped unless
-    ``GRAPHYN_ISOLATED_INSTALL_TORCH=1`` (keeps the default venv smaller).
+    ``torch`` is skipped unless ``GRAPHYN_ISOLATED_INSTALL_TORCH=1``.
     """
     from packaging.requirements import Requirement
 
-    reqs = list(manifest.dependencies) + list(manifest.optional_dependencies)
+    install_all = os.environ.get("GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     install_torch = os.environ.get("GRAPHYN_ISOLATED_INSTALL_TORCH", "").strip().lower() in (
         "1",
         "true",
         "yes",
     )
-    if install_torch:
-        return reqs
+    boot_heavy = os.environ.get("GRAPHYN_ISOLATED_BOOT_HEAVY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    allowlist = _ISOLATED_BOOT_OPTIONAL_HEAVY if boot_heavy else frozenset()
 
-    filtered: list[str] = []
-    for item in reqs:
+    def _pkg_name(item: str) -> str:
         try:
-            name = Requirement(item).name.lower().replace("_", "-")
+            return Requirement(item).name.lower().replace("_", "-")
         except Exception:
-            name = item.split()[0].lower()
+            return item.split()[0].lower().replace("_", "-")
+
+    reqs: list[str] = list(manifest.dependencies)
+    for item in manifest.optional_dependencies:
+        name = _pkg_name(item)
         if name in {"torch", "pytorch"}:
-            log.info(
-                "Skipping torch extra for isolated plugin '%s' "
-                "(set GRAPHYN_ISOLATED_INSTALL_TORCH=1 to install)",
+            if install_torch:
+                reqs.append(item)
+            else:
+                log.info(
+                    "Skipping torch extra for isolated plugin '%s' "
+                    "(set GRAPHYN_ISOLATED_INSTALL_TORCH=1 to install)",
+                    manifest.name,
+                )
+            continue
+        if install_all or name in allowlist:
+            reqs.append(item)
+        else:
+            log.debug(
+                "Deferring optional '%s' for isolated plugin '%s' "
+                "(install via UI, GRAPHYN_ISOLATED_BOOT_HEAVY=1, or "
+                "GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL=1)",
+                item,
                 manifest.name,
             )
-            continue
-        filtered.append(item)
-    return filtered
+    return reqs
 
 
 def _get_platform_version() -> str | None:
@@ -193,14 +235,23 @@ class PluginLoader:
         # Step 4 — dependency check / isolated venv
         if (manifest.runtime or "inprocess") == "isolated":
             from app.core.plugins.venv_manager import PluginVenvManager
+            from app.core.plugins.errors import PluginDependencyError
 
-            # Isolated plugins need required + optional extras (TF/Keras, etc.)
-            # in the plugin venv. Do not install those into the host API image.
+            # Required deps at load. Heavy TF/ONNX only with GRAPHYN_ISOLATED_BOOT_HEAVY=1.
             venv_mgr = PluginVenvManager()
-            venv_py = venv_mgr.ensure(
-                manifest.name,
-                isolated_venv_requirements(manifest),
-            )
+            reqs = isolated_venv_requirements(manifest)
+            try:
+                venv_py = venv_mgr.ensure(manifest.name, reqs)
+            except PluginDependencyError as exc:
+                # Never block registering the plugin when an optional boot package
+                # fails (platform wheel gaps). Fall back to required deps only.
+                log.warning(
+                    "Isolated venv extras failed for '%s' (%s); "
+                    "retrying with required dependencies only",
+                    manifest.name,
+                    exc,
+                )
+                venv_py = venv_mgr.ensure(manifest.name, list(manifest.dependencies))
         else:
             DependencyChecker().check(manifest.dependencies)
             venv_py = None

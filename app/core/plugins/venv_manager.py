@@ -57,10 +57,14 @@ class PluginVenvManager:
         requirements: list[str],
         *,
         system_site_packages: bool = False,
+        one_by_one: bool = False,
     ) -> Path:
         """Create venv if needed, install *requirements*, write lockfile.
 
         Returns path to the venv's Python executable.
+
+        *one_by_one* — install each missing requirement separately (used for
+        optional extras so one bad wheel does not abort the rest).
         """
         py = self.python_bin(plugin_name)
         root = self.venv_dir(plugin_name)
@@ -99,14 +103,29 @@ class PluginVenvManager:
             # Skip shared-env platform conflict hard-fail for plugin pins
             # (isolation is the point). Bootstrap still uses platform ranges.
             try:
-                unsatisfied = []
                 parsed = checker._parse_requirements(install_list)
                 unsatisfied = checker._find_unsatisfied(parsed, python=str(py))
                 if unsatisfied:
+                    # pip stdout/stderr are captured — emit progress so Docker
+                    # logs are not empty for 10–30 minutes of silent installs.
+                    print(
+                        f"graphyn: plugin '{plugin_name}' installing "
+                        f"{len(unsatisfied)} package(s): "
+                        f"{', '.join(unsatisfied[:6])}"
+                        f"{'…' if len(unsatisfied) > 6 else ''}",
+                        flush=True,
+                        file=sys.stderr,
+                    )
                     checker.install(
                         unsatisfied,
                         python=str(py),
                         check_platform=False,
+                        one_by_one=one_by_one,
+                    )
+                    print(
+                        f"graphyn: plugin '{plugin_name}' venv packages ready",
+                        flush=True,
+                        file=sys.stderr,
                     )
             except PluginDependencyError:
                 raise

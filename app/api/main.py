@@ -23,7 +23,10 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+import sys
+import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -54,7 +57,16 @@ from app.api.routers.models import router as models_router
 from app.api.observability import record_request
 from app.core.config import api_token, auth_required, datasets_output_dir, datasets_input_dir, runs_dir
 
+# Docker / compose: logging must hit stdout/stderr *before* plugin venv installs
+# (pip output is captured; without this, ``docker logs`` stays empty for minutes).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stderr,
+    force=True,
+)
 _logger = logging.getLogger(__name__)
+print("graphyn-api: process starting", flush=True, file=sys.stderr)
 
 # ── Domain serializer registration ───────────────────────────────────────────
 # Register the AudioSampleHandler so that artifact_store, pipeline_cache, and
@@ -63,19 +75,34 @@ _logger = logging.getLogger(__name__)
 from app.models.audio_artifact_serializer import register_audio_serializer as _reg_audio
 _reg_audio()
 
-# ── Registry initialization ───────────────────────────────────────────────────
-# Explicitly populate the NodeRegistry singleton. This must happen after the
-# domain serializer is registered (above) so AutoDiscovery can import node
-# modules that reference AudioSample without triggering a missing-handler warning.
 from app.core.nodes import initialize_registry as _init_registry
-try:
-    _init_registry()
-except Exception as exc:
-    _logger.error(
-        "Registry initialization failed — server will start with empty/partial registry: %s",
-        exc,
-        exc_info=True,
+
+
+def _boot_registry() -> None:
+    """Load plugins in a worker thread so uvicorn can bind :8001 immediately."""
+    try:
+        _init_registry()
+    except Exception as exc:
+        _logger.error(
+            "Registry initialization failed — server runs with empty/partial registry: %s",
+            exc,
+            exc_info=True,
+        )
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Do NOT block bind on TensorFlow/ONNX isolated venv installs.
+    t = threading.Thread(target=_boot_registry, name="graphyn-registry-init", daemon=True)
+    t.start()
+    print(
+        "graphyn-api: listening while plugins load in background "
+        "(GET /api/v1/system/health is up; /readiness waits for catalog)",
+        flush=True,
+        file=sys.stderr,
     )
+    yield
+
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -165,7 +192,7 @@ def _auth_dep_request(request: Request) -> None:
 
 # ── App factory ───────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Graphyn API", version="2.0.0")
+app = FastAPI(title="Graphyn API", version="2.0.0", lifespan=_lifespan)
 
 
 @app.exception_handler(RequestValidationError)

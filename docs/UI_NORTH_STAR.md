@@ -634,6 +634,7 @@ Any artifact/model/package/device build → Lineage (A7/A17) → Replay → Repr
 
 ### 8.10 Plugins
 - Install/catalog (shipped); venv GC (C12)
+- Deps install progress lists actual package names (no hardcoded PyTorch/TF stub)
 
 ### 8.11 Worker fleet
 - List/detail (shipped); deregister + Queue tab (A8)  

@@ -234,7 +234,8 @@ class AudioEventDetectorNode(Node):
             except ImportError:
                 raise ImportError(
                     "AudioEventDetectorNode: TFLite runtime required for backend='tflite'. "
-                    "Install with: pip install tflite-runtime>=2.14"
+                    "Install with: pip install tflite-runtime>=2.14 "
+                    "(or use tensorflow which provides tensorflow.lite)."
                 )
 
         # Cache interpreter — load model once per node instance, not per sample.

@@ -64,3 +64,65 @@ def test_version_constraint_unsatisfied_raises() -> None:
     # Require pytest at an impossibly high version
     with pytest.raises(PluginDependencyError):
         checker.check(["pytest>=9999.0.0"])
+
+
+def test_tflite_covered_when_tensorflow_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """tflite-runtime is treated as satisfied when TensorFlow is installed."""
+    checker = DependencyChecker()
+
+    def fake_installed(req, *, python=None):  # type: ignore[no-untyped-def]
+        name = req.name.replace("-", "_").lower()
+        if name in {"tensorflow", "tensorflow_cpu", "tensorflow_macos"}:
+            return "2.15.0"
+        return None
+
+    monkeypatch.setattr(DependencyChecker, "_installed_version", staticmethod(fake_installed))
+    rows = checker.status([], optional_dependencies=["tflite-runtime>=2.14"])
+    assert len(rows) == 1
+    assert rows[0].satisfied is True
+    assert rows[0].installed_version == "via tensorflow"
+
+
+def test_drop_covered_optionals_skips_tflite(monkeypatch: pytest.MonkeyPatch) -> None:
+    checker = DependencyChecker()
+    monkeypatch.setattr(
+        DependencyChecker,
+        "_tensorflow_present",
+        lambda self, *, python=None: True,
+    )
+    kept = checker.drop_covered_optionals(
+        ["torch>=2.0", "tflite-runtime>=2.14", "onnxruntime>=1.16"]
+    )
+    assert kept == ["torch>=2.0", "onnxruntime>=1.16"]
+
+
+def test_install_one_by_one_continues_after_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Batch optional install must not stop at the first failure."""
+    checker = DependencyChecker()
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        pkg = cmd[-1]
+        calls.append(cmd[3:])  # after pip install
+
+        class R:
+            returncode = 1 if "bad-pkg" in pkg else 0
+            stderr = "ERROR: No matching distribution found for bad-pkg\n" if "bad-pkg" in pkg else ""
+            stdout = ""
+
+        return R()
+
+    monkeypatch.setattr("app.core.plugins.dependencies.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        DependencyChecker,
+        "_tensorflow_present",
+        lambda self, *, python=None: False,
+    )
+    with pytest.raises(PluginDependencyError) as exc:
+        checker.install(
+            ["bad-pkg>=1", "pytest>=0.1"],
+            check_platform=False,
+            one_by_one=True,
+        )
+    assert "bad-pkg" in str(exc.value)
+    assert len(calls) == 2

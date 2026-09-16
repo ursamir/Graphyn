@@ -47,6 +47,36 @@ WORKER_BOOTSTRAP_REQUIREMENTS: tuple[str, ...] = (
     "packaging>=23.0",
 )
 
+# ``tflite-runtime`` is an alternate slim Interpreter; full TensorFlow already
+# ships ``tensorflow.lite``. Installing both in one env commonly fails (no
+# wheel / conflicts) and our nodes fall back to ``tensorflow.lite`` anyway.
+_TFLITE_RUNTIME_NAMES = frozenset({"tflite_runtime", "tflite-runtime", "tfliteruntime"})
+_TENSORFLOW_DIST_NAMES = ("tensorflow", "tensorflow-cpu", "tensorflow-macos")
+
+
+def _normalize_dist_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "_", name).lower()
+
+
+def _pip_error_summary(stderr: str, stdout: str = "", *, max_lines: int = 8) -> str:
+    """Pick the useful pip lines (ERROR/Could not find/…) for user-facing errors."""
+    blob = "\n".join(x for x in (stderr or "", stdout or "") if x).strip()
+    if not blob:
+        return "pip failed (no stderr captured)"
+    lines = [ln.strip() for ln in blob.splitlines() if ln.strip()]
+    interesting = [
+        ln
+        for ln in lines
+        if re.search(
+            r"ERROR:|Could not find|No matching distribution|conflict|ResolutionImpossible|"
+            r"because these package versions|requires|incompatible",
+            ln,
+            re.I,
+        )
+    ]
+    chosen = interesting[-max_lines:] if interesting else lines[-max_lines:]
+    return "\n".join(chosen)
+
 
 @dataclass(frozen=True)
 class DepStatus:
@@ -183,8 +213,14 @@ class DependencyChecker:
         python: str | None = None,
         check_platform: bool = True,
         timeout: int = 600,
+        one_by_one: bool = False,
     ) -> None:
-        """Install *requirements* with pip into *python* (default: current)."""
+        """Install *requirements* with pip into *python* (default: current).
+
+        When *one_by_one* is True (optional extras), each requirement is installed
+        separately so one unavailable wheel (e.g. ``tflite-runtime`` next to
+        TensorFlow) does not block the rest (e.g. ``torch``).
+        """
         if not requirements:
             return
         self._parse_requirements(requirements)
@@ -192,15 +228,37 @@ class DependencyChecker:
 
         if check_platform and python is None:
             conflicts = self.check_conflicts(requirements)
-            # Only hard-fail on platform-constraint conflicts, not "already
-            # installed wrong version" when we're about to pip-install —
-            # but platform pin vs plugin pin is fatal.
             hard = [c for c in conflicts if "platform requires" in c]
             if hard:
                 raise PluginDependencyError(
                     "Refusing to install into shared env due to platform "
                     "constraint conflicts:\n  - " + "\n  - ".join(hard)
                 )
+
+        requirements = self.drop_covered_optionals(requirements, python=python)
+        if not requirements:
+            return
+
+        if one_by_one and len(requirements) > 1:
+            failures: list[str] = []
+            for req in requirements:
+                try:
+                    self.install(
+                        [req],
+                        python=python,
+                        check_platform=check_platform,
+                        timeout=timeout,
+                        one_by_one=False,
+                    )
+                except PluginDependencyError as exc:
+                    failures.append(str(exc).strip())
+            if failures:
+                raise PluginDependencyError(
+                    "Some optional packages failed to install "
+                    f"({len(failures)}/{len(requirements)}):\n"
+                    + "\n---\n".join(failures)
+                )
+            return
 
         exe = python or sys.executable
         cmd = [exe, "-m", "pip", "install", *requirements]
@@ -219,13 +277,37 @@ class DependencyChecker:
             ) from exc
 
         if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
             joined = ", ".join(requirements)
+            detail = _pip_error_summary(result.stderr or "", result.stdout or "")
             raise PluginDependencyError(
-                f"pip install failed for [{joined}].\npip stderr:\n{stderr}"
+                f"pip install failed for [{joined}].\n{detail}"
             )
 
         logger.info("Installed plugin dependencies: %s", ", ".join(requirements))
+
+    def drop_covered_optionals(
+        self, requirements: list[str], *, python: str | None = None
+    ) -> list[str]:
+        """Drop ``tflite-runtime`` when TensorFlow is already present in *python*."""
+        if not requirements:
+            return []
+        if not self._tensorflow_present(python=python):
+            return list(requirements)
+        kept: list[str] = []
+        for dep in requirements:
+            try:
+                name = _normalize_dist_name(Requirement(dep).name)
+            except InvalidRequirement:
+                kept.append(dep)
+                continue
+            if name in _TFLITE_RUNTIME_NAMES:
+                logger.info(
+                    "Skipping %s — TensorFlow already provides tensorflow.lite",
+                    dep,
+                )
+                continue
+            kept.append(dep)
+        return kept
 
     # ------------------------------------------------------------------
     # Internals
@@ -260,6 +342,19 @@ class DependencyChecker:
         satisfied = False
         if installed is not None:
             satisfied = (not req.specifier) or (Version(installed) in req.specifier)
+        # Full TensorFlow covers TFLite Interpreter; nodes fall back to tensorflow.lite.
+        if (
+            not satisfied
+            and _normalize_dist_name(req.name) in _TFLITE_RUNTIME_NAMES
+            and self._tensorflow_present(python=python)
+        ):
+            return DepStatus(
+                requirement=str(req),
+                name=req.name,
+                satisfied=True,
+                installed_version="via tensorflow",
+                optional=optional,
+            )
         return DepStatus(
             requirement=str(req),
             name=req.name,
@@ -267,6 +362,12 @@ class DependencyChecker:
             installed_version=installed,
             optional=optional,
         )
+
+    def _tensorflow_present(self, *, python: str | None) -> bool:
+        for name in _TENSORFLOW_DIST_NAMES:
+            if self._installed_version(Requirement(name), python=python) is not None:
+                return True
+        return False
 
     @staticmethod
     def _parse_requirements(dependencies: list[str]) -> list[Requirement]:
@@ -282,16 +383,25 @@ class DependencyChecker:
 
     @staticmethod
     def _normalize_dist_name(name: str) -> str:
-        return re.sub(r"[-_.]+", "_", name).lower()
+        return _normalize_dist_name(name)
 
     @classmethod
     def _find_unsatisfied(
         cls, requirements: list[Requirement], *, python: str | None
     ) -> list[str]:
         unsatisfied: list[str] = []
+        tf_present: bool | None = None
         for req in requirements:
             installed = cls._installed_version(req, python=python)
             if installed is None:
+                if _normalize_dist_name(req.name) in _TFLITE_RUNTIME_NAMES:
+                    if tf_present is None:
+                        tf_present = any(
+                            cls._installed_version(Requirement(n), python=python) is not None
+                            for n in _TENSORFLOW_DIST_NAMES
+                        )
+                    if tf_present:
+                        continue
                 unsatisfied.append(str(req))
                 continue
             if req.specifier and Version(installed) not in req.specifier:

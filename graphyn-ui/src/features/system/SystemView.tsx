@@ -4,17 +4,13 @@ import { apiJson } from '../../api/client'
 import {
   formatCleanupToast,
   formatLocaleDateTime,
-  formatMetricsSummary,
   formatRelativeTime,
   formatUptime,
-  pickStatusFacts,
   prettyScalar,
-  startCase,
 } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
 import { goView } from '../../routes/nav'
 import {
-  CollapsibleJson,
   EmptyState,
   ErrorBanner,
   LoadingBlock,
@@ -34,24 +30,12 @@ function badgeFromPayload(data: unknown, okKeys: string[]): string {
   return 'ok'
 }
 
-function Facts({ data }: { data: unknown }) {
-  const facts = pickStatusFacts(data, 6)
-  if (facts.length === 0) return <p className="text-sm text-ink-500">No status yet.</p>
+function FactRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <dl className="space-y-1.5 text-sm">
-      {facts.map((f) => {
-        const value =
-          f.key === 'timestamp' && typeof f.value === 'string'
-            ? formatLocaleDateTime(f.value)
-            : prettyScalar(f.value) || String(f.value)
-        return (
-          <div key={f.key} className="flex justify-between gap-3">
-            <dt className="text-ink-500">{startCase(f.key)}</dt>
-            <dd className="font-medium text-ink-900">{value}</dd>
-          </div>
-        )
-      })}
-    </dl>
+    <div className="flex justify-between gap-3 text-sm">
+      <dt className="text-ink-500">{label}</dt>
+      <dd className="text-right font-medium text-ink-900">{value}</dd>
+    </div>
   )
 }
 
@@ -267,11 +251,13 @@ export default function SystemView() {
     'status' | 'schedules' | 'webhooks' | 'cleanup' | 'audit'
   >('status')
 
-  const metricsLine = formatMetricsSummary(metrics)
   const readyObj = ready && typeof ready === 'object' ? (ready as Record<string, unknown>) : null
+  const healthObj = health && typeof health === 'object' ? (health as Record<string, unknown>) : null
   const backendMode = String(readyObj?.backend_mode ?? '').trim()
   const backendId = String(readyObj?.backend ?? '').trim()
   const workerCount = Number(readyObj?.worker_count ?? NaN)
+  const nodeTypeCount = Number(readyObj?.node_type_count ?? NaN)
+  const registryReady = readyObj?.registry_ready === true || readyObj?.status === 'ready'
   const isDistributed = backendMode === 'distributed'
   const backendLabel =
     backendMode === 'distributed'
@@ -282,7 +268,10 @@ export default function SystemView() {
           ? backendId
           : ''
 
-  const goNav = (view: 'workers' | 'proposals') => goView(view)
+  const goNav = (view: 'workers' | 'proposals' | 'plugins') => goView(view)
+
+  const canAddSchedule =
+    Boolean(schedName.trim()) && Boolean(schedProject.trim()) && Boolean(schedPipeline.trim())
 
   const filteredAuditEvents = React.useMemo(() => {
     const actorQ = auditActorFilter.trim().toLowerCase()
@@ -390,9 +379,9 @@ export default function SystemView() {
             ) : null}
             <span
               className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[11px] text-ink-600"
-              title="MCP is a separate stdio process — not an HTTP health check"
+              title="MCP runs as a separate stdio process — not an HTTP health check"
             >
-              MCP: use <code className="font-mono text-[10px]">graphyn mcp</code> CLI — 29 tools
+              MCP: <code className="font-mono text-[10px]">graphyn mcp</code> · 29 tools
             </span>
             <button
               type="button"
@@ -474,53 +463,120 @@ export default function SystemView() {
                   <div className="font-mono text-sm font-semibold text-ink-900">{value}</div>
                 </div>
               ))}
-              {metricsLine ? (
-                <p className="self-center text-[11px] text-ink-400 ml-auto">{metricsLine}</p>
-              ) : null}
             </div>
           ) : null}
 
           <div className="grid gap-4 md:grid-cols-2">
-            {[
-              ['Health', health, badgeFromPayload(health, ['ok'])],
-              ['Readiness', ready, badgeFromPayload(ready, ['ready'])],
-            ].map(([title, data, badge]) => (
-              <section key={String(title)} className="rounded-2xl border border-ink-200 bg-white p-4">
-                <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold">{title as string}</h3>
-                  <StatusBadge status={String(badge)} />
-                </div>
-                <Facts data={data} />
-                <div className="mt-3">
-                  <CollapsibleJson value={data} label="Raw JSON" />
-                </div>
-              </section>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={venvGcBusy}
-              onClick={runPluginVenvGc}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              {venvGcBusy ? 'Running GC…' : 'Run plugin venv GC'}
-            </button>
-            <span className="text-[11px] text-ink-400">
-              POST /plugins/venvs/gc — removes unused isolated plugin venvs
-            </span>
-          </div>
-
-          {metrics && !metricsObj ? null : metrics ? (
             <section className="rounded-2xl border border-ink-200 bg-white p-4">
-              <h3 className="mb-1 text-sm font-semibold">Metrics detail</h3>
-              <div className="mt-2">
-                <CollapsibleJson value={metrics} label="Raw JSON" />
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Health</h3>
+                <StatusBadge status={badgeFromPayload(health, ['ok'])} />
               </div>
+              <dl className="space-y-1.5">
+                <FactRow
+                  label="Process"
+                  value={healthObj?.status === 'ok' ? 'Responding' : prettyScalar(healthObj?.status) || '—'}
+                />
+                <FactRow
+                  label="Checked"
+                  value={
+                    typeof healthObj?.timestamp === 'string'
+                      ? formatLocaleDateTime(healthObj.timestamp)
+                      : '—'
+                  }
+                />
+              </dl>
+              <p className="mt-3 text-[11px] text-ink-400">
+                Liveness only — the API process answered. Catalog readiness is below.
+              </p>
             </section>
-          ) : null}
+
+            <section className="rounded-2xl border border-ink-200 bg-white p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Readiness</h3>
+                <StatusBadge status={badgeFromPayload(ready, ['ready'])} />
+              </div>
+              <dl className="space-y-1.5">
+                <FactRow
+                  label="Catalog"
+                  value={
+                    registryReady
+                      ? Number.isFinite(nodeTypeCount)
+                        ? `Ready · ${nodeTypeCount} node types`
+                        : 'Ready'
+                      : 'Still loading plugins…'
+                  }
+                />
+                <FactRow
+                  label="Backend"
+                  value={
+                    backendLabel
+                      ? `${backendLabel}${backendId && backendId !== backendMode ? ` (${backendId})` : ''}`
+                      : '—'
+                  }
+                />
+                {isDistributed ? (
+                  <FactRow
+                    label="Workers"
+                    value={Number.isFinite(workerCount) ? String(workerCount) : '—'}
+                  />
+                ) : null}
+                <FactRow
+                  label="Runs folder"
+                  value={
+                    (readyObj?.checks as Record<string, unknown> | undefined)?.runs_dir_exists === true
+                      ? 'Yes'
+                      : 'Missing'
+                  }
+                />
+                <FactRow
+                  label="Cache folder"
+                  value={
+                    (readyObj?.checks as Record<string, unknown> | undefined)?.cache_dir_exists === true
+                      ? 'Yes'
+                      : 'Missing'
+                  }
+                />
+                <FactRow
+                  label="Checked"
+                  value={
+                    typeof readyObj?.timestamp === 'string'
+                      ? formatLocaleDateTime(String(readyObj.timestamp))
+                      : '—'
+                  }
+                />
+              </dl>
+              {!registryReady ? (
+                <p className="mt-3 text-[11px] text-amber-800">
+                  Health can be OK while plugins finish installing. Refresh in a moment, or open{' '}
+                  <button type="button" className="font-medium text-accent-700 hover:underline" onClick={() => goNav('plugins')}>
+                    Plugins
+                  </button>
+                  .
+                </p>
+              ) : null}
+            </section>
+          </div>
+
+          <section className="rounded-2xl border border-ink-200 bg-white px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-ink-900">Maintenance</h3>
+                <p className="text-[12px] text-ink-500">
+                  Remove unused isolated plugin environments left behind after uninstalls.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={venvGcBusy}
+                onClick={runPluginVenvGc}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {venvGcBusy ? 'Cleaning…' : 'Clean unused plugin venvs'}
+              </button>
+            </div>
+          </section>
         </div>
       )}
 
@@ -530,7 +586,10 @@ export default function SystemView() {
             <div>
               <h3 className="text-sm font-semibold">Recent audit events</h3>
               <p className="text-xs text-ink-500">
-                Append-only actor trail from GET /api/v1/audit (limit 100). Filters are client-side.
+                Who did what on this API (last 100 events). Filters apply in the browser.
+                {auditEvents.length > 0
+                  ? ` Showing ${filteredAuditEvents.length} of ${auditEvents.length}.`
+                  : ''}
               </p>
             </div>
             <button
@@ -622,11 +681,8 @@ export default function SystemView() {
         <div>
           <h3 className="text-sm font-semibold">Schedules</h3>
           <p className="text-xs text-ink-500">
-            Interval jobs that run a project pipeline while the API process is up (always-on lite).
-          </p>
-          <p className="mt-1 rounded-lg border border-amber-100 bg-amber-50/80 px-2.5 py-1.5 text-[11px] text-amber-950">
-            Cron expressions are not in the API — schedules use <strong className="font-semibold">interval_minutes</strong> only.
-            Last error and enabled state are shown per row when present.
+            Run a project pipeline on a fixed interval while this API is up. Choose an interval in
+            minutes (not cron expressions).
           </p>
         </div>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -707,13 +763,14 @@ export default function SystemView() {
           <button
             type="button"
             className="btn-primary"
+            disabled={!canAddSchedule}
             onClick={() => {
               void apiJson('/system/schedules', {
                 method: 'POST',
                 body: JSON.stringify({
-                  name: schedName,
-                  project: schedProject,
-                  pipeline: schedPipeline,
+                  name: schedName.trim(),
+                  project: schedProject.trim(),
+                  pipeline: schedPipeline.trim(),
                   interval_minutes: schedInterval,
                   enabled: true,
                 }),
@@ -744,11 +801,14 @@ export default function SystemView() {
                 )
             }}
           >
-            Tick due now
+            Run due now
           </button>
         </div>
         {schedules.length === 0 ? (
-          <p className="text-sm text-ink-500">No schedules yet.</p>
+          <EmptyState
+            title="No schedules yet"
+            description="Pick a project pipeline and interval, then Add schedule. Jobs only fire while this API process is running."
+          />
         ) : (
           <ul className="space-y-2">
             {schedules.map((s) => {
@@ -777,7 +837,7 @@ export default function SystemView() {
                   </div>
                   {hasError ? (
                     <div className="mt-1 text-[12px] font-medium text-rose-900" title={s.last_error}>
-                      last_error: {s.last_error}
+                      Last error: {s.last_error}
                     </div>
                   ) : null}
                 </div>
@@ -844,13 +904,29 @@ export default function SystemView() {
 
       {systemTab === 'webhooks' && (
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
-        <h3 className="text-sm font-semibold">Webhooks</h3>
-        <input
-          value={webhookUrl}
-          onChange={(e) => setWebhookUrl(e.target.value)}
-          placeholder="https://hooks.example.com/…"
-          className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
-        />
+        <div>
+          <h3 className="text-sm font-semibold">Webhooks</h3>
+          <p className="text-xs text-ink-500">
+            Send a POST when pipelines finish or fail. Leave events unchecked to receive all event
+            types.
+          </p>
+        </div>
+        {!webhookUrl.trim() ? (
+          <p className="rounded-lg border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
+            No webhook URL saved yet.
+          </p>
+        ) : null}
+        <label className="block text-sm text-ink-600">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+            Endpoint URL
+          </span>
+          <input
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder="https://hooks.example.com/…"
+            className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+          />
+        </label>
         <div className="flex flex-wrap gap-4 text-sm">
           {(
             [
@@ -876,10 +952,11 @@ export default function SystemView() {
           <button
             type="button"
             className="btn-primary"
+            disabled={!webhookUrl.trim()}
             onClick={() =>
               void apiJson('/system/webhooks', {
                 method: 'PUT',
-                body: JSON.stringify({ url: webhookUrl, events: webhookEvents }),
+                body: JSON.stringify({ url: webhookUrl.trim(), events: webhookEvents }),
               })
                 .then(() => pushToast('Webhook saved', 'success'))
                 .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
@@ -890,13 +967,22 @@ export default function SystemView() {
           <button
             type="button"
             className="btn-secondary"
+            disabled={!webhookUrl.trim()}
             onClick={() =>
-              void apiJson('/system/webhooks/test', { method: 'POST' })
-                .then(() => pushToast('Test webhook sent', 'success'))
+              void apiJson<{ ok?: boolean; reason?: string }>('/system/webhooks/test', {
+                method: 'POST',
+              })
+                .then((res) => {
+                  if (res?.ok === false) {
+                    pushToast(res.reason || 'Webhook test failed', 'error')
+                    return
+                  }
+                  pushToast('Test webhook sent', 'success')
+                })
                 .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
             }
           >
-            Test
+            Send test
           </button>
         </div>
       </section>
@@ -906,9 +992,9 @@ export default function SystemView() {
       <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
         <h3 className="text-sm font-semibold">Cleanup</h3>
         <p className="text-sm text-ink-500">
-          Deletes finished run journals older than N days (keeps latest). Optionally purge cache and
-          matching workspace artifacts. Never deletes a currently running run, examples/, or
-          datasets/input.
+          Free disk by deleting finished run records older than N days (always keeps the latest run
+          per pipeline). Optionally clear the pipeline cache and matching workspace artifacts.
+          Running runs, examples, and dataset inputs are never deleted.
         </p>
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
           Destructive options stay unchecked by default. Type{' '}

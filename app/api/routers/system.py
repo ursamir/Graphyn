@@ -51,8 +51,14 @@ def readiness_check():
 
     Includes backend mode (local vs distributed) and registered worker count so
     the console System page can surface Mode A/B without guessing.
+
+    ``registry_ready`` is false while the API is still installing/loading
+    isolated plugin venvs in the background (health stays ok so Docker/UI can
+    reach the process).
     """
     import os
+
+    from app.core.nodes import is_registry_ready, registry
 
     backend_id = (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python"
     backend_mode = "distributed" if backend_id == "distributed" else "local"
@@ -63,15 +69,19 @@ def readiness_check():
         worker_count = len(get_worker_registry().list(include_stale=True))
     except Exception:
         worker_count = 0
+    reg_ready = is_registry_ready()
     return {
-        "status": "ready",
+        "status": "ready" if reg_ready else "starting",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "backend": backend_id,
         "backend_mode": backend_mode,
         "worker_count": worker_count,
+        "registry_ready": reg_ready,
+        "node_type_count": len(registry) if reg_ready else 0,
         "checks": {
             "runs_dir_exists": _runs_dir().exists(),
             "cache_dir_exists": _cache_dir().exists(),
+            "registry_ready": reg_ready,
         },
     }
 
@@ -151,7 +161,7 @@ class WebhookBody(BaseModel):
 
 @router.get("/webhooks", summary="Get webhook configuration")
 def get_webhooks():
-    """Return the current webhook configuration."""
+    """Return the current webhook configuration (``url`` + ``events``, possibly empty)."""
     return _webhook_svc.load()
 
 

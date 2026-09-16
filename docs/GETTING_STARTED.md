@@ -9,6 +9,12 @@ Deep design: [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md). Docker: [DE
 `scripts/docker_ide_loop_smoke.sh` (see [DEPLOYMENT.md](./DEPLOYMENT.md#prove-the-ide-loop-server-99--docker)).
 Local uvicorn alone does not close the goal env gap.
 
+The API process binds `:8001` immediately (`GET /health` / `/api/v1/system/health`).
+Plugin catalog load (and any remaining light venv bootstrap) runs in a background
+thread — poll `/api/v1/system/readiness` until `registry_ready: true`. Empty
+`docker logs` during a long first boot usually meant the old blocking import-time
+install; current images print `graphyn: …` progress on stderr.
+
 ## Choose an operating mode
 
 | Mode | When | Backend | Who runs nodes |

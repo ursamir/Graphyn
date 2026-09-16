@@ -114,19 +114,27 @@ class WebhookService:
         WebhookService._class_config_cache = None
 
     def load(self) -> dict:
-        """Read webhook configuration. Returns {} if not configured."""
+        """Read webhook configuration. Always returns ``url`` + ``events`` keys."""
+        empty = {"url": "", "events": []}
         if not self.CONFIG_PATH.exists():
-            return {}
+            return dict(empty)
         try:
             with self.CONFIG_PATH.open("r", encoding="utf-8") as f:
-                return json.load(f)
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                return dict(empty)
+            events = raw.get("events")
+            return {
+                "url": str(raw.get("url") or ""),
+                "events": list(events) if isinstance(events, list) else [],
+            }
         except Exception as exc:
             logger.warning(
                 "Failed to read webhooks config at %s: %s — webhook notifications disabled.",
                 self.CONFIG_PATH,
                 exc,
             )
-            return {}
+            return dict(empty)
 
     def notify(self, event: str, payload: dict[str, Any]) -> None:
         """Fire-and-forget HTTP POST in a background thread.

@@ -353,12 +353,15 @@ SISO shorthand (auto-detected by __init_subclass__):
 ```
 Application startup (API / CLI / MCP)
          │
-         ├── initialize_registry()              ← idempotent; no-op on second call
+         ├── API: uvicorn binds first; initialize_registry() in background thread
+         │   (CLI / MCP still call initialize_registry() synchronously)
+         ├── initialize_registry()              ← idempotent; waiters block until ready
          │   (app/core/nodes/__init__.py)
          │   ├── PluginManager.maybe_auto_install_and_load()
          │   │     (GRAPHYN_AUTO_INSTALL_PLUGINS or empty enabled list:
          │   │      install PluginPackage/*/*/plugin.toml with upgrade=True)
          │   │     then load_enabled_plugins(); skip if GRAPHYN_SKIP_PLUGIN_LOAD=1
+         │   │     isolated: required deps only unless GRAPHYN_ISOLATED_BOOT_HEAVY=1
          │   └── AutoDiscovery.run(
          │           nodes_dir="app/core/nodes",
          │           plugins_dir=plugins_home(),

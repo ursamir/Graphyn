@@ -539,7 +539,11 @@ class PluginManager:
         if runtime == "isolated":
             from app.core.plugins.venv_manager import PluginVenvManager
 
-            py = PluginVenvManager().ensure(name, to_install)
+            # Optional extras: install one package at a time so a single bad
+            # wheel (tflite-runtime next to TensorFlow, etc.) does not abort torch.
+            py = PluginVenvManager().ensure(
+                name, to_install, one_by_one=include_optional
+            )
             # Refresh runtime registry python path if nodes already registered
             from app.core.plugins.runtime_registry import (
                 IsolatedPluginSpec,
@@ -561,7 +565,12 @@ class PluginManager:
             status = checker.status(to_install)
             missing = [s.requirement for s in status if not s.satisfied]
             if missing:
-                checker.install(missing, python=None, check_platform=True)
+                checker.install(
+                    missing,
+                    python=None,
+                    check_platform=True,
+                    one_by_one=include_optional,
+                )
 
         return self.dependency_status(name)
 

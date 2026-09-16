@@ -423,7 +423,7 @@ Control plane plugins ≠ worker plugins. **MISSING — I need** copy that Mode 
 | **Install source** (shipped) | path / package / https / git+; optional SHA256; Upgrade if installed; **Install**. |
 | **Search index** (shipped) | package name + Search; results Use / install. |
 | **Installed list** (shipped) | Name, status, deps chips; Actions menu: Manage dependencies, Enable/Disable, Uninstall (confirm). |
-| **Deps panel** (shipped) | Install required / optional; progress text while installing. |
+| **Deps panel** (shipped) | Install required / optional; progress names the packages being installed (not a hardcoded “PyTorch” / “TensorFlow” stub). |
 | **Empty** (shipped) | “No plugins installed” → focus Install. |
 | **No directory** (shipped) | Honest message to install from path/git/package. |
 | **Toasts** (shipped) | Installing… / Installed / Enabled / Disabled / Uninstalled / errors. |

@@ -233,6 +233,56 @@ def test_isolated_venv_requirements_torch_env(monkeypatch) -> None:
     assert "torch>=2.0" in reqs
 
 
+def test_isolated_venv_requirements_defers_exotic_optionals(monkeypatch) -> None:
+    monkeypatch.delenv("GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL", raising=False)
+    monkeypatch.delenv("GRAPHYN_ISOLATED_INSTALL_TORCH", raising=False)
+    m = PluginManifest(
+        name="audio-classifier",
+        version="1.0.0",
+        description="demo",
+        author="t",
+        platform_version=">=0.0",
+        entry_points=["nodes.py"],
+        runtime="isolated",
+        dependencies=["numpy>=1.24", "librosa>=0.10"],
+        optional_dependencies=[
+            "tensorflow>=2.12",
+            "tensorflow-hub>=0.14",
+            "tflite-runtime>=2.14",
+            "torch>=2.0",
+            "onnxruntime>=1.16",
+        ],
+    )
+    reqs = isolated_venv_requirements(m)
+    assert "numpy>=1.24" in reqs
+    assert "librosa>=0.10" in reqs
+    assert "tensorflow>=2.12" in reqs
+    assert "tensorflow-hub>=0.14" in reqs
+    assert "onnxruntime>=1.16" in reqs
+    assert not any("tflite-runtime" in r for r in reqs)
+    assert not any(r.lower().startswith("torch") for r in reqs)
+
+
+def test_isolated_venv_requirements_all_optional_env(monkeypatch) -> None:
+    monkeypatch.setenv("GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL", "1")
+    monkeypatch.delenv("GRAPHYN_ISOLATED_INSTALL_TORCH", raising=False)
+    m = PluginManifest(
+        name="audio-generator",
+        version="1.0.0",
+        description="demo",
+        author="t",
+        platform_version=">=0.0",
+        entry_points=["nodes.py"],
+        runtime="isolated",
+        dependencies=["numpy>=1.24"],
+        optional_dependencies=["audiocraft>=1.0", "torch>=2.0", "soundfile>=0.12"],
+    )
+    reqs = isolated_venv_requirements(m)
+    assert "audiocraft>=1.0" in reqs
+    assert "soundfile>=0.12" in reqs
+    assert not any(r.lower().startswith("torch") for r in reqs)
+
+
 def test_isolated_loader_does_not_exec_entry_point(tmp_path: Path, fresh_registry) -> None:
     """B2: host must not import isolated plugin third-party stacks."""
     plugin_dir = _isolated_toml(tmp_path)

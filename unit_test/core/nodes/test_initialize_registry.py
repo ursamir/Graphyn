@@ -49,6 +49,8 @@ def _reset_nodes_package() -> None:
     import app.core.nodes as nodes_pkg
 
     nodes_pkg._initialized = False
+    nodes_pkg._started = False
+    nodes_pkg._ready_event.clear()
     nodes_pkg.registry._classes.clear()
     nodes_pkg.registry._metadata.clear()
     nodes_pkg.registry._plugin_ui_fields.clear()

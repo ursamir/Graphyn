@@ -80,6 +80,9 @@
 | Builder misleading View outputs / Retry | Run failures only |
 | Edge wizard skip to step 3/4 | Gated |
 | Projects open fail left hollow Home | Clear payload + hide empty strip |
+| Plugins optional-install banner always said “PyTorch” / footnotes said “TensorFlow, …” | Progress + toasts name the actual missing packages; footnotes are runtime-generic |
+| Plugins optional install failed for `[tflite-runtime, torch]` while TF already ok | Skip tflite when TF present; install optionals one-by-one; surface real pip ERROR lines |
+| Ops Status duplicated every field under Raw JSON (+ metrics raw block) | Removed; readiness surfaces node count / backend; Maintenance copy plain-language |
 
 ### Still open (product)
 
