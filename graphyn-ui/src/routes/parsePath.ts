@@ -15,6 +15,14 @@ export type ParsedPath = {
   runsTab?: 'history' | 'live' | 'compare'
   shipTab?: 'package' | 'devices'
   compareIds?: string[]
+  /**
+   * Set when the requested pathname is an alias for a route that has its own
+   * canonical spelling — `/` and any unmatched path both render the workspaces
+   * picker, so `/`, `/workspaces` and `/nonsense` were three URLs for one page
+   * and whichever one you arrived on stayed in the address bar forever. App
+   * replaces the URL with this on sync.
+   */
+  canonical?: string
 }
 
 const PANEL_SET = new Set<RunPanel>(['logs', 'outputs', 'lineage', 'details', 'checkpoints'])
@@ -32,7 +40,7 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
   const qs = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
 
   if (parts.length === 0) {
-    return { view: 'projects' }
+    return { view: 'projects', canonical: '/workspaces' }
   }
 
   const [a, b, c, d, e] = parts
@@ -78,7 +86,7 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
       }
     }
     if (c === 'agent') return { view: 'builder', workspaceId: W }
-    return { view: 'projects', workspaceId: W }
+    return { view: 'projects', workspaceId: W, canonical: `/workspaces/${b}` }
   }
 
   if (a === 'templates') return { view: 'templates' }
@@ -106,7 +114,7 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
     if (b === 'access') return { view: 'access' as AppView }
   }
 
-  return { view: 'projects' }
+  return { view: 'projects', canonical: '/workspaces' }
 }
 
 /** Drop legacy `#/…` fragments so path + hash hybrids never stick in the address bar. */

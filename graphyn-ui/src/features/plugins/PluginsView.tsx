@@ -1,10 +1,10 @@
 import React from 'react'
 import clsx from 'clsx'
-import { Download, RefreshCw, PackagePlus, MoreHorizontal, Trash2 } from 'lucide-react'
+import { Download, RefreshCw, PackagePlus, MoreHorizontal, Search, Trash2 } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
-import { isIsolatedRuntime } from '../../lib/format'
+import { formatLocaleDateTime, formatRelativeTime, isIsolatedRuntime } from '../../lib/format'
 
 interface DepSummary {
   missing_required?: string[]
@@ -17,14 +17,24 @@ interface Plugin {
   version?: string
   enabled?: boolean
   status?: string
+  /** Not actually sent at this level by GET /plugins — kept only as a fallback.
+   *  Read via nodeTypesOf(), which prefers `manifest.node_types`. */
   node_types?: string[]
   error?: string | null
   runtime?: string
+  installed_at?: string
   dependency_summary?: DepSummary | null
   manifest?: {
     dependencies?: string[]
     optional_dependencies?: string[]
     runtime?: string
+    /* All three are sent for every installed plugin and none were rendered:
+       the description says what the plugin is for, node_types are the names you
+       search for in the Editor catalog, and tags are the only sensible way to
+       narrow a 48-item list. */
+    description?: string
+    node_types?: string[]
+    tags?: string[]
   }
 }
 
@@ -134,12 +144,51 @@ function pluginBucket(p: Plugin): StatusFilter {
   return 'ok'
 }
 
+/**
+ * Node types a plugin contributes to the Editor catalog.
+ *
+ * The card read `p.node_types` and the interface declared it, but the API only
+ * ever sends it nested under `manifest` — so across all 48 installed plugins the
+ * optional chain quietly resolved to undefined and the "N nodes" chip never
+ * rendered once. Optional chaining on a field that is always absent fails
+ * silently and looks correct in review; only diffing the declared type against
+ * the actual payload catches it.
+ */
+function nodeTypesOf(p: Plugin): string[] {
+  const fromManifest = p.manifest?.node_types
+  if (Array.isArray(fromManifest) && fromManifest.length) return fromManifest
+  return Array.isArray(p.node_types) ? p.node_types : []
+}
+
+function tagsOf(p: Plugin): string[] {
+  const t = p.manifest?.tags
+  return Array.isArray(t) ? t : []
+}
+
+type PluginSort = 'name' | 'installed' | 'nodes'
+
+const PLUGIN_SORT_LABEL: Record<PluginSort, string> = {
+  name: 'Name (A–Z)',
+  installed: 'Recently installed',
+  nodes: 'Most node types',
+}
+
 export default function PluginsView() {
   const refreshCatalog = useAppStore((s) => s.refreshCatalog)
   const pushToast = useAppStore((s) => s.pushToast)
   const [plugins, setPlugins] = React.useState<Plugin[] | null>(null)
   const [mainTab, setMainTab] = React.useState<MainTab>('installed')
   const [statusFilter, setStatusFilter] = React.useState<StatusFilter>('all')
+  /* The Installed tab had four status pills and no text search at all — 48
+     plugins with no way to find one by name, by what it does, or by the node
+     type it contributes. */
+  const [listQuery, setListQuery] = React.useState('')
+  const [activeTags, setActiveTags] = React.useState<string[]>([])
+  const [runtimeFilter, setRuntimeFilter] = React.useState<'all' | 'isolated' | 'inprocess'>('all')
+  const [pluginSort, setPluginSort] = React.useState<PluginSort>('name')
+  const [menuUp, setMenuUp] = React.useState(false)
+  const toggleTag = (t: string) =>
+    setActiveTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]))
   const [source, setSource] = React.useState('')
   const [upgrade, setUpgrade] = React.useState(false)
   const [sha, setSha] = React.useState('')
@@ -424,11 +473,61 @@ export default function PluginsView() {
     installingName && installStartedAt ? Date.now() - installStartedAt : 0
   void elapsedTick
 
-  const filtered =
-    plugins?.filter((p) => {
-      if (statusFilter === 'all') return true
-      return pluginBucket(p) === statusFilter
-    }) ?? null
+  const matchesStatusAndSearch = React.useCallback(
+    (p: Plugin) => {
+      if (statusFilter !== 'all' && pluginBucket(p) !== statusFilter) return false
+      if (runtimeFilter !== 'all') {
+        const rt = p.runtime ?? p.dependency_summary?.runtime ?? p.manifest?.runtime ?? 'inprocess'
+        const isolated = isIsolatedRuntime(rt, p.name)
+        if (runtimeFilter === 'isolated' ? !isolated : isolated) return false
+      }
+      const q = listQuery.trim().toLowerCase()
+      if (!q) return true
+      return [p.name, p.version ?? '', p.manifest?.description ?? '', ...tagsOf(p), ...nodeTypesOf(p)]
+        .join(' ')
+        .toLowerCase()
+        .includes(q)
+    },
+    [statusFilter, runtimeFilter, listQuery],
+  )
+
+  /* Tag counts come from the status+search+runtime result, not the tag-filtered
+     list — otherwise picking one tag zeroes every other count and you can never
+     widen the selection without clearing first. (Same rule as Templates.) */
+  const tagPool = React.useMemo(
+    () => (plugins ?? []).filter(matchesStatusAndSearch),
+    [plugins, matchesStatusAndSearch],
+  )
+  const tagFacets = React.useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const p of tagPool) for (const t of tagsOf(p)) counts.set(t, (counts.get(t) ?? 0) + 1)
+    return [...counts.entries()]
+      /* n > 2, not > 1: these 48 manifests carry ~34 tags used exactly twice,
+         which filled the bar with two wrapped rows of near-useless chips. The
+         long tail stays reachable — search matches tags, and a tag clicked on a
+         card joins the bar because activeTags is always included here. */
+      .filter(([t, n]) => n > 2 || activeTags.includes(t))
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  }, [tagPool, activeTags])
+
+  const filtered = React.useMemo(() => {
+    if (!plugins) return null
+    return tagPool
+      .filter((p) => activeTags.every((t) => tagsOf(p).includes(t)))
+      .sort((a, b) => {
+        if (pluginSort === 'nodes') {
+          return nodeTypesOf(b).length - nodeTypesOf(a).length || a.name.localeCompare(b.name)
+        }
+        if (pluginSort === 'installed') {
+          const t = (v?: string) => {
+            const n = v ? Date.parse(v) : NaN
+            return Number.isNaN(n) ? 0 : n
+          }
+          return t(b.installed_at) - t(a.installed_at) || a.name.localeCompare(b.name)
+        }
+        return a.name.localeCompare(b.name)
+      })
+  }, [plugins, tagPool, activeTags, pluginSort])
 
   const filterCounts = React.useMemo(() => {
     const counts = { all: 0, ok: 0, missing: 0, disabled: 0 }
@@ -525,19 +624,36 @@ export default function PluginsView() {
         ))}
       </div>
 
+      {/* Both forms were laid out full-bleed in a ~1300px card: the source input
+          stretched the whole page for a short package string while the search box
+          next to it was 200px, so two similar fields looked unrelated. Capped and
+          matched. */}
       {mainTab === 'install' && (
-        <div className="space-y-4">
+        <div className="grid gap-4 xl:grid-cols-2">
           <section className="surface-card space-y-3 p-5">
             <h3 className="text-sm font-semibold">Install from source</h3>
-            <input
-              value={source}
-              onChange={(e) => setSource(e.target.value)}
-              placeholder="path, package, https://…, git+…"
-              className="field-control mt-0 text-sm"
-            />
-            <button type="button" className="btn-primary" disabled={!source.trim() || !!pkgInstalling} onClick={() => void install()}>
-              <Download className="h-3.5 w-3.5" /> Install
-            </button>
+            <p className="text-type-meta text-ink-500">
+              A local path, a PyPI package name, an https:// archive, or a{' '}
+              <span className="font-mono">git+</span> URL.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                placeholder="path, package, https://…, git+…"
+                aria-label="Plugin source"
+                className="min-w-0 max-w-md flex-1 rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                className="btn-primary shrink-0"
+                disabled={!source.trim() || !!pkgInstalling}
+                title={!source.trim() ? 'Enter a path, package or URL first' : undefined}
+                onClick={() => void install()}
+              >
+                <Download className="h-3.5 w-3.5" /> Install
+              </button>
+            </div>
             <details className="rounded-lg border border-ink-100 bg-ink-50 px-3 py-2">
               <summary className="cursor-pointer select-none text-xs font-medium text-ink-600">Advanced</summary>
               <div className="mt-2 space-y-2">
@@ -569,14 +685,28 @@ export default function PluginsView() {
 
           <section className="surface-card space-y-3 p-5">
             <h3 className="text-sm font-semibold">Search index</h3>
-            <div className="flex gap-2">
+            {/* "Search index" never said what index. The page only admitted it needs
+                a configured plugin directory once a search had already failed. */}
+            <p className="text-type-meta text-ink-500">
+              Looks up packages in the configured plugin directory. Not connected to the
+              Installed tab’s search, which filters what you already have.
+            </p>
+            <div className="flex flex-wrap gap-2">
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
+                className="min-w-0 max-w-md flex-1 rounded-lg border border-ink-200 px-3 py-2 text-sm"
                 placeholder="package name"
+                aria-label="Package name to search"
+                onKeyDown={(e) => e.key === 'Enter' && query.trim() && void searchIndex()}
               />
-              <button type="button" className="btn-secondary" onClick={() => void searchIndex()}>
+              <button
+                type="button"
+                className="btn-secondary shrink-0"
+                disabled={!query.trim()}
+                title={!query.trim() ? 'Enter a package name first' : undefined}
+                onClick={() => void searchIndex()}
+              >
                 Search
               </button>
             </div>
@@ -604,6 +734,49 @@ export default function PluginsView() {
 
       {mainTab === 'installed' && (
         <section className="surface-card p-5 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[13rem] flex-1 sm:max-w-sm">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+              <input
+                value={listQuery}
+                onChange={(e) => setListQuery(e.target.value)}
+                placeholder="Search name, description, node type…"
+                aria-label="Search installed plugins"
+                className="w-full rounded-lg border border-ink-200 bg-white py-1.5 pl-8 pr-2 text-sm"
+              />
+            </div>
+            <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
+              Runtime
+              <select
+                className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
+                value={runtimeFilter}
+                onChange={(e) =>
+                  setRuntimeFilter(e.target.value as 'all' | 'isolated' | 'inprocess')
+                }
+              >
+                <option value="all">Any</option>
+                <option value="isolated">Isolated venv</option>
+                <option value="inprocess">Shared env</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
+              Sort
+              <select
+                className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
+                value={pluginSort}
+                onChange={(e) => setPluginSort(e.target.value as PluginSort)}
+              >
+                {(Object.keys(PLUGIN_SORT_LABEL) as PluginSort[]).map((k) => (
+                  <option key={k} value={k}>
+                    {PLUGIN_SORT_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="ml-auto text-[12px] text-ink-400">
+              {plugins == null ? 'Loading…' : `${filtered?.length ?? 0} of ${plugins.length} shown`}
+            </span>
+          </div>
           <div className="flex flex-wrap gap-1.5">
             {statusFilters.map((f) => (
               <button
@@ -620,6 +793,44 @@ export default function PluginsView() {
               </button>
             ))}
           </div>
+          {/* Tag facets, mirroring Templates: manifest tags were fetched for every
+              plugin and shown nowhere, so the only way to find "the audio ones"
+              was to read all 48 names. */}
+          {tagFacets.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-ink-400">
+                Tag
+              </span>
+              {tagFacets.map(([t, n]) => {
+                const on = activeTags.includes(t)
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    aria-pressed={on}
+                    className={clsx(
+                      'rounded-md border px-1.5 py-0.5 text-[11px] transition',
+                      on
+                        ? 'border-accent-400 bg-accent-50 font-medium text-accent-900'
+                        : 'border-ink-200 bg-white text-ink-600 hover:border-accent-300 hover:text-accent-800',
+                    )}
+                    onClick={() => toggleTag(t)}
+                  >
+                    {t} <span className={on ? 'text-accent-700' : 'text-ink-400'}>{n}</span>
+                  </button>
+                )
+              })}
+              {activeTags.length > 0 && (
+                <button
+                  type="button"
+                  className="ml-1 text-[11px] font-medium text-ink-500 hover:text-ink-900"
+                  onClick={() => setActiveTags([])}
+                >
+                  Clear {activeTags.length} tag{activeTags.length === 1 ? '' : 's'}
+                </button>
+              )}
+            </div>
+          )}
 
           {plugins === null ? (
             <LoadingBlock />
@@ -634,9 +845,33 @@ export default function PluginsView() {
               }
             />
           ) : filtered && filtered.length === 0 ? (
-            <p className="py-6 text-center text-sm text-ink-500">No plugins match this filter.</p>
+            <div className="py-6 text-center">
+              <p className="text-sm text-ink-500">
+                No plugins match{listQuery.trim() ? ` “${listQuery.trim()}”` : ' this filter'}
+                {activeTags.length ? ` with tag${activeTags.length === 1 ? '' : 's'} ${activeTags.join(' + ')}` : ''}.
+              </p>
+              {(activeTags.length > 0 || listQuery.trim() || runtimeFilter !== 'all' || statusFilter !== 'all') && (
+                <button
+                  type="button"
+                  className="btn-secondary mt-3"
+                  onClick={() => {
+                    setActiveTags([])
+                    setListQuery('')
+                    setRuntimeFilter('all')
+                    setStatusFilter('all')
+                  }}
+                >
+                  Clear all filters
+                </button>
+              )}
+            </div>
           ) : (
-            <ul className="space-y-2">
+            /* Two columns on wide screens. Each card was full-width (~1300px) for
+               ~140px of content, so 48 plugins meant an enormous scroll with a huge
+               dead gap between the text on the left and the ⋯ menu on the right.
+               A card that expands its dependency panel spans both columns so the
+               table inside it isn't cramped. */
+            <ul className="grid gap-2 xl:grid-cols-2">
               {(filtered ?? []).map((p) => {
                 const missingReq = p.dependency_summary?.missing_required?.length ?? 0
                 const showMissingOptCount = p.dependency_summary?.missing_optional?.length ?? 0
@@ -664,12 +899,27 @@ export default function PluginsView() {
                   (busy ? '' : depInstallErrors[p.name] || apiInstallFailed) ||
                   (p.status === 'failed' && p.error ? shortenInstallError(String(p.error)) : '')
                 return (
-                  <li key={p.name} className="rounded-2xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm">
+                  <li
+                    key={p.name}
+                    className={clsx(
+                      'rounded-2xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm',
+                      // The dependency panel is a table; give it the full width.
+                      isExpanded && 'xl:col-span-2',
+                    )}
+                  >
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="font-medium text-type-body">
                           {p.name} {p.version ? `v${p.version}` : ''}
                         </div>
+                        {/* Every installed plugin ships a description and this page
+                            rendered none of them — the one line that says what a
+                            plugin is actually for. */}
+                        {p.manifest?.description ? (
+                          <p className="mt-0.5 line-clamp-2 text-type-secondary text-ink-600">
+                            {p.manifest.description}
+                          </p>
+                        ) : null}
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-type-meta text-ink-500">
                           <StatusBadge status={p.enabled === false ? 'disabled' : p.status ?? 'enabled'} />
                           <span
@@ -685,18 +935,82 @@ export default function PluginsView() {
                           >
                             {isolated ? 'isolated venv' : 'shared env'}
                           </span>
-                          {p.node_types?.length ? `${p.node_types.length} nodes` : null}
+                          {/* Only the exceptional state is loud. "required deps ok"
+                              used to print in green on all 48 rows, which is the
+                              same noise as badging every project "DRAFT" — it made
+                              the one row that actually needs attention harder to
+                              spot, not easier. */}
                           {missingReq > 0 ? (
-                            <span className="text-amber-700">{missingReq} missing required</span>
-                          ) : (
-                            <span className="text-emerald-700">required deps ok</span>
-                          )}
+                            <span className="font-medium text-amber-700">
+                              {missingReq} missing required
+                            </span>
+                          ) : null}
                           {showMissingOptCount > 0 ? (
                             <span className="text-amber-700">{showMissingOptCount} missing optional</span>
                           ) : optionalDeclared ? (
                             <span className="text-ink-500">optional extras available</span>
                           ) : null}
+                          {p.installed_at ? (
+                            <span title={formatLocaleDateTime(p.installed_at)}>
+                              installed {formatRelativeTime(p.installed_at)}
+                            </span>
+                          ) : null}
                         </div>
+                        {/* Node types are what you type into the Editor catalog, so
+                            they're the most searchable thing a plugin has — and the
+                            card previously showed only a count, which never rendered
+                            (see nodeTypesOf). Tags double as the facet control. */}
+                        {(() => {
+                          const nodeTypes = nodeTypesOf(p)
+                          const tags = tagsOf(p)
+                          if (!nodeTypes.length && !tags.length) return null
+                          return (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                              {/* Labelled: node types and tags are different kinds of
+                                  thing but rendered as one undifferentiated row of
+                                  chips, so `alignment_node` read as just another tag. */}
+                              {nodeTypes.length ? (
+                                <span className="mr-0.5 text-[10px] uppercase tracking-wide text-ink-400">
+                                  Nodes
+                                </span>
+                              ) : null}
+                              {nodeTypes.slice(0, 4).map((nt) => (
+                                <span
+                                  key={nt}
+                                  className="rounded-md bg-ink-50 px-1.5 py-0.5 font-mono text-type-mono text-ink-600"
+                                  title={`Node type “${nt}” — appears in the Editor catalog`}
+                                >
+                                  {nt}
+                                </span>
+                              ))}
+                              {nodeTypes.length > 4 ? (
+                                <span className="text-type-meta text-ink-400">
+                                  +{nodeTypes.length - 4}
+                                </span>
+                              ) : null}
+                              {tags.slice(0, 4).map((t) => {
+                                const on = activeTags.includes(t)
+                                return (
+                                  <button
+                                    key={t}
+                                    type="button"
+                                    aria-pressed={on}
+                                    title={on ? `Stop filtering by ${t}` : `Show only ${t} plugins`}
+                                    className={clsx(
+                                      'rounded-full border px-1.5 py-px text-type-meta transition',
+                                      on
+                                        ? 'border-accent-400 bg-accent-50 font-medium text-accent-900'
+                                        : 'border-ink-200/80 text-ink-500 hover:border-accent-300 hover:text-accent-800',
+                                    )}
+                                    onClick={() => toggleTag(t)}
+                                  >
+                                    {t}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
                         {/* Collapsed: exactly one dep CTA */}
                         {!isExpanded && (
                           <div className="mt-2">
@@ -710,14 +1024,18 @@ export default function PluginsView() {
                                 <PackagePlus className="h-3.5 w-3.5" /> Install required deps
                               </button>
                             ) : showMissingOptCount > 0 ? (
+                              /* Quiet, not secondary: optional extras are a
+                                 maintenance action, but styled as a filled button
+                                 it was the loudest thing on the card — louder than
+                                 the plugin's own name — on half the list. */
                               <button
                                 type="button"
-                                className="btn-secondary"
+                                className="btn-quiet"
                                 disabled={anyBusy}
                                 onClick={() => void installDeps(p.name, true)}
                                 title={
                                   isolated
-                                    ? 'Install optional extras into this plugin’s isolated venv'
+                                    ? 'Install optional extras into this plugin’s isolated venv — not into the API image'
                                     : 'Installs into the shared API Python — heavy ML extras often fail here; prefer isolated runtime'
                                 }
                               >
@@ -752,12 +1070,31 @@ export default function PluginsView() {
                           type="button"
                           className="btn-icon"
                           aria-label={`Actions for ${p.name}`}
-                          onClick={() => setMenuFor((m) => (m === p.name ? null : p.name))}
+                          aria-expanded={menuFor === p.name}
+                          aria-haspopup="menu"
+                          onClick={(e) => {
+                            if (menuFor === p.name) {
+                              setMenuFor(null)
+                              return
+                            }
+                            /* Flip above the trigger near the window edge — with 48
+                               rows the last few opened off-screen and Uninstall was
+                               unreachable (same fix as Workspaces and Templates). */
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            setMenuUp(window.innerHeight - rect.bottom < 170)
+                            setMenuFor(p.name)
+                          }}
                         >
                           <MoreHorizontal className="h-4 w-4" />
                         </button>
                         {menuFor === p.name && (
-                          <div className="absolute right-0 z-20 mt-1 w-52 rounded-2xl border border-ink-200 bg-white p-1.5 shadow-soft">
+                          <div
+                            role="menu"
+                            className={clsx(
+                              'absolute right-0 z-20 w-52 rounded-2xl border border-ink-200 bg-white p-1.5 shadow-soft',
+                              menuUp ? 'bottom-full mb-1' : 'top-full mt-1',
+                            )}
+                          >
                             <button type="button" className="btn-quiet w-full justify-start" onClick={() => { void toggleDeps(p.name); setMenuFor(null) }}>
                               Dependencies
                             </button>
@@ -790,11 +1127,10 @@ export default function PluginsView() {
                         )}
                       </div>
                     </div>
-                    {isolated && !isExpanded && (
-                      <p className="mt-2 text-type-meta text-ink-500">
-                        Optional packages install into this plugin’s isolated venv — not into the API image.
-                      </p>
-                    )}
+                    {/* This sentence used to print on every isolated plugin — 16 copies
+                        of one general fact that the "Deps:" banner at the top of the
+                        page already states. It now lives on the button's tooltip,
+                        where it applies to the action that needs it. */}
                     {busy && (
                       <div className="mt-3 flex items-start gap-2 rounded-xl border border-accent-200 bg-accent-50/60 px-3 py-2 text-sm text-ink-700">
                         <span className="mt-0.5 inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />

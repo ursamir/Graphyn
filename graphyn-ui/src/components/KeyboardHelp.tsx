@@ -1,23 +1,44 @@
 import React from 'react'
 import { X } from 'lucide-react'
+import type { AppView } from '../store/appStore'
+import { JUMP_KEYS, NAV_SHORTCUT_LABEL } from '../routes/nav'
+
+/** Sidebar order (Workspace strip, then Build / Library / Deploy / Admin groups) —
+ * matching it here means this list reads the same as the nav a user just looked at. */
+const NAV_ORDER: AppView[] = [
+  'projects',
+  'builder',
+  'runs',
+  'templates',
+  'proposals',
+  'data',
+  'plugins',
+  'models',
+  'artifacts',
+  'edge',
+  'workers',
+  'secrets',
+  'system',
+  'access',
+]
+
+function primaryKeyFor(view: AppView): string | undefined {
+  return Object.entries(JUMP_KEYS).find(([, v]) => v === view)?.[0]
+}
+
+/** Derived from the same JUMP_KEYS map App.tsx's keydown handler uses — this used to
+ * be a separate hand-written list that silently drifted out of sync (it stopped
+ * mentioning Models or Access once those views were added to the sidebar). */
+const NAV_ROWS: Array<{ keys: string; action: string }> = NAV_ORDER.flatMap((view) => {
+  const key = primaryKeyFor(view)
+  const action = NAV_SHORTCUT_LABEL[view]
+  return key && action ? [{ keys: key.toUpperCase(), action }] : []
+})
 
 const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: string }> }> = [
   {
     title: 'Navigation',
-    rows: [
-      { keys: 'J', action: 'Home (workspace overview)' },
-      { keys: 'B', action: 'Editor' },
-      { keys: 'R', action: 'Runs (History)' },
-      { keys: 'D', action: 'Datasets' },
-      { keys: 'A', action: 'Artifacts (cross-run registry)' },
-      { keys: 'T', action: 'Templates' },
-      { keys: 'P', action: 'Agent inbox' },
-      { keys: 'L', action: 'Library · Plugins' },
-      { keys: 'G', action: 'Ship' },
-      { keys: 'W', action: 'Worker fleet' },
-      { keys: 'K', action: 'Secrets' },
-      { keys: 'S', action: 'Ops' },
-    ],
+    rows: NAV_ROWS,
   },
   {
     title: 'Runs panels (secondary)',

@@ -4,7 +4,13 @@
  */
 import React from 'react'
 import { Download, FileJson, Music, Image as ImageIcon, FileText, Box } from 'lucide-react'
-import { fetchOutputBlobUrl, downloadOutputFile, apiFetch } from '../api/client'
+import {
+  fetchOutputBlobUrl,
+  fetchInputBlobUrl,
+  downloadOutputFile,
+  downloadInputFile,
+  apiFetch,
+} from '../api/client'
 import { detectFileKind, formatBytes, type FileKind } from '../lib/fileKind'
 import { CopyableMono } from './ui'
 import clsx from 'clsx'
@@ -16,6 +22,12 @@ type FileViewerProps = {
   name?: string
   size?: number
   className?: string
+  /** Which jailed file API `path` resolves under. Run outputs/artifacts (the
+   * original use of this viewer) live under `/outputs/file`; Datasets' shared
+   * Inputs library is a separate jail at `/data/inputs/file` (it follows
+   * symlinked directories that `/outputs/file` deliberately won't). Defaults
+   * to 'outputs' so every existing call site keeps its current behavior. */
+  source?: 'outputs' | 'inputs'
 }
 
 function JsonTree({ value, path = '$', depth = 0 }: { value: unknown; path?: string; depth?: number }) {
@@ -59,8 +71,11 @@ function JsonTree({ value, path = '$', depth = 0 }: { value: unknown; path?: str
   )
 }
 
-export function FileViewer({ path, name, size, className }: FileViewerProps) {
+export function FileViewer({ path, name, size, className, source = 'outputs' }: FileViewerProps) {
   const kind: FileKind = detectFileKind(name || path)
+  const endpoint = source === 'inputs' ? '/data/inputs/file' : '/outputs/file'
+  const fetchBlobUrl = source === 'inputs' ? fetchInputBlobUrl : fetchOutputBlobUrl
+  const downloadFile = source === 'inputs' ? downloadInputFile : downloadOutputFile
   const label = name || path.split(/[/\\]/).pop() || path
   const [blobUrl, setBlobUrl] = React.useState<string | null>(null)
   const [text, setText] = React.useState<string | null>(null)
@@ -81,7 +96,7 @@ export function FileViewer({ path, name, size, className }: FileViewerProps) {
       setLoading(true)
       try {
         if (kind === 'image' || kind === 'audio') {
-          const url = await fetchOutputBlobUrl(path)
+          const url = await fetchBlobUrl(path)
           if (cancelled) {
             URL.revokeObjectURL(url)
             return
@@ -91,7 +106,7 @@ export function FileViewer({ path, name, size, className }: FileViewerProps) {
           return
         }
         if (kind === 'json' || kind === 'text') {
-          const res = await apiFetch('/outputs/file', { query: { path } })
+          const res = await apiFetch(endpoint, { query: { path } })
           if (!res.ok) {
             const body = (await res.json().catch(() => ({}))) as { detail?: string }
             throw new Error(body.detail || `HTTP ${res.status}`)
@@ -137,10 +152,10 @@ export function FileViewer({ path, name, size, className }: FileViewerProps) {
       cancelled = true
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
-  }, [path, kind])
+  }, [path, kind, endpoint, fetchBlobUrl])
 
   const download = () => {
-    void downloadOutputFile(path, label)
+    void downloadFile(path, label)
   }
 
   return (

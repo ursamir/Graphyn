@@ -20,7 +20,6 @@ import {
   Trash2,
   Download,
   Upload,
-  Hash,
   Square,
   BookmarkPlus,
   MoreHorizontal,
@@ -1165,10 +1164,25 @@ function BuilderInner() {
 
   const secondaryActions = (
     <>
+      <button
+        type="button"
+        disabled={nodes.length === 0 || isRunning}
+        className="btn-quiet w-full justify-start"
+        onClick={() => {
+          void handleRunAsync()
+          setMoreOpen(false)
+        }}
+      >
+        <Play className="h-3.5 w-3.5" /> Run in background
+      </button>
+      {/* Seed lives only in the Graph settings panel (deselect any node/edge to see it) — it used
+          to also be editable here, which meant the same value could be changed from two places
+          with no indication they were the same field. */}
       <ConfirmButton
         label="Clear canvas"
         confirmLabel="Confirm clear"
         danger
+        className="w-full justify-start"
         onConfirm={() => {
           setNodes([])
           setEdges([])
@@ -1181,28 +1195,6 @@ function BuilderInner() {
           setMoreOpen(false)
         }}
       />
-      <button
-        type="button"
-        disabled={nodes.length === 0 || isRunning}
-        className="btn-quiet"
-        onClick={() => {
-          void handleRunAsync()
-          setMoreOpen(false)
-        }}
-      >
-        Run in background
-      </button>
-      <label className="flex items-center gap-1.5 px-1 text-xs text-ink-500">
-        <Hash className="h-3.5 w-3.5" />
-        Seed
-        <input
-          type="number"
-          value={seed}
-          onChange={(e) => setSeed(Number(e.target.value) || 0)}
-          className="field-control mt-0 w-16 py-0.5 font-mono text-xs"
-          title="Graph seed"
-        />
-      </label>
     </>
   )
 
@@ -1569,15 +1561,22 @@ function BuilderInner() {
           >
             <BookmarkPlus className="h-3.5 w-3.5" /> Save
           </button>
-          <input
-            value={graphName}
-            onChange={(e) => setGraphName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '-'))}
-            onBlur={() => setGraphName((n) => slugifyName(n))}
-            placeholder="graph-name"
-            className="w-40 rounded-lg border border-ink-200/80 bg-ink-50/60 px-2.5 py-1.5 text-sm font-medium text-ink-900 outline-none focus:border-accent-400 focus:bg-white focus:ring-2 focus:ring-accent-200/70"
-            title="Graph name — used as the artifact slug on Run"
-            aria-label="Graph name"
-          />
+          {/* The picker above chooses WHICH saved pipeline is loaded; this renames the graph
+              currently in the canvas (used as the artifact slug on Run) — they can diverge (e.g.
+              load "call-analytics" then rename before running a variant), so both showing the
+              same text by default reads as an accidental duplicate without this label. */}
+          <div className="flex items-center gap-1.5 rounded-lg border border-ink-200/80 bg-ink-50/60 pl-2 focus-within:border-accent-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-accent-200/70">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Name</span>
+            <input
+              value={graphName}
+              onChange={(e) => setGraphName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '-'))}
+              onBlur={() => setGraphName((n) => slugifyName(n))}
+              placeholder="graph-name"
+              className="w-36 rounded-lg bg-transparent py-1.5 pr-2.5 text-sm font-medium text-ink-900 outline-none"
+              title="Graph name — used as the artifact slug on Run"
+              aria-label="Graph name"
+            />
+          </div>
           {runHadErrors && !isRunning && (
             <button
               type="button"
@@ -1908,16 +1907,11 @@ function BuilderInner() {
                   <div className="flex-1 space-y-2 overflow-y-auto px-3 py-2">
                     {mode === 'graph' && (
                       <>
-                        <label className="block text-[12px] text-ink-700">
-                          <span className="font-medium">Graph name</span>
-                          <input
-                            value={graphName}
-                            onChange={(e) => setGraphName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '-'))}
-                            onBlur={() => setGraphName((n) => slugifyName(n))}
-                            className="field-control mt-1"
-                            placeholder="pipeline"
-                          />
-                        </label>
+                        {/* Graph name is edited once, in the toolbar above the canvas (it's the
+                            title bar for the graph, same pattern as n8n's inline workflow name) —
+                            this panel used to duplicate that exact field right below its own
+                            subtitle line, which already shows the same name. Don't re-add an
+                            editable "Graph name" input here; edit it in the toolbar instead. */}
                         <label className="block text-[12px] text-ink-700">
                           <span className="font-medium">Seed</span>
                           <input

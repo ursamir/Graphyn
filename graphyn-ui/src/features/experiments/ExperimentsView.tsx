@@ -524,8 +524,12 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
   }
 
   return (
-    <div className="relative h-full min-h-0 space-y-6 overflow-y-auto p-6">
+    // Top padding lives on the header, not the scroll container: a sticky child's
+    // `top: 0` resolves against the scrollport's PADDING box, so `p-6` would pin
+    // the selection bar 24px low and let content scroll through the gap above it.
+    <div className="relative h-full min-h-0 space-y-6 overflow-y-auto px-6 pb-6">
       <PageHeader
+            className="pt-6"
             title="Compare runs"
             description="Deep link for cross-run metrics. Prefer Runs → Compare tab when a workspace is open."
             actions={

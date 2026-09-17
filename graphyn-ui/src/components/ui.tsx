@@ -130,12 +130,15 @@ export function ConfirmButton({
   onConfirm,
   danger,
   disabled,
+  className,
 }: {
   label: string
   confirmLabel?: string
   onConfirm: () => void
   danger?: boolean
   disabled?: boolean
+  /** Extra classes merged in after the base button/danger styling — e.g. `w-full justify-start` to match sibling rows in a menu. */
+  className?: string
 }) {
   const [armed, setArmed] = React.useState(false)
   const btnRef = React.useRef<HTMLButtonElement>(null)
@@ -165,6 +168,7 @@ export function ConfirmButton({
         danger ? 'btn-danger' : 'btn-secondary',
         armed && 'ring-2 ring-offset-1',
         armed && (danger ? 'ring-rose-400' : 'ring-accent-400'),
+        className,
       )}
       aria-pressed={armed}
       aria-label={armed ? `${confirmLabel} — click again to confirm, Esc cancels` : label}
@@ -357,15 +361,20 @@ export function PageHeader({
   description,
   actions,
   scope,
+  className,
 }: {
   title: string
   description?: string
   actions?: React.ReactNode
   /** Prefer omitting — scope is already clear from the activity bar / project chip. */
   scope?: 'project' | 'global'
+  /** Extra classes on the wrapper — e.g. a page whose scroll container drops its
+   *  top padding so a sticky toolbar can pin flush, and needs the header to carry
+   *  that spacing instead. */
+  className?: string
 }) {
   return (
-    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+    <div className={clsx('mb-4 flex flex-wrap items-start justify-between gap-3', className)}>
       <div className="min-w-0 max-w-3xl">
         <div className="flex flex-wrap items-baseline gap-2">
           <h1 className="text-type-page tracking-tight text-ink-950">{title}</h1>
@@ -434,13 +443,19 @@ function middleTruncate(value: string, keep = 18): string {
 export function CopyableMono({
   value,
   title,
+  copyOnly,
 }: {
   value: string
   title?: string
+  /** Render just the copy button. For tables that already show the value in
+   *  their own column and only need the copy affordance beside it — otherwise
+   *  the row prints the same string twice. */
+  copyOnly?: boolean
 }) {
   const [copied, setCopied] = React.useState(false)
   return (
     <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+      {copyOnly ? null : (
       <code
         className="min-w-0 break-all text-type-mono text-ink-800"
         title={title ?? value}
@@ -448,9 +463,10 @@ export function CopyableMono({
         <span className="sm:hidden">{middleTruncate(value)}</span>
         <span className="hidden sm:inline">{value}</span>
       </code>
+      )}
       <button
         type="button"
-        className="btn-icon shrink-0"
+        className={clsx('btn-icon shrink-0', copied && 'text-emerald-600')}
         title={copied ? 'Copied' : 'Copy'}
         aria-label="Copy"
         onClick={(e) => {
@@ -462,7 +478,10 @@ export function CopyableMono({
           })
         }}
       >
-        <Copy className="h-3 w-3" />
+        {/* A tooltip-only "Copied" state (the title attribute above) needs a hover-and-wait
+            to notice — swap to a checkmark too so clicking gives an immediate visible cue,
+            matching how ErrorBanner's copy button already swaps its (visible) label text. */}
+        {copied ? <CheckCircle2 className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
       </button>
     </span>
   )

@@ -42,3 +42,50 @@ export function onPathChange(handler: () => void): () => void {
   window.addEventListener('popstate', handler)
   return () => window.removeEventListener('popstate', handler)
 }
+
+/**
+ * Single-letter jump keys, shared by App.tsx's keydown handler and the
+ * Keyboard shortcuts overlay (KeyboardHelp.tsx). This used to be a private
+ * const in App.tsx with a second, hand-maintained copy of the same list (as
+ * plain label strings) inside KeyboardHelp.tsx — the two silently drifted
+ * apart and the overlay stopped mentioning Models or Access entirely once
+ * those views gained nav entries. Keeping one map here means adding a view
+ * only ever happens in one place.
+ */
+export const JUMP_KEYS: Record<string, AppView> = {
+  b: 'builder',
+  t: 'templates',
+  p: 'proposals',
+  r: 'runs',
+  o: 'runs',
+  e: 'runs',
+  a: 'artifacts',
+  d: 'data',
+  j: 'projects',
+  g: 'edge',
+  w: 'workers',
+  l: 'plugins',
+  k: 'secrets',
+  s: 'system',
+  m: 'models',
+  c: 'access',
+}
+
+/** Human label for a view's primary jump key, shown in the shortcuts overlay's
+ * Navigation section (secondary Runs-panel keys — o/e — are listed separately). */
+export const NAV_SHORTCUT_LABEL: Partial<Record<AppView, string>> = {
+  projects: 'Home (workspace overview)',
+  builder: 'Editor',
+  runs: 'Runs (History)',
+  data: 'Datasets',
+  artifacts: 'Artifacts (cross-run registry)',
+  templates: 'Templates',
+  proposals: 'Agent inbox',
+  plugins: 'Library · Plugins',
+  edge: 'Ship',
+  workers: 'Worker fleet',
+  secrets: 'Secrets',
+  system: 'Ops',
+  models: 'Models',
+  access: 'Access',
+}

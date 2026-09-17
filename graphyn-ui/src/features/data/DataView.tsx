@@ -1,17 +1,22 @@
 import React from 'react'
-import { RefreshCw, Search, Upload } from 'lucide-react'
+import { ArrowDown, ArrowUp, FileAudio, Play, RefreshCw, Search, Upload, X } from 'lucide-react'
 import {
   apiFetch,
   apiJson,
   apiUrl,
-  fetchAuthenticatedBlobUrl,
-  fetchInputBlobUrl,
   getApiToken,
 } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
+import { FileViewer } from '../../components/FileViewer'
 import clsx from 'clsx'
-import { formatExecutionLine, formatMergeToast } from '../../lib/format'
+import {
+  formatBytes,
+  formatExecutionLine,
+  formatLocaleDateTime,
+  formatMergeToast,
+  formatRelativeTime,
+} from '../../lib/format'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { paths } from '../../routes/paths'
 
@@ -149,6 +154,20 @@ export default function DataView() {
   const [errorDetail, setErrorDetail] = React.useState<string | null>(null)
   const [pathRecovery, setPathRecovery] = React.useState(false)
   const [listFilter, setListFilter] = React.useState('')
+  const [sortKey, setSortKey] = React.useState<'path' | 'size' | 'modified'>('path')
+  const [sortDir, setSortDir] = React.useState<'asc' | 'desc'>('asc')
+  /* The cap is a render guard, not a data limit — raising it is the user's call,
+     so the footer offers it rather than silently hiding the rest. */
+  const [listCap, setListCap] = React.useState(LIST_CAP)
+  const toggleSort = (key: 'path' | 'size' | 'modified') => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setSortKey(key)
+    // Size and date are most useful largest/newest-first; names read A–Z.
+    setSortDir(key === 'path' ? 'asc' : 'desc')
+  }
   const [detailEpoch, setDetailEpoch] = React.useState(0)
   const skippedOutputKey = React.useRef<string | null>(null)
   /** Input labels that failed with invalid-path — do not auto-reselect after clear. */
@@ -159,6 +178,9 @@ export default function DataView() {
   const skipProjectHashRef = React.useRef(false)
   const appliedUnscopeEpochRef = React.useRef<number | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const [previewFile, setPreviewFile] = React.useState<{ path: string; kind: 'files' | 'input-files' } | null>(
+    null,
+  )
   const [storageHintDismissed, setStorageHintDismissed] = React.useState(() => {
     try {
       return localStorage.getItem('graphyn.datasets.storageHint') === '1'
@@ -410,22 +432,12 @@ export default function DataView() {
     }
   }, [mode, project, version, label, loadSources, detailEpoch])
 
-  const openFile = async (path: string, kind: 'files' | 'input-files') => {
-    try {
-      // Input trees often nest via directory symlinks (environmental-sounds/*, speech-commands/*).
-      // Use the jailed /data/inputs/file API instead of StaticFiles (/input-files), which 404s
-      // when follow_symlink is false.
-      const objUrl =
-        kind === 'input-files'
-          ? await fetchInputBlobUrl(path)
-          : await fetchAuthenticatedBlobUrl(
-              `/${kind}/${path.split('/').map(encodeURIComponent).join('/')}`,
-            )
-      window.open(objUrl, '_blank', 'noopener,noreferrer')
-      setTimeout(() => URL.revokeObjectURL(objUrl), 60_000)
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
-    }
+  // Preview inline via FileViewer (audio player, image, JSON tree, text — with Download)
+  // instead of the previous window.open(blobUrl) into a bare, unbranded new tab, which was
+  // the only place in the app that punted a file preview like that (Runs → Run outputs
+  // already used FileViewer for the equivalent action).
+  const openFile = (path: string, kind: 'files' | 'input-files') => {
+    setPreviewFile({ path, kind })
   }
 
   const upload = () => {
@@ -671,8 +683,42 @@ export default function DataView() {
       ),
     [rows, listFilter],
   )
-  const displayRows = filteredRows.slice(0, LIST_CAP)
-  const listTruncated = filteredRows.length > LIST_CAP
+  /* The listing was unsorted (filesystem walk order) with no way to reorder it,
+     so finding the biggest file or the most recent one in 186 rows meant reading
+     every row. Size and mtime only became sortable once the API started
+     returning them — it previously sent nothing but the path and the label the
+     caller already knew. */
+  const sortedRows = React.useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : -1)
+    const time = (v: unknown) => {
+      const t = typeof v === 'string' ? Date.parse(v) : NaN
+      return Number.isNaN(t) ? -1 : t
+    }
+    return [...filteredRows].sort((a, b) => {
+      if (sortKey === 'size') {
+        return (num(a.size_bytes) - num(b.size_bytes)) * dir
+      }
+      if (sortKey === 'modified') {
+        return (time(a.modified_at) - time(b.modified_at)) * dir
+      }
+      return String(a.path ?? '').localeCompare(String(b.path ?? '')) * dir
+    })
+  }, [filteredRows, sortKey, sortDir])
+  const displayRows = sortedRows.slice(0, listCap)
+  const listTruncated = sortedRows.length > listCap
+  /* Totals describe the whole filtered set, not just the rendered page — a
+     footer that counted only the visible 200 would quietly understate a
+     1200-file label. */
+  const totalBytes = React.useMemo(
+    () =>
+      filteredRows.reduce(
+        (sum, r) => sum + (typeof r.size_bytes === 'number' ? r.size_bytes : 0),
+        0,
+      ),
+    [filteredRows],
+  )
+  const anySizes = filteredRows.some((r) => typeof r.size_bytes === 'number')
 
   const switchUxMode = (next: 'browse' | 'manage') => {
     setError(null)
@@ -726,8 +772,13 @@ export default function DataView() {
   )
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-4">
+    // Top padding on the header, not the scroll container: a sticky child's
+    // `top: 0` resolves against the scrollport's PADDING box, so `p-6` would pin
+    // the file table's header row 24px low and let rows scroll through the strip
+    // above it (the defect found on Templates).
+    <div className="h-full min-h-0 overflow-y-auto px-6 pb-6 space-y-4">
       <PageHeader
+        className="pt-6"
         title="Datasets"
         description="Shared Inputs and Outputs for pipelines — not the same as per-run downloads under Runs."
         actions={
@@ -1105,10 +1156,15 @@ export default function DataView() {
                   onConfirm={() => void deleteInput()}
                 />
               ) : null}
+              {/* "Use in workspace" navigated to the picker and said nothing about
+                  what happens next, so it read as if it would link the label for
+                  you. It can't — pinning happens on a workspace's Home. Both
+                  branches now name the actual next step. */}
               {activeProject ? (
                 <button
                   type="button"
                   className="btn-primary"
+                  title={`Open ${activeProject} Home, where “${label || 'an input label'}” can be pinned under Linked inputs`}
                   onClick={() => {
                     useAppStore.getState().openProject(activeProject)
                   }}
@@ -1119,9 +1175,13 @@ export default function DataView() {
                 <button
                   type="button"
                   className="btn-primary"
-                  onClick={() => openProjects()}
+                  title={`Pick a workspace, then pin “${label}” under its Home → Linked inputs`}
+                  onClick={() => {
+                    pushToast(`Pick a workspace, then pin “${label}” under Home → Linked inputs`, 'info')
+                    openProjects()
+                  }}
                 >
-                  Use in workspace
+                  Pick a workspace…
                 </button>
               ) : null}
               {uxMode === 'manage' ? (
@@ -1251,30 +1311,151 @@ export default function DataView() {
             />
           ) : (
             <div className="space-y-2">
-              {listTruncated ? (
-                <p className="text-[12px] text-ink-500">
-                  Showing first {LIST_CAP} of {filteredRows.length} files
-                  {listFilter.trim() ? ' matching this filter' : ''}. Refine the filter to narrow results.
-                </p>
-              ) : null}
+              {/* Summary of the whole filtered set. The page previously said nothing
+                  about how much data a label holds — you got a wall of filenames. */}
+              <div className="flex flex-wrap items-baseline justify-between gap-2 text-[12px] text-ink-500">
+                <span>
+                  <span className="font-medium text-ink-800">{filteredRows.length}</span>
+                  {` file${filteredRows.length === 1 ? '' : 's'}`}
+                  {listFilter.trim() ? ` matching “${listFilter.trim()}”` : ''}
+                  {anySizes ? (
+                    <>
+                      {' · '}
+                      <span className="font-medium text-ink-800">{formatBytes(totalBytes)}</span>
+                      {' total'}
+                    </>
+                  ) : null}
+                </span>
+                {listTruncated ? (
+                  <span>
+                    Showing {displayRows.length} of {sortedRows.length} —{' '}
+                    <button
+                      type="button"
+                      className="font-medium text-accent-800 hover:underline"
+                      onClick={() => setListCap(sortedRows.length)}
+                    >
+                      show all
+                    </button>
+                  </span>
+                ) : null}
+              </div>
+              {/* No `overflow-hidden` here, however tempting for clipping the table
+                  to the rounded corners: an ancestor with overflow hidden/clip
+                  becomes the sticky header's scroll container, so the header would
+                  stick inside a box that never scrolls — i.e. not stick at all
+                  (measured: it scrolled 279px past the top). The header rounds its
+                  own outer corners instead. */}
               <div className="rounded-2xl border border-ink-200 bg-white">
                 <table className="w-full text-left text-sm">
-                  <thead className="border-b border-ink-100 text-[11px] uppercase text-ink-500">
-                    <tr><th className="px-3 py-2">Path</th><th className="px-3 py-2">Meta</th><th className="px-3 py-2">Open</th></tr>
+                  {/* Sticky header: 200 rows is several screens, and the column
+                      labels used to scroll away with them. `top-0` is safe here
+                      because this page's scroll container no longer carries top
+                      padding (see the container comment above). */}
+                  <thead className="sticky top-0 z-10 bg-ink-50/95 text-[11px] uppercase text-ink-500 shadow-[inset_0_-1px_0_rgb(0_0_0/0.06)]">
+                    <tr>
+                      {(
+                        [
+                          ['path', 'Name', 'text-left'],
+                          ['size', 'Size', 'text-right'],
+                          ['modified', 'Modified', 'text-right'],
+                        ] as const
+                      ).map(([key, labelText, align], idx) => (
+                        <th
+                          key={key}
+                          className={clsx(
+                            'px-3 py-2 font-medium',
+                            align,
+                            idx === 0 && 'rounded-tl-2xl',
+                          )}
+                        >
+                          <button
+                            type="button"
+                            className={clsx(
+                              'inline-flex items-center gap-1 uppercase hover:text-ink-900',
+                              sortKey === key && 'text-ink-900',
+                            )}
+                            aria-sort={
+                              sortKey === key
+                                ? sortDir === 'asc'
+                                  ? 'ascending'
+                                  : 'descending'
+                                : 'none'
+                            }
+                            onClick={() => toggleSort(key)}
+                          >
+                            {labelText}
+                            {sortKey === key ? (
+                              sortDir === 'asc' ? (
+                                <ArrowUp className="h-3 w-3" />
+                              ) : (
+                                <ArrowDown className="h-3 w-3" />
+                              )
+                            ) : null}
+                          </button>
+                        </th>
+                      ))}
+                      <th className="rounded-tr-2xl px-3 py-2 text-right font-medium">
+                        <span className="sr-only">Actions</span>
+                      </th>
+                    </tr>
                   </thead>
                   <tbody>
                     {displayRows.map((r, i) => {
                       const path = String(r.path ?? '')
+                      /* Every row repeated the label as a folder prefix AND in a
+                         Meta column, while the label picker above already says
+                         which label you're in — three copies of one constant.
+                         Show the part that differs; the full path stays on the
+                         copy button and the tooltip. */
+                      const rowLabel = String(r.label ?? '')
+                      const display =
+                        rowLabel && path.startsWith(`${rowLabel}/`)
+                          ? path.slice(rowLabel.length + 1)
+                          : path
+                      const size = typeof r.size_bytes === 'number' ? r.size_bytes : null
+                      const modified = typeof r.modified_at === 'string' ? r.modified_at : null
+                      const kind = mode === 'outputs' ? 'files' : 'input-files'
                       return (
-                        <tr key={i} className="border-b border-ink-50">
-                          <td className="px-3 py-2 font-mono text-[11px]">
-                            {path ? <CopyableMono value={path} /> : '—'}
+                        <tr key={i} className="group border-b border-ink-50 last:border-b-0 hover:bg-ink-50/60">
+                          <td className="px-3 py-1.5">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <FileAudio className="h-3.5 w-3.5 shrink-0 text-ink-300" />
+                              <button
+                                type="button"
+                                className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-ink-800 hover:text-accent-800"
+                                title={`${path} — click to preview`}
+                                onClick={() => openFile(path, kind)}
+                              >
+                                {display || '—'}
+                              </button>
+                            </div>
                           </td>
-                          <td className="px-3 py-2 text-[11px] text-ink-500">{String(r.split ?? r.label ?? '')}</td>
-                          <td className="px-3 py-2">
-                            <button type="button" className="text-accent-700 underline" onClick={() => void openFile(path, mode === 'outputs' ? 'files' : 'input-files')}>
-                              open
-                            </button>
+                          <td className="whitespace-nowrap px-3 py-1.5 text-right text-[11px] tabular-nums text-ink-500">
+                            {formatBytes(size)}
+                          </td>
+                          <td
+                            className="whitespace-nowrap px-3 py-1.5 text-right text-[11px] text-ink-500"
+                            title={modified ? formatLocaleDateTime(modified) : undefined}
+                          >
+                            {modified ? formatRelativeTime(modified) : '—'}
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <div className="flex items-center justify-end gap-1">
+                              {/* Actions stay visible on hover/focus only so 200 rows
+                                  aren't 400 competing buttons, but never hide from
+                                  keyboard users. */}
+                              <span className="opacity-0 transition group-focus-within:opacity-100 group-hover:opacity-100">
+                                {path ? <CopyableMono value={path} copyOnly /> : null}
+                              </span>
+                              <button
+                                type="button"
+                                className="btn-icon"
+                                aria-label={`Preview ${display || path}`}
+                                onClick={() => openFile(path, kind)}
+                              >
+                                <Play className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       )
@@ -1285,6 +1466,36 @@ export default function DataView() {
             </div>
           )}
         </>
+      ) : null}
+      {previewFile ? (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-ink-950/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="File preview"
+          onClick={() => setPreviewFile(null)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-2xl shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="relative">
+              <button
+                type="button"
+                className="btn-icon absolute right-2 top-2 z-10 bg-white/90"
+                aria-label="Close preview"
+                onClick={() => setPreviewFile(null)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+              <FileViewer
+                path={previewFile.path}
+                source={previewFile.kind === 'input-files' ? 'inputs' : 'outputs'}
+                className="max-h-[85vh]"
+              />
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   )

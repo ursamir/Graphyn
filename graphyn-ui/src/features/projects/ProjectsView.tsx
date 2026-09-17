@@ -1,5 +1,23 @@
 import React from 'react'
-import { RefreshCw, Copy, Pencil, Workflow, History, ChevronRight, CalendarClock, Play, Star } from 'lucide-react'
+import {
+  RefreshCw,
+  Copy,
+  Database,
+  Pencil,
+  Workflow,
+  History,
+  ChevronRight,
+  CalendarClock,
+  Clock,
+  LayoutGrid,
+  LayoutTemplate,
+  MoreHorizontal,
+  Play,
+  Plus,
+  Rows3,
+  Search,
+  Star,
+} from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
@@ -9,14 +27,50 @@ import {
   ErrorBanner,
   KeyValue,
   LoadingBlock,
+  StatusBadge,
 } from '../../components/ui'
 import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
+import { formatRelativeTime, shortRunId } from '../../lib/format'
+import {
+  forgetRecentWorkspace,
+  noteRecentWorkspace,
+  readRecentWorkspaces,
+} from '../../lib/recentWorkspaces'
 
 interface Project {
   name: string
   status?: string
+  /** GET /projects already returns these — the picker discarded all of them and
+   *  rendered a bare name, so there was no way to tell 30 workspaces apart. */
+  created_at?: string
+  updated_at?: string
+  versions?: string[]
   [key: string]: unknown
+}
+
+/** Row from GET /runs. The global (unscoped) listing carries `project` for any
+ *  run that recorded one, which is what makes a cross-workspace activity feed
+ *  and per-workspace last-run possible in a single request. */
+type RunRow = {
+  run_id: string
+  status?: string
+  project?: string
+  graph_name?: string
+  created_at?: string
+}
+
+type WorkspaceSort = 'recent' | 'updated' | 'activity' | 'name'
+
+/** Approximate height of the workspace ⋯ menu (4 items + separator), used to
+ *  decide whether it still fits below the trigger or has to open upwards. */
+const MENU_HEIGHT_PX = 190
+
+const SORT_LABEL: Record<WorkspaceSort, string> = {
+  recent: 'Recently opened',
+  updated: 'Recently updated',
+  activity: 'Recent activity',
+  name: 'Name (A–Z)',
 }
 
 type Tab = 'spec' | 'taxonomy' | 'contract' | 'versions' | 'snapshots' | 'diff'
@@ -82,6 +136,7 @@ function writePinnedPipelines(project: string, names: string[]) {
     /* ignore */
   }
 }
+
 
 export default function ProjectsView() {
   const activeProject = useAppStore((s) => s.activeProject)
@@ -160,6 +215,13 @@ export default function ProjectsView() {
   const [links, setLinks] = React.useState<{ inputs: string[]; outputs: Array<{ version: string }> }>({ inputs: [], outputs: [] })
   const [inputLabels, setInputLabels] = React.useState<string[]>([])
   const [linkPick, setLinkPick] = React.useState('')
+  const [pipelinesHintDismissed, setPipelinesHintDismissed] = React.useState(() => {
+    try {
+      return localStorage.getItem('graphyn.home.pipelinesHint') === '1'
+    } catch {
+      return false
+    }
+  })
 
   const load = React.useCallback(async () => {
     setError(null)
@@ -178,7 +240,27 @@ export default function ProjectsView() {
     void load()
   }, [load])
 
+  /* One unscoped /runs call powers the whole landing page: the cross-workspace
+     activity feed, each workspace's last run, and the failure count. Fetching
+     per-project would be ~30 requests for the same information. */
+  const [allRuns, setAllRuns] = React.useState<RunRow[] | null>(null)
+  const loadAllRuns = React.useCallback(async () => {
+    try {
+      const rows = await apiJson<RunRow[]>('/runs', { query: { limit: 60, offset: 0 } })
+      setAllRuns(Array.isArray(rows) ? rows : [])
+    } catch {
+      /* The workspace list is the page; a missing activity feed degrades it but
+         must not blank it, so this failure is deliberately not surfaced as an
+         error banner — the feed renders its own "couldn't load" state. */
+      setAllRuns([])
+    }
+  }, [])
+  React.useEffect(() => {
+    if (!selected) void loadAllRuns()
+  }, [selected, loadAllRuns])
+
   const open = async (name: string) => {
+    noteRecentWorkspace(name)
     setSelected(name)
     setActiveProject(name)
     setRenameTo(name)
@@ -473,6 +555,7 @@ export default function ProjectsView() {
         body: JSON.stringify({ new_name: renameTo.trim() }),
       })
       pushToast(`Renamed to ${renameTo}`, 'success')
+      forgetRecentWorkspace(selected)
       await load()
       await open(renameTo.trim())
     } catch (err) {
@@ -488,6 +571,36 @@ export default function ProjectsView() {
         body: JSON.stringify({ new_name: cloneTo.trim() }),
       })
       pushToast(`Cloned to ${cloneTo}`, 'success')
+      await load()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  /* Name-addressed variants for the landing page, where there is no `selected`
+     workspace — the console acts on whichever card you used. */
+  const cloneProject = async (from: string, to: string) => {
+    try {
+      await apiJson(`/projects/${encodeURIComponent(from)}/clone`, {
+        method: 'POST',
+        body: JSON.stringify({ new_name: to }),
+      })
+      pushToast(`Cloned ${from} → ${to}`, 'success')
+      await load()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  const removeProject = async (name: string) => {
+    try {
+      await apiJson(`/projects/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ confirm: name }),
+      })
+      pushToast(`Deleted ${name}`, 'success')
+      forgetRecentWorkspace(name)
+      if (useAppStore.getState().activeProject === name) setActiveProject(null)
       await load()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -668,6 +781,59 @@ export default function ProjectsView() {
 
   const [datasetOpen, setDatasetOpen] = React.useState(() => Boolean(initialLoc.tab))
   const [projectFilter, setProjectFilter] = React.useState('')
+  /* Landing-page console controls. Sort and density persist — a management list
+     you re-sort on every visit is a list that doesn't remember you. */
+  const [sortBy, setSortBy] = React.useState<WorkspaceSort>(() => {
+    try {
+      const raw = localStorage.getItem('graphyn.workspaces.sort')
+      return raw && raw in SORT_LABEL ? (raw as WorkspaceSort) : 'recent'
+    } catch {
+      return 'recent'
+    }
+  })
+  const [dense, setDense] = React.useState<boolean>(() => {
+    try {
+      return localStorage.getItem('graphyn.workspaces.dense') === '1'
+    } catch {
+      return false
+    }
+  })
+  const [cardMenu, setCardMenu] = React.useState<string | null>(null)
+  const [cloneDialog, setCloneDialog] = React.useState<{ from: string; to: string } | null>(null)
+  const [activityFilter, setActivityFilter] = React.useState<'all' | 'failed'>('all')
+  const [menuUp, setMenuUp] = React.useState(false)
+  const cardMenuRef = React.useRef<HTMLDivElement | null>(null)
+  React.useEffect(() => {
+    if (!cardMenu) return
+    const onDoc = (e: MouseEvent) => {
+      if (!cardMenuRef.current?.contains(e.target as Node)) setCardMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCardMenu(null)
+    }
+    document.addEventListener('mousedown', onDoc)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [cardMenu])
+  const setSortPref = (next: WorkspaceSort) => {
+    setSortBy(next)
+    try {
+      localStorage.setItem('graphyn.workspaces.sort', next)
+    } catch {
+      /* ignore */
+    }
+  }
+  const setDensePref = (next: boolean) => {
+    setDense(next)
+    try {
+      localStorage.setItem('graphyn.workspaces.dense', next ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }
   const [pinnedPipelines, setPinnedPipelines] = React.useState<string[]>([])
 
   React.useEffect(() => {
@@ -714,6 +880,30 @@ export default function ProjectsView() {
     )
   }, [projects, projectFilter])
 
+  /* The header stats used to be plain text sitting next to a "Last run" link —
+     three things that look identical, one of which happens to be clickable.
+     Each stat now jumps to the card that owns it and flashes it, so the summary
+     line is a table of contents for the page rather than decoration. */
+  const continueRef = React.useRef<HTMLElement | null>(null)
+  const inputsRef = React.useRef<HTMLElement | null>(null)
+  const [flashed, setFlashed] = React.useState<'continue' | 'inputs' | null>(null)
+  const flashTimer = React.useRef<number | null>(null)
+  React.useEffect(
+    () => () => {
+      if (flashTimer.current) window.clearTimeout(flashTimer.current)
+    },
+    [],
+  )
+  const jumpToCard = (which: 'continue' | 'inputs') => {
+    const el = which === 'continue' ? continueRef.current : inputsRef.current
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setFlashed(which)
+    if (flashTimer.current) window.clearTimeout(flashTimer.current)
+    flashTimer.current = window.setTimeout(() => setFlashed(null), 1500)
+  }
+  const cardRing = (which: 'continue' | 'inputs') =>
+    flashed === which ? 'ring-2 ring-accent-400 ring-offset-2' : ''
+
   const authBlocked = /unauthorized|401|api token/i.test(error || '')
   const goEditor = () => goView('builder')
   const goTemplates = () => goView('templates')
@@ -728,95 +918,649 @@ export default function ProjectsView() {
   }
   const workspaceEmpty = projectPipelines.length === 0 && recentRuns.length === 0
 
-  /* ── Picker: single explorer + welcome (no workspace chrome) ── */
+  /* ── Landing console: manage every workspace from one surface ───────────────
+     This used to be a 15.5rem column of 30 bare names (each one truncated, each
+     badged "DRAFT") beside an otherwise-empty welcome pane. Nothing on it told
+     you which workspace had run recently, which had failed, or which you touched
+     last — you had to open them one at a time to find out. GET /projects already
+     returns updated_at and versions, and the unscoped GET /runs carries the
+     project on each row, so all of that is available for two requests. */
   if (!selected) {
-    return (
-      <div className="flex h-full min-h-0">
-        <aside className="flex w-[15.5rem] shrink-0 flex-col border-r border-ink-200/80 bg-[#f7f7f8]">
-          <div className="border-b border-ink-200/60 px-3 py-2.5 space-y-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Projects</div>
-            <div className="flex gap-1.5">
-              <input
-                ref={nameRef}
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="New project…"
-                className="min-w-0 flex-1 rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px]"
-                onKeyDown={(e) => e.key === 'Enter' && void create()}
+    const list = projects ?? []
+    const known = new Set(list.map((p) => p.name))
+    /* Recents are only meaningful while the workspace still exists — a deleted
+       or renamed one would otherwise sit at the top of the list forever. */
+    const recentNames = readRecentWorkspaces().filter((n) => known.has(n))
+    const recentRank = new Map(recentNames.map((n, i) => [n, i] as const))
+
+    const runsByProject = new Map<string, RunRow[]>()
+    for (const r of allRuns ?? []) {
+      const key = (r.project || '').trim()
+      if (!key) continue
+      const bucket = runsByProject.get(key)
+      if (bucket) bucket.push(r)
+      else runsByProject.set(key, [r])
+    }
+    const lastRunOf = (name: string) => runsByProject.get(name)?.[0]
+    const ts = (iso?: string) => {
+      const t = iso ? Date.parse(iso) : NaN
+      return Number.isNaN(t) ? 0 : t
+    }
+    const isFailed = (status?: string) => /fail|error/i.test(status || '')
+
+    const sorted = [...filteredProjects].sort((a, b) => {
+      if (sortBy === 'name') return a.name.localeCompare(b.name)
+      if (sortBy === 'updated') {
+        return ts(b.updated_at) - ts(a.updated_at) || a.name.localeCompare(b.name)
+      }
+      if (sortBy === 'activity') {
+        return (
+          ts(lastRunOf(b.name)?.created_at) - ts(lastRunOf(a.name)?.created_at) ||
+          a.name.localeCompare(b.name)
+        )
+      }
+      const ar = recentRank.get(a.name) ?? Number.POSITIVE_INFINITY
+      const br = recentRank.get(b.name) ?? Number.POSITIVE_INFINITY
+      if (ar !== br) return ar - br
+      return ts(b.updated_at) - ts(a.updated_at) || a.name.localeCompare(b.name)
+    })
+
+    /* Only runs that recorded a project can be opened from here — openRun with
+       no workspace resolves to no path and silently does nothing. Rather than
+       render rows that look clickable and aren't, the untagged ones are counted
+       out loud instead of being quietly dropped. */
+    const feedAll = (allRuns ?? []).filter((r) => r.project)
+    const untagged = (allRuns?.length ?? 0) - feedAll.length
+    const feed = activityFilter === 'failed' ? feedAll.filter((r) => isFailed(r.status)) : feedAll
+    const failedCount = feedAll.filter((r) => isFailed(r.status)).length
+    const newestRun = feedAll[0]
+
+    const statTile = (
+      label: string,
+      value: React.ReactNode,
+      hint?: string,
+      onClick?: () => void,
+      active?: boolean,
+    ) => {
+      const body = (
+        <>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+            {label}
+          </div>
+          <div className="mt-1 text-[22px] font-semibold leading-none text-ink-950">{value}</div>
+          {hint ? <div className="mt-1 text-[11px] text-ink-500">{hint}</div> : null}
+        </>
+      )
+      const base = 'rounded-2xl border bg-white p-3.5 text-left shadow-sm transition'
+      return onClick ? (
+        <button
+          type="button"
+          onClick={onClick}
+          aria-pressed={active}
+          className={`${base} ${active ? 'border-accent-400 ring-1 ring-accent-200' : 'border-ink-200/80 hover:border-accent-300'}`}
+        >
+          {body}
+        </button>
+      ) : (
+        <div className={`${base} border-ink-200/80`}>{body}</div>
+      )
+    }
+
+    const statusChip = (raw: unknown) => {
+      const s = normalizeProjectStatus(raw)
+      /* Every project is "draft" until someone changes it, so badging all 30 of
+         them printed the same word 30 times and told you nothing. Only the
+         statuses that actually distinguish a workspace earn the pixels. */
+      if (s === 'draft') return null
+      return (
+        <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-ink-600">
+          {s}
+        </span>
+      )
+    }
+
+    const cardMenuFor = (p: Project) => (
+      /* Every row's trigger sits in its own `relative` wrapper. They all shared
+         one z-index, so an open menu was painted UNDER the wrappers of the rows
+         below it (later siblings win at equal z) — the neighbouring ⋯ buttons
+         showed straight through the menu and it read as garbled. The open one
+         has to outrank its siblings, not just its own contents. */
+      <div
+        className={`relative shrink-0 ${cardMenu === p.name ? 'z-40' : 'z-10'}`}
+        ref={cardMenu === p.name ? cardMenuRef : undefined}
+      >
+        <button
+          type="button"
+          className="btn-icon"
+          aria-label={`More actions for ${p.name}`}
+          aria-expanded={cardMenu === p.name}
+          aria-haspopup="menu"
+          onClick={(e) => {
+            if (cardMenu === p.name) {
+              setCardMenu(null)
+              return
+            }
+            /* Open upwards near the bottom of the viewport — on the last rows of
+               a 30-workspace list the menu was cut off by the window edge and
+               Clone/Delete were unreachable. */
+            const rect = e.currentTarget.getBoundingClientRect()
+            setMenuUp(window.innerHeight - rect.bottom < MENU_HEIGHT_PX)
+            setCardMenu(p.name)
+          }}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </button>
+        {cardMenu === p.name && (
+          <div
+            role="menu"
+            className={`absolute right-0 z-40 w-52 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft ${
+              menuUp ? 'bottom-full mb-1' : 'top-full mt-1'
+            }`}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full rounded-md px-2 py-1.5 text-left text-[12px] text-ink-800 hover:bg-ink-50"
+              onClick={() => {
+                setCardMenu(null)
+                void open(p.name).then(goEditor)
+              }}
+            >
+              Open in Editor
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full rounded-md px-2 py-1.5 text-left text-[12px] text-ink-800 hover:bg-ink-50"
+              onClick={() => {
+                setCardMenu(null)
+                void open(p.name).then(() => goView('runs', { workspaceId: p.name }))
+              }}
+            >
+              View runs
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="block w-full rounded-md px-2 py-1.5 text-left text-[12px] text-ink-800 hover:bg-ink-50"
+              onClick={() => {
+                setCardMenu(null)
+                setCloneDialog({ from: p.name, to: `${p.name}-copy` })
+              }}
+            >
+              Clone…
+            </button>
+            <div className="mt-1 border-t border-ink-100 pt-1">
+              <ConfirmButton
+                label="Delete"
+                confirmLabel={`Delete ${p.name}?`}
+                danger
+                className="w-full justify-start"
+                onConfirm={() => {
+                  setCardMenu(null)
+                  void removeProject(p.name)
+                }}
               />
-              <button type="button" className="btn-primary !px-2 !py-1 text-[11px]" onClick={() => void create()}>
-                New
+            </div>
+          </div>
+        )}
+      </div>
+    )
+
+    /* Last run, rendered identically in card and row layouts. Clicking it opens
+       that run directly instead of making you open the workspace and find it. */
+    const lastRunLine = (p: Project) => {
+      const r = lastRunOf(p.name)
+      if (!allRuns) return <span className="text-[12px] text-ink-300">Loading activity…</span>
+      if (!r) return <span className="text-[12px] text-ink-400">No runs in recent history</span>
+      return (
+        <button
+          type="button"
+          className="relative z-10 flex min-w-0 items-center gap-1.5 text-left text-[12px] text-ink-600 hover:text-accent-800"
+          title={`Open run ${r.run_id}`}
+          onClick={() => useAppStore.getState().openRun(r.run_id, { project: p.name })}
+        >
+          <span
+            aria-hidden
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+              isFailed(r.status)
+                ? 'bg-rose-500'
+                : /complete|succe/i.test(r.status || '')
+                  ? 'bg-emerald-500'
+                  : 'bg-amber-500'
+            }`}
+          />
+          <span className="min-w-0 truncate">
+            {r.graph_name || shortRunId(r.run_id)} · {formatRelativeTime(r.created_at)}
+          </span>
+        </button>
+      )
+    }
+
+    const metaLine = (p: Project) => {
+      const versionCount = Array.isArray(p.versions) ? p.versions.length : 0
+      const runCount = runsByProject.get(p.name)?.length ?? 0
+      const bits: string[] = []
+      if (runCount) bits.push(`${runCount} recent run${runCount === 1 ? '' : 's'}`)
+      if (versionCount) bits.push(`${versionCount} dataset version${versionCount === 1 ? '' : 's'}`)
+      if (p.updated_at) bits.push(`updated ${formatRelativeTime(p.updated_at)}`)
+      return bits.length ? bits.join(' · ') : 'No pipelines or runs yet'
+    }
+
+    return (
+      <div className="h-full min-h-0 overflow-y-auto">
+        <div className="mx-auto max-w-[92rem] space-y-6 px-6 py-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-type-page text-ink-950">Workspaces</h1>
+              <p className="mt-1 max-w-2xl text-type-body text-ink-500">
+                Every project on this API. A workspace holds its own pipelines, linked datasets and
+                run history — Editor and Runs stay greyed out in the sidebar until one is open.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="btn-quiet"
+                onClick={() => {
+                  void load()
+                  void loadAllRuns()
+                }}
+              >
+                <RefreshCw className="h-3.5 w-3.5" /> Refresh
+              </button>
+              <button type="button" className="btn-secondary" onClick={goTemplates}>
+                <LayoutTemplate className="h-3.5 w-3.5" /> Browse templates
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openData({ mode: 'inputs' })}
+              >
+                <Database className="h-3.5 w-3.5" /> Browse datasets
               </button>
             </div>
-            <input
-              value={projectFilter}
-              onChange={(e) => setProjectFilter(e.target.value)}
-              placeholder="Filter…"
-              aria-label="Filter projects"
-              className="w-full rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px]"
+          </div>
+
+          {error && (
+            <ErrorBanner
+              message={error}
+              onRetry={() => void load()}
+              actions={
+                authBlocked ? (
+                  <button type="button" className="btn-primary" onClick={() => setSettingsOpen(true)}>
+                    Settings
+                  </button>
+                ) : undefined
+              }
             />
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {statTile(
+              'Workspaces',
+              loading || projects == null ? '—' : list.length,
+              recentNames.length ? `${recentNames.length} opened recently` : 'None opened yet',
+            )}
+            {statTile(
+              'Active',
+              allRuns ? runsByProject.size : '—',
+              'with runs in recent history',
+            )}
+            {statTile(
+              'Failed runs',
+              allRuns ? failedCount : '—',
+              failedCount
+                ? activityFilter === 'failed'
+                  ? 'Showing only these — click to clear'
+                  : 'Click to filter activity'
+                : 'Nothing failing',
+              failedCount ? () => setActivityFilter((f) => (f === 'failed' ? 'all' : 'failed')) : undefined,
+              activityFilter === 'failed',
+            )}
+            {statTile(
+              'Last activity',
+              newestRun ? formatRelativeTime(newestRun.created_at) : allRuns ? 'None' : '—',
+              newestRun?.project ? `in ${newestRun.project}` : undefined,
+            )}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
-            {error && (
-              <div className="mb-2 px-1">
-                <ErrorBanner
-                  message={error}
-                  onRetry={() => void load()}
-                  actions={
-                    authBlocked ? (
-                      <button type="button" className="btn-primary" onClick={() => setSettingsOpen(true)}>
-                        Settings
-                      </button>
-                    ) : undefined
-                  }
+
+          {/* Creating a workspace was a bare text box in a sidebar gutter. It is
+              the primary action of this page, so it looks like one. */}
+          <div className="rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="min-w-[14rem] flex-1 text-[12px] font-medium text-ink-600">
+                New workspace
+                <input
+                  ref={nameRef}
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="my-pipeline-project"
+                  className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+                  onKeyDown={(e) => e.key === 'Enter' && void create()}
                 />
-              </div>
-            )}
-            {loading || projects == null ? (
-              <LoadingBlock label="Loading…" />
-            ) : projects.length === 0 ? (
-              <p className="px-2 py-4 text-[12px] text-ink-500">
-                {authBlocked ? 'Sign in via Settings to list projects.' : 'No projects yet — create one above.'}
-              </p>
-            ) : filteredProjects.length === 0 ? (
-              <p className="px-2 py-4 text-[12px] text-ink-500">No matches for “{projectFilter.trim()}”.</p>
-            ) : (
-              <ul className="space-y-0.5">
-                {filteredProjects.map((p) => (
-                  <li key={p.name}>
-                    <button type="button" onClick={() => void open(p.name)} className="ide-row w-full">
-                      <span className="min-w-0 flex-1 truncate font-medium text-ink-900">{p.name}</span>
-                      <span className="shrink-0 text-[10px] uppercase tracking-wide text-ink-400">
-                        {normalizeProjectStatus(p.status)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <div className="border-t border-ink-200/60 p-2">
-            <button type="button" className="ide-quiet-btn w-full justify-center" onClick={() => void load()}>
-              <RefreshCw className="h-3 w-3" /> Refresh
-            </button>
-          </div>
-        </aside>
-        <main className="flex min-w-0 flex-1 flex-col items-center justify-center px-8">
-          <div className="max-w-md text-center">
-            <h1 className="text-type-page text-ink-950">Open a workspace</h1>
-            <p className="mt-2 text-type-body text-ink-500">
-              Pick a project on the left. Home, Editor, and Runs appear in the activity bar once a workspace is open.
+              </label>
+              <button
+                type="button"
+                className="btn-primary mb-px"
+                disabled={!newName.trim()}
+                title={!newName.trim() ? 'Type a name first' : `Create ${newName.trim()}`}
+                onClick={() => void create()}
+              >
+                <Plus className="h-3.5 w-3.5" /> Create workspace
+              </button>
+            </div>
+            <p className="mt-2 text-[12px] text-ink-400">
+              Created empty and opened immediately. Templates and Datasets are shared across
+              workspaces, so you can look at those before picking one.
             </p>
-            <ol className="mt-6 space-y-2 text-left text-[13px] text-ink-600">
-              <li className="flex gap-2"><span className="font-mono text-ink-400">1</span> Open or create a project</li>
-              <li className="flex gap-2"><span className="font-mono text-ink-400">2</span> Start from a template or build in Editor</li>
-              <li className="flex gap-2"><span className="font-mono text-ink-400">3</span> Run from Editor, then inspect Run outputs and Lineage under Runs</li>
-            </ol>
-            <button type="button" className="btn-secondary mt-6" onClick={() => openData({ mode: 'inputs' })}>
-              Browse Datasets
-            </button>
           </div>
-        </main>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[13rem] flex-1 sm:max-w-sm">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+              <input
+                value={projectFilter}
+                onChange={(e) => setProjectFilter(e.target.value)}
+                placeholder="Search workspaces"
+                aria-label="Search workspaces"
+                className="w-full rounded-lg border border-ink-200 bg-white py-1.5 pl-8 pr-2 text-sm"
+              />
+            </div>
+            <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
+              Sort
+              <select
+                className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
+                value={sortBy}
+                onChange={(e) => setSortPref(e.target.value as WorkspaceSort)}
+              >
+                {(Object.keys(SORT_LABEL) as WorkspaceSort[]).map((k) => (
+                  <option key={k} value={k}>
+                    {SORT_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex overflow-hidden rounded-md border border-ink-200">
+              <button
+                type="button"
+                className={`px-2 py-1 ${!dense ? 'bg-ink-100 text-ink-900' : 'bg-white text-ink-500 hover:text-ink-800'}`}
+                aria-pressed={!dense}
+                title="Card view"
+                onClick={() => setDensePref(false)}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                className={`border-l border-ink-200 px-2 py-1 ${dense ? 'bg-ink-100 text-ink-900' : 'bg-white text-ink-500 hover:text-ink-800'}`}
+                aria-pressed={dense}
+                title="Compact list"
+                onClick={() => setDensePref(true)}
+              >
+                <Rows3 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <span className="text-[12px] text-ink-400">
+              {loading || projects == null
+                ? 'Loading…'
+                : `${sorted.length}${sorted.length === list.length ? '' : ` of ${list.length}`} shown`}
+            </span>
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_21rem]">
+            <section className="min-w-0">
+              {loading || projects == null ? (
+                <LoadingBlock label="Loading workspaces…" />
+              ) : list.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-ink-300 bg-white px-6 py-10 text-center">
+                  <h2 className="text-base font-semibold text-ink-950">No workspaces yet</h2>
+                  <p className="mx-auto mt-1 max-w-md text-[13px] text-ink-500">
+                    {authBlocked
+                      ? 'Sign in via Settings to list workspaces.'
+                      : 'Create one above to start building pipelines, or open a template to see how one is put together.'}
+                  </p>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => nameRef.current?.focus()}
+                    >
+                      <Plus className="h-3.5 w-3.5" /> New workspace
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={goTemplates}>
+                      Browse templates
+                    </button>
+                  </div>
+                </div>
+              ) : sorted.length === 0 ? (
+                <div className="rounded-2xl border border-ink-200/80 bg-white px-6 py-10 text-center">
+                  <p className="text-[13px] text-ink-600">
+                    No workspaces match “{projectFilter.trim()}”.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-secondary mt-3"
+                    onClick={() => setProjectFilter('')}
+                  >
+                    Clear search
+                  </button>
+                </div>
+              ) : dense ? (
+                <ul className="divide-y divide-ink-100 overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
+                  {sorted.map((p) => (
+                    <li
+                      key={p.name}
+                      className="group relative flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 transition hover:bg-ink-50/70"
+                    >
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-ink-900 after:absolute after:inset-0 after:content-[''] group-hover:text-accent-800"
+                        onClick={() => void open(p.name)}
+                      >
+                        {p.name}
+                      </button>
+                      {recentRank.has(p.name) ? (
+                        <Clock className="h-3 w-3 shrink-0 text-ink-300" aria-label="Opened recently" />
+                      ) : null}
+                      {statusChip(p.status)}
+                      <div className="hidden min-w-0 max-w-[16rem] flex-1 sm:block">
+                        {lastRunLine(p)}
+                      </div>
+                      <span className="hidden shrink-0 text-[11px] text-ink-400 lg:inline">
+                        {p.updated_at ? `updated ${formatRelativeTime(p.updated_at)}` : ''}
+                      </span>
+                      {cardMenuFor(p)}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <ul className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                  {sorted.map((p) => (
+                    <li
+                      key={p.name}
+                      className="group relative flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm transition hover:border-accent-300 hover:shadow-soft"
+                    >
+                      <div className="flex items-start gap-2">
+                        <div className="min-w-0 flex-1">
+                          {/* Stretched-link pattern: the title is the real button
+                              and its ::after covers the card, so the whole card is
+                              clickable without nesting interactive elements. */}
+                          <button
+                            type="button"
+                            className="block w-full truncate text-left text-[14px] font-semibold text-ink-950 after:absolute after:inset-0 after:content-[''] group-hover:text-accent-800"
+                            title={p.name}
+                            onClick={() => void open(p.name)}
+                          >
+                            {p.name}
+                          </button>
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            {recentRank.has(p.name) ? (
+                              <span className="inline-flex items-center gap-1 rounded-md bg-accent-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-accent-800">
+                                <Clock className="h-2.5 w-2.5" /> Recent
+                              </span>
+                            ) : null}
+                            {statusChip(p.status)}
+                          </div>
+                        </div>
+                        {cardMenuFor(p)}
+                      </div>
+                      <div className="mt-3 border-t border-ink-100 pt-2.5">
+                        {lastRunLine(p)}
+                        <p className="mt-1 truncate text-[11px] text-ink-400" title={metaLine(p)}>
+                          {metaLine(p)}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            {/* Activity across every workspace — previously you had to open each
+                one in turn to discover that something had failed in it. */}
+            {/* Sticky: the workspace list is 30 rows tall and the rail is short, so
+                it scrolled out of view almost immediately and the cross-workspace
+                activity — the reason the rail exists — was only visible at the top
+                of the page. */}
+            <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start">
+              <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white shadow-sm">
+                <div className="flex items-center justify-between gap-2 border-b border-ink-100 px-4 py-3">
+                  <div className="ide-section-title">Recent activity</div>
+                  <div className="flex overflow-hidden rounded-md border border-ink-200 text-[11px]">
+                    {(['all', 'failed'] as const).map((f) => (
+                      <button
+                        key={f}
+                        type="button"
+                        className={`px-2 py-0.5 capitalize ${
+                          activityFilter === f
+                            ? 'bg-ink-100 text-ink-900'
+                            : 'bg-white text-ink-500 hover:text-ink-800'
+                        } ${f === 'failed' ? 'border-l border-ink-200' : ''}`}
+                        aria-pressed={activityFilter === f}
+                        onClick={() => setActivityFilter(f)}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {allRuns == null ? (
+                  <div className="px-4 py-5">
+                    <LoadingBlock label="Loading activity…" />
+                  </div>
+                ) : feed.length === 0 ? (
+                  <p className="px-4 py-5 text-[12px] text-ink-500">
+                    {activityFilter === 'failed'
+                      ? 'No failed runs in recent history.'
+                      : 'No runs recorded against a workspace yet.'}
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-ink-100">
+                    {feed.slice(0, 14).map((r) => (
+                      <li key={r.run_id}>
+                        <button
+                          type="button"
+                          className="ide-row w-full items-start px-3 py-2"
+                          onClick={() =>
+                            useAppStore.getState().openRun(r.run_id, { project: r.project })
+                          }
+                        >
+                          <span
+                            aria-hidden
+                            className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
+                              isFailed(r.status)
+                                ? 'bg-rose-500'
+                                : /complete|succe/i.test(r.status || '')
+                                  ? 'bg-emerald-500'
+                                  : 'bg-amber-500'
+                            }`}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[12px] font-medium text-ink-900">
+                              {r.graph_name || shortRunId(r.run_id)}
+                            </span>
+                            <span className="block truncate text-[11px] text-ink-500">
+                              {r.project} · {formatRelativeTime(r.created_at)}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {untagged > 0 && (
+                  <p className="border-t border-ink-100 px-4 py-2 text-[11px] text-ink-400">
+                    {untagged} run{untagged === 1 ? '' : 's'} not tagged with a workspace are hidden
+                    — they can't be opened from here.
+                  </p>
+                )}
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        {cloneDialog && (
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-ink-950/40 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clone-ws-title"
+            onClick={() => setCloneDialog(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-ink-200 bg-white p-5 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 id="clone-ws-title" className="text-lg font-semibold text-ink-950">
+                Clone {cloneDialog.from}
+              </h2>
+              <p className="mt-1 text-sm text-ink-500">
+                Copies the workspace's pipelines and metadata under a new name. Run history is not
+                copied.
+              </p>
+              <label className="mt-4 block text-sm text-ink-600">
+                New workspace name
+                <input
+                  autoFocus
+                  className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+                  value={cloneDialog.to}
+                  onChange={(e) => setCloneDialog({ ...cloneDialog, to: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || !cloneDialog.to.trim()) return
+                    const { from, to } = cloneDialog
+                    setCloneDialog(null)
+                    void cloneProject(from, to.trim())
+                  }}
+                />
+              </label>
+              <div className="mt-4 flex justify-end gap-2">
+                <button type="button" className="btn-secondary" onClick={() => setCloneDialog(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={!cloneDialog.to.trim() || cloneDialog.to.trim() === cloneDialog.from}
+                  title={
+                    !cloneDialog.to.trim()
+                      ? 'Enter a name first'
+                      : cloneDialog.to.trim() === cloneDialog.from
+                        ? 'Pick a different name for the copy'
+                        : undefined
+                  }
+                  onClick={() => {
+                    const { from, to } = cloneDialog
+                    setCloneDialog(null)
+                    void cloneProject(from, to.trim())
+                  }}
+                >
+                  Clone
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -845,25 +1589,43 @@ export default function ProjectsView() {
             <button type="button" className="btn-secondary" onClick={goTemplates}>
               From template
             </button>
-            {lastRun ? (
-              <button type="button" className="btn-secondary" onClick={openLastRun}>
-                <History className="h-3.5 w-3.5" /> Last run
-              </button>
-            ) : null}
+            {/* "Last run" lived here as well as in the metrics line below and in the
+                header's own run chip — three controls for one run on one screen. The
+                metrics entry wins: it shows the status and id, not just a label. */}
             <button type="button" className="btn-icon" aria-label="Refresh" onClick={() => void open(selected)}>
               <RefreshCw className="h-4 w-4" />
             </button>
           </div>
         </div>
-        {/* L0 — compact metrics (status already in subtitle) */}
+        {/* L0 — compact metrics (status already in subtitle). Every entry links to
+            the section it summarises; a stat that reads like a link and isn't one is
+            worse than no stat. */}
         <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink-600">
           <div className="flex gap-1.5">
             <dt className="text-ink-400">Pipelines</dt>
-            <dd className="font-medium text-ink-800">{projectPipelines.length}</dd>
+            <dd>
+              <button
+                type="button"
+                className="font-medium text-accent-800 hover:underline"
+                title="Jump to the Continue list"
+                onClick={() => jumpToCard('continue')}
+              >
+                {projectPipelines.length}
+              </button>
+            </dd>
           </div>
           <div className="flex gap-1.5">
             <dt className="text-ink-400">Pinned inputs</dt>
-            <dd className="font-medium text-ink-800">{links.inputs.length}</dd>
+            <dd>
+              <button
+                type="button"
+                className="font-medium text-accent-800 hover:underline"
+                title="Jump to Linked inputs"
+                onClick={() => jumpToCard('inputs')}
+              >
+                {links.inputs.length}
+              </button>
+            </dd>
           </div>
           <div className="flex gap-1.5">
             <dt className="text-ink-400">Last run</dt>
@@ -891,7 +1653,7 @@ export default function ProjectsView() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto max-w-3xl space-y-6">
+        <div className="mx-auto max-w-6xl space-y-6">
           {openError && <ErrorBanner message={openError} onRetry={() => void open(selected)} />}
 
           {workspaceEmpty && !openError && !opening ? (
@@ -917,14 +1679,62 @@ export default function ProjectsView() {
             </section>
           ) : null}
 
-          <p className="text-[12px] text-ink-500">
-            <span className="font-medium text-ink-700">Pipelines:</span> Templates are starters · Project pipelines are the canonical saved graphs · Editor edits the active graph.
-          </p>
+          {!pipelinesHintDismissed ? (
+            <div
+              role="note"
+              className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-[12px] leading-relaxed text-ink-700"
+            >
+              <p>
+                <strong className="font-medium text-ink-900">Pipelines:</strong> Templates are starters
+                · Project pipelines are the canonical saved graphs · Editor edits the active graph.
+              </p>
+              <button
+                type="button"
+                className="shrink-0 text-[11px] font-semibold text-ink-500 hover:text-ink-800"
+                onClick={() => {
+                  try {
+                    localStorage.setItem('graphyn.home.pipelinesHint', '1')
+                  } catch {
+                    /* ignore */
+                  }
+                  setPipelinesHintDismissed(true)
+                }}
+              >
+                Got it
+              </button>
+            </div>
+          ) : null}
 
           {/* Activity feed */}
           <section>
-            <div className="ide-section-title mb-2">Activity</div>
-            <p className="mb-2 text-[12px] text-ink-500">Recent runs — click a row to open it.</p>
+            {/* Activity was the one section with no way out of it: eight rows, then
+                nothing. Runs (full history + filters) and Artifacts (what those runs
+                produced) are both one click from here now. */}
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="ide-section-title">Activity</div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="ide-quiet-btn text-[11px]"
+                  onClick={() => useAppStore.getState().openArtifacts({ project: selected })}
+                >
+                  Browse artifacts
+                </button>
+                <button
+                  type="button"
+                  className="ide-quiet-btn text-[11px]"
+                  onClick={() => goView('runs')}
+                >
+                  View all in Runs
+                  <ChevronRight className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+            <p className="mb-2 text-[12px] text-ink-500">
+              {recentRuns.length >= 8
+                ? 'Latest 8 runs — click a row to open it, or View all in Runs for the full history.'
+                : 'Recent runs — click a row to open it.'}
+            </p>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
               {opening ? (
                 <div className="px-4 py-5 text-[13px] text-ink-400">Loading…</div>
@@ -946,7 +1756,7 @@ export default function ProjectsView() {
                           {r.run_id.slice(0, 10)}…
                           {r.graph_name ? ` · ${r.graph_name}` : ''}
                         </span>
-                        <span className="text-[11px] text-ink-400">{r.status || ''}</span>
+                        {r.status ? <StatusBadge status={r.status} /> : null}
                       </button>
                     </li>
                   ))}
@@ -973,9 +1783,23 @@ export default function ProjectsView() {
             </div>
           </section>
 
+          {/* Continue / Always-on / Linked inputs sit side-by-side on wide screens instead of
+              stacking full-width one after another — this is a dashboard, not a document. */}
+          <div className="grid gap-4 lg:grid-cols-3">
           {/* Layer 1 — continue work */}
-          <section>
-            <div className="ide-section-title mb-2">Continue</div>
+          <section
+            ref={continueRef}
+            className={`flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm transition ${cardRing('continue')}`}
+          >
+            {/* Every card header now has the same shape — title left, one cross-link
+                right — instead of Continue having none, Always-on having one and
+                Linked inputs having an action plus a stat. */}
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="ide-section-title">Continue</div>
+              <button type="button" className="ide-quiet-btn text-[11px]" onClick={goEditor}>
+                Open Editor
+              </button>
+            </div>
             <p className="mb-2 text-[12px] text-ink-500">Open a pipeline in the Editor to keep working.</p>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
               {opening ? (
@@ -1101,7 +1925,7 @@ export default function ProjectsView() {
           </section>
 
           {/* Always-on — schedules filtered by project when possible */}
-          <section className="ide-section">
+          <section className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="ide-section-title">Always-on</div>
               <button
@@ -1167,22 +1991,24 @@ export default function ProjectsView() {
           </section>
 
           {/* Layer 2 — linked data (compact) */}
-          <section className="ide-section">
+          <section
+            ref={inputsRef}
+            className={`flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm transition ${cardRing('inputs')}`}
+          >
+            {/* This card is entirely about Datasets input labels, yet its header
+                action went to Artifacts (run *outputs*) while the Datasets link was
+                buried as a tertiary button below the form. Swapped: the header links
+                where the card points, and Artifacts moved up to Activity where the
+                runs that produce them live. */}
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="ide-section-title">Linked inputs</div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="ide-quiet-btn text-[11px]"
-                  onClick={() => useAppStore.getState().openArtifacts({ project: selected })}
-                >
-                  Browse Artifacts
-                </button>
-                <span className="text-type-meta text-ink-400">
-                  {links.inputs.length} pinned
-                  {versionOptions.length ? ` · ${versionOptions.length} output version${versionOptions.length === 1 ? '' : 's'}` : ''}
-                </span>
-              </div>
+              <button
+                type="button"
+                className="ide-quiet-btn text-[11px]"
+                onClick={() => openData({ mode: 'inputs' })}
+              >
+                Open Datasets
+              </button>
             </div>
             <p className="mb-2 text-[12px] text-ink-500">
               Pin Datasets input labels here so Editor runs know which folders to use. Completing a run does not auto-link.
@@ -1207,13 +2033,8 @@ export default function ProjectsView() {
                 onConfirm={() => void linkInput()}
                 disabled={!linkPick || links.inputs.includes(linkPick)}
               />
-              <button
-                type="button"
-                className="ide-quiet-btn"
-                onClick={() => openData({ mode: 'inputs' })}
-              >
-                Browse library
-              </button>
+              {/* "Browse library" removed — it opened the same Datasets Inputs view
+                  as the card header's "Open Datasets", one row apart. */}
             </div>
             {links.inputs.length === 0 && (
               <p className="mt-2 rounded-lg border border-dashed border-ink-200 bg-ink-50/50 px-3 py-2 text-[12px] text-ink-600">
@@ -1240,19 +2061,35 @@ export default function ProjectsView() {
               </ul>
             )}
           </section>
+          </div>
 
-          {/* Layer 3 — advanced (collapsed by default) */}
+          {/* Layer 3 — advanced (collapsed by default).
+              These two drawers were bare `border-t` rows on the page background while
+              everything above them was a white card, so they read as page footer
+              rather than content and were easy to scroll past without registering.
+              They get the same card chrome as the rest of the dashboard, and their
+              summaries say what is inside before you open them. */}
           <details
-            className="ide-section group"
+            className="group overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm"
             open={datasetOpen}
             onToggle={(e) => setDatasetOpen((e.currentTarget as HTMLDetailsElement).open)}
           >
-            <summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-medium text-ink-700 hover:text-ink-950">
-              <ChevronRight className="h-4 w-4 text-ink-400 transition group-open:rotate-90" />
-              Spec & metadata
-              <span className="font-normal text-ink-400">spec, taxonomy, contract, versions…</span>
+            <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-3 text-[13px] font-medium text-ink-800 hover:bg-ink-50/70">
+              <ChevronRight className="h-4 w-4 shrink-0 text-ink-400 transition group-open:rotate-90" />
+              Spec &amp; metadata
+              <span className="font-normal text-ink-400">
+                spec, taxonomy, contract, dataset versions, snapshots, diff
+              </span>
+              <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-ink-500">
+                <span className="rounded-md bg-ink-100 px-1.5 py-0.5">
+                  {versions.length} version{versions.length === 1 ? '' : 's'}
+                </span>
+                <span className="rounded-md bg-ink-100 px-1.5 py-0.5">
+                  {snapshots.length} snapshot{snapshots.length === 1 ? '' : 's'}
+                </span>
+              </span>
             </summary>
-            <div className="mt-3 space-y-3 pl-1">
+            <div className="space-y-3 border-t border-ink-100 px-4 pb-4 pt-3">
               <div className="flex flex-wrap gap-1 border-b border-ink-100 pb-2">
                 {(
                   [
@@ -1295,15 +2132,23 @@ export default function ProjectsView() {
               )}
               {tab === 'versions' && (
                 <section className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    <select value={versionFocus} onChange={(e) => setVersionFocus(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
-                      {versionOptions.map((v) => (
-                        <option key={v} value={v}>{v}</option>
-                      ))}
-                    </select>
-                    <button type="button" className="btn-secondary" onClick={() => void loadVersionDetail()}>Load stats</button>
-                    <ConfirmButton label="Restore" confirmLabel={`Restore ${versionFocus}?`} onConfirm={() => void restoreVersion()} />
-                  </div>
+                  {/* Load stats / Restore both silently no-op on an empty versionFocus (the
+                      handlers guard on it), but with zero versions the select has nothing to
+                      pick — showing them anyway meant a user could click "Restore" with nothing
+                      selected and see it arm into the literal, broken-looking "Restore ?" (the
+                      version name interpolates to nothing). Only show this toolbar once there's
+                      something in it to select. */}
+                  {versions.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      <select value={versionFocus} onChange={(e) => setVersionFocus(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
+                        {versionOptions.map((v) => (
+                          <option key={v} value={v}>{v}</option>
+                        ))}
+                      </select>
+                      <button type="button" className="btn-secondary" onClick={() => void loadVersionDetail()}>Load stats</button>
+                      <ConfirmButton label="Restore" confirmLabel={`Restore ${versionFocus}?`} onConfirm={() => void restoreVersion()} />
+                    </div>
+                  )}
                   {versions.length === 0 ? (
                     <p className="text-[13px] text-ink-500">No versions yet — run a pipeline that writes dataset output.</p>
                   ) : (
@@ -1317,7 +2162,15 @@ export default function ProjectsView() {
                 <section className="space-y-3">
                   <div className="flex gap-2">
                     <input id="snapshot-name" value={snapshotName} onChange={(e) => setSnapshotName(e.target.value)} placeholder="snapshot-name" className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]" />
-                    <button type="button" className="btn-secondary" onClick={() => void createSnapshot()}>Create</button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!snapshotName.trim()}
+                      title={!snapshotName.trim() ? 'Type a snapshot name first' : undefined}
+                      onClick={() => void createSnapshot()}
+                    >
+                      Create
+                    </button>
                   </div>
                   {snapshots.length === 0 ? (
                     <p className="text-[13px] text-ink-500">No snapshots.</p>
@@ -1341,20 +2194,26 @@ export default function ProjectsView() {
               )}
               {tab === 'diff' && (
                 <section className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    <select value={diffA} onChange={(e) => setDiffA(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
-                      {versionOptions.map((v) => (
-                        <option key={`a-${v}`} value={v}>{v}</option>
-                      ))}
-                    </select>
-                    <span className="self-center text-[12px] text-ink-400">vs</span>
-                    <select value={diffB} onChange={(e) => setDiffB(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
-                      {versionOptions.map((v) => (
-                        <option key={`b-${v}`} value={v}>{v}</option>
-                      ))}
-                    </select>
-                    <button type="button" className="btn-secondary" onClick={() => void runDiff()}>Diff</button>
-                  </div>
+                  {/* Needs two versions to compare — with fewer, the selects have nothing
+                      meaningful to offer and "Diff" would fire with empty version_a/version_b. */}
+                  {versionOptions.length >= 2 ? (
+                    <div className="flex flex-wrap gap-2">
+                      <select value={diffA} onChange={(e) => setDiffA(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
+                        {versionOptions.map((v) => (
+                          <option key={`a-${v}`} value={v}>{v}</option>
+                        ))}
+                      </select>
+                      <span className="self-center text-[12px] text-ink-400">vs</span>
+                      <select value={diffB} onChange={(e) => setDiffB(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1.5 text-[12px]">
+                        {versionOptions.map((v) => (
+                          <option key={`b-${v}`} value={v}>{v}</option>
+                        ))}
+                      </select>
+                      <button type="button" className="btn-secondary" onClick={() => void runDiff()}>Diff</button>
+                    </div>
+                  ) : (
+                    <p className="text-[13px] text-ink-500">Need at least 2 dataset versions to diff — run a pipeline that writes dataset output more than once.</p>
+                  )}
                   {diffResult != null && <KeyValue data={diffResult} />}
                   {(() => {
                     const ids = lineageIds(lineage)
@@ -1382,35 +2241,113 @@ export default function ProjectsView() {
             </div>
           </details>
 
-          {/* Layer 4 — settings */}
-          <details className="ide-section group">
-            <summary className="flex cursor-pointer list-none items-center gap-2 text-[13px] font-medium text-ink-700 hover:text-ink-950">
-              <ChevronRight className="h-4 w-4 text-ink-400 transition group-open:rotate-90" />
+          {/* Layer 4 — settings.
+              Was a single undifferentiated flex row: a status select, two bare text
+              inputs whose only labels were `aria-label` (so sighted users saw two
+              identical prefilled boxes and had to infer which was Rename and which
+              was Clone from the button beside it), and Delete sitting in the same
+              row as everything else. Each action is now its own labelled row, and
+              the destructive one is separated out. */}
+          <details className="group overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
+            <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-3 text-[13px] font-medium text-ink-800 hover:bg-ink-50/70">
+              <ChevronRight className="h-4 w-4 shrink-0 text-ink-400 transition group-open:rotate-90" />
               Project settings
+              <span className="font-normal text-ink-400">status, rename, clone, delete</span>
+              <span className="ml-auto shrink-0 rounded-md bg-ink-100 px-1.5 py-0.5 text-[11px] text-ink-500">
+                {statusVal}
+              </span>
             </summary>
-            <div className="mt-3 flex flex-wrap items-center gap-2 pl-1">
-              <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
-                Status
-                <select
-                  className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
-                  value={statusVal}
-                  onChange={(e) => void setStatus(e.target.value)}
-                >
-                  {STATUSES.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </label>
-              <input value={renameTo} onChange={(e) => setRenameTo(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1 text-[12px]" aria-label="Rename to" />
-              <button type="button" className="btn-secondary" onClick={() => void rename()}>
-                <Pencil className="h-3.5 w-3.5" /> Rename
-              </button>
-              <input value={cloneTo} onChange={(e) => setCloneTo(e.target.value)} className="rounded-md border border-ink-200 px-2 py-1 text-[12px]" aria-label="Clone as" />
-              <button type="button" className="btn-secondary" onClick={() => void clone()}>
-                <Copy className="h-3.5 w-3.5" /> Clone
-              </button>
-              <button type="button" className="btn-secondary" onClick={useInEdge}>Use in Ship</button>
-              <ConfirmButton label="Delete" confirmLabel={`Delete ${selected}?`} danger onConfirm={() => void remove()} />
+            <div className="border-t border-ink-100 px-4 pb-4 pt-3">
+              <div className="grid gap-3 sm:max-w-xl">
+                <label className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-[12px] text-ink-500">
+                  Status
+                  <select
+                    className="w-full rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
+                    value={statusVal}
+                    onChange={(e) => void setStatus(e.target.value)}
+                  >
+                    {STATUSES.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-[12px] text-ink-500">
+                  <label htmlFor="ws-rename-to">Rename to</label>
+                  <div className="flex min-w-0 gap-2">
+                    <input
+                      id="ws-rename-to"
+                      value={renameTo}
+                      onChange={(e) => setRenameTo(e.target.value)}
+                      className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-[12px]"
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary shrink-0"
+                      disabled={!renameTo.trim() || renameTo.trim() === selected}
+                      title={
+                        !renameTo.trim()
+                          ? 'Enter a name first'
+                          : renameTo.trim() === selected
+                            ? 'That is already the current name'
+                            : undefined
+                      }
+                      onClick={() => void rename()}
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Rename
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-[12px] text-ink-500">
+                  <label htmlFor="ws-clone-to">Clone as</label>
+                  <div className="flex min-w-0 gap-2">
+                    <input
+                      id="ws-clone-to"
+                      value={cloneTo}
+                      onChange={(e) => setCloneTo(e.target.value)}
+                      className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-[12px]"
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary shrink-0"
+                      disabled={!cloneTo.trim() || cloneTo.trim() === selected}
+                      title={
+                        !cloneTo.trim()
+                          ? 'Enter a name first'
+                          : cloneTo.trim() === selected
+                            ? 'Pick a different name for the copy'
+                            : undefined
+                      }
+                      onClick={() => void clone()}
+                    >
+                      <Copy className="h-3.5 w-3.5" /> Clone
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-[12px] text-ink-500">
+                  <span>Deploy</span>
+                  <div>
+                    <button type="button" className="btn-secondary" onClick={useInEdge}>
+                      Use in Ship
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50/50 px-3 py-2.5">
+                {/* Scope verified against ProjectManager.delete: it rmtree's
+                    workspace/datasets/output/{name} only — artifacts under
+                    workspace/artifacts/{name}/runs are a separate tree and survive. */}
+                <p className="text-[12px] text-rose-900">
+                  <span className="font-medium">Delete this workspace.</span> Removes its pipelines,
+                  spec/taxonomy/contract, links and dataset output versions. Artifacts and run
+                  history are kept.
+                </p>
+                <ConfirmButton
+                  label="Delete"
+                  confirmLabel={`Delete ${selected}?`}
+                  danger
+                  onConfirm={() => void remove()}
+                />
+              </div>
             </div>
           </details>
         </div>

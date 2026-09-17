@@ -174,7 +174,23 @@ def get_input_dataset(label: str):
             if f.lower().endswith(SUPPORTED_AUDIO_EXTENSIONS):
                 abs_path = os.path.join(root, f)
                 rel_path = os.path.relpath(abs_path, input_root).replace("\\", "/")
-                files.append({"path": rel_path, "label": label})
+                entry = {"path": rel_path, "label": label}
+                # Size and mtime come from a stat on a path os.walk has already
+                # surfaced, so the browser can show what a file browser should
+                # show. Previously every record carried only its path plus the
+                # label the caller already asked for, leaving the UI with one
+                # constant column and nothing to sort by. Never fatal: a file
+                # that vanished or is unreadable mid-walk drops its metadata
+                # rather than failing the whole listing.
+                try:
+                    st = os.stat(abs_path)
+                    entry["size_bytes"] = st.st_size
+                    entry["modified_at"] = datetime.fromtimestamp(
+                        st.st_mtime, tz=timezone.utc
+                    ).isoformat()
+                except OSError:
+                    pass
+                files.append(entry)
     return files
 
 

@@ -223,15 +223,29 @@ export async function fetchOutputBlobUrl(filePath: string): Promise<string> {
   return URL.createObjectURL(blob)
 }
 
+function triggerBlobDownload(url: string, filePath: string, filename?: string): void {
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename || filePath.split(/[\\/]/).pop() || 'download'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
 export async function downloadOutputFile(filePath: string, filename?: string): Promise<void> {
   const url = await fetchOutputBlobUrl(filePath)
   try {
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename || filePath.split(/[\\/]/).pop() || 'download'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
+    triggerBlobDownload(url, filePath, filename)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+/** Same as downloadOutputFile but for a jailed input dataset file. */
+export async function downloadInputFile(filePath: string, filename?: string): Promise<void> {
+  const url = await fetchInputBlobUrl(filePath)
+  try {
+    triggerBlobDownload(url, filePath, filename)
   } finally {
     URL.revokeObjectURL(url)
   }

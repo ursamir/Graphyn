@@ -218,6 +218,22 @@ export function formatRelativeTime(iso?: string | null): string {
   return formatLocaleDateTime(iso)
 }
 
+/** Compact file size — "32.0 KB", "5.7 MB". Binary units, matching what a file
+ *  browser reports. Returns '—' for a missing size so callers can render a row
+ *  for a file whose stat failed without special-casing it. */
+export function formatBytes(bytes?: number | null): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`
+}
+
 export function shortRunId(id: string): string {
   if (!id) return '—'
   if (id.length > 12) return id.slice(0, 8)

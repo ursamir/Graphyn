@@ -620,8 +620,12 @@ export default function EdgeWizardView() {
     ) : null
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-6">
+    // Top padding lives on the header, not the scroll container: a sticky child's
+    // `top: 0` resolves against the scrollport's PADDING box, so `p-6` would pin
+    // the lineage bar 24px low and let content scroll through the strip above it.
+    <div className="h-full min-h-0 overflow-y-auto px-6 pb-6 space-y-6">
       <PageHeader
+        className="pt-6"
         title="Ship"
         description="Deploy — package a trained run for on-device delivery, or browse the device fleet."
         actions={

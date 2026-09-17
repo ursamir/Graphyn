@@ -54,6 +54,7 @@ import { resolveLegacyHash } from './routes/legacyHash'
 import { paths } from './routes/paths'
 import { pathForView } from './routes/viewMap'
 import { navigatePath, parsePathname, panelToFocus, stripLegacyAppHash } from './routes/parsePath'
+import { JUMP_KEYS } from './routes/nav'
 
 type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }
 type NavGroup = { title: string; items: NavItem[] }
@@ -149,27 +150,21 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   devices: 'Devices — fleet inventory (API pending)',
 }
 
-const JUMP_KEYS: Record<string, AppView> = {
-  b: 'builder',
-  t: 'templates',
-  p: 'proposals',
-  r: 'runs',
-  o: 'runs',
-  e: 'runs',
-  a: 'artifacts',
-  d: 'data',
-  j: 'projects',
-  g: 'edge',
-  w: 'workers',
-  l: 'plugins',
-  k: 'secrets',
-  s: 'system',
+/** Compact last-run observe control — Trace / Artifacts / Compare live in a menu. (ux-pass) */
+/** Dot colour for a finished run's outcome, folded into the run chip so the
+ *  header doesn't carry a second pill saying the same thing in words. */
+const OUTCOME_DOT: Record<string, string> = {
+  failed: 'bg-rose-500',
+  cancelled: 'bg-ink-400',
+  succeeded: 'bg-emerald-500',
+  running: 'bg-amber-500',
 }
 
-/** Compact last-run observe control — Trace / Artifacts / Compare live in a menu. (ux-pass) */
 function LastRunMenu({
   runId,
   showCompare,
+  outcome,
+  outcomeLabel,
   onOpenRun,
   onOpenTrace,
   onOpenArtifacts,
@@ -177,6 +172,8 @@ function LastRunMenu({
 }: {
   runId: string
   showCompare: boolean
+  outcome?: string | null
+  outcomeLabel?: string | null
   onOpenRun: () => void
   onOpenTrace: () => void
   onOpenArtifacts: () => void
@@ -200,13 +197,24 @@ function LastRunMenu({
     }
   }, [open])
   return (
-    <div ref={rootRef} className="relative flex items-center gap-0.5" title={`Last run ${runId}`}>
+    <div
+      ref={rootRef}
+      className="relative flex items-center gap-0.5"
+      title={outcomeLabel ? `Last run ${outcomeLabel.toLowerCase()} · ${runId}` : `Last run ${runId}`}
+    >
       <button
         type="button"
-        className="rounded-l-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"
+        className="inline-flex items-center gap-1.5 rounded-l-full border border-ink-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-ink-700 hover:border-accent-400 hover:text-accent-800"
         onClick={onOpenRun}
       >
+        {outcome ? (
+          <span
+            aria-hidden
+            className={clsx('h-1.5 w-1.5 shrink-0 rounded-full', OUTCOME_DOT[outcome] ?? 'bg-ink-300')}
+          />
+        ) : null}
         Last {shortRunId(runId)}
+        {outcomeLabel ? <span className="sr-only"> — {outcomeLabel}</span> : null}
       </button>
       <button
         type="button"
@@ -345,26 +353,38 @@ export default function App() {
   /** Workspace chrome only when the URL carries a workspace id (not localStorage alone). */
   const workspaceOpen = Boolean(parsedLocation.workspaceId)
 
-  /** Reconcile legacy `#/…` on path URLs and restore last workspace when landing on picker. */
+  /**
+   * Collapse alias URLs onto one canonical spelling. `/`, `/workspaces` and any
+   * unmatched path all render the workspaces picker, so the same page could sit
+   * under three different URLs depending on how you got there — and whichever
+   * one you arrived on stayed in the address bar, so bookmarks and shared links
+   * disagreed about the address of a single page. replaceState (not
+   * navigatePath) on purpose: no popstate, so this cannot re-enter the parse.
+   */
   React.useEffect(() => {
-    const { pathname, search, hash } = window.location
-    if (hash && /^#\//.test(hash)) {
-      const target = resolveLegacyHash(hash, { activeProject: useAppStore.getState().activeProject })
-      if (target) {
-        navigatePath(target, true)
-        return
-      }
-      stripLegacyAppHash()
-    }
-    const parsed = parsePathname(pathname, search)
-    if (parsed.workspaceId) return
-    const barePicker = pathname === '/' || pathname === '/workspaces'
-    if (!barePicker) return
-    const stored = useAppStore.getState().activeProject
-    if (stored?.trim()) {
-      navigatePath(paths.workspace(stored.trim()), true)
-      setActiveProject(stored.trim())
-    }
+    const canonical = parsedLocation.canonical
+    if (!canonical || window.location.pathname === canonical) return
+    window.history.replaceState(null, '', `${canonical}${window.location.search}`)
+  }, [parsedLocation])
+
+  /**
+   * Reconcile legacy `#/…` fragments on path URLs.
+   *
+   * This effect also used to auto-resume: landing on `/` or `/workspaces`
+   * redirected straight into whichever workspace you had open last, so the app
+   * had no landing page you could actually reach — every entry bounced past it
+   * into a workspace you might not have wanted, and typing `/workspaces`
+   * silently took you somewhere else. The workspaces console surfaces recents
+   * itself (sorted recently-opened first, with a Recent tag), so getting back to
+   * yesterday's work is one visible click instead of a redirect that overrides
+   * the address you asked for.
+   */
+  React.useEffect(() => {
+    const { hash } = window.location
+    if (!hash || !/^#\//.test(hash)) return
+    const target = resolveLegacyHash(hash, { activeProject: useAppStore.getState().activeProject })
+    if (target) navigatePath(target, true)
+    else stripLegacyAppHash()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -881,11 +901,10 @@ export default function App() {
             </div>
             <div className="min-w-0 leading-tight">
               <div className="text-[15px] font-semibold text-ink-950">Graphyn</div>
-              <div className="truncate text-[11px] text-ink-500">
-                {workspaceOpen && parsedLocation.workspaceId
-                  ? `${VIEW_LABEL[view]} · ${parsedLocation.workspaceId}`
-                  : VIEW_LABEL[view]}
-              </div>
+              {/* The workspace name is already shown in the sidebar's Workspace strip and in the
+                  page's own title — repeating it here too just added a third copy of the same
+                  string. This line is now purely "which page," matching the sidebar's own labels. */}
+              <div className="truncate text-[11px] text-ink-500">{VIEW_LABEL[view]}</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -926,8 +945,12 @@ export default function App() {
               ) : null}
             </button>
             {(() => {
-              const chipForThisWorkspace = Boolean(effectiveLastRunId) || isRunning
-              if (!chipForThisWorkspace && !chipLabel) return null
+              // A finished run used to get TWO adjacent chips for the same thing: a
+              // bare outcome word ("Succeeded" — at what?) and the "Last <id>" menu
+              // right beside it. The outcome is now a dot inside that run chip, so
+              // only the in-flight case (and a status with no run id yet) still needs
+              // a pill of its own.
+              if (!chipLabel) return null
               if (isRunning) {
                 return (
                   <span className={clsx('inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold', chipTone)}>
@@ -935,7 +958,7 @@ export default function App() {
                   </span>
                 )
               }
-              if (chipLabel && effectiveLastRunId) {
+              if (!effectiveLastRunId) {
                 return (
                   <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
                     {chipLabel}
@@ -968,7 +991,10 @@ export default function App() {
                 </button>
               </div>
             )}
-            {(!activeProject || !workspaceOpen) && (
+            {/* With no project open, this chip said "Open workspace" and navigated to
+                the projects picker — which, on the picker itself, is the page you are
+                already looking at. A visible, enabled, no-op control; hidden there. */}
+            {(!activeProject || !workspaceOpen) && !(!activeProject && view === 'projects') && (
               <button
                 type="button"
                 className={clsx(
@@ -1001,6 +1027,8 @@ export default function App() {
               <LastRunMenu
                 runId={effectiveLastRunId}
                 showCompare
+                outcome={isRunning ? null : effectiveOutcome}
+                outcomeLabel={isRunning ? null : chipLabel}
                 onOpenRun={() =>
                   openRun(effectiveLastRunId, activeProject ? { project: activeProject } : undefined)
                 }
@@ -1013,7 +1041,6 @@ export default function App() {
                 onOpenCompare={() => openExperiments({ runIds: [effectiveLastRunId] })}
               />
             )}
-            <LayoutModeControl className="hidden sm:inline-flex" />
             <button
               type="button"
               className="btn-icon"
@@ -1201,6 +1228,18 @@ export default function App() {
               <p className="mt-2 text-xs text-ink-500">
                 Paste the same token as GRAPHYN_API_TOKEN on the server. Stored only in this browser.
               </p>
+              <div className="mt-5 border-t border-ink-100 pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm text-ink-700">Content layout</div>
+                    <p className="mt-0.5 text-xs text-ink-500">
+                      Master–Detail shows list and detail side-by-side; Stack shows them one above
+                      the other. Applies to Runs, Datasets, and similar split views.
+                    </p>
+                  </div>
+                  <LayoutModeControl className="shrink-0" />
+                </div>
+              </div>
               <div className="mt-4 flex justify-end gap-2">
                 <button type="button" className="btn-secondary" onClick={() => setSettingsOpen(false)}>
                   Cancel
