@@ -101,7 +101,18 @@ export default function ProjectsView() {
   const [renameTo, setRenameTo] = React.useState('')
   const [cloneTo, setCloneTo] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
+  // Separate from `error` (the projects-list load failure) — open() failing
+  // for one project (e.g. "Project 'X' not found" after it's deleted) used
+  // to write to the same `error` state, so that message kept showing in the
+  // list panel's own banner even after navigating away to browse other
+  // projects, with a misleading "reload the list" retry action attached.
+  const [openError, setOpenError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(true)
+  // True for the whole duration of open()'s multi-endpoint fetch. Every
+  // "empty" section below (Activity/Continue/etc.) keys off array lengths,
+  // which are also [] before the fetch resolves — without this flag every
+  // workspace open briefly, falsely renders as "no pipelines / no activity".
+  const [opening, setOpening] = React.useState(false)
 
   const [spec, setSpec] = React.useState('')
   const [taxonomy, setTaxonomy] = React.useState('[]')
@@ -172,7 +183,8 @@ export default function ProjectsView() {
     setActiveProject(name)
     setRenameTo(name)
     setCloneTo(`${name}-copy`)
-    setError(null)
+    setOpenError(null)
+    setOpening(true)
     replacePathSearch(
       tab && tab !== 'versions' ? { tab } : {},
       paths.workspace(name),
@@ -262,7 +274,7 @@ export default function ProjectsView() {
       setDiffA(first)
       setDiffB(typeof vers[1] === 'string' ? vers[1] : first)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setOpenError(err instanceof Error ? err.message : String(err))
       // Keep selected, but clear Home payload so we don't pretend load succeeded.
       setVersions([])
       setSpec('')
@@ -277,6 +289,8 @@ export default function ProjectsView() {
       setVersionFocus('')
       setDiffA('')
       setDiffB('')
+    } finally {
+      setOpening(false)
     }
   }
 
@@ -296,6 +310,7 @@ export default function ProjectsView() {
         })
       } else {
         setSelected(null)
+        setOpenError(null)
       }
     }
     return onPathChange(apply)
@@ -877,9 +892,9 @@ export default function ProjectsView() {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-3xl space-y-6">
-          {error && <ErrorBanner message={error} onRetry={() => void open(selected)} />}
+          {openError && <ErrorBanner message={openError} onRetry={() => void open(selected)} />}
 
-          {workspaceEmpty && !error ? (
+          {workspaceEmpty && !openError && !opening ? (
             <section className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-semibold text-ink-950">Start from template</h2>
@@ -911,7 +926,9 @@ export default function ProjectsView() {
             <div className="ide-section-title mb-2">Activity</div>
             <p className="mb-2 text-[12px] text-ink-500">Recent runs — click a row to open it.</p>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
-              {recentRuns.length === 0 && !schedules.some((s) => s.last_run_id) ? (
+              {opening ? (
+                <div className="px-4 py-5 text-[13px] text-ink-400">Loading…</div>
+              ) : recentRuns.length === 0 && !schedules.some((s) => s.last_run_id) ? (
                 <div className="px-4 py-5 text-[13px] text-ink-600">
                   No activity yet — run a pipeline from the Editor.
                 </div>
@@ -961,7 +978,9 @@ export default function ProjectsView() {
             <div className="ide-section-title mb-2">Continue</div>
             <p className="mb-2 text-[12px] text-ink-500">Open a pipeline in the Editor to keep working.</p>
             <div className="overflow-hidden rounded-xl border border-ink-200/70 bg-white">
-              {projectPipelines.length === 0 && recentRuns.length === 0 ? (
+              {opening ? (
+                <div className="px-4 py-5 text-[13px] text-ink-400">Loading…</div>
+              ) : projectPipelines.length === 0 ? (
                 <div className="px-4 py-5 text-[13px] text-ink-600">
                   No pipelines yet.{' '}
                   <button type="button" className="font-medium text-accent-800 hover:underline" onClick={goTemplates}>

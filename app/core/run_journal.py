@@ -376,7 +376,13 @@ class RunManager:
         )
 
         _input_ids = input_artifact_ids or []
-        if not deduplicated and record.artifact_id not in _input_ids:
+        # Always record provenance, even when `deduplicated` — otherwise this
+        # run's own by_run provenance index stays permanently empty whenever
+        # its output happens to content-match an earlier run (deterministic/
+        # seeded pipelines hit this constantly). provenance.record() no longer
+        # overwrites another run's canonical record in that case; it only adds
+        # this run to the artifact's by_run index (see provenance.py).
+        if record.artifact_id not in _input_ids:
             try:
                 self._get_provenance_store().record(
                     artifact_id=record.artifact_id,

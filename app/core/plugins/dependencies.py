@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version as pkg_version
+from pathlib import Path
 from typing import Iterable
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -94,7 +96,6 @@ class DependencyChecker:
     """Checks / installs PEP 508 deps against the current or a target Python."""
 
     _installed_cache: dict[tuple[str, str], tuple[str | None, float]] = {}
-    _site_packages_mtime: dict[str, float] = {}
 
     def check(self, dependencies: list[str], *, python: str | None = None) -> None:
         """Verify every dependency is satisfied; optionally auto-install."""
@@ -418,26 +419,23 @@ class DependencyChecker:
 
     @classmethod
     def _site_packages_mtime_for(cls, python: str) -> float:
-        if python in cls._site_packages_mtime:
-            return cls._site_packages_mtime[python]
-        code = (
-            "import site, os, sys\n"
-            "paths = site.getsitepackages()\n"
-            "p = paths[0] if paths else ''\n"
-            "print(os.path.getmtime(p) if p and os.path.isdir(p) else 0.0)\n"
-        )
+        # Always recompute: this mtime is the staleness signal _installed_cache
+        # entries are compared against, so memoizing it would freeze that
+        # signal at its first value and mask any later change to the venv.
+        # Derived straight from the venv layout (no subprocess) — this runs
+        # once per plugin on every dependency-status check (e.g. every
+        # Plugins page load across ~50 isolated venvs), so shelling out to
+        # each venv's interpreter here would add a python-startup's worth of
+        # latency per plugin per request.
         try:
-            result = subprocess.run(
-                [python, "-c", code],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            stamp = float((result.stdout or "0").strip() or 0.0)
+            venv_root = Path(python).resolve().parent.parent
+            for pattern in ("lib/python*/site-packages", "Lib/site-packages"):
+                for candidate in venv_root.glob(pattern):
+                    if candidate.is_dir():
+                        return os.path.getmtime(candidate)
         except Exception:
-            stamp = 0.0
-        cls._site_packages_mtime[python] = stamp
-        return stamp
+            pass
+        return 0.0
 
     @classmethod
     def _prefetch_installed_versions(cls, names: list[str], *, python: str) -> None:

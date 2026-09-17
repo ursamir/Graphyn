@@ -280,14 +280,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     navigatePath(id?.trim() ? paths.proposal(id.trim()) : paths.agentInbox())
     set({ view: 'proposals' })
   },
-  openEdge: ({ project } = {}) => {
+  openEdge: ({ project, version, runId } = {}) => {
     const proj = project?.trim() || ''
     if (proj) {
       persistActiveProject(proj)
       set({ activeProject: proj })
     }
     const W = proj || get().activeProject || ''
-    navigatePath(W ? paths.ship(W) : paths.deployShip())
+    const base = W ? paths.ship(W) : paths.deployShip()
+    // version/runId were accepted here but silently dropped — callers like
+    // ProjectsView's "Use in Ship" passed a run_id that never made it into
+    // the URL, so the Ship wizard always landed on "project + source run
+    // required" even though the caller had a specific run in hand.
+    const qs = new URLSearchParams()
+    if (version?.trim()) qs.set('version', version.trim())
+    if (runId?.trim()) qs.set('run_id', runId.trim())
+    const query = qs.toString()
+    navigatePath(query ? `${base}?${query}` : base)
     set({ view: 'edge' })
   },
   openData: ({ mode, project, version, label } = {}) => {

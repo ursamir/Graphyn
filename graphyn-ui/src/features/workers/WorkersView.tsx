@@ -224,7 +224,9 @@ export default function WorkersView() {
             </a>
           </div>
           {queueNote && <p className="text-sm text-amber-800">{queueNote}</p>}
-          {recentRuns.length === 0 ? (
+          {loading && recentRuns.length === 0 ? (
+            <LoadingBlock label="Loading recent runs…" />
+          ) : recentRuns.length === 0 ? (
             <EmptyState
               title="No queue listing available"
               description="Use recent run statuses below as a rough proxy once runs exist, or inspect a job by id via the API."

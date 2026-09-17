@@ -380,7 +380,18 @@ def reconcile_abandoned_runs(
         updated["reason"] = "stale_reconciled"
         updated["reconciled_at"] = _now().isoformat()
         try:
+            # Both GET /runs ("newest first") and this same function's
+            # older_than_days deletion check key off this run directory's
+            # mtime (a cheap stat, to avoid reading every meta.json — see
+            # list_runs() and cleanup_workspace()). Rewriting meta.json
+            # bumps that mtime, which would make a long-abandoned run look
+            # brand new: it would jump to the top of "recent runs" and
+            # restart its age-based cleanup countdown from the reconcile
+            # moment instead of its real age. Restore the pre-write mtime
+            # so reconciling is invisible to both.
+            stat_before = entry.stat()
             _atomic_write_meta(entry, updated)
+            os.utime(entry, (stat_before.st_atime, stat_before.st_mtime))
         except OSError as exc:
             logger.warning("failed to reconcile run %s: %s", run_id, exc)
             skipped_other += 1

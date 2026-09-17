@@ -162,6 +162,12 @@ def request_prod(
     slug = str(rec.get("slug") or (staging or {}).get("slug") or "")
     if not rid or not slug:
         raise ValueError("Need staging stage or run_id to request prod")
+    prod = stages.get("prod") if isinstance(stages.get("prod"), dict) else None
+    if prod and prod.get("run_id") == rid:
+        raise ValueError(f"Run '{rid}' is already in prod for '{name}'")
+    pending = rec.get("pending_prod")
+    if isinstance(pending, dict) and pending.get("run_id") == rid:
+        raise ValueError(f"Run '{rid}' already has a pending prod request for '{name}'")
     now = datetime.now(timezone.utc).isoformat()
     path = registry_path(base_dir)
     data = _load(path)

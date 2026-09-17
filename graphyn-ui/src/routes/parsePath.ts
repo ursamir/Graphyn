@@ -117,9 +117,24 @@ export function stripLegacyAppHash() {
   window.history.replaceState(null, '', `${pathname}${search}`)
 }
 
-/** History API navigation that notifies listeners (store + App sync). Path-only — never keeps hash. */
+/**
+ * History API navigation that notifies listeners (store + App sync). Path-only — never keeps hash.
+ *
+ * Idempotent: a no-op when `path` already matches the current location. Without
+ * this, an `open*` store action (e.g. openRun) that calls navigatePath
+ * unconditionally can loop forever — App's popstate-driven path sync reads the
+ * new URL, calls the matching open* action again to reconcile store state,
+ * which calls navigatePath again, dispatching another popstate, ad infinitum.
+ * This really happened (`RangeError: Maximum call stack size exceeded` in
+ * openRun, reproduced live). Stopping once the URL stops changing breaks the
+ * cycle regardless of which action started it.
+ */
 export function navigatePath(path: string, replace = false) {
   const target = path.split('#')[0]
+  if (typeof window !== 'undefined') {
+    const current = `${window.location.pathname}${window.location.search}`
+    if (current === target) return
+  }
   if (replace) window.history.replaceState(null, '', target)
   else window.history.pushState(null, '', target)
   stripLegacyAppHash()

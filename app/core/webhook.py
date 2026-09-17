@@ -47,23 +47,33 @@ class WebhookService:
     def save(self, url: str, events: list[str]) -> None:
         """Persist webhook configuration to workspace/webhooks.json.
 
-        Raises:
-            ValueError: if ``url`` does not use http or https scheme, has no
-                        valid host, or resolves to a private/loopback/link-local
-                        IP address (SSRF prevention — SEC-3 fix).
-        """
-        parsed = urlparse(url)
-        if parsed.scheme not in _ALLOWED_SCHEMES:
-            raise ValueError(
-                f"Webhook URL must use http or https scheme, "
-                f"got {parsed.scheme!r}. URL: {url!r}"
-            )
-        if not parsed.netloc:
-            raise ValueError(
-                f"Webhook URL must have a valid host. URL: {url!r}"
-            )
+        An empty (or whitespace-only) ``url`` clears the configured webhook —
+        it skips the scheme/host/SSRF checks below (which only make sense for
+        a URL that will actually be dialed) and persists ``url: ""``, matching
+        what ``load()`` returns when no webhook has ever been configured.
+        Without this, a previously-saved URL could never be removed: any
+        non-empty scheme check would reject the empty string outright.
 
-        validate_webhook_target_url(url)
+        Raises:
+            ValueError: if ``url`` is non-empty and does not use http or https
+                        scheme, has no valid host, or resolves to a
+                        private/loopback/link-local IP address (SSRF
+                        prevention — SEC-3 fix).
+        """
+        url = (url or "").strip()
+        if url:
+            parsed = urlparse(url)
+            if parsed.scheme not in _ALLOWED_SCHEMES:
+                raise ValueError(
+                    f"Webhook URL must use http or https scheme, "
+                    f"got {parsed.scheme!r}. URL: {url!r}"
+                )
+            if not parsed.netloc:
+                raise ValueError(
+                    f"Webhook URL must have a valid host. URL: {url!r}"
+                )
+
+            validate_webhook_target_url(url)
 
         self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         config = {"url": url, "events": events}

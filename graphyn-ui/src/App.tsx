@@ -58,12 +58,26 @@ import { navigatePath, parsePathname, panelToFocus, stripLegacyAppHash } from '.
 type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }
 type NavGroup = { title: string; items: NavItem[] }
 
-/** Global shell when no project is open (project-first IA). */
-const GLOBAL_NAV_GROUPS: NavGroup[] = [
-  {
-    title: 'Projects',
-    items: [{ id: 'projects', label: 'Projects', icon: FolderKanban }],
-  },
+/**
+ * Workspace-scoped items — the only ones that genuinely require a project
+ * (Editor/Runs have no meaning without one). Always rendered in the same
+ * spot; disabled (not hidden) when no project is active, so the sidebar's
+ * shape never changes based on which page you're on — only the enabled
+ * state and the Workspace strip's own content adapt to activeProject.
+ */
+const WORKSPACE_NAV_ITEMS: NavItem[] = [
+  { id: 'projects', label: 'Home', icon: FolderKanban },
+  { id: 'builder', label: 'Editor', icon: Workflow },
+  { id: 'runs', label: 'Runs', icon: History },
+]
+
+/**
+ * Everything else — one fixed set of grouped items, always visible in full,
+ * regardless of whether a project is open. A page like Datasets/Models/Ship
+ * still auto-scopes to activeProject via pathForView()/go(); it just never
+ * disappears from or reappears in the nav depending on that state.
+ */
+const NAV_GROUPS: NavGroup[] = [
   {
     title: 'Build',
     items: [
@@ -95,18 +109,6 @@ const GLOBAL_NAV_GROUPS: NavGroup[] = [
       { id: 'access', label: 'Access', icon: Shield },
     ],
   },
-]
-
-/**
- * Project activity strip. Lineage / Compare live under Runs (tabs + path deep links).
- */
-const PROJECT_NAV_ITEMS: NavItem[] = [
-  { id: 'projects', label: 'Home', icon: FolderKanban },
-  { id: 'builder', label: 'Editor', icon: Workflow },
-  { id: 'runs', label: 'Runs', icon: History },
-  { id: 'models', label: 'Models', icon: Box },
-  { id: 'edge', label: 'Ship', icon: Cpu },
-  { id: 'data', label: 'Datasets', icon: Database },
 ]
 
 const VIEW_LABEL: Record<AppView, string> = {
@@ -271,7 +273,6 @@ export default function App() {
   const openTrace = useAppStore((s) => s.openTrace)
   const openArtifacts = useAppStore((s) => s.openArtifacts)
   const openExperiments = useAppStore((s) => s.openExperiments)
-  const openData = useAppStore((s) => s.openData)
   const activeProject = useAppStore((s) => s.activeProject)
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const closeProject = useAppStore((s) => s.closeProject)
@@ -328,8 +329,6 @@ export default function App() {
     }
   }, [navOpen])
 
-  /** When a project is open, Global/Admin is collapsed by default (IDE-first). */
-  const [globalNavOpen, setGlobalNavOpen] = React.useState(false)
   const [locationKey, setLocationKey] = React.useState(
     () => `${window.location.pathname}${window.location.search}`,
   )
@@ -345,10 +344,6 @@ export default function App() {
   )
   /** Workspace chrome only when the URL carries a workspace id (not localStorage alone). */
   const workspaceOpen = Boolean(parsedLocation.workspaceId)
-
-  React.useEffect(() => {
-    if (workspaceOpen) setGlobalNavOpen(false)
-  }, [workspaceOpen])
 
   /** Reconcile legacy `#/…` on path URLs and restore last workspace when landing on picker. */
   React.useEffect(() => {
@@ -380,12 +375,14 @@ export default function App() {
   } | null>(null)
   React.useEffect(() => {
     let cancelled = false
+    let timer: number | null = null
     if (!activeProject) {
       setProjectLatest(null)
       return
     }
     const project = activeProject
-    ;(async () => {
+    const NON_TERMINAL = new Set(['running', 'queued', 'pending', 'paused'])
+    const fetchLatest = async () => {
       try {
         const runs = await apiJson<
           Array<{ run_id: string; status?: string; created_at?: string }>
@@ -393,12 +390,22 @@ export default function App() {
         if (cancelled) return
         const first = Array.isArray(runs) && runs.length > 0 ? runs[0] : null
         setProjectLatest(first ? { run_id: first.run_id, status: first.status } : null)
+        // Keep polling while the latest run is still non-terminal — otherwise
+        // this one-shot fetch freezes the header chip at "Running" forever
+        // once the user navigates away from whatever started the run (the
+        // isRunning/lastRunId deps below never change again to re-trigger it).
+        const status = (first?.status || '').toLowerCase()
+        if (!cancelled && NON_TERMINAL.has(status)) {
+          timer = window.setTimeout(fetchLatest, 4000)
+        }
       } catch {
         if (!cancelled) setProjectLatest(null)
       }
-    })()
+    }
+    void fetchLatest()
     return () => {
       cancelled = true
+      if (timer) window.clearTimeout(timer)
     }
   }, [activeProject, lastRunId, isRunning])
 
@@ -719,6 +726,14 @@ export default function App() {
     </main>
   )
 
+  /** Hint + jump-key suffix, shared by every nav row so the tooltip format never drifts. */
+  const navTitle = (id: AppView, fallback?: string) => {
+    const hint = NAV_HINTS[id] ?? fallback
+    if (!hint) return undefined
+    const jump = Object.entries(JUMP_KEYS).find(([, v]) => v === id)?.[0]
+    return jump ? `${hint} · Press ${jump}` : hint
+  }
+
   const navAside = (
     <aside
               className={clsx(
@@ -726,97 +741,91 @@ export default function App() {
                 narrow ? 'absolute inset-y-0 left-0 w-[13.5rem] shadow-xl' : 'w-full',
               )}
             >
+              {/*
+                One fixed shape, always: a Workspace strip (Home/Editor/Runs, disabled
+                without an active project) followed by the same four groups whether or
+                not a project is open. Nothing here appears or disappears based on which
+                page is active — only which row is highlighted, and whether the
+                workspace-scoped rows are enabled, ever changes. See the user's complaint
+                about the sidebar "frequently switching" between a global and a
+                project shell — this replaces that with a single stable structure.
+              */}
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
-                {workspaceOpen && parsedLocation.workspaceId && (
-                  <div className="mb-3 space-y-0.5">
-                    <div className="flex items-center justify-between px-2.5 pb-1">
-                      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-ink-400" title={parsedLocation.workspaceId}>
-                        {parsedLocation.workspaceId}
-                      </div>
-                      <button
-                        type="button"
-                        className="text-[10px] font-medium text-ink-400 hover:text-ink-800"
-                        title="Close workspace"
-                        onClick={() => closeProject()}
-                      >
-                        Close
-                      </button>
+                <div className="mb-3 space-y-0.5">
+                  <div className="flex items-center justify-between gap-2 px-2.5 pb-1">
+                    {activeProject ? (
+                      <>
+                        <div
+                          className="truncate text-[10px] font-semibold uppercase tracking-wide text-ink-400"
+                          title={activeProject}
+                        >
+                          {activeProject}
+                        </div>
+                        <button
+                          type="button"
+                          className="shrink-0 text-[10px] font-medium text-ink-400 hover:text-ink-800"
+                          title="Switch workspace — show project picker"
+                          onClick={switchProject}
+                        >
+                          Switch
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                          No project open
+                        </div>
+                        <button
+                          type="button"
+                          className="shrink-0 text-[10px] font-medium text-accent-800 hover:text-accent-950"
+                          title="Open a project"
+                          onClick={() => go('projects')}
+                        >
+                          Open
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div className="space-y-0.5">
+                    {WORKSPACE_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
+                      const active = view === id
+                      const enabled = id === 'projects' || Boolean(activeProject)
+                      return (
+                        <button
+                          key={`ws-${id}`}
+                          type="button"
+                          disabled={!enabled}
+                          title={enabled ? navTitle(id) : 'Open a project first'}
+                          onClick={() => go(id)}
+                          className={clsx(
+                            'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                            !enabled && 'cursor-not-allowed opacity-40',
+                            active
+                              ? 'bg-white font-medium text-ink-950 shadow-sm'
+                              : enabled && 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
+                          )}
+                          aria-current={active ? 'page' : undefined}
+                        >
+                          <Icon className={clsx('h-4 w-4', active ? 'text-accent-800' : 'text-ink-400')} />
+                          <span className="flex-1 truncate">{label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                {NAV_GROUPS.map((group) => (
+                  <div key={group.title} className="mb-4">
+                    <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
+                      {group.title}
                     </div>
                     <div className="space-y-0.5">
-                      {PROJECT_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
+                      {group.items.map(({ id, label, icon: Icon }) => {
                         const active = view === id
                         return (
                           <button
-                            key={`proj-${id}`}
+                            key={id}
                             type="button"
-                            title={NAV_HINTS[id]}
-                            onClick={() => {
-                              const W = parsedLocation.workspaceId || activeProject
-                              if (id === 'projects' && W) openProject(W)
-                              else if (id === 'data' && W) openData({ project: W })
-                              else go(id)
-                            }}
-                            className={clsx(
-                              'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                              active
-                                ? 'bg-white font-medium text-ink-950 shadow-sm'
-                                : 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
-                            )}
-                            aria-current={active ? 'page' : undefined}
-                          >
-                            <Icon className={clsx('h-4 w-4', active ? 'text-accent-800' : 'text-ink-400')} />
-                            <span className="flex-1 truncate">{label}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-                {workspaceOpen ? (
-                  <div className="mb-4 rounded-xl border border-ink-200/70 bg-white/40">
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left"
-                      aria-expanded={globalNavOpen}
-                      onClick={() => setGlobalNavOpen((o) => !o)}
-                    >
-                      <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                        Library &amp; admin
-                        {!globalNavOpen && pendingProposalCount > 0 ? (
-                          <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
-                            {pendingProposalCount}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="text-[10px] font-medium text-ink-400">
-                        {globalNavOpen ? 'Hide' : 'Show'}
-                      </span>
-                    </button>
-                    {globalNavOpen && (
-                    <div className="space-y-0.5 border-t border-ink-100/80 px-1 pb-1.5 pt-1">
-                      {(
-                        [
-                          { id: 'templates' as AppView, label: 'Templates', icon: BookOpen },
-                          { id: 'proposals' as AppView, label: 'Agent inbox', icon: GitPullRequest },
-                          { id: 'artifacts' as AppView, label: 'Artifacts', icon: Archive },
-                          { id: 'plugins' as AppView, label: 'Plugins', icon: Package },
-                          { id: 'workers' as AppView, label: 'Worker fleet', icon: Server },
-                          { id: 'secrets' as AppView, label: 'Secrets', icon: KeyRound },
-                          { id: 'system' as AppView, label: 'Ops', icon: Activity },
-                          { id: 'access' as AppView, label: 'Access', icon: Shield },
-                        ] as const
-                      ).map(({ id, label, icon: Icon }) => {
-                        const active = view === id
-                        return (
-                          <button
-                            key={`global-${id}`}
-                            type="button"
-                            title={(() => {
-                              const hint = NAV_HINTS[id]
-                              if (!hint) return undefined
-                              const jump = Object.entries(JUMP_KEYS).find(([, v]) => v === id)?.[0]
-                              return jump ? `${hint} · Press ${jump}` : hint
-                            })()}
+                            title={navTitle(id)}
                             onClick={() => go(id)}
                             className={clsx(
                               'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
@@ -837,50 +846,8 @@ export default function App() {
                         )
                       })}
                     </div>
-                    )}
                   </div>
-                ) : (
-                  GLOBAL_NAV_GROUPS.map((group) => (
-                    <div key={group.title} className="mb-4">
-                      <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
-                        {group.title}
-                      </div>
-                      <div className="space-y-0.5">
-                        {group.items.map(({ id, label, icon: Icon }) => {
-                          const active = view === id
-                          return (
-                            <button
-                              key={id}
-                              type="button"
-                              title={(() => {
-                                const hint = NAV_HINTS[id]
-                                if (!hint) return undefined
-                                const jump = Object.entries(JUMP_KEYS).find(([, v]) => v === id)?.[0]
-                                return jump ? `${hint} · Press ${jump}` : hint
-                              })()}
-                              onClick={() => go(id)}
-                              className={clsx(
-                                'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                                active
-                                  ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
-                                  : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
-                              )}
-                              aria-current={active ? 'page' : undefined}
-                            >
-                              <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
-                              <span className="flex-1 truncate">{label}</span>
-                              {id === 'proposals' && pendingProposalCount > 0 && (
-                                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
-                                  {pendingProposalCount}
-                                </span>
-                              )}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ))
-                )}
+                ))}
               </nav>
             </aside>
   )
@@ -1004,13 +971,30 @@ export default function App() {
             {(!activeProject || !workspaceOpen) && (
               <button
                 type="button"
-                className="inline-flex items-center rounded-full border border-dashed border-ink-300 bg-white/80 px-2.5 py-0.5 text-[11px] text-ink-500 hover:border-accent-300 hover:text-accent-800"
+                className={clsx(
+                  'inline-flex max-w-[13rem] items-center gap-1 truncate rounded-full border px-2.5 py-0.5 text-[11px]',
+                  activeProject
+                    ? 'border-accent-200 bg-accent-50/60 text-accent-800 hover:border-accent-300'
+                    : 'border-dashed border-ink-300 bg-white/80 text-ink-500 hover:border-accent-300 hover:text-accent-800',
+                )}
+                // On a global page (Artifacts/Templates/Secrets/…), activeProject can still be
+                // set from earlier — the workspace was never closed, just not part of this URL.
+                // Say so explicitly instead of the generic "Open workspace", which reads as
+                // "nothing is open" and made the project feel silently lost.
+                title={activeProject ? `${activeProject} is still open — return to it` : 'Open a project'}
                 onClick={() => {
                   if (activeProject) openProject(activeProject)
                   else go('projects')
                 }}
               >
-                Open workspace
+                {activeProject ? (
+                  <>
+                    <FolderKanban className="h-3 w-3 shrink-0" />
+                    <span className="truncate">Back to {activeProject}</span>
+                  </>
+                ) : (
+                  'Open workspace'
+                )}
               </button>
             )}
             {effectiveLastRunId && (

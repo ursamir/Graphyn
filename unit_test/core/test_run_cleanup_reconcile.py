@@ -51,6 +51,22 @@ def test_reconcile_marks_stale_running_failed(tmp_workspace: Path):
     assert dmeta["status"] == "completed"
 
 
+def test_reconcile_preserves_run_dir_mtime(tmp_workspace: Path):
+    """GET /runs sorts "newest first" by run-dir mtime, and cleanup's
+    older_than_days check reads the same mtime to decide what's old enough to
+    delete — reconciling must not bump it, or an abandoned run would jump to
+    the top of "recent runs" and its disk-cleanup countdown would restart
+    from the reconcile moment instead of its real age."""
+    zombie = _write_run(tmp_workspace, "zombie-mtime", status="running", age_hours=3)
+    mtime_before = zombie.stat().st_mtime
+
+    result = reconcile_abandoned_runs(stale_after_hours=1.0)
+    assert "zombie-mtime" in result["reconciled_run_ids"]
+
+    mtime_after = zombie.stat().st_mtime
+    assert mtime_after == mtime_before
+
+
 def test_reconcile_skips_active_registered_run(tmp_workspace: Path):
     from app.core import run_control
 

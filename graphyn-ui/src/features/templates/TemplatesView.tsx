@@ -517,6 +517,13 @@ export default function TemplatesView() {
                         </span>
                       ) : null}
                     </div>
+                    {/* Several examples share a display name with a saved template once the
+                        "ex-NN-" prefix is stripped (e.g. "call-analytics" vs
+                        "ex-22-call-analytics" both humanize to "Call analytics") — show the
+                        raw slug so those aren't indistinguishable in the list. */}
+                    <div className="truncate font-mono text-type-meta text-ink-400" title={name}>
+                      {name}
+                    </div>
                     <p className="mt-1 line-clamp-2 text-type-secondary text-ink-600">
                       {tpl.description?.trim()
                         ? tpl.description

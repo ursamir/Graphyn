@@ -141,7 +141,9 @@ export default function TriggersDock({
       <div className="flex-1 space-y-3 overflow-y-auto px-3 py-2">
         <section className="space-y-2">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Schedules</div>
-          {schedules.length === 0 ? (
+          {loading ? (
+            <p className="text-[11px] leading-snug text-ink-400">Loading…</p>
+          ) : schedules.length === 0 ? (
             <p className="text-[11px] leading-snug text-ink-500">
               No schedules yet. Create an interval schedule for a project pipeline.
             </p>
@@ -160,7 +162,7 @@ export default function TriggersDock({
                   </div>
                   <div className="text-[10px] text-ink-500">
                     every {s.interval_minutes}m · {s.enabled ? 'enabled' : 'disabled'}
-                    {s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
+                    {s.enabled && s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
                     {s.last_error ? ` · err: ${s.last_error}` : ''}
                   </div>
                 </li>

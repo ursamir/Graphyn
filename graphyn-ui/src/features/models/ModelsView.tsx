@@ -156,6 +156,13 @@ export default function ModelsView() {
       contentClassName="overflow-y-auto"
     >
       <div className="space-y-4 p-5 h-full min-h-0 flex flex-col">
+      {activeProject ? (
+        <p className="rounded-lg border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
+          This is the <span className="font-medium text-ink-800">global</span> model registry — every
+          model registered from any project is listed here, not just {activeProject}. There is no
+          per-project filter yet; double-check a model's linked run (below) before promoting it.
+        </p>
+      ) : null}
       {registerOpen && (
         <div className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3 shadow-sm">
           <h3 className="text-sm font-semibold text-ink-950">Register from a run</h3>
@@ -166,7 +173,12 @@ export default function ModelsView() {
             </label>
             <label className="text-[12px] text-ink-600">
               Run id
-              <input className="field-control mt-1 font-mono" value={regRunId} onChange={(e) => setRegRunId(e.target.value)} />
+              <input
+                className="field-control mt-1 font-mono"
+                value={regRunId}
+                onChange={(e) => setRegRunId(e.target.value)}
+                placeholder={activeProject ? `any run id — not limited to ${activeProject}` : 'run id'}
+              />
             </label>
             <label className="text-[12px] text-ink-600">
               Slug
@@ -263,14 +275,20 @@ export default function ModelsView() {
                           )}
                         </div>
                         {stage === 'staging' && entry ? (
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            disabled={busy}
-                            onClick={() => void requestProd(detail.name)}
-                          >
-                            <Shield className="h-3.5 w-3.5" /> Request prod
-                          </button>
+                          entry.run_id === stages.prod?.run_id ? (
+                            <span className="text-[11px] text-ink-400">Already in prod</span>
+                          ) : entry.run_id === detail.pending_prod?.run_id ? (
+                            <span className="text-[11px] text-ink-400">Prod approval pending</span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              disabled={busy}
+                              onClick={() => void requestProd(detail.name)}
+                            >
+                              <Shield className="h-3.5 w-3.5" /> Request prod
+                            </button>
+                          )
                         ) : null}
                         {stage === 'prod' && detail.pending_prod?.run_id ? (
                           <button
@@ -316,7 +334,13 @@ export default function ModelsView() {
                       <button
                         type="button"
                         className="btn-secondary"
-                        onClick={() => navigatePath(paths.ship(activeProject))}
+                        onClick={() =>
+                          navigatePath(
+                            primaryRunId
+                              ? `${paths.ship(activeProject)}?run_id=${encodeURIComponent(primaryRunId)}`
+                              : paths.ship(activeProject),
+                          )
+                        }
                       >
                         Use in Ship
                       </button>

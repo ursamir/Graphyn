@@ -138,21 +138,35 @@ class ProvenanceStore:
         )
 
         with self._lock:
-            # Write {artifact_id}.json atomically
+            # Write {artifact_id}.json atomically — but ONLY if no canonical
+            # record exists yet for this artifact_id.
+            #
+            # Content-addressed artifacts (ArtifactStore.register) are shared
+            # across every run that produces byte-identical output — e.g. a
+            # deterministic/seeded pipeline re-run, or an unrelated project
+            # using the same template on the same synthetic fixture data.
+            # Overwriting this file on every subsequent run destroyed the
+            # FIRST run's provenance permanently (this really happened: a
+            # fresh run's "Record" link silently resolved to an unrelated
+            # project's run because the second write clobbered the first).
+            # First-writer-wins here, matching the identical, already-documented
+            # convention in ArtifactStore.register()'s dedup contract — the
+            # canonical record's node_id/graph_hash reflect whichever run
+            # produced this content FIRST, not necessarily the caller's run.
+            # The by_run index below is what makes THIS run's own lineage
+            # correct; it is always updated regardless of who owns the
+            # canonical record.
             record_path = self.base / f"{artifact_id}.json"
-            if record_path.exists():
-                logger.warning(
-                    "ProvenanceStore: overwriting existing provenance record for artifact %s "
-                    "(run_id=%s, node_id=%s)",
-                    artifact_id, run_id, node_id,
+            if not record_path.exists():
+                tmp_record = record_path.with_suffix(".json.tmp")
+                tmp_record.write_text(
+                    json.dumps(prov.model_dump(mode="json"), indent=2), encoding="utf-8"
                 )
-            tmp_record = record_path.with_suffix(".json.tmp")
-            tmp_record.write_text(
-                json.dumps(prov.model_dump(mode="json"), indent=2), encoding="utf-8"
-            )
-            tmp_record.replace(record_path)
+                tmp_record.replace(record_path)
 
-            # Append artifact_id to by_run/{run_id}.json atomically (no duplicates)
+            # Append artifact_id to by_run/{run_id}.json atomically (no duplicates) —
+            # unconditional, so every run that references this artifact (including
+            # via content dedup) shows it in its own lineage/trace.
             by_run_path = self.base / "by_run" / f"{run_id}.json"
             if by_run_path.exists():
                 try:

@@ -454,8 +454,27 @@ export default function DataView() {
     input.click()
   }
 
-  const streamJob = async (jobId: string, kind: 'url' | 'huggingface') => {
+  /** Result of one ingest job's SSE stream — the job "completing" only means
+   * it finished running, not that every URL/file succeeded. */
+  type IngestStreamResult = { totalFiles: number; errorCount: number }
+
+  const trackIngestEvent = (raw: string, acc: IngestStreamResult) => {
+    try {
+      const data = JSON.parse(raw) as { type?: string; status?: string; total_files?: number }
+      if (data.type === 'summary' && typeof data.total_files === 'number') {
+        acc.totalFiles = data.total_files
+      }
+      if (data.status === 'error' || data.type === 'error') {
+        acc.errorCount += 1
+      }
+    } catch {
+      /* not JSON — ignore for counting, still shown in the raw log */
+    }
+  }
+
+  const streamJob = async (jobId: string, kind: 'url' | 'huggingface'): Promise<IngestStreamResult> => {
     const path = `/ingest/${kind}/${jobId}/stream`
+    const acc: IngestStreamResult = { totalFiles: 0, errorCount: 0 }
     // EventSource can't send Authorization — fall back to fetch stream if token set
     if (getApiToken()) {
       const res = await apiFetch(path, { timeoutMs: 600000 })
@@ -472,15 +491,18 @@ export default function DataView() {
         for (const part of parts) {
           const line = part.split('\n').find((l) => l.startsWith('data:'))
           if (!line) continue
-          setIngestLog((l) => [...l, line.slice(5).trim()].slice(-100))
+          const data = line.slice(5).trim()
+          setIngestLog((l) => [...l, data].slice(-100))
+          trackIngestEvent(data, acc)
         }
       }
-      return
+      return acc
     }
     await new Promise<void>((resolve, reject) => {
       const es = new EventSource(apiUrl(path))
       es.onmessage = (ev) => {
         setIngestLog((l) => [...l, ev.data].slice(-100))
+        trackIngestEvent(ev.data, acc)
         try {
           const data = JSON.parse(ev.data) as { type?: string }
           if (data.type === 'summary') {
@@ -496,6 +518,19 @@ export default function DataView() {
         reject(new Error('Ingest stream error'))
       }
     })
+    return acc
+  }
+
+  /** Turn a stream result into the right toast — never claim success when
+   * every URL errored or nothing was actually ingested. */
+  const pushIngestResultToast = (label: string, result: IngestStreamResult) => {
+    if (result.errorCount > 0 && result.totalFiles === 0) {
+      pushToast(`${label} failed — 0 files ingested, ${result.errorCount} error(s). See log.`, 'error')
+    } else if (result.errorCount > 0) {
+      pushToast(`${label}: ${result.totalFiles} file(s) ingested, ${result.errorCount} error(s). See log.`, 'error')
+    } else {
+      pushToast(`${label} complete — ${result.totalFiles} file(s) ingested`, 'success')
+    }
   }
 
   const startUrlIngest = async () => {
@@ -506,8 +541,8 @@ export default function DataView() {
         body: JSON.stringify({ urls: list, label: ingestLabel }),
       })
       setIngestLog([`job ${res.job_id} started`])
-      await streamJob(res.job_id, 'url')
-      pushToast('URL ingest complete', 'success')
+      const result = await streamJob(res.job_id, 'url')
+      pushIngestResultToast('URL ingest', result)
       await loadSources()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -526,8 +561,8 @@ export default function DataView() {
         }),
       })
       setIngestLog([`job ${res.job_id} started`])
-      await streamJob(res.job_id, 'huggingface')
-      pushToast('HF ingest complete', 'success')
+      const result = await streamJob(res.job_id, 'huggingface')
+      pushIngestResultToast('HF ingest', result)
       await loadSources()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -653,7 +688,11 @@ export default function DataView() {
       setManageTab('merge')
     } else {
       setManageTab('upload')
-      setMode('inputs')
+      // Preserve outputs — Manage's Upload tab renders the delete-output-
+      // version view when mode is 'outputs' (see the mode === 'outputs'
+      // branch below), so forcing 'inputs' here would silently drop out of
+      // Outputs browsing the moment a user clicked the Manage tab.
+      setMode(mode === 'outputs' ? 'outputs' : 'inputs')
     }
   }
 
@@ -693,11 +732,11 @@ export default function DataView() {
         description="Shared Inputs and Outputs for pipelines — not the same as per-run downloads under Runs."
         actions={
           <div className="flex gap-2">
-            {uxMode === 'manage' && manageTab === 'upload' && (
-              <button type="button" className="btn-secondary" onClick={upload}>
-                <Upload className="h-3.5 w-3.5" /> Upload
-              </button>
-            )}
+            {/* Not duplicated here — the Manage toolbar already has its own
+                Upload button (same handler) scoped to the selected label,
+                which used to render alongside this one whenever
+                uxMode==='manage' && manageTab==='upload', showing the exact
+                same action twice at once. */}
             <button type="button" className="btn-secondary" onClick={() => void loadSources()}>
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </button>
@@ -1005,7 +1044,12 @@ export default function DataView() {
                     onClick={() => {
                       setUxMode('manage')
                       setManageTab('upload')
-                      setMode('inputs')
+                      // Stay on outputs — this button lives in the outputs
+                      // toolbar, so forcing 'inputs' here (as the Manage tab
+                      // used to) would drop the project/version the user was
+                      // just browsing and land them on the unrelated Upload
+                      // panel instead of the delete-output-version view.
+                      setMode('outputs')
                     }}
                   >
                     Manage…

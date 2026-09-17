@@ -275,6 +275,17 @@ function BuilderInner() {
       return
     }
     let cancelled = false
+    // Captured synchronously, before the async fetch below — a proposal
+    // "Accept -> Editor" (or an agent-generated graph) sets this in the store
+    // before BuilderView ever mounts, so it's already true here at effect-run
+    // time regardless of how long our own fetch takes. Reading it only AFTER
+    // the fetch resolves would race: the other effect that consumes
+    // pendingGraph can finish first (clearing it back to null) and we'd see
+    // a false "nothing claimed it yet" and clobber the just-accepted graph
+    // with this project's default pipeline. This really happened: accepting
+    // an empty-stub proposal into the Editor showed the project's saved
+    // pipeline instead of the stub the user just accepted.
+    const hadPendingGraphAtMount = Boolean(useAppStore.getState().pendingGraph)
     void (async () => {
       try {
         const pipes = await apiJson<
@@ -291,7 +302,35 @@ function BuilderInner() {
         if (cancelled) return
         const list = Array.isArray(pipes) ? pipes : []
         setProjectPipelineList(list)
-        setPipelinePick((prev) => prev || list[0]?.name || templateName || graphName || '')
+        const autoPick = list[0]?.name
+        // Same race as below: a pendingGraph already claimed (or is about to
+        // claim) the canvas, so don't default the picker to "the project's
+        // first saved pipeline" here either — that's exactly as misleading
+        // as auto-loading it (see the comment below), just via the label
+        // instead of the canvas.
+        if (!hadPendingGraphAtMount && !useAppStore.getState().pendingGraph) {
+          setPipelinePick((prev) => prev || autoPick || templateName || graphName || '')
+        }
+        // The line above can select a pipeline name in the toolbar's picker
+        // purely because it's the project's only/first saved pipeline — with
+        // nothing yet telling the canvas to actually load it. That left the
+        // toolbar showing e.g. "basic-wakeword" selected while the canvas was
+        // still blank ("pipeline", 0 nodes): Save uses `templateName` (not
+        // this picker), so a Save in that state silently created a second,
+        // confusingly-named "pipeline" entry instead of touching the one the
+        // toolbar implied was open. Auto-load it for real, but only when
+        // nothing has claimed the canvas yet (no explicit template/pipeline
+        // chosen, no nodes placed) — never override an in-progress edit.
+        if (
+          !pipelinePick &&
+          !templateName &&
+          autoPick &&
+          nodesRef.current.length === 0 &&
+          !hadPendingGraphAtMount &&
+          !useAppStore.getState().pendingGraph
+        ) {
+          void openPipelineEnv(autoPick)
+        }
       } catch {
         if (!cancelled) setProjectPipelineList([])
       }
@@ -299,6 +338,10 @@ function BuilderInner() {
     return () => {
       cancelled = true
     }
+    // Intentionally project-only: re-checking templateName/pipelinePick/graphName
+    // on every keystroke would re-fire this fetch and could re-trigger the
+    // auto-load guard mid-edit. It only needs to run once per project.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject])
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null)
   const [actionError, setActionError] = React.useState<{ title: string; message: string; detail?: string } | null>(null)
@@ -537,6 +580,13 @@ function BuilderInner() {
   const pendingGraph = useAppStore((s) => s.pendingGraph)
 
   const loadGraph = (graph: GraphIR) => {
+    // Clear the saved-pipeline picker — a freshly loaded graph (from an
+    // artifact, proposal, run, or edge wizard) isn't necessarily the pipeline
+    // it was last pointed at, and leaving the old selection in place shows a
+    // pipeline name in the toolbar that doesn't match what's on the canvas.
+    // openPipelineEnv() (the one caller that DOES load a real saved pipeline)
+    // re-sets this right after calling loadGraph(), so that path is unaffected.
+    setPipelinePick('')
     const loadedName = slugifyName(graph.metadata?.name || '')
     setGraphName(loadedName)
     if (/^[A-Za-z0-9_-]+$/.test(loadedName)) setTemplateName(loadedName)
@@ -1366,6 +1416,9 @@ function BuilderInner() {
                     aria-label="Project pipeline"
                     title="Canonical project pipeline"
                   >
+                    {!pipelinePick ? (
+                      <option value="">— not a saved pipeline —</option>
+                    ) : null}
                     {projectPipelineList.map((p) => (
                       <option key={p.name} value={p.name}>
                         {p.name}

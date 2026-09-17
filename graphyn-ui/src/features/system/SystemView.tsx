@@ -858,7 +858,9 @@ export default function SystemView() {
             Run due now
           </button>
         </div>
-        {schedules.length === 0 ? (
+        {loading ? (
+          <LoadingBlock label="Loading schedules…" />
+        ) : schedules.length === 0 ? (
           <EmptyState
             title="No schedules yet"
             description="Pick a project pipeline and interval, then Add schedule. Jobs only fire while this API process is running."
@@ -886,7 +888,8 @@ export default function SystemView() {
                   </div>
                   <div className="text-[11px] text-ink-500">
                     every {s.interval_minutes ?? '—'} min
-                    {s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
+                    {s.enabled && s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
+                    {!s.enabled ? ' · paused' : ''}
                     {s.last_run_id ? ` · last run ${String(s.last_run_id).slice(0, 8)}…` : ''}
                   </div>
                   {hasError ? (
@@ -1009,13 +1012,14 @@ export default function SystemView() {
           <button
             type="button"
             className="btn-primary"
-            disabled={!webhookUrl.trim()}
             onClick={() =>
               void apiJson('/system/webhooks', {
                 method: 'PUT',
                 body: JSON.stringify({ url: webhookUrl.trim(), events: webhookEvents }),
               })
-                .then(() => pushToast('Webhook saved', 'success'))
+                .then(() =>
+                  pushToast(webhookUrl.trim() ? 'Webhook saved' : 'Webhook cleared', 'success'),
+                )
                 .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
             }
           >

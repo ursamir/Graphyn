@@ -122,6 +122,17 @@ class PluginVenvManager:
                         check_platform=False,
                         one_by_one=one_by_one,
                     )
+                    # Re-verify rather than trusting pip's exit code alone —
+                    # a package can appear to install yet still not be
+                    # importable in the venv (interrupted extraction, a
+                    # transient resolver failure pip itself papered over).
+                    still = checker._find_unsatisfied(parsed, python=str(py))
+                    if still:
+                        joined = ", ".join(still)
+                        raise PluginDependencyError(
+                            f"Install reported success for plugin '{plugin_name}' "
+                            f"but still not importable in its venv: {joined}"
+                        )
                     print(
                         f"graphyn: plugin '{plugin_name}' venv packages ready",
                         flush=True,
