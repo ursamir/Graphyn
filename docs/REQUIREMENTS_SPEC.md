@@ -2,17 +2,17 @@
 
 | Field | Value |
 |---|---|
-| **Title** | Graphyn Standalone Greenfield Software Requirements Specification — Complete Build-Ready |
+| **Title** | Graphyn Standalone Greenfield Software Requirements Specification — Contract Closure |
 | **Document ID** | GRAPHYN-SRS-001 |
-| **Version** | **1.1.0 Draft — Complete Build-Ready** |
+| **Version** | **1.2.0 Draft — Contract Closure** |
 | **Date** | 2026-09-18 (Asia/Calcutta) |
-| **Status** | Draft — build-contract SRS (normative REST/runtime/persistence/security) |
+| **Status** | Draft — contract-closure SRS (P0 APIs, SDK/CLI, SM, repro, NFRs) |
 | **Document author** | Samir Kumar Mishra \<samir.nmiet@gmail.com\> |
 | **Audience** | Product managers, engineers, QA, agent implementers building Graphyn freshly |
 
 ## 1. Document control
 
-This document is the **sole normative Software Requirements Specification** for Graphyn when building the product from a greenfield codebase. It embeds product vision, architecture, data model, Graph IR, **build-contract REST/MCP/CLI contracts**, console UX, runtime state machines, persistence guarantees, distributed execution, plugin lifecycle, security/threat model, operational procedures, journeys, and acceptance criteria **inline**. A new team SHALL be able to implement **all P0 requirements** using only this document plus ordinary engineering judgment — **without reading any other repository guide**.
+This document is the **sole normative Software Requirements Specification** for Graphyn when building the product from a greenfield codebase. It embeds product vision, architecture, data model, Graph IR, **build-contract REST/MCP/CLI contracts**, console UX, runtime state machines, persistence guarantees, distributed execution, plugin lifecycle, security/threat model, operational procedures, journeys, and acceptance criteria **inline**. A new team SHALL implement **P0 requirements that this document fully contracts** using only this document plus ordinary engineering judgment — **without reading any other repository guide**. Residual gaps (Settings UX detail, device API shape, RBAC taxonomy, measurable GA perf numbers still labeled TBD-PERF-*) are listed in §32 / Appendix F and **shall not** be invented by implementers as if specified.
 
 **Change history**
 
@@ -20,6 +20,7 @@ This document is the **sole normative Software Requirements Specification** for 
 |---|---|---|
 | 1.0.0 Draft | 2026-09-18 | Standalone greenfield rewrite: all product facts folded in; zero outbound doc references; Priority P0/P1/P2 only (target product, not tip status) |
 | 1.1.0 Draft — Complete Build-Ready | 2026-09-18 | Upgrade to build-contract SRS: normative REST field tables, error envelope, run state machine, distributed P0 failure behavior, persistence, graph validation model, plugin lifecycle/security, model↔pipeline env lineage, Ship package model, dataset version semantics, MCP parity expansion for J1–J6, audit/provenance schemas, threat-model requirements, operational contracts, broadened acceptance matrix, Completeness Review |
+| 1.2.0 Draft — Contract Closure | 2026-09-18 | Contract closure: expand compressed P0 REST to equal-precision contracts; normative Python SDK + CLI; executable schemas for worker resources / run metrics / params / pipeline environments; authoritative run Current×Action transition table (failed/cancelled/succeeded resume = NO); Prove pillar provenance/repro capture set; Ship package lifecycle states; performance NFR structure with PROVISIONAL / TBD-PERF-* (no fake product numbers); Completeness Review honesty + Appendix F closed-gaps summary |
 
 **Conventions**
 
@@ -332,14 +333,33 @@ Enough fields to implement. Types are conceptual JSON/Python; persistence may be
 | `environments` | object | See below |
 | `project` | string | Owning workspace wire name |
 
-**Environments object**
+**Environments object — executable schema (P0)**
 
-| Key | Meaning |
-|---|---|
-| `draft` | Always the editable head |
-| `staging` | Pointer to version id or null |
-| `prod` | Pointer to version id or null |
-| `pending_prod` | Version awaiting approve |
+```json
+{
+  "$id": "graphyn.pipeline.environments",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["draft", "staging", "prod", "pending_prod"],
+  "properties": {
+    "draft": {
+      "type": "object",
+      "description": "Always present editable head metadata (not a version pointer)",
+      "required": ["updated_at"],
+      "properties": {
+        "updated_at": {"type": "string", "format": "date-time"},
+        "resource_version": {"type": "string"},
+        "graph_hash": {"type": ["string", "null"]}
+      }
+    },
+    "staging": {"type": ["string", "null"], "description": "version id e.g. v3 or null"},
+    "prod": {"type": ["string", "null"]},
+    "pending_prod": {"type": ["string", "null"], "description": "version awaiting approve; null when none"}
+  }
+}
+```
+
+**Null rules (normative):** `staging`/`prod`/`pending_prod` **shall** be `null` when unset (not omitted). `draft` **shall never** be null. Setting `prod` **shall** clear `pending_prod` to null atomically.
 
 **DM-PIPE-001** (P0) Publish **shall** create `vN` and optionally set staging.  
 **DM-PIPE-002** (P0) Promote to prod **shall** require explicit approve.  
@@ -363,8 +383,9 @@ Top-level: `schema_version`, `metadata`, `nodes[]`, `edges[]`, optional `paramet
 | `actor` | string | Who/what triggered |
 | `backend_mode` | string | `local_python` \| `distributed` |
 | `distributed_node_workers` | map | node_id → worker_id (Mode B) |
-| `metrics` / `params` | object | Experiment compare |
-| `error` | string \| object | Failure detail |
+| `metrics` | object | See §7.16 executable schema — values **shall** be numbers |
+| `params` | object | See §7.16 — allowed JSON types only |
+| `error` | string \| object \| null | Failure detail |
 
 ### 7.5 Artifact
 
@@ -457,7 +478,7 @@ Top-level: `schema_version`, `metadata`, `nodes[]`, `edges[]`, optional `paramet
 | `worker_id` | string | |
 | `labels` | string[] | e.g. `gpu`, `lab` |
 | `pools` | string[] | |
-| `resources` | object | `gpu`, `gpu_name`, `vram_mib_total`, `vram_mib_free`, `cpus` |
+| `resources` | object | See §7.16 WorkerResources schema |
 | `plugins` | string[] | Advertised node types |
 | `graphyn_version` | string | |
 | `heartbeat_at` | ISO-8601 | Stale ~45s |
@@ -491,6 +512,77 @@ Top-level: `schema_version`, `metadata`, `nodes[]`, `edges[]`, optional `paramet
 
 ---
 
+
+### 7.16 Executable schemas for formerly-loose objects (P0)
+
+**DM-SCHEMA-001** (P0) The following JSON Schema fragments **shall** be enforced on write (REST body / SDK / worker register) and echoed on read. Unknown keys **shall** be rejected (`additionalProperties: false`) unless noted.
+
+#### WorkerResources
+
+```json
+{
+  "$id": "graphyn.worker.resources",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cpus", "memory_mib"],
+  "properties": {
+    "cpus": {"type": "number", "exclusiveMinimum": 0},
+    "memory_mib": {"type": "integer", "minimum": 1},
+    "gpu": {"type": "integer", "minimum": 0, "description": "GPU count; 0 if none"},
+    "gpu_name": {"type": ["string", "null"]},
+    "vram_mib_total": {"type": ["integer", "null"], "minimum": 0},
+    "vram_mib_free": {"type": ["integer", "null"], "minimum": 0}
+  }
+}
+```
+
+| Field | Mandatory | Notes |
+|---|---|---|
+| `cpus` | YES | Logical CPU capacity advertised |
+| `memory_mib` | YES | Host RAM MiB |
+| `gpu` | NO (default 0) | Count |
+| `gpu_name` | NO | e.g. `NVIDIA RTX 4090` |
+| `vram_mib_total` / `vram_mib_free` | NO | Required when `gpu` ≥ 1 |
+
+#### RunMetrics
+
+```json
+{
+  "$id": "graphyn.run.metrics",
+  "type": "object",
+  "additionalProperties": {"type": "number"},
+  "properties": {
+    "loss": {"type": "number"},
+    "accuracy": {"type": "number"},
+    "f1": {"type": "number"},
+    "latency_ms": {"type": "number"},
+    "throughput_samples_s": {"type": "number"},
+    "duration_s": {"type": "number"}
+  }
+}
+```
+
+Known keys above are **optional**; any additional key **shall** still have a **number** value (not string/object/array/bool/null). Empty object `{}` is valid.
+
+#### RunParameters
+
+```json
+{
+  "$id": "graphyn.run.params",
+  "type": "object",
+  "additionalProperties": {
+    "type": ["string", "number", "boolean", "null", "array", "object"]
+  }
+}
+```
+
+Nested objects/arrays **shall** be JSON-serializable and **shall not** contain secret-shaped keys with non-empty values (same IR secret policy). Binary blobs **shall not** be stored in `params` (use artifacts).
+
+#### PipelineEnvironments
+
+See §7.2 — schema id `graphyn.pipeline.environments`.
+
+---
 
 ## 8. Graph IR specification (normative)
 
@@ -1122,9 +1214,308 @@ Stamps metadata.project. Secret-shaped config fail-closed.
 
 *Idempotency-Key supported.*
 
-Templates: `GET/POST /pipelines/templates`, `GET/DELETE /pipelines/templates/{name}`, `POST …/sync-examples`, `GET /pipelines/examples`, `GET …/versions` — list/detail return `{name, description, graph, tags, created_at}`; POST body `{name, graph, description?, tags?}`; 409 on duplicate name; DELETE 204.
+#### Templates & examples (P0 — equal-precision)
 
-Nodes: `GET /nodes`, `GET /nodes/{node_type}`, `GET …/config-schema`, `GET …/port-schema`, `POST …/validate-config` body `{config}` → `{valid, errors}`, `GET /types`, `GET /nodes/compatible?output_type&direction`.
+##### `GET /pipelines/templates`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /pipelines/templates` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `limit`, `offset`, `q?`, `sort?` |
+| **Request body** | — |
+| **Response** | List envelope; `items[]`: `name`, `description`, `tags[]`, `created_at` |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+
+| Field | Type | Null | Notes |
+|---|---|---|---|
+| items[].name | string | NO | |
+| items[].description | string | YES | |
+| items[].tags | string[] | NO | |
+| items[].created_at | ISO-8601 | NO | |
+##### `POST /pipelines/templates`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /pipelines/templates` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` recommended |
+| **Concurrency** | Create-once by name |
+| **Request headers** | `Authorization`; `Idempotency-Key` optional; `X-Actor` optional |
+| **Request query** | — |
+| **Request body** | `{name, graph, description?, tags?}` |
+| **Response** | `{name, description, graph, tags, created_at}` |
+| **HTTP statuses** | 201; 400; 401; 409; 422 |
+| **Error codes** | `validation_failed` | `conflict` | `secret_in_ir` |
+| **Side effects** | Persists template under templates store |
+| **Audit event** | `template.create` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /pipelines/templates/{name}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /pipelines/templates/{name}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{name, description, graph, tags, created_at, resource_version}` |
+| **HTTP statuses** | 200; 401; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+
+| Field | Type | Null |
+|---|---|---|
+| name | string | NO |
+| graph | object (Graph IR) | NO |
+| description | string | YES |
+| tags | string[] | NO |
+| created_at | ISO-8601 | NO |
+| resource_version | string | NO |
+##### `DELETE /pipelines/templates/{name}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `DELETE /pipelines/templates/{name}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes (repeat DELETE → 404 or 204) |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `force?` bool default false |
+| **Request body** | — |
+| **Response** | empty |
+| **HTTP statuses** | 204; 401; 404; 409 |
+| **Error codes** | `not_found` | `conflict` |
+| **Side effects** | Removes template; 409 if referenced unless force |
+| **Audit event** | `template.delete` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `POST /pipelines/templates/sync-examples`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /pipelines/templates/sync-examples` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | system | human |
+| **Idempotency** | `Idempotency-Key` recommended |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | `{}` or `{overwrite?: bool}` |
+| **Response** | `{synced: string[], skipped: string[]}` |
+| **HTTP statuses** | 200; 401; 403 |
+| **Error codes** | `forbidden` |
+| **Side effects** | Upserts bundled example templates |
+| **Audit event** | `template.sync_examples` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /pipelines/examples`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /pipelines/examples` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | List envelope of example template summaries (same shape as templates list) |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /pipelines/templates/{name}/versions`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /pipelines/templates/{name}/versions` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `limit`, `offset` |
+| **Request body** | — |
+| **Response** | `items[].version`, `created_at`, `actor`; `total` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+#### Nodes & types (P0 — equal-precision)
+
+##### `GET /nodes`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /nodes` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `q?`, `envelope?=1` |
+| **Request body** | — |
+| **Response** | Bare array **or** list envelope when `envelope=1`; items: `node_type`, `display_name`, `category`, `version?` |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+
+*Notes:* Bare array allowed until P1 default-envelope migration.
+##### `GET /nodes/{node_type}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /nodes/{node_type}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{node_type, display_name, category, description, version, plugin?}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /nodes/{node_type}/config-schema`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /nodes/{node_type}/config-schema` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | JSON Schema object for node config |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /nodes/{node_type}/port-schema`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /nodes/{node_type}/port-schema` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{inputs: Port[], outputs: Port[]}` where Port=`{name, type, required?}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `POST /nodes/{node_type}/validate-config`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /nodes/{node_type}/validate-config` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (pure validation) |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | `{config: object}` |
+| **Response** | `{valid: bool, errors: [{field, message, code?}]}` |
+| **HTTP statuses** | 200; 404; 401 |
+| **Error codes** | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /types`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /types` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{items: [{name, description?}]}` port data types |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /nodes/compatible`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /nodes/compatible` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `output_type` (required), `direction` = `downstream`|`upstream` (required) |
+| **Request body** | — |
+| **Response** | `{items: [{node_type, port_name, port_type}]}` |
+| **HTTP statuses** | 200; 400; 401 |
+| **Error codes** | `validation_failed` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
 
 #### 9.2.4 Runs & run-control
 
@@ -1174,7 +1565,232 @@ Nodes: `GET /nodes`, `GET /nodes/{node_type}`, `GET …/config-schema`, `GET …
 | 400 | Bad id |
 | 404 | Missing |
 
-Also: `GET …/graph`; `GET …/status`; checkpoints/samples; `GET …/artifacts`; `GET …/outputs` + `/outputs/zip`; `GET …/provenance`; `GET …/debug-report`; `GET /outputs/file?path=` (jailed).
+#### Run sub-resources (P0 — equal-precision)
+
+##### `GET /runs/{run_id}/graph`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/graph` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | Graph IR object saved for the run (`schema_version`, `metadata`, `nodes`, `edges`, `parameters?`) |
+| **HTTP statuses** | 200; 400; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /runs/{run_id}/status`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/status` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{run_id, status, started_at, ended_at, progress?: {completed_nodes, total_nodes}}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /runs/{run_id}/checkpoints`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/checkpoints` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{items: [{node_id, status, updated_at, has_sample: bool}]}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /runs/{run_id}/checkpoints/{node_id}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/checkpoints/{node_id}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{node_id, status, resume_token?, updated_at, metrics?}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /runs/{run_id}/checkpoints/{node_id}/samples`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/checkpoints/{node_id}/samples` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `limit?` default 20 max 100 |
+| **Request body** | — |
+| **Response** | `{items: [{sample_id, preview_type, bytes?, truncated: bool}]}` — **no secrets** |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /runs/{run_id}/artifacts`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/artifacts` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{items: ArtifactSummary[], total}` ArtifactSummary=`artifact_id,content_hash,artifact_type,node_id,created_at` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /runs/{run_id}/outputs`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/outputs` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{items: [{path, size, sha256?, content_type?}]}` paths relative to run outputs dir |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /runs/{run_id}/outputs/zip`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/outputs/zip` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `application/zip` binary |
+| **HTTP statuses** | 200; 404; 409 |
+| **Error codes** | `not_found` | `conflict` (still running) |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+
+*Notes:* 409 if run non-terminal and zip incomplete policy enabled.
+##### `GET /runs/{run_id}/provenance`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/provenance` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{run_id, records: ProvenanceRecord[]}` — see §22.2 + Prove capture set |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /runs/{run_id}/debug-report`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /runs/{run_id}/debug-report` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{run_id, status, graph_hash, error?, node_summaries[], worker_map?, created_at}` — redacted |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+##### `GET /outputs/file`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /outputs/file` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `path` (required) — must resolve under allowed roots |
+| **Request body** | — |
+| **Response** | file bytes (`Content-Type` sniffed/safe) |
+| **HTTP statuses** | 200; 400; 403; 404 |
+| **Error codes** | `validation_failed` | `forbidden` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original response; same key+different body → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers: `If-Match` / `resource_version` → 412/409 `version_conflict` when applicable |
+
+
+*Notes:* Path **shall** be jail-checked (SEC-030). `../` → 400/403.
 
 ##### `POST /runs/{run_id}/pause`
 
@@ -1444,9 +2060,254 @@ Worker/control data plane.
 
 #### 9.2.7 Data / datasets
 
-`GET /data/inputs` labels; `GET /data/inputs/{label}` files; `POST /data/inputs/upload` multipart `{label, file}`; `GET /data/outputs`; `GET /data/outputs/{project}/{version}`; `GET …/stats` `{file_count, total_bytes, content_hash}`; `POST /data/merge` → new immutable version; `DELETE …/{version}?force=false` → 409 if referenced.
+#### Datasets & ingest (P0 — equal-precision)
 
-Ingest: `POST /ingest/url` `{url, label?}` → `{job_id}`; SSE; `POST /ingest/huggingface`. 403/400 on SSRF.
+##### `GET /data/inputs`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /data/inputs` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{items: [{label, file_count, total_bytes, updated_at?}]}` |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /data/inputs/{label}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /data/inputs/{label}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{label, files: [{name, size, sha256?, modified_at?}]}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /data/inputs/upload`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /data/inputs/upload` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` recommended |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `Content-Type: multipart/form-data`; `Idempotency-Key`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | multipart fields: `label` (string), `file` (binary) |
+| **Response** | `{label, filename, size, sha256}` |
+| **HTTP statuses** | 201; 400; 401; 413 |
+| **Error codes** | `validation_failed` | `payload_too_large` |
+| **Side effects** | Writes under datasets/input/{label}/ with sanitized name |
+| **Audit event** | `dataset.input_upload` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /data/outputs`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /data/outputs` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `project?` |
+| **Request body** | — |
+| **Response** | `{items: [{project, version, created_at, content_hash?}]}` |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /data/outputs/{project}/{version}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /data/outputs/{project}/{version}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{project, version, files: [{path, size, sha256}], content_hash, created_at}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /data/outputs/{project}/{version}/stats`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /data/outputs/{project}/{version}/stats` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{file_count: int, total_bytes: int, content_hash: string}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /data/merge`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /data/merge` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` **required** |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `Idempotency-Key`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{sources: [{kind: label|version, ref: string}], target_project: string, message?}` |
+| **Response** | `{project, version, content_hash}` |
+| **HTTP statuses** | 201; 400; 404; 409 |
+| **Error codes** | `validation_failed` | `not_found` | `idempotency_conflict` |
+| **Side effects** | Creates **new immutable** output version; sources unchanged |
+| **Audit event** | `dataset.merge` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `DELETE /data/outputs/{project}/{version}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `DELETE /data/outputs/{project}/{version}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `force` bool default false |
+| **Request body** | — |
+| **Response** | empty |
+| **HTTP statuses** | 204; 404; 409 |
+| **Error codes** | `not_found` | `conflict` |
+| **Side effects** | Deletes version; 409 if referenced unless force (force audited) |
+| **Audit event** | `dataset.version_delete` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /ingest/url`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /ingest/url` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` recommended |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | `{url: string, label?: string}` |
+| **Response** | `{job_id, status}` |
+| **HTTP statuses** | 202; 400; 403; 401 |
+| **Error codes** | `validation_failed` | `ssrf_blocked` | `forbidden` |
+| **Side effects** | Starts async ingest job; blocks private/loopback URLs |
+| **Audit event** | `ingest.url_start` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+
+*Notes:* SSE progress at `GET /ingest/url/{job_id}/stream`.
+##### `GET /ingest/url/{job_id}/stream`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /ingest/url/{job_id}/stream` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `text/event-stream` events `{status, bytes?, error?}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+
+*Notes:* SSE; ends on terminal status.
+##### `POST /ingest/huggingface`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /ingest/huggingface` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` recommended |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | `{repo: string, revision?, label?, allow_patterns?}` |
+| **Response** | `{job_id, status}` |
+| **HTTP statuses** | 202; 400; 403; 401 |
+| **Error codes** | `validation_failed` | `forbidden` |
+| **Side effects** | Starts HF ingest job |
+| **Audit event** | `ingest.hf_start` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+
+*Notes:* SSE at `GET /ingest/huggingface/{job_id}/stream`.
+##### `GET /ingest/huggingface/{job_id}/stream`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /ingest/huggingface/{job_id}/stream` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `text/event-stream` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
 
 #### 9.2.8 Plugins
 
@@ -1499,7 +2360,168 @@ Remote may be async — poll GET /plugins/{name}. Failed install rolls back.
 
 *Idempotency-Key supported.*
 
-Also: `GET /plugins/search?q=`; `GET /plugins/{name}`; `GET …/dependencies`; `POST …/dependencies/install`; `POST …/enable`; `POST …/disable`; `DELETE /plugins/{name}` (409 if in-use unless force); `POST /plugins/venvs/gc`.
+#### Plugin sub-resources (P0 — equal-precision)
+
+##### `GET /plugins/search`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /plugins/search` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `q` required; `limit?` |
+| **Request body** | — |
+| **Response** | `{items: [{name, version, summary?}]}` |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /plugins/{name}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /plugins/{name}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{name, version, enabled, runtime, status, description?, resource_version}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /plugins/{name}/dependencies`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /plugins/{name}/dependencies` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{items: [{name, version_spec, resolved_version?, status}]}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /plugins/{name}/dependencies/install`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /plugins/{name}/dependencies/install` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` recommended |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `Idempotency-Key`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{deps?: string[]}` optional subset |
+| **Response** | `{status, installed[]}` |
+| **HTTP statuses** | 200; 202; 404; 422 |
+| **Error codes** | `not_found` | `validation_failed` |
+| **Side effects** | Installs deps into plugin venv |
+| **Audit event** | `plugin.deps_install` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /plugins/{name}/enable`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /plugins/{name}/enable` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{}` |
+| **Response** | `{name, enabled: true, status}` |
+| **HTTP statuses** | 200; 404; 409 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | Loads plugin into registry |
+| **Audit event** | `plugin.enable` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /plugins/{name}/disable`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /plugins/{name}/disable` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{}` |
+| **Response** | `{name, enabled: false, status}` |
+| **HTTP statuses** | 200; 404; 409 |
+| **Error codes** | `not_found` | `conflict` |
+| **Side effects** | Unloads from registry if safe |
+| **Audit event** | `plugin.disable` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `DELETE /plugins/{name}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `DELETE /plugins/{name}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `force?` bool default false |
+| **Request body** | — |
+| **Response** | empty |
+| **HTTP statuses** | 204; 404; 409 |
+| **Error codes** | `not_found` | `conflict` |
+| **Side effects** | Uninstall; 409 if in-use unless force |
+| **Audit event** | `plugin.uninstall` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /plugins/venvs/gc`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /plugins/venvs/gc` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | system |
+| **Idempotency** | Yes (GC is repeatable) |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | `{dry_run?: bool}` |
+| **Response** | `{removed: string[], bytes_freed: int}` |
+| **HTTP statuses** | 200; 401; 403 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | Deletes unused plugin venvs |
+| **Audit event** | `plugin.venv_gc` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
 
 #### 9.2.9 Secrets
 
@@ -1516,7 +2538,48 @@ Also: `GET /plugins/search?q=`; `GET /plugins/{name}`; `GET …/dependencies`; `
 
 ##### `POST /secrets`
 
-PUT /secrets/{name} replace; DELETE 204. Forbidden: GET-by-name value endpoint.
+##### `PUT /secrets/{name}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `PUT /secrets/{name}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes (last-write wins with version) |
+| **Concurrency** | `If-Match` / `resource_version` recommended |
+| **Request headers** | `Authorization`; `If-Match?`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{value: string}` write-only |
+| **Response** | `{name, updated_at, resource_version}` — **value never echoed** |
+| **HTTP statuses** | 200; 400; 401; 404; 412; 422 |
+| **Error codes** | `validation_failed` | `not_found` | `version_conflict` | `precondition_failed` |
+| **Side effects** | Replaces secret ciphertext |
+| **Audit event** | `secret.set` (name only) |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `DELETE /secrets/{name}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `DELETE /secrets/{name}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | empty |
+| **HTTP statuses** | 204; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | Deletes secret material |
+| **Audit event** | `secret.delete` (name only) |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+
+*Notes:* **Forbidden:** any GET-by-name that returns secret **value**.
 
 | Body field | Type | Required | Notes |
 |---|---|---|---|
@@ -1586,9 +2649,148 @@ PUT /secrets/{name} replace; DELETE 204. Forbidden: GET-by-name value endpoint.
 
 *Idempotency-Key supported.*
 
-`POST /system/schedules/tick`; `POST …/{id}/run`; `POST …/{id}/enable`; `DELETE …/{id}`.
+#### Schedule control & webhooks (P0)
 
-Webhooks: `GET/PUT /system/webhooks` body `{url, events[], secret_name?}` — private URL 400; `POST …/test`.
+##### `POST /system/schedules/tick`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /system/schedules/tick` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | system | human |
+| **Idempotency** | Yes (tick is safe to retry; duplicate fires guarded by schedule cursor) |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | `{now?: ISO-8601}` optional override for tests |
+| **Response** | `{fired: [{schedule_id, run_id}], skipped: int}` |
+| **HTTP statuses** | 200; 401; 403 |
+| **Error codes** | `unauthorized` | `forbidden` |
+| **Side effects** | May create runs for due schedules (env default `prod`) |
+| **Audit event** | `schedule.tick` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /system/schedules/{id}/run`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /system/schedules/{id}/run` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` recommended |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `Idempotency-Key`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{}` |
+| **Response** | `{run_id, status}` |
+| **HTTP statuses** | 202; 404; 409 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | Creates run from schedule pipeline/env |
+| **Audit event** | `schedule.run_now` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /system/schedules/{id}/enable`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /system/schedules/{id}/enable` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | `{enabled: bool}` |
+| **Response** | `{id, enabled}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | Toggles schedule |
+| **Audit event** | `schedule.enable` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `DELETE /system/schedules/{id}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `DELETE /system/schedules/{id}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | empty |
+| **HTTP statuses** | 204; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | Deletes schedule |
+| **Audit event** | `schedule.delete` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /system/webhooks`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /system/webhooks` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{url, events[], secret_name: string|null, resource_version}` — **never** secret value |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `PUT /system/webhooks`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `PUT /system/webhooks` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes with version |
+| **Concurrency** | `If-Match` / `resource_version` |
+| **Request headers** | `Authorization`; `If-Match?`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{url: string, events: string[], secret_name?: string|null}` |
+| **Response** | `{url, events, secret_name, resource_version}` |
+| **HTTP statuses** | 200; 400; 401; 412 |
+| **Error codes** | `validation_failed` | `ssrf_blocked` | `version_conflict` |
+| **Side effects** | Replaces webhook config; private/loopback URL → 400 |
+| **Audit event** | `webhook.put` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /system/webhooks/test`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /system/webhooks/test` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | `{event?: string}` |
+| **Response** | `{ok: bool, status_code?, error?}` |
+| **HTTP statuses** | 200; 400; 401 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | Sends test delivery (still SSRF-blocked) |
+| **Audit event** | `webhook.test` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
 
 #### 9.2.11 Workers & jobs
 
@@ -1631,7 +2833,46 @@ Webhooks: `GET/PUT /system/webhooks` body `{url, events[], secret_name?}` — pr
 | 200 | OK |
 | 404 | Unknown worker |
 
-`GET /workers`; `DELETE /workers/{id}`.
+##### `GET /workers`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /workers` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `status?`, `pool?`, `limit?`, `offset?` |
+| **Request body** | — |
+| **Response** | `{items: Worker[], total}` Worker includes `worker_id,labels,pools,resources,plugins,graphyn_version,heartbeat_at,status` |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `DELETE /workers/{id}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `DELETE /workers/{id}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | Yes |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `force?` bool |
+| **Request body** | — |
+| **Response** | empty |
+| **HTTP statuses** | 204; 404; 409 |
+| **Error codes** | `not_found` | `conflict` |
+| **Side effects** | Deregisters worker; 409 if busy unless force (force cancels leased jobs) |
+| **Audit event** | `worker.deregister` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
 
 ##### `POST /jobs/claim`
 
@@ -1705,7 +2946,90 @@ CAS claim — P0.
 
 *Idempotency-Key supported.*
 
-`GET /proposals`; `GET /proposals/{id}`; `POST …/accept`; `POST …/reject`; double-accept 409.
+#### Proposal read/decide (P0)
+
+##### `GET /proposals`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /proposals` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | `status?`, `project?`, `limit?`, `offset?` |
+| **Request body** | — |
+| **Response** | `{items: ProposalSummary[], total}` |
+| **HTTP statuses** | 200; 401 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /proposals/{id}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /proposals/{id}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | Full proposal: `id,status,graph,base_graph,message,rationale,actor,project,pipeline,created_at,resolved_at,reject_reason` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `POST /proposals/{id}/accept`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /proposals/{id}/accept` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` **required** |
+| **Concurrency** | Single-decider: second accept → 409 |
+| **Request headers** | `Authorization`; `Idempotency-Key`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{save_pipeline?: bool, project?, pipeline?}` |
+| **Response** | `{id, status: accepted, pipeline?, resource_version?}` |
+| **HTTP statuses** | 200; 404; 409; 422 |
+| **Error codes** | `not_found` | `conflict` | `invalid_transition` | `validation_failed` |
+| **Side effects** | Marks accepted; optionally writes pipeline draft (secret policy enforced) |
+| **Audit event** | `proposal.accept` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+
+*Notes:* Double-accept **shall** return 409.
+##### `POST /proposals/{id}/reject`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /proposals/{id}/reject` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` recommended |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `Idempotency-Key`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{reason?: string}` |
+| **Response** | `{id, status: rejected}` |
+| **HTTP statuses** | 200; 404; 409 |
+| **Error codes** | `not_found` | `invalid_transition` |
+| **Side effects** | Marks rejected |
+| **Audit event** | `proposal.reject` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
 
 #### 9.2.13 System / readiness / trace / audit / experiments
 
@@ -1767,19 +3091,180 @@ CAS claim — P0.
 
 *Idempotency-Key supported.*
 
-`GET …/packages/{id}`; `GET …/download`; `POST …/promote` `{to_env, approve?}`. Device routes needs-API — 501 honesty until implemented.
+#### Ship package sub-resources (P0)
+
+##### `GET /projects/{name}/ship/packages/{id}`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /projects/{name}/ship/packages/{id}` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `{package_id, status, env, manifest, checksums, created_at, resource_version}` |
+| **HTTP statuses** | 200; 404 |
+| **Error codes** | `unauthorized` | `not_found` |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+##### `GET /projects/{name}/ship/packages/{id}/download`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `GET /projects/{name}/ship/packages/{id}/download` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | N/A (safe/read) unless noted |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization` (conditional); `X-Request-Id` optional |
+| **Request query** | — |
+| **Request body** | — |
+| **Response** | `application/octet-stream` archive; headers `X-Content-SHA256`, `Content-Disposition` |
+| **HTTP statuses** | 200; 404; 409 |
+| **Error codes** | `not_found` | `conflict` (not ready) |
+| **Side effects** | None |
+| **Audit event** | None |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+
+*Notes:* UI **shall** display checksums from manifest.
+##### `POST /projects/{name}/ship/packages/{id}/promote`
+
+| Attribute | Contract |
+|---|---|
+| **METHOD / PATH** | `POST /projects/{name}/ship/packages/{id}/promote` |
+| **Auth** | Bearer when token set; fail-closed when auth required |
+| **Actor** | human | agent | system (`X-Actor`) |
+| **Idempotency** | `Idempotency-Key` **required** |
+| **Concurrency** | Concurrent readers OK |
+| **Request headers** | `Authorization`; `Idempotency-Key`; `X-Actor` |
+| **Request query** | — |
+| **Request body** | `{to_env: staging|prod, approve?: bool}` |
+| **Response** | `{package_id, env, status}` |
+| **HTTP statuses** | 200; 400; 404; 409 |
+| **Error codes** | `validation_failed` | `not_found` | `conflict` |
+| **Side effects** | Moves package channel; prod may require approve=true |
+| **Audit event** | `ship.promote` |
+| **Idempotency semantics** | If `Idempotency-Key` used: same key+body → original; mismatch → 409 `idempotency_conflict` |
+| **Concurrency semantics** | Writers use `If-Match` / `resource_version` when applicable → 412/409 `version_conflict` |
+
+
+*Notes:* Device flash/OTA routes **shall** return **501** with honesty until device API exists (EDGE-007).
 
 ### 9.3 MCP tool categories
 
 See **section 21** for normative expanded catalog (J1–J6 parity). Transport: stdio JSON-RPC; auth `_meta.auth_token`.
 
-### 9.4 CLI / SDK
+### 9.4 CLI / SDK (normative — Contract Closure)
 
-**CLI-001** (P0) validate, run/execute, migrate YAML→JSON, mcp, worker, plugin install/list, secrets set/list (names).
+**CLI-000** (P0) Entry point binary/module **shall** be `graphyn` (Python: `python -m graphyn`). Global flags: `--api-url`, `--token` (or env `GRAPHYN_API_TOKEN`), `--actor`, `--json` (machine stdout), `--verbose`. Exit codes: `0` success; `1` general failure; `2` validation failure; `3` auth failure; `4` not found; `5` conflict/invalid transition; `130` cancelled.
 
-**CLI-002** (P0) SDK builds Graph IR; `get_backend().execute()`.
+#### 9.4.1 CLI commands (P0)
 
-**CLI-003** (P1) Worker CLI register/heartbeat/claim/execute/complete with bearer.
+| Command | Args / options | Stdout | Stderr | Auth | Failure behavior |
+|---|---|---|---|---|---|
+| `graphyn validate <path>` | `--strict`; `--json` | ValidationResult JSON/text | diagnostics | token if remote schema needed | exit 2 if `valid=false` |
+| `graphyn run <path>` | `--project`; `--pipeline`; `--env`; `--seed`; `--async`; `--param KEY=VAL` repeatable; `--json` | `run_id` + status (or NDJSON events) | progress/errors | Bearer when required | exit 1 on failed run; 2 invalid graph; 3 auth |
+| `graphyn migrate <yaml>` | `--out <json>`; `--in-place` | migrated Graph IR path | deprecation warnings | local | exit 2 on migrate error |
+| `graphyn worker start` | `--worker-id`; `--labels`; `--pools`; `--api-url`; `--token` | status lines / `--json` heartbeats | errors | **Bearer required** in Mode B | exit 1 on register/heartbeat failure |
+| `graphyn worker status` | `--worker-id?`; `--json` | worker list/detail | errors | Bearer when required | exit 4 if unknown id |
+| `graphyn mcp` | `--transport stdio` (default) | MCP JSON-RPC on stdio | logs on stderr only | `_meta.auth_token` / env token | non-zero on transport crash |
+| `graphyn plugin install <source>` | `--upgrade`; `--enable`; `--expected-sha256` | plugin name/version | progress | Bearer when required | exit 1/5 on deny/conflict |
+| `graphyn plugin list` | `--enabled?`; `--json` | names/versions (no secrets) | — | Bearer when required | exit 0 |
+| `graphyn secrets set <name>` | value via stdin or `--value` (discouraged); `--json` | `{name, updated_at}` only | — | Bearer | exit 1 on policy fail; **never** echo value |
+| `graphyn secrets list` | `--json` | names only | — | Bearer | exit 0 |
+
+**CLI-001** (P0) Commands in the table above **shall** exist with listed exit codes and JSON mode.
+
+**CLI-003** (P1) `graphyn worker register|heartbeat|claim|complete` low-level verbs **may** expose Mode B protocol for debugging (bearer required).
+
+#### 9.4.2 Python SDK public surface (P0)
+
+**SDK-001** (P0) Public import path **shall** be `from graphyn import Pipeline` (or `from graphyn.sdk import Pipeline`). Implementation **shall** serialize to Graph IR and execute via the same backend entry as REST/CLI (`get_backend().execute` in-process, or REST client when `GRAPHYN_API_URL` / constructor `api_url` set).
+
+```python
+class Pipeline:
+    def __init__(
+        self,
+        name: str = "pipeline",
+        *,
+        seed: int = 42,
+        description: str = "",
+        schema_version: str = "1.2",
+        api_url: str | None = None,
+        token: str | None = None,
+    ) -> None: ...
+
+    def add(
+        self,
+        node_type: str,
+        config: dict | None = None,
+        *,
+        node_id: str | None = None,
+        placement: dict | None = None,
+    ) -> str:
+        """Validate config; append node; return node_id."""
+
+    def connect(
+        self,
+        src: str,
+        src_port: str,
+        dst: str,
+        dst_port: str,
+        *,
+        condition: str | None = None,
+    ) -> None: ...
+
+    def validate(self, *, strict: bool = True) -> "ValidationResult":
+        """Return ValidationResult; does not raise on valid=false unless raise_on_error=True."""
+
+    def run(
+        self,
+        *,
+        project: str | None = None,
+        pipeline: str | None = None,
+        env: str | None = None,
+        seed: int | None = None,
+        params: dict | None = None,
+        use_cache: bool = True,
+        checkpoint: bool = True,
+    ) -> "RunResult":
+        """Sync execute; returns RunResult(run_id, status, artifacts, metrics, error)."""
+
+    async def run_async(self, **kwargs) -> "RunResult":
+        """Async variant; same semantics as run()."""
+
+    def to_ir(self) -> dict: ...
+    def to_json(self, path: str | None = None) -> str: ...
+    @classmethod
+    def from_ir(cls, graph: dict, **kwargs) -> "Pipeline": ...
+    @classmethod
+    def from_json(cls, path: str, **kwargs) -> "Pipeline": ...
+
+    def pause(self, run_id: str) -> None: ...
+    def resume(self, run_id: str, *, expected_graph_hash: str | None = None) -> None: ...
+    def cancel(self, run_id: str) -> None: ...
+```
+
+| Topic | Normative rule |
+|---|---|
+| Exceptions | `GraphynValidationError`, `GraphynAuthError`, `GraphynApiError(code, status)`, `GraphynInvalidTransition`, `IRVersionError` |
+| Sync/async | `run` blocks; `run_async` awaits same backend; both **shall not** embed secrets in IR |
+| IR serialization | `to_ir()` **shall** produce schema_version 1.2 write-target JSON matching §8 |
+| Version compat | SDK major **shall** refuse IR major it does not support; minor newer → warn |
+| REST vs in-process | If `api_url` set → HTTP `/api/v1` client; else in-process backend. Behavior (validation, SM, artifacts) **shall** be equivalent for P0 paths |
+| Builder alternate | Constructing with a pre-built node list **may** be offered; `add`/`connect` **shall** remain the normative builder surface |
+
+**SDK-002** (P0) `Pipeline.run` / `run_async` **shall** refuse graphs with validation errors (same as REST 422).
+
+**CLI-002** (P0) SDK **shall** build Graph IR and execute only through the shared backend entry (no side execution path).
 
 ## 10. Information architecture & navigation (normative UX)
 
@@ -2301,29 +3786,41 @@ running → failed | cancelled | succeeded
 paused  → running | cancelled | failed
 ```
 
-#### Legal / illegal transitions
+#### Authoritative Current × Action → Next matrix (P0)
 
-| From → To | Legal? | Trigger |
+Actions: `start` (executor), `pause`, `resume`, `cancel`, `succeed` (internal), `fail` (internal), `retry` (operator — always new run).
+
+| Current \ Action | start | pause | resume | cancel | succeed | fail | retry (operator) |
+|---|---|---|---|---|---|---|---|
+| `pending` | `running` | ❌ | ❌ | `cancelled` | ❌ | ❌ | new run only |
+| `running` | ❌ | `paused` | ❌ | `cancelled` | `succeeded` | `failed` | new run only |
+| `paused` | ❌ | ❌ | `running`¹ | `cancelled` | ❌ | `failed`² | new run only |
+| `succeeded` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | **new run** |
+| `failed` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | **new run** |
+| `cancelled` | ❌ | ❌ | ❌ | ❌³ | ❌ | ❌ | **new run** |
+
+¹ Resume **shall** require matching `graph_hash` (else 409 or → `failed`).  
+² Resume validation / crash detection may mark `failed`.  
+³ Cancel when already `cancelled` is ack no-op **200** with same status (idempotent cancel) — not a state change.
+
+❌ = **disallowed** → HTTP **409** `error.code=invalid_transition` (status unchanged), except idempotent cancel on `cancelled`.
+
+#### Locked resume / pause decisions (Contract Closure)
+
+| Question | Decision | Notes |
 |---|---|---|
-| pending → running | YES | Executor starts first wave |
-| pending → cancelled | YES | Cancel before start |
-| pending → paused/succeeded/failed | NO | — |
-| running → paused | YES | `POST …/pause` cooperative |
-| running → succeeded | YES | All nodes done OK |
-| running → failed | YES | Node/system failure |
-| running → cancelled | YES | `POST …/cancel` |
-| running → pending | NO | — |
-| paused → running | YES | `POST …/resume` (graph_hash match) |
-| paused → cancelled | YES | Cancel while paused |
-| paused → failed | YES | Resume validation failure / underlying crash detected |
-| paused → succeeded/pending | NO | — |
-| succeeded → * | NO | Terminal |
-| failed → * | NO | Terminal (retry = new run) |
-| cancelled → * | NO | Terminal |
+| Resume a **failed** run? | **NO** | Operator **shall** create a **new** `run_id` (RT-019). Optional checkpoint hydration via `resume_from_checkpoints_of` does **not** revive the failed run. |
+| Resume a **cancelled** run? | **NO** | New run required. |
+| Pause / resume a **succeeded** run? | **NO** | Terminal. |
+| Resume a **paused** run? | **YES** | Only legal resume path; graph_hash must match. |
+
+*v1.1 already treated failed/cancelled/succeeded as terminal; v1.2.0 makes the Current×Action table and the three NO answers explicit and authoritative.*
 
 **RT-SM-001** (P0) Illegal transitions **shall** return **409** with `error.code=invalid_transition` and leave status unchanged.
 
 **RT-SM-002** (P0) Status transitions **shall** be atomic w.r.t. run meta durability (§16).
+
+**RT-SM-003** (P0) Implementers **shall** treat the Current×Action matrix as the sole authority for run control APIs (pause/resume/cancel) and executor-driven succeed/fail.
 
 #### Cancel semantics
 
@@ -2684,14 +4181,31 @@ Device registry/flash/OTA APIs may be **needs-API**; **package side is fully spe
 | `lineage` | object | YES | `{run_id, model_name, dataset_versions[]}` |
 | `notes` | string | NO | |
 
-### 19.2 Lifecycle
+### 19.2 Lifecycle (Contract Closure — normative states)
+
+**Package lifecycle states (P0):**
+
+`draft` → `validated` → `built` → `signed` → `published` → `deployed` → (`failed` | `superseded`)
 
 ```
-creating → ready → staging → prod
-                ↘ failed
-ready|staging|prod → superseded (after rollback/replace)
-any non-terminal → cancelled
+draft → validated → built → signed → published → deployed
+                         ↘ failed
+published|deployed → superseded (after rollback/replace)
+any non-terminal → failed (build/sign/publish error)
 ```
+
+| State | Meaning |
+|---|---|
+| `draft` | Package request accepted; manifest draft |
+| `validated` | Refs (model/pipeline/runtime) resolved & compatible |
+| `built` | Archive + per-file hashes written |
+| `signed` | Signature present **or** signing skipped with explicit `unsigned_allowed=true` (dev only) |
+| `published` | Available on a channel (`staging`/`prod`) for download |
+| `deployed` | Marked deployed to a target (device side may stub) |
+| `failed` | Terminal failure for this `package_id` |
+| `superseded` | Replaced by newer package on channel |
+
+**Immutable package identity (P0):** `package_id` + aggregate content `checksums.sha256` **shall not** change after `built`. Model/pipeline refs, runtime/arch, deps digests, signing metadata, deploy target, and rollback pointer **shall** be recorded on the manifest (§19.1).
 
 | ID | Requirement | Pri |
 |---|---|---|
@@ -2701,6 +4215,7 @@ any non-terminal → cancelled
 | SHIP-004 | Rollback points channel to prior `package_id`; marks current superseded | P1 |
 | SHIP-005 | Deployment status on package: `not_deployed`\|`pending`\|`deployed`\|`failed` (device side may be stub) | P1 |
 | SHIP-006 | Device identity fields on assign: `device_id`, `display_name`, `last_package_id`, `last_seen_at`, `ota_status` — **needs-API** for live OTA; UI honesty stub | P0 |
+| SHIP-007 | Implementers **shall** use the lifecycle states above; wire aliases `creating`→`draft`, `ready`→`built` **may** be accepted on read during migration | P0 |
 | EDGE-001 | edge_optimizer + deployment_packager path via template/wizard | P0 |
 | EDGE-002 | Download package artifact from completed ship run | P0 |
 | EDGE-007 | Fake Devices UI without API **shall not** ship — stub + honesty only | P0 |
@@ -2837,7 +4352,9 @@ any non-terminal → cancelled
 
 **AUD-005** (P0) Required audited actions include: proposal create/accept/reject; pipeline publish/promote/rollback; model request/approve prod; secret set/delete (name only); plugin install/enable/disable/uninstall; schedule CRUD; ship package create/promote; run cancel; cleanup.
 
-### 22.2 Provenance record
+### 22.2 Provenance record & Prove-pillar capture set
+
+#### Provenance record (per artifact)
 
 | Field | Type | Required |
 |---|---|---|
@@ -2851,6 +4368,37 @@ any non-terminal → cancelled
 | `actor` | string\|null | NO |
 | `dataset_refs` | array | NO | `{label_or_version, content_hash?}` |
 | `created_at` | ISO-8601 | YES |
+
+#### Normative minimum reproducibility / provenance capture (Prove) — **AUD-PROV-010** (P0)
+
+On every terminal run (and on each committed artifact), Graphyn **shall** capture and persist the following (immutable after write; redaction of secret **values** only):
+
+| Field | Type | Required | Source |
+|---|---|---|---|
+| `graph_hash` | string | YES | Canonical hash of Graph IR |
+| `graph_schema_version` | string | YES | IR `schema_version` |
+| `pipeline_version` | string\|null | YES* | Version id when run from published env; null if ad-hoc |
+| `dataset_versions` | array | YES | `[{project?, version\|label, content_hash?}]` — empty array if none |
+| `input_artifact_hashes` | string[] | YES | Content hashes of input artifacts (may empty) |
+| `node_implementation_versions` | object | YES | map `node_type` → implementation version/digest |
+| `plugin_version` | object | YES | map plugin name → version (empty object if none) |
+| `model_version` | object\|null | NO | When run consumes/registry-stamps models |
+| `runtime_version` | string | YES | Python/runtime identifier |
+| `graphyn_version` | string | YES | Control-plane / package version |
+| `worker_id` | string\|null | YES* | Mode B worker; null in Mode A |
+| `worker_software_version` | string\|null | YES* | Worker binary/image version; null in Mode A |
+| `configuration` | object | YES | Non-secret run params + resolved node configs (secret names only) |
+| `seed` | integer\|null | YES | RNG seed when applicable; else null |
+| `actor` | string | YES | From `X-Actor` / system |
+| `trigger` | string | YES | `ui`\|`cli`\|`sdk`\|`mcp`\|`schedule`\|`webhook`\|`api` |
+| `environment` | string\|null | YES | `draft`\|`staging`\|`prod`\|null |
+| `timestamp` | ISO-8601 | YES | Capture time (server) |
+
+\* Field always present; value may be null per rules.
+
+**AUD-PROV-011** (P0) Capture records **shall** be immutable (append-only / content-addressed). Updates **forbidden**; corrections require a new run.
+
+**AUD-PROV-012** (P0) Replay / Prove UI **shall** surface this set (partial honesty when a field was historically missing — OBS-007).
 
 **OBS-001** Append-only audit for mutations (P0).  
 **OBS-002** `GET /trace` unified backtrack (P0).  
@@ -2926,14 +4474,24 @@ Single-tenant shared bearer. Bearer holder can CRUD all workspaces until multi-u
 
 ## 25. Non-functional requirements
 
-### 25.1 Performance
+### 25.1 Performance (structure required; numbers provisional / TBD)
 
-| ID | Requirement | Pri |
-|---|---|---|
-| NFR-PERF-001 | Route-level code splitting for features | P1 |
-| NFR-PERF-002 | Virtualize long run/log/artifact lists | P1 |
-| NFR-PERF-003 | Editor bundle isolated from observe routes | P1 |
-| NFR-PERF-004 | Catalog/list endpoints should respond < 2s on lab hardware for ≤1k nodes/runs page | P2 |
+**NFR-PERF-000** (P0 for GA release gating; P1 for early alpha) Before GA, every `TBD-PERF-*` slot **shall** be replaced with a measured target + method. **PROVISIONAL** defaults below are engineering placeholders — **not** final product commitments. Implementers **shall not** treat provisional numbers as locked SLOs.
+
+| ID | Metric | Measurement method | Default | Pri |
+|---|---|---|---|---|
+| NFR-PERF-001 | Console route code-splitting | Bundle analysis in CI | Split by feature route | P1 |
+| NFR-PERF-002 | Long list rendering | Manual + e2e scroll 10k rows | Virtualize runs/logs/artifacts | P1 |
+| NFR-PERF-003 | Editor isolate from observe | Bundle graph check | Separate async chunk | P1 |
+| NFR-PERF-004 | Catalog/list paged latency | API bench ≤1k items page, lab HW | **PROVISIONAL** p95 < 2.0s | P2 |
+| NFR-PERF-010 | `POST /pipelines/validate` p95 | Bench 100-node graph, Mode A lab | **PROVISIONAL** < 500ms | P1 / **TBD-PERF-VALIDATE** before GA |
+| NFR-PERF-011 | Run start ack (`run-async`) p95 | Bench local, warm process | **PROVISIONAL** < 300ms | P1 / **TBD-PERF-RUN-ACK** before GA |
+| NFR-PERF-012 | Mode A empty-graph overhead | Wall time pending→succeeded noop | **TBD-PERF-NOOP** (fill before GA) | P0-for-GA |
+| NFR-PERF-013 | Artifact upload 100MiB | Local disk store | **PROVISIONAL** < 5s lab SSD | P2 / **TBD-PERF-ARTIFACT** |
+| NFR-PERF-014 | MCP tool round-trip validate | stdio local | **PROVISIONAL** < 750ms | P2 / **TBD-PERF-MCP** |
+| NFR-PERF-015 | Worker heartbeat handling | Control plane under 100 workers | **TBD-PERF-HB** before GA | P0-for-GA |
+
+**Labeling rule:** rows marked **PROVISIONAL** may guide early alpha; rows marked **TBD-PERF-*** **must** be filled before GA (release checklist P0). Do **not** invent marketing SLOs in this SRS.
 
 ### 25.2 Accessibility
 
@@ -3124,44 +4682,45 @@ Format: Given / When / Then. Map to FR/RT/API/DIST/SEC IDs.
 
 ## 33. Requirements Completeness Review
 
-### 33.1 Area coverage Current (v1.0) → v1.1
+### 33.1 Area coverage v1.0 → v1.1 → v1.2.0
 
-| Area | v1.0 | v1.1 | Notes |
-|---|---|---|---|
-| Vision / pillars / IA / path URLs | Strong | Preserved | Workspace strip, Artifacts not strip peer |
-| Graph IR shape | Strong | Preserved + validation model | §14 complete checks |
-| REST inventory | Path list | **Field contracts + envelope + pagination + concurrency** | §9 |
-| Run state machine | Sketch | **Normative transitions + cancel/resume/crash** | §13.2 |
-| Distributed failure | Soft/deferred reclaim | **P0 CAS, lease, at-least-once, reassignment** | §15 |
-| Persistence | Implied files | **Durability + atomicity + quarantine** | §16 |
-| Plugins | Install basics | **Lifecycle SM + trust + rollback** | §17 |
-| Models vs pipeline envs | Mentioned | **Formal dual-axis + lineage** | §18 |
-| Ship package | Wizard sketch | **Manifest + lifecycle** | §19 |
-| Dataset versions | Paths | **Immutability/hash/delete/repro** | §20 |
-| MCP vs J1–J6 | Contradiction risk | **Expanded tool set for parity** | §21 |
-| Audit schemas | Light | **Event schema + immutability** | §22 |
-| Threat model | Trust notes | **XSS/localStorage/worker/plugin/python_code** | §23 |
-| Operational | Thin NFR | **Backup/migrate/shutdown/disk-full/compat** | §24 |
-| Acceptance | Journey happy | **Happy+negative+security+distributed** | §28 |
-| Completeness Review | Absent | **This section** | §33 |
+| Area | v1.0 | v1.1 | v1.2.0 Contract Closure | Notes |
+|---|---|---|---|---|
+| Vision / pillars / IA / path URLs | Strong | Preserved | Preserved (not rewritten) | Workspace strip locked |
+| Graph IR shape | Strong | + validation model | Preserved | §8 / §14 |
+| REST inventory | Path list | Field tables | **Compressed P0 endpoints expanded to equal-precision contracts** | §9 |
+| SDK / CLI | Mention | One-liners | **Normative Python SDK + CLI tables** | §9.4 |
+| Domain loose objects | Soft types | Soft types | **Executable schemas** (resources/metrics/params/envs) | §7.16 |
+| Run state machine | Sketch | Transitions | **Authoritative Current×Action matrix; resume NO on failed/cancelled/succeeded** | §13.2 |
+| Distributed failure | Soft | P0 CAS/lease | Preserved | §15 |
+| Persistence | Implied | Durability | Preserved | §16 |
+| Plugins | Basics | Lifecycle SM | + equal-precision REST | §17 / §9 |
+| Models vs pipeline envs | Mentioned | Dual-axis | + env null rules schema | §18 / §7.16 |
+| Ship package | Wizard | Manifest | **Lifecycle draft→…→deployed/failed/superseded** | §19 |
+| Dataset versions | Paths | Immutability | + equal-precision data/ingest REST | §20 / §9 |
+| MCP vs J1–J6 | Risk | Expanded tools | Preserved catalog | §21 |
+| Prove / provenance | Light | Event schema | **Minimum repro capture set** | §22.2 |
+| Performance NFRs | Thin | Thin | **PROVISIONAL / TBD-PERF-* structure (no fake SLOs)** | §25.1 |
+| Threat / ops / acceptance | Notes | Expanded | Preserved | §23–28 |
+| Completeness Review | Absent | Present | **Honesty pass + residual gap list** | §33 / App F |
 
 ### 33.2 Priority counts (approximate unique IDs in this SRS)
 
 | Priority | Approx count | Role |
 |---|---|---|
-| P0 | ~220+ | Build blockers / greenfield must |
+| P0 | ~240+ | Build blockers / greenfield must (incl. closure IDs) |
 | P1 | ~90+ | Journey completeness / product-feel |
 | P2 | ~40+ | Polish / future |
 
-*(Exact count may drift as IDs are added; treat tables as authoritative.)*
+*(Exact count may drift; treat tables as authoritative.)*
 
-### 33.3 Greenfield build statement
+### 33.3 Greenfield build statement (honest)
 
-**Yes — a greenfield team can build Graphyn P0 from this document alone**, including: console IA, Graph IR, REST contracts with error envelope, run state machine, Mode A execution, Mode B worker protocol with P0 failure behavior, persistence guarantees, validation model, plugin lifecycle, model/pipeline promotion, ship package manifests, dataset version rules, MCP tools for J1–J6, audit/provenance schemas, core threat mitigations, and operational backup/readiness/cleanup.
+**Mostly yes — with named residuals.** After Contract Closure, a greenfield team **can** implement the **contracted P0 surface** from this document alone: console IA, Graph IR, equal-precision P0 REST (including formerly compressed routes), Python SDK + CLI, run Current×Action SM, Mode A/B P0 failure behavior, persistence, validation, plugin lifecycle, model/pipeline promotion, ship lifecycle + manifest, dataset version rules, MCP J1–J6 tools, Prove capture set, threat mitigations, and ops backup/readiness/cleanup.
 
-**Residual P1/P2 judgment areas (not blocking P0):** cookie/BFF token migration UX; full device OTA; RBAC role taxonomy; compare chart aggregation locus; optional audit hash-chain UX; BASE_PATH; partial proposal apply; dedicated HITL node; OTel span viewer; mobile observe-only.
+**This document does *not* claim zero unknowns.** Softened vs v1.1: Settings UX density, device registry/OTA API shape, RBAC role taxonomy, compare aggregation locus, cookie/BFF token timeline, and all **TBD-PERF-*** numeric targets remain **unfilled**. Those **shall not** be invented by implementers as if specified. Early alpha **may** ship against **PROVISIONAL** perf defaults; **GA shall not** until TBD-PERF slots are filled.
 
-**Residual undecidable TBDs:** listed in §32 only (product preference, not missing build contracts for P0).
+**Residual P1/P2 / TBD (not silent P0):** see §32 and Appendix F residual list.
 
 ## 34. Appendix
 
@@ -3343,6 +4902,52 @@ Plus project lifecycle routes under `/api/v1/projects` (CRUD, clone, taxonomy, c
 
 Implementers **shall** support a typed port system. Platform examples include: `AudioSample`, `FeatureArray`, `TensorBatch`, `ModelArtifact`, `TFLiteArtifact`, `PredictionResult`, `DeploymentArtifact`, `DataSample`. Plugins may register additional `PortDataType` subclasses via `types.py`.
 
+### Appendix F — Contract Closure Gap List (Samir A–G) — closed vs residual
+
+Extracted from v1.1 against J1–J6 + acceptance matrix; closed in v1.2.0 unless marked residual.
+
+#### F.1 Closed in v1.2.0
+
+| Gap | Samir | Closure location |
+|---|---|---|
+| P0 REST endpoints compressed into prose (templates, nodes, run sub-resources, data/ingest, plugins, secrets PUT/DELETE, schedule control, webhooks, workers list/delete, proposals, ship package sub-resources) | A | §9.2 equal-precision contracts |
+| SDK Python public surface underspecified | B | §9.4.2 `Pipeline` add/connect/validate/run(+async), IR, exceptions, REST vs in-process |
+| CLI commands underspecified | C | §9.4.1 command table (args, exit codes, stdout/stderr, JSON, auth) |
+| Domain fields typed as loose `object` (worker resources, metrics, params, environments) | D | §7.16 executable JSON Schemas |
+| Run SM missing authoritative transition table + failed/cancelled resume answers | E | §13.2 Current×Action matrix; resume **NO** for failed/cancelled/succeeded |
+| Provenance/repro field list incomplete for Prove pillar | F | §22.2 AUD-PROV-010 capture set + immutability |
+| Performance NFRs lack measurable targets | G | §25.1 PROVISIONAL / TBD-PERF-* structure (no fake product numbers) |
+| Ship package lifecycle states incomplete | — | §19.2 draft→validated→built→signed→published→deployed→failed/superseded |
+| Overclaim “build all P0 from this doc alone” | — | §1 softens; §33.3 honest residual statement |
+
+#### F.2 P0 inventory cross-check (informative summary)
+
+| Class | Count / notes | J1–J6 / AC coverage |
+|---|---|---|
+| P0 requirement IDs | ~240+ unique IDs with (P0) / Pri P0 | Trace via §28 + §29 + §31 |
+| P0 REST | Appendix B path list + §9.2 contracts (expanded) | J1–J6 API paths covered |
+| P0 MCP tools | §21.3 core + parity additions | Journey matrix §21.4 |
+| P0 CLI | validate, run, migrate, worker start/status, mcp, plugin install/list, secrets set/list | §9.4.1 |
+| P0 domain objects | Workspace, Pipeline(+envs), Graph IR, Run, Artifact, Provenance, Model, Dataset version, Schedule, Webhook, Proposal, Secret, Worker(+resources), Actor, Job, Ship package | §7 + §7.16 + §19 |
+
+#### F.3 Residual gaps (explicit — do not invent)
+
+| Residual | Pri | Notes |
+|---|---|---|
+| Settings UX layout (page vs drawer) | TBD §32 | Product preference |
+| Device registry / OTA API shape | P0 honesty stub; API needs-API | EDGE/SHIP device |
+| RBAC role taxonomy | P2 | Access stub until multi-user |
+| Compare chart aggregation locus | TBD §32 | |
+| Cookie/BFF token migration timeline | P1 | localStorage interim remains |
+| Numeric GA perf SLO fill-in | **TBD-PERF-*** | Structure present; numbers before GA |
+| Partial proposal apply API | TBD §32 | |
+| Dedicated HITL node type | TBD §32 | |
+| Project advanced routes (clone/taxonomy/…) detail tables | P1 | Appendix B notes projects router extras |
+
+#### F.4 Contradiction check — “sole normative / build P0 from this doc alone”
+
+v1.1 implied **all** P0 were fully contracted. v1.2.0 **resolves** by: (1) closing A–G contract holes; (2) restating sole-normative as covering **fully contracted** P0; (3) listing residuals so implementers cannot silently invent Settings/device/RBAC/perf numbers.
+
 ---
 
-*End of GRAPHYN-SRS-001 v1.1.0 Draft — Complete Build-Ready — 2026-09-18 (Asia/Calcutta). Document author: Samir Kumar Mishra \<samir.nmiet@gmail.com\>.*
+*End of GRAPHYN-SRS-001 v1.2.0 Draft — Contract Closure — 2026-09-18 (Asia/Calcutta). Document author: Samir Kumar Mishra \<samir.nmiet@gmail.com\>.*
