@@ -2,32 +2,45 @@
 
 | Field | Value |
 |---|---|
-| **Title** | Graphyn Standalone Greenfield Software Requirements Specification |
+| **Title** | Graphyn Standalone Greenfield Software Requirements Specification — Complete Build-Ready |
 | **Document ID** | GRAPHYN-SRS-001 |
-| **Version** | **1.0.0 Draft** |
+| **Version** | **1.1.0 Draft — Complete Build-Ready** |
 | **Date** | 2026-09-18 (Asia/Calcutta) |
-| **Status** | Draft — greenfield standalone (build-from-scratch ready) |
+| **Status** | Draft — build-contract SRS (normative REST/runtime/persistence/security) |
 | **Document author** | Samir Kumar Mishra \<samir.nmiet@gmail.com\> |
 | **Audience** | Product managers, engineers, QA, agent implementers building Graphyn freshly |
 
 ## 1. Document control
 
-This document is the **sole normative Software Requirements Specification** for Graphyn when building the product from a greenfield codebase. It embeds product vision, architecture, data model, Graph IR, REST/MCP/CLI contracts, console UX, runtime, security, NFRs, journeys, and acceptance criteria **inline**. A new team SHALL be able to implement the system using only this document plus ordinary engineering judgment — **without reading any other repository guide**.
+This document is the **sole normative Software Requirements Specification** for Graphyn when building the product from a greenfield codebase. It embeds product vision, architecture, data model, Graph IR, **build-contract REST/MCP/CLI contracts**, console UX, runtime state machines, persistence guarantees, distributed execution, plugin lifecycle, security/threat model, operational procedures, journeys, and acceptance criteria **inline**. A new team SHALL be able to implement **all P0 requirements** using only this document plus ordinary engineering judgment — **without reading any other repository guide**.
 
 **Change history**
 
 | Version | Date | Notes |
 |---|---|---|
 | 1.0.0 Draft | 2026-09-18 | Standalone greenfield rewrite: all product facts folded in; zero outbound doc references; Priority P0/P1/P2 only (target product, not tip status) |
+| 1.1.0 Draft — Complete Build-Ready | 2026-09-18 | Upgrade to build-contract SRS: normative REST field tables, error envelope, run state machine, distributed P0 failure behavior, persistence, graph validation model, plugin lifecycle/security, model↔pipeline env lineage, Ship package model, dataset version semantics, MCP parity expansion for J1–J6, audit/provenance schemas, threat-model requirements, operational contracts, broadened acceptance matrix, Completeness Review |
 
 **Conventions**
 
 - Requirements use RFC 2119 **shall** / **should** / **may**.
-- Every requirement has a unique ID (`FR-*`, `UX-*`, `NFR-*`, `SEC-*`, `RT-*`, `DIST-*`, `MR-*`, `PLG-*`, `MCP-*`, `EDGE-*`, `DATA-*`, `OBS-*`, `QA-*`, `DM-*`, `IR-*`, `API-*`, `CLI-*`, `ARCH-*`, `J-*`).
-- **Priority only:** **P0** (must ship for usable product) · **P1** (product-feel / journey completeness) · **P2** (polish / later). Do **not** track Implemented/Partial against a git tip in this SRS — this is the **target product**.
+- Every requirement has a unique ID (`FR-*`, `UX-*`, `NFR-*`, `SEC-*`, `RT-*`, `DIST-*`, `MR-*`, `PLG-*`, `MCP-*`, `EDGE-*`, `DATA-*`, `OBS-*`, `QA-*`, `DM-*`, `IR-*`, `API-*`, `CLI-*`, `ARCH-*`, `J-*`, `VAL-*`, `PERS-*`, `OPS-*`, `SHIP-*`, `AUD-*`, `THREAT-*`).
+- **Priority only:** **P0** · **P1** · **P2**. This is the **target product**, not tip status.
 - **UI noun:** **Workspace** everywhere in the console. API wire fields may use `project` (Project = Workspace, one entity).
-- Tables + numbered SHALL requirements are preferred for clarity.
+- Tables + numbered SHALL requirements preferred.
+- **Independence:** zero outbound references to other repository markdown files (no relative sibling-doc hyperlinks).
+
+**Normative vs informative**
+
+| Kind | Meaning |
+|---|---|
+| **SHALL / MUST** tables & state machines | Build contract |
+| **SHOULD** | Strong default; deviation needs rationale |
+| **MAY** | Optional; not blocking greenfield P0 |
+| Mermaid / examples | Informative; field tables win on conflict |
+
 ---
+
 ## 2. Purpose, scope, assumptions, constraints
 ### 2.1 Purpose
 
@@ -79,6 +92,7 @@ Graphyn’s product identity is the combination of six pillars in **one** produc
 | A-002 | Desktop browsers (Chrome/Edge/Firefox latest-2) are the primary console clients |
 | A-003 | Workspace filesystem roots (`GRAPHYN_PROJECT_DIR` / `workspace/`) and platform home (`GRAPHYN_HOME`) are writable by the API process |
 | A-004 | Mode A (single process) is the default; Mode B requires operator-started workers with shared bearer |
+| A-006 | Persistence may be files or DB; §16 guarantees apply equally |
 | A-005 | Plugin authors follow the plugin package contract; untrusted multi-tenant plugin execution needs future isolation beyond AST filters |
 
 ### 2.5 Constraints
@@ -90,8 +104,10 @@ Graphyn’s product identity is the combination of six pillars in **one** produc
 | C-003 | API field name `project` may appear on the wire; UI **shall** say Workspace |
 | C-004 | Stable IDE rail structure is locked (§10) — strip vs groups must not morph |
 | C-005 | Hostnames of lab boxes are deployment detail, not product requirements |
+| C-007 | Zero outbound refs from this SRS to other repository markdown files |
 | C-006 | Pickle deserialization is same-trust-plane only (distributed blobs / isolated plugins) |
 ---
+
 ## 3. Glossary
 | Term | Definition | Is not |
 |---|---|---|
@@ -123,6 +139,14 @@ Graphyn’s product identity is the combination of six pillars in **one** produc
 | **Worker** | Mode B process that claims jobs and executes nodes | Edge device |
 | **Switch** | Single control to change/clear active workspace (sidebar strip only) | Dual header+sidebar switchers |
 ---
+| **Ship package** | Deployable edge bundle with manifest, checksums, model version refs | Worker fleet |
+| **Job** | Unit of remote work (one node execution) in Mode B | Entire pipeline run |
+| **Lease** | Time-bounded claim on a job; renewed by heartbeat | Permanent ownership |
+| **Error envelope** | Canonical JSON error body (§9.0) | Ad-hoc string-only errors |
+| **ETag / resource_version** | Optimistic concurrency token | Soft advisory only |
+| **Dataset version** | Immutable content-addressed snapshot under datasets/output | Mutable input label folder |
+
+
 ## 4. Stakeholders / personas
 | Persona | Goals | Primary surfaces |
 |---|---|---|
@@ -134,6 +158,7 @@ Graphyn’s product identity is the combination of six pillars in **one** produc
 | **Reviewer / auditor** | Backtrack any artifact to graph+run+actor | Lineage, Audit, Access |
 | **Product owner** | Journeys J1–J6 complete without leaving Graphyn | All |
 ---
+
 ## 5. Goals & success criteria
 ### 5.1 Goals
 
@@ -158,6 +183,7 @@ Graphyn’s product identity is the combination of six pillars in **one** produc
 | SM-008 | Journeys J1–J6 | Completable by human **and** MCP agent without leaving Graphyn | P0 |
 
 ---
+
 
 ## 6. System context & architecture
 
@@ -275,6 +301,7 @@ Conceptual roots (env-configurable):
 - SDK: build Graph IR / Pipeline nodes; `get_backend().execute()`
 
 ---
+
 
 ## 7. Domain data model
 
@@ -464,6 +491,7 @@ Top-level: `schema_version`, `metadata`, `nodes[]`, `edges[]`, optional `paramet
 
 ---
 
+
 ## 8. Graph IR specification (normative)
 
 ### 8.1 Top-level required keys
@@ -599,230 +627,1159 @@ Remote nodes exchange ports as `artifact://{store}/{key}` / `input_refs` / `outp
 
 ---
 
+
 ## 9. External interfaces: REST, MCP, CLI/SDK
 
-### 9.1 REST auth (applies to all `/api/v1` unless noted)
+### 9.0 REST conventions (normative — build contract)
+
+**API-CONV-001** (P0) Base prefix **shall** be `/api/v1`. Content-Type `application/json` unless multipart upload or binary download.
+
+**API-CONV-002** (P0) All authenticated endpoints **shall** accept `Authorization: Bearer <token>` when `GRAPHYN_API_TOKEN` is set. Fail-closed when `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV` ∈ {`production`,`prod`,`staging`}.
+
+**API-CONV-003** (P0) Mutations **shall** accept optional `X-Actor` (string, max 256 chars) and persist it on audit/run metadata when provided.
+
+**API-CONV-004** (P0) Idempotent creates/mutations that are retry-safe **shall** accept `Idempotency-Key` header (ASCII, 1–128 chars). Replays with the same key + same body **shall** return the original status/body; same key + different body **shall** return **409** with `error.code=idempotency_conflict`.
+
+**API-CONV-005** (P0) Resources that support concurrent writers (pipeline draft, schedule, webhook config, secret metadata, ship package status) **shall** support optimistic concurrency via one of:
+- `If-Match: "<etag>"` / response `ETag` header, or
+- body/query `resource_version` (integer or opaque string echoed from GET).
+Mismatch **shall** return **412** (If-Match) or **409** with `error.code=version_conflict`.
+
+#### 9.0.1 Error envelope schema
+
+**API-ERR-001** (P0) Every non-2xx JSON response from `/api/v1/*` **shall** use this envelope (FastAPI `detail` string **may** additionally appear for legacy clients, but `error` object is normative):
+
+```json
+{
+  "error": {
+    "code": "string_snake_case",
+    "message": "human-readable summary",
+    "detail": "optional longer explanation",
+    "field_errors": [{"field": "path.to.field", "message": "…", "code": "optional"}],
+    "request_id": "opaque correlation id",
+    "resource": {"type": "run|pipeline|artifact|…", "id": "…"},
+    "retryable": false
+  }
+}
+```
+
+| Field | Required | Type | Rules |
+|---|---|---|---|
+| `error.code` | YES | string | Stable machine code (`not_found`, `validation_failed`, `conflict`, `forbidden`, `unauthorized`, `precondition_failed`, `idempotency_conflict`, `version_conflict`, `invalid_transition`, `secret_in_ir`, `worker_stale`, …) |
+| `error.message` | YES | string | Safe for UI toast; **shall not** contain secret values |
+| `error.detail` | NO | string | Extra context |
+| `error.field_errors` | NO | array | For 422 validation |
+| `error.request_id` | YES | string | Matches response header `X-Request-Id` when set |
+| `error.resource` | NO | object | When applicable |
+| `error.retryable` | YES | bool | Client guidance |
+
+**Standard status codes**
+
+| Code | When |
+|---|---|
+| 200 | Success with body |
+| 201 | Created |
+| 204 | Success no body |
+| 400 | Malformed request / invalid id shape |
+| 401 | Missing/invalid bearer |
+| 403 | Authenticated but forbidden operation |
+| 404 | Resource not found |
+| 409 | Conflict (state, idempotency, duplicate) |
+| 412 | Precondition failed (If-Match) |
+| 422 | Schema / Graph IR / config validation failed |
+| 429 | Rate limited (optional; if used, include `Retry-After`) |
+| 500 | Unexpected server error (`retryable` true only if safe) |
+| 503 | Not ready (readiness false / disk-full / store unavailable) |
+
+**Forbidden API behaviors**
+
+| ID | Forbidden | Pri |
+|---|---|---|
+| API-FORBID-001 | Returning secret **values** in any list/get response | P0 |
+| API-FORBID-002 | Echoing submitted secret values in 422 `input` fields on secrets routes | P0 |
+| API-FORBID-003 | Silent empty list when index is corrupted (must 503 or quarantine error) | P0 |
+| API-FORBID-004 | Accepting Graph IR that embeds non-empty secret-shaped config keys | P0 |
+| API-FORBID-005 | Committing new artifacts for a run after cancel is acknowledged | P0 |
+| API-FORBID-006 | Claiming a job without CAS / lease fencing | P0 |
+| API-FORBID-007 | Cross-tenant data via path traversal (`../`) | P0 |
+
+#### 9.0.2 Pagination, filter, sort (list endpoints)
+
+**API-PAGE-001** (P0) List endpoints **shall** support:
+
+| Query | Type | Default | Notes |
+|---|---|---|---|
+| `limit` | int | 50 | Max 500 (artifacts/runs max 1000 where noted) |
+| `offset` | int | 0 | Or `cursor` opaque string — pick one per resource; document below |
+| `sort` | string | resource default | `field` or `-field` (desc) |
+| `q` | string | — | Free-text where applicable |
+
+**List response envelope**
+
+```json
+{
+  "items": [],
+  "total": 0,
+  "limit": 50,
+  "offset": 0,
+  "next_offset": null
+}
+```
+
+Resources that historically returned bare arrays **shall** accept `?envelope=1` (P0) and **should** migrate default to envelope (P1). Bare array remains allowed for nodes catalogue until P1.
+
+### 9.1 Auth (all `/api/v1` unless noted)
 
 | Mode | When | Behaviour |
 |---|---|---|
 | Unauthenticated-dev | Token unset and auth not required | Local single-user only |
 | Shared bearer | `GRAPHYN_API_TOKEN` set | `Authorization: Bearer <token>` |
-| Fail-closed | `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV` ∈ {production,prod,staging} | Empty token rejected |
+| Fail-closed | `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV` in {production,prod,staging} | Empty token rejected |
 
-Always unauthenticated: `GET /`, `GET /health` (liveness). Static mounts use same bearer policy when token set.
+Always unauthenticated: `GET /`, `GET /health` (liveness). Static mounts use same bearer when token set.
 
-**API-AUTH-001** (P0) Mutations **should** accept `X-Actor` for audit.
+**API-AUTH-001** (P0) Mutations **shall** accept `X-Actor` for audit.
 
-### 9.2 REST resource catalog (conceptual contract)
+### 9.2 Resource contracts (field-level)
 
-Base prefix: `/api/v1`.
+Base prefix: `/api/v1`. Error envelope section 9.0. List pagination section 9.0.2 unless noted.
 
-#### Nodes & types
+#### 9.2.1 Workspaces / projects
 
-| Method | Path | Purpose | Key fields |
+Wire name: `project`. UI: Workspace.
+
+##### `GET /projects`
+
+| Query | Type | Required | Notes |
 |---|---|---|---|
-| GET | `/nodes` | List catalogue | Query filters; returns node_type, metadata, ports |
-| GET | `/nodes/{node_type}` | Node detail | Full schema |
-| GET | `/nodes/{node_type}/config-schema` | JSON Schema for config | |
-| GET | `/nodes/{node_type}/port-schema` | Ports | |
-| POST | `/nodes/{node_type}/validate-config` | Body: config object | `{valid, errors}` |
-| GET | `/types` | Port data types | |
-| GET | `/nodes/compatible` | Compatibility search | Query: type, direction |
+| limit | int | NO | default 50 |
+| offset | int | NO |  |
+| q | string | NO | name search |
+| sort | string | NO | name or -updated_at |
 
-#### Pipelines (ad-hoc IR)
+| Response field | Type | Notes |
+|---|---|---|
+| items[] | object | Project summary |
+| total | int |  |
+| limit | int |  |
+| offset | int |  |
 
-| Method | Path | Purpose | Key fields |
+| Status | When |
+|---|---|
+| 200 | OK |
+| 401 | Unauthorized |
+
+##### `POST /projects`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | NO | Recommended |
+
+| Body field | Type | Required | Notes |
 |---|---|---|---|
-| POST | `/pipelines/validate` | Validate Graph IR | Body: graph; secret fail-closed |
-| POST | `/pipelines/run` | Sync execute (or stream NDJSON) | Body: graph, flags |
-| POST | `/pipelines/run-async` | Start async | Returns `{run_id, status}` |
-| GET/POST/DELETE | `/pipelines/templates…` | Template gallery CRUD + sync-examples | |
-| GET | `/pipelines/examples` | Bundled examples | |
+| name | string | YES | slug id |
+| display_name | string | NO |  |
+| description | string | NO |  |
+| tags | string[] | NO |  |
 
-#### Workspace pipelines (API `projects`)
-
-| Method | Path | Purpose |
+| Response field | Type | Notes |
 |---|---|---|
-| GET | `/projects/{name}/pipelines` | List + environments + version_count |
-| GET | `/projects/{name}/pipelines/{pipeline}` | Draft IR; `?env=staging\|prod` resolves pointer |
-| PUT | `/projects/{name}/pipelines/{pipeline}` | Save draft (secret fail-closed, stamp project) |
-| DELETE | `/projects/{name}/pipelines/{pipeline}` | Delete draft |
-| GET | `…/versions` | Published snapshots |
-| GET | `…/environments` | draft/staging/prod/pending_prod |
-| POST | `…/publish` | `{ message?, set_env?: staging\|prod }` |
-| POST | `…/promote` | `{ to_env, version?, from_env?, approve? }` — prod needs `approve: true` |
-| POST | `…/rollback` | `{ version }` → copy onto draft |
+| name | string |  |
+| display_name | string |  |
+| created_at | ISO-8601 |  |
 
-Additional project lifecycle (create/get/update/delete/clone, taxonomy, contract, spec, annotations, quality, snapshots) **shall** exist under `/projects` for dataset workspace features (P1/P2 as UI prioritizes).
+| Status | When |
+|---|---|
+| 201 | Created |
+| 400 | Invalid name |
+| 409 | Duplicate name |
+| 401 | Unauthorized |
 
-#### Runs
+*Idempotency-Key supported.*
 
-| Method | Path | Purpose |
+##### `GET /projects/{name}`
+
+| Response field | Type | Notes |
 |---|---|---|
-| GET | `/runs` | List; `?project=` scopes |
-| GET | `/runs/{run_id}` | Meta |
-| GET | `/runs/{run_id}/graph` | Saved IR |
-| GET | `/runs/{run_id}/status` | Status |
-| GET | `/runs/{run_id}/checkpoints` | List |
-| GET | `/runs/{run_id}/checkpoints/{node_id}` | Detail |
-| GET | `/runs/{run_id}/checkpoints/{node_id}/samples` | Samples |
-| GET | `/runs/{run_id}/artifacts` | Run artifacts |
-| GET | `/runs/{run_id}/outputs` | Run outputs listing |
-| GET | `/runs/{run_id}/outputs/zip` | Zip download |
-| POST | `/runs/{run_id}/promote` | Aliases `latest`\|`staging`\|`prod` |
-| POST | `/runs/{run_id}/pause` | Pause |
-| POST | `/runs/{run_id}/resume` | Resume |
-| POST | `/runs/{run_id}/cancel` | Cancel |
-| DELETE | `/runs/{run_id}` | Delete terminal |
-| GET | `/runs/{run_id}/provenance` | Provenance |
-| GET | `/runs/{run_id}/debug-report` | Debug |
-| GET | `/outputs/file` | Safe file fetch |
+| name | string |  |
+| display_name | string |  |
+| description | string |  |
+| tags | string[] |  |
+| linked_input_labels | string[] |  |
+| favorite_pipelines | string[] |  |
+| created_at | ISO-8601 |  |
+| updated_at | ISO-8601 |  |
+| resource_version | string | For If-Match |
 
-#### Artifacts
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Not found |
 
-| Method | Path | Purpose |
+*ETag / If-Match / resource_version.*
+
+##### `PUT /projects/{name}`
+
+| Request header | Required | Notes |
 |---|---|---|
-| GET | `/artifacts` | Registry list/filter |
-| GET | `/artifacts/{artifact_id}/lineage` | Lineage tree |
-| POST | `/artifacts/blob` | Put distributed blob |
-| GET | `/artifacts/blob/{key}` | Get blob |
+| If-Match | NO | Recommended |
 
-#### Secrets
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| display_name | string | NO |  |
+| description | string | NO |  |
+| tags | string[] | NO |  |
+| linked_input_labels | string[] | NO |  |
+| favorite_pipelines | string[] | NO |  |
+| resource_version | string | NO | alt to If-Match |
 
-| Method | Path | Purpose |
+| Response field | Type | Notes |
 |---|---|---|
-| GET | `/secrets` | **Names only** |
-| POST | `/secrets` | Set `{name, value}` — value not echoed |
-| PUT | `/secrets/{name}` | Replace (confirm in UI) |
-| DELETE | `/secrets/{name}` | Delete |
+| name | string |  |
+| updated_at | ISO-8601 |  |
+| resource_version | string |  |
 
-#### Data & ingest
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Not found |
+| 409 | version_conflict |
+| 412 | If-Match failed |
 
-| Method | Path | Purpose |
+*ETag / If-Match / resource_version.*
+
+##### `DELETE /projects/{name}`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| force | bool | NO | default false |
+
+| Status | When |
+|---|---|
+| 204 | Deleted |
+| 404 | Not found |
+| 409 | Has runs/pipelines and force=false |
+
+**Forbidden:** Creating a second entity type for Workspace; returning secret values in project metadata.
+
+#### 9.2.2 Pipelines (workspace)
+
+##### `GET /projects/{name}/pipelines`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| limit | int | NO |  |
+| offset | int | NO |  |
+
+| Response field | Type | Notes |
 |---|---|---|
-| GET | `/data/inputs` | Labels |
-| GET | `/data/inputs/{label}` | Files |
-| POST | `/data/inputs/upload` | Multipart upload |
-| GET | `/data/outputs` | Projects |
-| GET | `/data/outputs/{project}/{version}` | Browse |
-| GET | `/data/outputs/{project}/{version}/stats` | Stats |
-| POST | `/data/merge` | Merge → new version |
-| POST | `/ingest/url` | URL ingest job |
-| GET | `/ingest/url/{job_id}/stream` | SSE progress |
-| POST | `/ingest/huggingface` | HF ingest |
-| GET | `/ingest/huggingface/{job_id}/stream` | SSE |
+| items[].name | string |  |
+| items[].version_count | int |  |
+| items[].environments | object | draft/staging/prod/pending_prod |
+| total | int |  |
 
-#### System
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Project missing |
 
-| Method | Path | Purpose |
+##### `GET /projects/{name}/pipelines/{pipeline}`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| env | string | NO | draft (default) | staging | prod |
+
+| Response field | Type | Notes |
 |---|---|---|
-| GET | `/system/health` | Liveness detail |
-| GET | `/system/readiness` | `registry_ready`, `backend_mode`, workers |
-| GET | `/system/auth-status` | Auth honesty (public) |
-| GET | `/system/metrics` | Metrics |
-| POST | `/system/cleanup` | Armed cleanup |
-| GET | `/system/projects-registry` | Registry |
-| GET/PUT | `/system/webhooks` | Outbound webhook config |
-| POST | `/system/webhooks/test` | Test |
-| GET/POST | `/system/schedules` | CRUD |
-| POST | `/system/schedules/tick` | Tick |
-| POST | `/system/schedules/{id}/run` | Run now |
-| POST | `/system/schedules/{id}/enable` | Enable |
-| DELETE | `/system/schedules/{id}` | Delete |
+| name | string |  |
+| graph | object | Graph IR |
+| env | string |  |
+| resource_version | string |  |
 
-#### Models
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Missing |
+| 409 | env pointer null |
 
-| Method | Path | Purpose |
+*ETag / If-Match / resource_version.*
+
+##### `PUT /projects/{name}/pipelines/{pipeline}`
+
+Stamps metadata.project. Secret-shaped config fail-closed.
+
+| Request header | Required | Notes |
 |---|---|---|
-| GET | `/models` | List |
-| GET | `/models/{name}` | Detail/stages |
-| POST | `/models` | `{ name, run_id, slug, stage? }` |
-| POST | `/models/{name}/request-prod` | Request |
-| POST | `/models/{name}/approve-prod` | Approve |
+| If-Match | NO |  |
+| Idempotency-Key | NO |  |
 
-#### Plugins
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| graph | object | YES | Graph IR |
+| resource_version | string | NO |  |
 
-| Method | Path | Purpose |
+| Response field | Type | Notes |
 |---|---|---|
-| GET | `/plugins` | Installed |
-| POST | `/plugins/install` | `{source, upgrade?, expected_sha256?}` |
-| GET | `/plugins/search` | Index search |
-| POST | `/plugins/venvs/gc` | GC unused venvs |
-| GET | `/plugins/{name}` | Record + install state |
-| GET | `/plugins/{name}/dependencies` | Dep status |
-| POST | `/plugins/{name}/dependencies/install` | `{include_optional?}` |
-| POST | `/plugins/{name}/enable` | Enable |
-| POST | `/plugins/{name}/disable` | Disable |
-| DELETE | `/plugins/{name}` | Uninstall |
+| name | string |  |
+| saved_at | ISO-8601 |  |
+| resource_version | string |  |
 
-#### Workers & jobs
+| Status | When |
+|---|---|
+| 200 | Saved |
+| 422 | Validation/secret policy |
+| 409 | version_conflict |
+| 412 | If-Match |
 
-| Method | Path | Purpose |
+*Idempotency-Key supported, ETag / If-Match / resource_version.*
+
+##### `DELETE /projects/{name}/pipelines/{pipeline}`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| force | bool | NO |  |
+
+| Status | When |
+|---|---|
+| 204 | Deleted |
+| 404 | Missing |
+| 409 | Env pointers set without force |
+
+##### `GET /projects/{name}/pipelines/{pipeline}/versions`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| limit | int | NO |  |
+| offset | int | NO |  |
+
+| Response field | Type | Notes |
 |---|---|---|
-| POST | `/workers/register` | Register/refresh |
-| POST | `/workers/{id}/heartbeat` | Heartbeat + resources |
-| GET | `/workers` | List |
-| DELETE | `/workers/{id}` | Deregister |
-| POST | `/jobs/claim` | Claim next job |
-| POST | `/jobs/{id}/complete` | Result |
-| POST | `/jobs/{id}/events` | Log events |
-| POST | `/jobs/{id}/cancel` | Cancel signal |
-| GET | `/jobs/{id}` | Job detail |
+| items[].version | string | vN |
+| items[].message | string |  |
+| items[].created_at | ISO-8601 |  |
+| items[].actor | string |  |
+| total | int |  |
 
-#### Proposals
+| Status | When |
+|---|---|
+| 200 | OK |
 
-| Method | Path | Purpose |
+##### `GET /projects/{name}/pipelines/{pipeline}/environments`
+
+| Response field | Type | Notes |
 |---|---|---|
-| POST | `/proposals` | Create |
-| GET | `/proposals` | List/filter |
-| GET | `/proposals/{id}` | Detail |
-| POST | `/proposals/{id}/accept` | Accept |
-| POST | `/proposals/{id}/reject` | Reject + reason |
+| draft | object | Always head metadata |
+| staging | string|null | version id |
+| prod | string|null |  |
+| pending_prod | string|null |  |
 
-#### Trace, audit, experiments
+| Status | When |
+|---|---|
+| 200 | OK |
 
-| Method | Path | Purpose |
+##### `POST /projects/{name}/pipelines/{pipeline}/publish`
+
+| Request header | Required | Notes |
 |---|---|---|
-| GET | `/trace` | Unified backtrack (`artifact_id` / `run_id` query) |
-| GET | `/trace/artifact/{id}` | Artifact-centric |
-| GET | `/trace/run/{id}` | Run-centric |
-| GET | `/audit` | Append-only events |
-| GET | `/experiments` | List |
-| GET | `/experiments/{name}` | Detail |
-| GET | `/experiments/compare` | `?ids=` compare payload |
+| Idempotency-Key | YES | Required |
 
-**API-ERR-001** (P0) Error bodies **should** use `{error, detail}` or FastAPI `detail` consistently; UI **shall** surface precise messages for run control.
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| message | string | NO |  |
+| set_env | string | NO | staging|prod |
+
+| Response field | Type | Notes |
+|---|---|---|
+| version | string |  |
+| environments | object |  |
+
+| Status | When |
+|---|---|
+| 201 | Published |
+| 422 | Invalid graph |
+| 409 | idempotency_conflict |
+
+*Idempotency-Key supported.*
+
+##### `POST /projects/{name}/pipelines/{pipeline}/promote`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| to_env | string | YES | staging|prod |
+| version | string | NO |  |
+| from_env | string | NO |  |
+| approve | bool | NO | required true for prod |
+
+| Response field | Type | Notes |
+|---|---|---|
+| environments | object |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 400 | approve missing for prod |
+| 409 | conflict |
+
+*Idempotency-Key supported.*
+
+##### `POST /projects/{name}/pipelines/{pipeline}/rollback`
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| version | string | YES | Copy onto draft |
+
+| Response field | Type | Notes |
+|---|---|---|
+| graph | object | New draft |
+| resource_version | string |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Version missing |
+
+*Idempotency-Key supported.*
+
+#### 9.2.3 Ad-hoc pipelines / templates / nodes
+
+##### `POST /pipelines/validate`
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| graph | object | YES |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| valid | bool |  |
+| errors | array | VAL schema |
+| warnings | array |  |
+
+| Status | When |
+|---|---|
+| 200 | Always 200 with valid flag |
+| 401 | Unauthorized |
+
+##### `POST /pipelines/run`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | NO | For non-stream |
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| stream | bool | NO | NDJSON when true |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| graph | object | YES |  |
+| project | string | NO |  |
+| pipeline | string | NO |  |
+| env | string | NO |  |
+| seed | int | NO |  |
+| checkpoint | bool | NO |  |
+| use_cache | bool | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| run_id | string | non-stream |
+| status | string |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 422 | Invalid graph |
+| 401 | Unauthorized |
+
+*Idempotency-Key supported.*
+
+##### `POST /pipelines/run-async`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES | Required |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| graph | object | YES |  |
+| project | string | NO |  |
+| pipeline | string | NO |  |
+| env | string | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| run_id | string |  |
+| status | string | pending|running |
+
+| Status | When |
+|---|---|
+| 202 | Accepted |
+| 422 | Invalid |
+| 409 | idempotency_conflict |
+
+*Idempotency-Key supported.*
+
+Templates: `GET/POST /pipelines/templates`, `GET/DELETE /pipelines/templates/{name}`, `POST …/sync-examples`, `GET /pipelines/examples`, `GET …/versions` — list/detail return `{name, description, graph, tags, created_at}`; POST body `{name, graph, description?, tags?}`; 409 on duplicate name; DELETE 204.
+
+Nodes: `GET /nodes`, `GET /nodes/{node_type}`, `GET …/config-schema`, `GET …/port-schema`, `POST …/validate-config` body `{config}` → `{valid, errors}`, `GET /types`, `GET /nodes/compatible?output_type&direction`.
+
+#### 9.2.4 Runs & run-control
+
+##### `GET /runs`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| project | string | NO | Workspace scope |
+| pipeline | string | NO |  |
+| status | string | NO | comma enum |
+| limit | int | NO | default 50 max 1000 |
+| offset | int | NO |  |
+| sort | string | NO | -started_at default |
+
+| Response field | Type | Notes |
+|---|---|---|
+| items[] | RunSummary | run_id,status,project,pipeline,started_at,ended_at,actor,backend_mode |
+| total | int |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+
+##### `GET /runs/{run_id}`
+
+| Response field | Type | Notes |
+|---|---|---|
+| run_id | string |  |
+| status | enum | state machine |
+| project | string|null |  |
+| pipeline | string|null |  |
+| env | string|null |  |
+| graph_hash | string |  |
+| started_at | ISO-8601 |  |
+| ended_at | ISO-8601|null |  |
+| actor | string |  |
+| backend_mode | string |  |
+| distributed_node_workers | object | Mode B |
+| metrics | object |  |
+| params | object |  |
+| error | object|string|null |  |
+| resource_version | string |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 400 | Bad id |
+| 404 | Missing |
+
+Also: `GET …/graph`; `GET …/status`; checkpoints/samples; `GET …/artifacts`; `GET …/outputs` + `/outputs/zip`; `GET …/provenance`; `GET …/debug-report`; `GET /outputs/file?path=` (jailed).
+
+##### `POST /runs/{run_id}/pause`
+
+Legal from running only.
+
+| Response field | Type | Notes |
+|---|---|---|
+| run_id | string |  |
+| status | string | paused |
+
+| Status | When |
+|---|---|
+| 200 | Paused |
+| 404 | Missing |
+| 409 | invalid_transition |
+
+##### `POST /runs/{run_id}/resume`
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| expected_graph_hash | string | NO | If set must match |
+
+| Response field | Type | Notes |
+|---|---|---|
+| run_id | string |  |
+| status | string | running |
+
+| Status | When |
+|---|---|
+| 200 | Resumed |
+| 404 | Missing |
+| 409 | invalid_transition or hash mismatch |
+
+##### `POST /runs/{run_id}/cancel`
+
+After success: artifact commit for run forbidden.
+
+| Response field | Type | Notes |
+|---|---|---|
+| run_id | string |  |
+| status | string | cancelled |
+
+| Status | When |
+|---|---|
+| 200 | Cancelled |
+| 404 | Missing |
+| 409 | already terminal |
+
+##### `DELETE /runs/{run_id}`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| force | bool | NO |  |
+
+| Status | When |
+|---|---|
+| 204 | Deleted |
+| 404 | Missing |
+| 409 | Non-terminal and force=false |
+
+##### `POST /runs/{run_id}/promote`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| stage | string | YES | latest|staging|prod |
+| name | string | NO | model name |
+| slug | string | NO |  |
+| approve | bool | NO | required for prod if gate enabled |
+
+| Response field | Type | Notes |
+|---|---|---|
+| model | object | Updated registry entry |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 400 | Bad stage |
+| 404 | Run missing |
+| 409 | No artifact slug |
+
+*Idempotency-Key supported.*
+
+#### 9.2.5 Artifacts & outputs
+
+##### `GET /artifacts`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| project | string | NO | P0 server-side filter |
+| run_id | string | NO |  |
+| artifact_type | string | NO |  |
+| limit | int | NO | max 1000 |
+| offset | int | NO |  |
+| sort | string | NO | -created_at |
+
+| Response field | Type | Notes |
+|---|---|---|
+| items[] | Artifact | artifact_id,content_hash,artifact_type,node_id,run_id,created_at |
+| total | int |  |
+| truncated | bool | If limited |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 503 | store_corrupt |
+
+##### `GET /artifacts/{artifact_id}/lineage`
+
+| Response field | Type | Notes |
+|---|---|---|
+| artifact_id | string |  |
+| run_id | string |  |
+| node_id | string |  |
+| input_artifact_ids | string[] |  |
+| graph_hash | string |  |
+| worker_id | string|null |  |
+| parents | array | recursive summary |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Missing |
+
+##### `POST /artifacts/blob`
+
+Worker/control data plane.
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| key | string | YES | store key |
+| content | binary | YES | multipart or raw |
+
+| Response field | Type | Notes |
+|---|---|---|
+| key | string |  |
+| sha256 | string |  |
+| uri | string | artifact:// |
+
+| Status | When |
+|---|---|
+| 201 | Stored |
+| 401 | Unauthorized |
+| 409 | key exists different hash |
+
+##### `GET /artifacts/blob/{key}`
+
+| Status | When |
+|---|---|
+| 200 | OK binary |
+| 404 | Missing |
+
+#### 9.2.6 Models
+
+##### `GET /models`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| project | string | NO | Filter by stamped project |
+| limit | int | NO |  |
+| offset | int | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| items[].name | string |  |
+| items[].stages | object |  |
+| items[].pending_prod | object|null | sibling of stages |
+| items[].project | string|null |  |
+| total | int |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+
+##### `GET /models/{name}`
+
+| Response field | Type | Notes |
+|---|---|---|
+| name | string |  |
+| stages | object | latest|staging|prod pointers |
+| pending_prod | object|null |  |
+| project | string|null |  |
+| resource_version | string |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Missing |
+
+*ETag / If-Match / resource_version.*
+
+##### `POST /models`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| name | string | YES |  |
+| run_id | string | YES |  |
+| slug | string | YES |  |
+| stage | string | NO | default latest |
+| project | string | NO | Stamp |
+
+| Response field | Type | Notes |
+|---|---|---|
+| name | string |  |
+| stages | object |  |
+
+| Status | When |
+|---|---|
+| 201 | Registered |
+| 404 | Run missing |
+| 409 | conflict |
+
+*Idempotency-Key supported.*
+
+##### `POST /models/{name}/request-prod`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| run_id | string | NO |  |
+| slug | string | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| pending_prod | object |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Missing |
+
+*Idempotency-Key supported.*
+
+##### `POST /models/{name}/approve-prod`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| approve | bool | YES | must true |
+
+| Response field | Type | Notes |
+|---|---|---|
+| stages | object |  |
+| pending_prod | null | cleared |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 400 | approve not true |
+| 404 | Missing |
+| 409 | no pending |
+
+*Idempotency-Key supported.*
+
+#### 9.2.7 Data / datasets
+
+`GET /data/inputs` labels; `GET /data/inputs/{label}` files; `POST /data/inputs/upload` multipart `{label, file}`; `GET /data/outputs`; `GET /data/outputs/{project}/{version}`; `GET …/stats` `{file_count, total_bytes, content_hash}`; `POST /data/merge` → new immutable version; `DELETE …/{version}?force=false` → 409 if referenced.
+
+Ingest: `POST /ingest/url` `{url, label?}` → `{job_id}`; SSE; `POST /ingest/huggingface`. 403/400 on SSRF.
+
+#### 9.2.8 Plugins
+
+##### `GET /plugins`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| enabled | bool | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| items[].name | string |  |
+| items[].version | string |  |
+| items[].enabled | bool |  |
+| items[].runtime | string |  |
+| items[].status | string |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+
+##### `POST /plugins/install`
+
+Remote may be async — poll GET /plugins/{name}. Failed install rolls back.
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| source | string | YES | path|pkg|git|https |
+| upgrade | bool | NO |  |
+| expected_sha256 | string | NO |  |
+| enable | bool | NO | default false |
+
+| Response field | Type | Notes |
+|---|---|---|
+| name | string |  |
+| version | string |  |
+| status | string |  |
+
+| Status | When |
+|---|---|
+| 201 | Installed/queued |
+| 400 | Bad source |
+| 403 | Allowlist deny |
+| 409 | Already installed |
+| 422 | Manifest/compat |
+
+*Idempotency-Key supported.*
+
+Also: `GET /plugins/search?q=`; `GET /plugins/{name}`; `GET …/dependencies`; `POST …/dependencies/install`; `POST …/enable`; `POST …/disable`; `DELETE /plugins/{name}` (409 if in-use unless force); `POST /plugins/venvs/gc`.
+
+#### 9.2.9 Secrets
+
+##### `GET /secrets`
+
+| Response field | Type | Notes |
+|---|---|---|
+| items[].name | string |  |
+| items[].updated_at | ISO-8601 | never value |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+
+##### `POST /secrets`
+
+PUT /secrets/{name} replace; DELETE 204. Forbidden: GET-by-name value endpoint.
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| name | string | YES |  |
+| value | string | YES | write-only |
+
+| Response field | Type | Notes |
+|---|---|---|
+| name | string |  |
+| updated_at | ISO-8601 | value not echoed |
+
+| Status | When |
+|---|---|
+| 201 | Set |
+| 400 | Bad name |
+| 422 | Empty value policy |
+
+#### 9.2.10 Schedules & webhooks
+
+##### `GET /system/schedules`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| project | string | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| items[].id | string |  |
+| items[].project | string |  |
+| items[].pipeline | string |  |
+| items[].env | string |  |
+| items[].interval_s | int|null |  |
+| items[].cron | string|null |  |
+| items[].enabled | bool |  |
+| items[].last_run_id | string|null |  |
+| items[].last_error | string|null |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+
+##### `POST /system/schedules`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| project | string | YES |  |
+| pipeline | string | YES |  |
+| env | string | NO | default prod |
+| interval_s | int | NO |  |
+| cron | string | NO |  |
+| enabled | bool | NO | default true |
+
+| Response field | Type | Notes |
+|---|---|---|
+| id | string |  |
+| enabled | bool |  |
+
+| Status | When |
+|---|---|
+| 201 | Created |
+| 400 | Missing timing |
+| 404 | Pipeline missing |
+
+*Idempotency-Key supported.*
+
+`POST /system/schedules/tick`; `POST …/{id}/run`; `POST …/{id}/enable`; `DELETE …/{id}`.
+
+Webhooks: `GET/PUT /system/webhooks` body `{url, events[], secret_name?}` — private URL 400; `POST …/test`.
+
+#### 9.2.11 Workers & jobs
+
+##### `POST /workers/register`
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| worker_id | string | YES |  |
+| labels | string[] | NO |  |
+| pools | string[] | NO |  |
+| resources | object | YES |  |
+| plugins | string[] | YES |  |
+| graphyn_version | string | YES |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| worker_id | string |  |
+| status | string |  |
+
+| Status | When |
+|---|---|
+| 200 | Upserted |
+| 401 | Unauthorized |
+| 400 | Bad payload |
+
+##### `POST /workers/{id}/heartbeat`
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| resources | object | NO |  |
+| status | string | NO | idle|busy |
+
+| Response field | Type | Notes |
+|---|---|---|
+| ok | bool |  |
+| server_time | ISO-8601 |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 404 | Unknown worker |
+
+`GET /workers`; `DELETE /workers/{id}`.
+
+##### `POST /jobs/claim`
+
+CAS claim — P0.
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| worker_id | string | YES |  |
+| max_jobs | int | NO | default 1 |
+
+| Response field | Type | Notes |
+|---|---|---|
+| jobs[] | object | job_id,run_id,node_id,node_type,config,seed,input_refs,placement,timeout_s,lease_generation,lease_expires_at |
+
+| Status | When |
+|---|---|
+| 200 | OK maybe empty |
+| 401 | Unauthorized |
+| 409 | Worker stale |
+
+##### `POST /jobs/{id}/complete`
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| worker_id | string | YES |  |
+| lease_generation | int | YES |  |
+| status | string | YES | succeeded|failed|cancelled |
+| output_refs | object | NO |  |
+| events | array | NO |  |
+| error | string | NO |  |
+| duration_s | number | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| ok | bool |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+| 409 | Fencing mismatch |
+| 404 | Missing |
+
+`POST /jobs/{id}/events`; `POST /jobs/{id}/cancel`; `GET /jobs/{id}`.
+
+#### 9.2.12 Proposals
+
+##### `POST /proposals`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| graph | object | YES |  |
+| base_graph | object | NO |  |
+| message | string | NO |  |
+| rationale | string | NO |  |
+| project | string | NO |  |
+| pipeline | string | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| id | string |  |
+| status | string | pending |
+
+| Status | When |
+|---|---|
+| 201 | Created |
+| 422 | Invalid graph |
+
+*Idempotency-Key supported.*
+
+`GET /proposals`; `GET /proposals/{id}`; `POST …/accept`; `POST …/reject`; double-accept 409.
+
+#### 9.2.13 System / readiness / trace / audit / experiments
+
+| Method | Path | Response highlights | Codes |
+|---|---|---|---|
+| GET | `/system/health` | `{status:ok}` liveness | 200 |
+| GET | `/system/readiness` | `{ready, registry_ready, backend_mode, workers?, stores?}` | 200 or 503 |
+| GET | `/system/auth-status` | `{auth_required, token_configured}` public | 200 |
+| GET | `/system/metrics` | counters | 200 |
+| POST | `/system/cleanup` | body `{arm: CLEANUP, targets[]}` | 200/400/403 |
+| GET | `/system/projects-registry` | registry dump | 200 |
+| GET | `/trace` | query artifact_id/run_id | 200/404 |
+| GET | `/audit` | actor,resource,from,to,limit,offset | 200 |
+| GET | `/experiments` | list | 200 |
+| GET | `/experiments/compare?ids=` | compare payload | 200/400 |
+
+#### 9.2.14 Ship packages
+
+##### `GET /projects/{name}/ship/packages`
+
+| Query | Type | Required | Notes |
+|---|---|---|---|
+| limit | int | NO |  |
+| env | string | NO |  |
+
+| Response field | Type | Notes |
+|---|---|---|
+| items[] | ShipPackageSummary | package_id,status,env,model_ref,created_at,checksum |
+| total | int |  |
+
+| Status | When |
+|---|---|
+| 200 | OK |
+
+##### `POST /projects/{name}/ship/packages`
+
+| Request header | Required | Notes |
+|---|---|---|
+| Idempotency-Key | YES |  |
+
+| Body field | Type | Required | Notes |
+|---|---|---|---|
+| model_name | string | YES |  |
+| model_stage_or_version | string | YES |  |
+| target | object | YES | runtime/arch |
+| env | string | NO | draft|staging |
+
+| Response field | Type | Notes |
+|---|---|---|
+| package_id | string |  |
+| status | string | creating|ready|failed |
+| manifest | object |  |
+
+| Status | When |
+|---|---|
+| 201 | Created/queued |
+| 404 | Model missing |
+| 422 | Incompatible |
+
+*Idempotency-Key supported.*
+
+`GET …/packages/{id}`; `GET …/download`; `POST …/promote` `{to_env, approve?}`. Device routes needs-API — 501 honesty until implemented.
 
 ### 9.3 MCP tool categories
 
-Transport: stdio JSON-RPC. Auth: `_meta.auth_token` mirrors API token policy.
+See **section 21** for normative expanded catalog (J1–J6 parity). Transport: stdio JSON-RPC; auth `_meta.auth_token`.
 
-| Category | Tools (names) | Notes |
-|---|---|---|
-| Discovery | `list_nodes` | Schemas + capabilities |
-| Graph | `generate_graph`, `validate_graph`, `get_graph_schema`, `get_graph_capability_summary`, `get_event_schema` | Preserve ids, conditions, event_trigger |
-| Execution | `execute_pipeline` | Returns `run_id` quickly; async body |
-| Run control | `pause_run`, `resume_run`, `cancel_run` | Active runs |
-| Inspect | `inspect_run` | Meta/logs/graph/checkpoints |
-| Provenance | `list_artifacts`, `get_artifact_lineage`, `replay_run` | |
-| Optimization | `optimize_execution` | Suggestions |
-| Plugins | `install_plugin`, `list_plugins`, `manage_plugin` | |
-| Secrets | `secrets_list`, `secrets_set` | Names only on list |
-| Proposals | `propose_graph`, `list_proposals`, `get_proposal`, `reject_proposal`, `accept_proposal` | `accept_proposal` only when `GRAPHYN_MCP_HUMAN_APPROVAL=1` |
-| Workspace observe | `list_experiments`, `get_trace`, `list_projects`, `list_data_inputs` | |
+### 9.4 CLI / SDK
 
-**MCP-001** (P0) Agents **shall not** receive secret values via list tools.  
-**MCP-002** (P0) Default apply path: propose → human Accept in UI (unless human-approval flag enables MCP accept).  
-**MCP-003** (P1) Schedules, worker pool admin, and document ingest **may** remain REST-only.  
-**MCP-004** (P1) MCP/docs copy **shall** cite **path URLs**, not hashes.
+**CLI-001** (P0) validate, run/execute, migrate YAML→JSON, mcp, worker, plugin install/list, secrets set/list (names).
 
-### 9.4 CLI / SDK capabilities
+**CLI-002** (P0) SDK builds Graph IR; `get_backend().execute()`.
 
-**CLI-001** (P0) CLI **shall** support at least: validate graph, run/execute, migrate YAML→JSON, start MCP, start worker, plugin install/list, secrets set/list (names).  
-**CLI-002** (P0) SDK **shall** build nodes/edges into Graph IR and call `get_backend().execute()`.  
-**CLI-003** (P1) Worker CLI **shall** register, heartbeat, claim, execute, complete with bearer.
-
----
+**CLI-003** (P1) Worker CLI register/heartbeat/claim/execute/complete with bearer.
 
 ## 10. Information architecture & navigation (normative UX)
 
@@ -1293,76 +2250,323 @@ For each surface: purpose, layout/controls, empty/loading/error, bridges, accept
 
 ---
 
-## 13. Runtime / pipeline
+## 13. Runtime / pipeline execution
+
+### 13.1 Canonical execution entry
 
 | ID | Requirement | Pri |
 |---|---|---|
 | RT-001 | Graph IR **shall** be canonical (`schema_version` 1.2 write target); UI/API/CLI/MCP speak same IR | P0 |
-| RT-002 | `get_backend().execute(graph)` **shall** be the execution entry | P0 |
+| RT-002 | `get_backend().execute(graph, …)` **shall** be the sole execution entry for Console, REST, CLI, SDK, MCP | P0 |
 | RT-003 | Planner **shall** topo-sort into waves; parallel execution within wave when enabled | P0 |
-| RT-004 | Pause / resume / cancel **shall** work for active runs | P0 |
+| RT-004 | Pause / resume / cancel **shall** obey the normative state machine (§13.2) | P0 |
 | RT-005 | Per-node checkpoints **shall** support resume/inspect samples | P0 |
 | RT-006 | Pipeline cache **shall** key by content hash; skip on hit when enabled | P1 |
-| RT-007 | Edge conditions **shall** skip/branch safely (evaluator whitelist) | P1 |
+| RT-007 | Edge conditions **shall** skip/branch safely (AST whitelist evaluator) | P1 |
 | RT-008 | ProvenanceStore **shall** record lineage for artifacts | P0 |
 | RT-009 | ArtifactStore **shall** content-address artifacts; download/replay | P0 |
-| RT-010 | Schedules **shall** fire runs (interval; cron honesty); default env=prod for scheduled | P1 |
+| RT-010 | Schedules **shall** fire runs (interval; cron honesty); default env=`prod` for scheduled | P1 |
 | RT-011 | Outbound webhooks **shall** fire on terminal run states when configured | P1 |
-| RT-012 | Run journal **shall** persist meta, graph, logs under run dir | P0 |
+| RT-012 | Run journal **shall** persist meta, graph, logs under run dir before acknowledging start | P0 |
 | RT-013 | Secret resolution in nodes **shall** use names; fail closed if required secret missing | P0 |
-| RT-014 | Retry policies **should** be configurable per node | P2 |
+| RT-014 | Per-node retry policies **may** retry the **node** within the same run; they **shall not** silently create a new `run_id` | P1 |
 | RT-015 | Resume **shall** validate `graph_hash` match or fail closed | P0 |
 | RT-016 | Event-driven mode **shall** re-execute on event_trigger sources (mutually exclusive with parallel) | P2 |
-| RT-017 | Node lifecycle **shall** support setup → process/on_start/on_end → teardown; retry on failure | P0 |
+| RT-017 | Node lifecycle **shall** support setup → process/on_start/on_end → teardown | P0 |
 | RT-018 | Write paths for node outputs **shall** be mkdir-jailed before process | P0 |
+| RT-019 | **Retry policy (product decision, locked):** operator-facing “Retry failed run” **shall** create a **new run** (`run_id` new) copying graph + params; optional `resume_from_checkpoints_of` may hydrate cache from prior run but status machine starts at `pending`. In-run node retries are not a new run. | P0 |
+| RT-020 | After terminal status is durably written, further node side-effects for that run **shall** be forbidden | P0 |
 
-**Execution flow (Mode A)**
+### 13.2 Run state machine (normative)
 
-1. `load_ir` → validate schema/version  
-2. `get_backend().execute` → LocalPython → orchestrator  
-3. IR → PipelineConfig → PipelineGraph (instantiate, validate edges, Kahn topo, waves)  
-4. RunManager creates run dir; save graph; register active run  
-5. Per wave/node: assemble inputs → conditions → cache → NodeExecutor → checkpoint → resume_state  
-6. Finalize meta; deregister; fire webhooks if terminal  
+**States (canonical wire values):**
 
-**Acceptance:** Given Graph IR with two independent nodes When execute parallel Then both complete in same wave. Given cancel When in-flight Then no further side effects after cancel acknowledged.
+| State | Terminal? | Meaning |
+|---|---|---|
+| `pending` | No | Run created; not yet executing nodes |
+| `running` | No | At least one node executing or waves in progress |
+| `paused` | No | Cooperative pause acknowledged; no new nodes start |
+| `succeeded` | Yes | All required nodes completed successfully |
+| `failed` | Yes | Unrecoverable node/system failure (or exhausted node retries) |
+| `cancelled` | Yes | Cancel acknowledged; run stopped by operator/system |
 
----
+Legacy aliases: `active` / `in-progress` **may** be accepted on read as `running` (P1); writers **shall** emit canonical names.
 
-## 14. Model registry
+```
+pending → running → paused ⇄ running → succeeded
+                              ↘ failed
+                              ↘ cancelled
+pending → cancelled          (cancel before first node)
+running → failed | cancelled | succeeded
+paused  → running | cancelled | failed
+```
+
+#### Legal / illegal transitions
+
+| From → To | Legal? | Trigger |
+|---|---|---|
+| pending → running | YES | Executor starts first wave |
+| pending → cancelled | YES | Cancel before start |
+| pending → paused/succeeded/failed | NO | — |
+| running → paused | YES | `POST …/pause` cooperative |
+| running → succeeded | YES | All nodes done OK |
+| running → failed | YES | Node/system failure |
+| running → cancelled | YES | `POST …/cancel` |
+| running → pending | NO | — |
+| paused → running | YES | `POST …/resume` (graph_hash match) |
+| paused → cancelled | YES | Cancel while paused |
+| paused → failed | YES | Resume validation failure / underlying crash detected |
+| paused → succeeded/pending | NO | — |
+| succeeded → * | NO | Terminal |
+| failed → * | NO | Terminal (retry = new run) |
+| cancelled → * | NO | Terminal |
+
+**RT-SM-001** (P0) Illegal transitions **shall** return **409** with `error.code=invalid_transition` and leave status unchanged.
+
+**RT-SM-002** (P0) Status transitions **shall** be atomic w.r.t. run meta durability (§16).
+
+#### Cancel semantics
+
+| ID | Rule | Pri |
+|---|---|---|
+| RT-CANCEL-001 | Cancel **shall** be acknowledged only after durable status=`cancelled` (or already terminal) | P0 |
+| RT-CANCEL-002 | After cancel ack: **no new nodes** start; in-flight Mode A nodes **shall** be cooperatively stopped at next cancel check; Mode B jobs **shall** be marked cancelled and workers polled to stop | P0 |
+| RT-CANCEL-003 | **Artifact commit after cancel is FORBIDDEN** — stores **shall** reject new artifact registration for that `run_id` once cancel is durable (409/`run_cancelled`) | P0 |
+| RT-CANCEL-004 | Partially written node outputs for in-flight cancelled nodes **shall** be discarded or marked `incomplete`; they **shall not** appear as succeeded provenance | P0 |
+| RT-CANCEL-005 | Webhooks for `cancelled` **shall** fire once | P1 |
+| RT-CANCEL-006 | In-process `node.process()` without isolation **cannot** be force-killed mid-call; cancel **shall** still prevent subsequent nodes and mark run cancelled when the call returns or cancel check hits | P0 |
+
+#### Pause / resume semantics
+
+| ID | Rule | Pri |
+|---|---|---|
+| RT-PAUSE-001 | Pause **shall** stop scheduling new nodes after current cancel-check boundary; status→`paused` when no new work starts | P0 |
+| RT-RESUME-001 | Resume **shall** require status=`paused`, matching `graph_hash` (else fail closed → `failed` or 409), and continue from checkpoint/`resume_state` completed node set | P0 |
+| RT-RESUME-002 | Resume **shall not** re-execute successfully checkpointed nodes unless cache invalidated | P0 |
+| RT-RESUME-003 | Resume of a run whose control process crashed **shall** follow crash recovery (§13.3) before accepting resume | P0 |
+
+#### Crash recovery & worker disappearance
+
+| ID | Rule | Pri |
+|---|---|---|
+| RT-CRASH-001 | On API/control restart: runs with status `running`/`paused` whose process lease is dead **shall** be detected within readiness loop (≤ 60s target) | P0 |
+| RT-CRASH-002 | Stale `running` without live executor **shall** transition to `failed` with `error.code=control_plane_crash` **or** be reclaimable to `paused` if checkpoints allow — product default: **failed** with message to Retry (new run) or Resume-from-checkpoint if `resume_state` intact and graph_hash matches | P0 |
+| RT-CRASH-003 | Mode B: worker disappearance (heartbeat stale > threshold) while job leased **shall** expire lease and requeue job (**at-least-once**) per §15 — run stays `running` until waves complete or cancel/fail | P0 |
+| RT-CRASH-004 | Orphan jobs after run already terminal **shall** be cancelled and not requeue | P0 |
+
+### 13.3 Execution flow (Mode A)
+
+1. `load_ir` → validate schema/version (§14)
+2. `get_backend().execute` → LocalPython → orchestrator
+3. IR → PipelineConfig → PipelineGraph (instantiate, validate edges, Kahn topo, waves)
+4. RunManager creates run dir; durable `pending` meta; save `graph.json`; register active run
+5. Transition `pending`→`running`; per wave/node: assemble inputs → conditions → cache → NodeExecutor → checkpoint → resume_state
+6. Finalize meta terminal; deregister; fire webhooks
+
+### 13.4 Mode A vs honesty
+
+Mode A empty Workers UI **shall not** present as error. Placement IR ignored with honesty badge when Mode A.
+
+## 14. Graph validation model (complete, normative)
+
+**VAL-001** (P0) Validation **shall** run before execute, on Editor Validate, on pipeline save (configurable warn vs block), and via `POST /pipelines/validate` / MCP `validate_graph`.
+
+### 14.1 Severity
+
+| Severity | Effect |
+|---|---|
+| **error** | `valid=false`; execute/save-blocking when policy=`strict` (default for execute) |
+| **warning** | `valid` may still be true; UI shows warnings; execute **may** proceed |
+
+### 14.2 Checks
+
+| Check ID | Condition | Severity | Notes |
+|---|---|---|---|
+| VAL-DUP-ID | Duplicate `nodes[].id` | error | |
+| VAL-MISS-NODE | Edge references unknown `src_id`/`dst_id` | error | |
+| VAL-MISS-PORT | Edge references unknown port for node type | error | |
+| VAL-TYPE | Port type incompatibility | error | CompatibilityChecker |
+| VAL-REQ-IN | Required input port has no edge and no default | error | |
+| VAL-CYCLE | Graph has cycle | error | Kahn residual |
+| VAL-UNREACH | Node unreachable from sources (not connected) | warning | May be intentional draft |
+| VAL-PLACE | Invalid placement (unknown mode, worker pin without id, min_vram negative) | error | |
+| VAL-CONFIG | Config fails node JSON Schema / Pydantic | error | field_errors |
+| VAL-COND | Condition expression fails AST whitelist / parse | error | |
+| VAL-UNK-TYPE | `node_type` not in registry | error | |
+| VAL-SECRET | Secret-shaped non-empty values in config | error | fail closed |
+| VAL-MIGRATE | `schema_version` major unsupported | error | |
+| VAL-MIGRATE-MINOR | Minor > supported | warning | continue with defaults |
+| VAL-EMPTY | Zero nodes | warning (validate) / error (execute) | UI disables Run |
+| VAL-EVENT-PAR | event_trigger + parallel mode conflict | error | when both set |
+
+### 14.3 Validation result schema
+
+```json
+{
+  "valid": false,
+  "node_count": 3,
+  "edge_count": 2,
+  "schema_version": "1.2",
+  "errors": [
+    {
+      "code": "VAL-CYCLE",
+      "severity": "error",
+      "message": "Cycle detected involving nodes a → b → a",
+      "node_ids": ["a", "b"],
+      "edge_index": null,
+      "field": null
+    }
+  ],
+  "warnings": [
+    {
+      "code": "VAL-UNREACH",
+      "severity": "warning",
+      "message": "Node orphan_1 is unreachable",
+      "node_ids": ["orphan_1"],
+      "edge_index": null,
+      "field": null
+    }
+  ]
+}
+```
+
+**VAL-002** (P0) `valid` **shall** be true iff `errors` is empty.
+
+**VAL-003** (P0) Execute path **shall** refuse graphs with any error severity findings (HTTP 422 / MCP error).
+
+## 15. Distributed execution (Mode B) — P0 failure behavior
+
+### 15.1 Worker identity & registration
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `worker_id` | string | YES | Stable unique id (hostname+suffix OK) |
+| `labels` | string[] | NO | e.g. `gpu`, `lab` |
+| `pools` | string[] | NO | Logical pools |
+| `resources` | object | YES | `gpu`, `gpu_name`, `vram_mib_total`, `vram_mib_free`, `cpus` |
+| `plugins` | string[] | YES | Advertised node_type names |
+| `graphyn_version` | string | YES | Semver / package version |
+| `heartbeat_at` | ISO-8601 | YES | Updated on heartbeat |
+| `status` | enum | YES | `idle` \| `busy` \| `stale` \| `draining` |
 
 | ID | Requirement | Pri |
 |---|---|---|
-| MR-001 | Register model from run artifact/slug | P0 |
-| MR-002 | Promote aliases `latest` \| `staging` \| `prod` on runs | P0 |
-| MR-003 | `request-prod` / `approve-prod` gate with audit | P0 |
-| MR-004 | Pipeline env pointers separate from model stages but linked in UX | P0 |
-| MR-005 | Model → training run → dataset version links **should** be first-class | P1 |
+| DIST-001 | Workers **shall** register/heartbeat/deregister with shared bearer | P0 |
+| DIST-008 | Heartbeat interval default **15s**; stale after **45s** without heartbeat → scheduler skips worker | P0 |
+| DIST-011 | Registration **shall** upsert by `worker_id` (idempotent) | P0 |
+| DIST-012 | Worker missing required `node_type` for a job **shall** be ineligible to claim it | P0 |
+| DIST-013 | `graphyn_version` mismatch vs control plane **should** warn; major mismatch **shall** refuse claim (P0 for major) | P0 |
 
----
-
-## 15. Distributed Mode B
+### 15.2 Auth implications (shared bearer)
 
 | ID | Requirement | Pri |
 |---|---|---|
-| DIST-001 | Workers register/heartbeat/deregister with bearer | P0 |
-| DIST-002 | Job claim/complete/events/cancel APIs **shall** exist | P0 |
-| DIST-003 | IR placement (auto/worker/pool/gpu) **shall** route work in Mode B | P0 |
+| DIST-AUTH-001 | Workers use the **same** Bearer as control plane API | P0 |
+| DIST-AUTH-002 | Product honesty **shall** state: any bearer holder can register as worker, claim jobs, read blobs | P0 |
+| DIST-AUTH-003 | Separate worker credentials / mTLS **may** ship later (P2); not required for v1 single-tenant | P2 |
+| DIST-AUTH-004 | Blob put/get **shall** require bearer when auth configured | P0 |
+
+### 15.3 Job claim — CAS / race
+
+| ID | Requirement | Pri |
+|---|---|---|
+| DIST-020 | `POST /jobs/claim` **shall** use atomic CAS (flock RMW / Redis WATCH / DB tx) — not process-local Lock alone when durable store on | P0 |
+| DIST-021 | Claim response includes `job_id`, `lease_generation`, `lease_expires_at`, full job payload | P0 |
+| DIST-022 | Concurrent claims on same job: exactly one winner; loser gets empty/next job | P0 |
+| DIST-023 | Complete **shall** require `worker_id == claimed_by` AND matching `lease_generation`; else **409** | P0 |
+| DIST-024 | Reclaim increments `lease_generation` and returns job to `pending` | P0 |
+
+### 15.4 Delivery semantics (LOCKED)
+
+**DIST-SEM-001** (P0) Job execution delivery is **at-least-once**.
+
+Required mitigations:
+
+| Mitigation | Rule |
+|---|---|
+| Idempotent artifact keys | Output blobs keyed by content hash / deterministic job+port key |
+| Complete fencing | Only current lease_generation may complete |
+| Node side-effects | Authors **should** make `process()` idempotent; non-idempotent nodes **shall** be documented |
+| Duplicate complete | Second complete with same generation **shall** be idempotent success; different generation **shall** 409 |
+| Exactly-once | **Not** promised for node side-effects outside artifact store |
+
+### 15.5 Lease / heartbeat / reassignment
+
+| ID | Requirement | Pri |
+|---|---|---|
+| DIST-030 | Default lease TTL **60s** (`GRAPHYN_JOB_LEASE_TTL_S`); heartbeat renews lease | P0 |
+| DIST-031 | Expired lease → reclaim to `pending` → eligible for reassignment (**P0**, not deferred) | P0 |
+| DIST-032 | After reclaim, `mode=worker` pin **shall** widen to `mode=auto` (keep tags/GPU/VRAM/pool) | P0 |
+| DIST-033 | Worker disappearance mid-job: lease expiry path; run stays `running` until wave resolves | P0 |
+| DIST-034 | Cancel: control marks job `cancelled`; worker polls (~2 Hz) and stops; complete after cancel with success outputs **forbidden** | P0 |
+| DIST-035 | Durable worker registry + job queue **shall** be default for Mode B (disk or Redis); memory-only only for tests | P0 |
+
+### 15.6 Data plane
+
+| ID | Requirement | Pri |
+|---|---|---|
+| DIST-009 | Cross-machine data **shall** use `artifact://` URIs only — not live Python objects or host-local absolute paths | P0 |
+| DIST-010 | Host loads of worker outputs **shall** use RestrictedUnpickler (allowlist) | P0 |
+| DIST-005 | Blob transfer put/get via control API **shall** work without shared filesystem | P0 |
+| DIST-003 | IR placement (auto/worker/pool/gpu/VRAM) **shall** route work | P0 |
 | DIST-004 | Run detail **shall** expose `distributed_node_workers` map | P1 |
-| DIST-005 | Blob transfer for artifacts across workers **shall** work | P1 |
-| DIST-006 | Mid-flight reclaim / reassignment UX **may** follow API | P2 |
-| DIST-007 | OTel spans per node/job across workers **may** be later | P2 |
-| DIST-008 | Heartbeats ~15s; stale after ~45s → scheduler skips worker | P0 |
-| DIST-009 | Data plane **shall** cross machines only via artifact URIs — not live Python objects or host-local absolute paths | P0 |
-| DIST-010 | Host loads of worker outputs **shall** use RestrictedUnpickler (allowlist builtins/numpy/app.models) | P0 |
 
-**Job unit:** `{job_id, run_id, node_id, node_type, config, seed, input_refs, placement, timeout_s}` → result `{status, output_refs, events, error, worker_id, duration_s}`.
+### 15.7 Job unit schema
 
----
+**Request (enqueue/internal):** `{job_id, run_id, node_id, node_type, config, seed, input_refs, placement, timeout_s, created_at, lease_generation?}`
 
-## 16. Plugins
+**Result (complete):** `{job_id, status: succeeded|failed|cancelled, output_refs, events, error, worker_id, duration_s, lease_generation}`
 
-### 16.1 Package contract
+Job statuses: `pending` → `claimed` → `running` → `succeeded`|`failed`|`cancelled`; reclaim: `claimed`/`running` → `pending`.
+
+## 16. Persistence & durability (normative)
+
+Persistence **may** be filesystem or database. **Same guarantees apply.**
+
+### 16.1 Minimum durability — what must survive process restart
+
+| Data | Survive restart? | Notes |
+|---|---|---|
+| Run `meta.json` / status | YES | Including terminal reason |
+| Run `graph.json` | YES | Immutable after start |
+| Checkpoints / `resume_state.json` | YES | When checkpointing enabled |
+| Artifact blobs + index entries | YES | Content-addressed |
+| Provenance records | YES | Append-only |
+| Model registry | YES | stages + pending_prod |
+| Pipeline drafts + versions + env pointers | YES | |
+| Plugin registry (installed/enabled) | YES | under GRAPHYN_HOME |
+| Secrets (encrypted/at-rest files) | YES | 0600 |
+| Schedules / webhooks config | YES | |
+| Worker registry + job queue (Mode B) | YES when durable store enabled (default on for Mode B P0) | memory-only **forbidden** for production Mode B |
+| Audit events | YES | Append-only |
+| Ship package manifests + blobs | YES | |
+| Dataset version manifests + content | YES | |
+| In-memory only active-run handles | NO | Recover via §13.3 |
+
+**PERS-001** (P0) Before returning `run_id` from async start, durable `pending` meta + graph **shall** be fsynced (or DB committed).
+
+**PERS-002** (P0) Terminal status write **shall** be atomic (temp + `os.replace` / transactional commit).
+
+### 16.2 Atomicity rules
+
+| ID | Rule | Pri |
+|---|---|---|
+| PERS-010 | Run meta updates **shall** be atomic per run | P0 |
+| PERS-011 | Artifact blob write **then** index commit; crash between → orphan blob OK; index without blob **forbidden** (quarantine) | P0 |
+| PERS-012 | Provenance append **shall** happen only after artifact index commit for that artifact | P0 |
+| PERS-013 | Model registry stage pointer updates **shall** be atomic; approve-prod is single atomic swap | P0 |
+| PERS-014 | Pipeline publish: version snapshot commit **then** env pointer update | P0 |
+| PERS-015 | Job claim CAS **shall** be single atomic mutate (flock/WATCH/tx) | P0 |
+
+### 16.3 Corrupted index quarantine
+
+**PERS-020** (P0) If artifact/run/registry index fails checksum/parse: **shall not** return silent empty success. **Shall** quarantine corrupt file aside, log error, return **503** or **500** with `error.code=store_corrupt` for affected APIs, and expose Ops signal.
+
+**PERS-021** (P0) Readiness **shall** be false (`ready=false`) when critical stores are corrupt or unwritable (disk-full).
+
+## 17. Plugin lifecycle & security (normative)
+
+### 17.1 Package contract
 
 ```
 my_plugin/
@@ -1374,138 +2578,364 @@ my_plugin/
 
 **plugin.toml keys:** `name` (slug `^[a-z][a-z0-9_-]*$`), `version` (PEP 440), `description`, `author`, `platform_version`, `entry_points`, `license`, `tags`, `dependencies`, `optional_dependencies`, `runtime` = `inprocess` \| `isolated`.
 
-| ID | Requirement | Pri |
+### 17.2 Lifecycle state machine
+
+```
+not_installed → installing → installed_disabled → enabled → disabled → uninstalling → not_installed
+                     ↘ failed_install (rollback) → not_installed
+enabled → upgrading → enabled | rolled_back
+```
+
+| Step | SHALL behavior | Pri |
 |---|---|---|
-| PLG-SYS-001 | Plugins **shall** install via PluginManager (path/pkg/git/https) with optional SHA256 | P0 |
-| PLG-SYS-002 | Manifest + registry registration **shall** expose nodes to catalogue | P0 |
-| PLG-SYS-003 | Isolated runtime (`iso`) **should** be indicated in catalog | P1 |
-| PLG-SYS-004 | Remote install allowlist **shall** fail closed when auth required | P0 |
-| PLG-SYS-005 | Enable/disable/uninstall **shall** update catalog on refresh | P0 |
-| PLG-SYS-006 | Auto-install bundled PluginPackage when production/empty enabled list (unless skip flag) | P1 |
-| PLG-SYS-007 | Heavy deps **shall** prefer `optional_dependencies`; isolated venvs under GRAPHYN_HOME | P1 |
-| PLG-SYS-008 | Domain types for plugins **shall** live in plugin `types.py`, not platform `app/models` | P0 |
-
-**Node authoring minimum:** `Node` subclass with `NodeMetadata`, `input_ports`/`output_ports`, `Config(NodeConfig)`, `process` (SISO OK), optional `setup`/`teardown`, optional `RetryPolicy`.
-
----
-
-## 17. Agents / MCP / proposals
-
-Covered in §9.3 and §12.9. Additional:
-
-| ID | Requirement | Pri |
-|---|---|---|
-| AGT-SYS-001 | Propose → human Accept in UI **shall** be the default apply path | P0 |
-| AGT-SYS-002 | Create/accept/reject **shall** emit audit events | P0 |
-| AGT-SYS-003 | Explain/fix from failed run **shall** create a proposal | P1 |
-| AGT-SYS-004 | Agents are first-class actors — chips on proposals + audit | P1 |
-
----
-
-## 18. Edge / Ship / devices
+| Install | Fetch/verify (optional SHA256) → extract → parse manifest → check platform_version compat → stage deps → register record `disabled` by default or per flag | P0 |
+| Deps | Install declared deps into isolated venv when `runtime=isolated`; fail closed on conflict | P0 |
+| Isolate | `isolated` runs out-of-process; `inprocess` loads into host (trust boundary) | P0 |
+| Register | Node types appear in catalogue only when **enabled** | P0 |
+| Enable | Load entry points; DuplicateNodeTypeError → fail enable, leave previous | P0 |
+| Disable | Unload from catalogue; in-flight runs keep already-instantiated classes until run ends | P0 |
+| Uninstall | Disable first if enabled; remove files/venv; refuse if `force=false` and active runs reference types (409) | P0 |
+| Upgrade | Install new version to stage → swap → on failure rollback to previous version files + registry | P0 |
+| Downgrade | Allowed when `allow_downgrade=true`; same rollback rules | P1 |
+| Failed install | **Rollback:** delete staged files; registry unchanged; return error envelope | P0 |
 
 | ID | Requirement | Pri |
 |---|---|---|
+| PLG-SYS-001 | Install via PluginManager (path/pkg/git/https) with optional SHA256 | P0 |
+| PLG-SYS-002 | Manifest + registry expose nodes when enabled | P0 |
+| PLG-SYS-003 | Isolated runtime indicated in catalog | P1 |
+| PLG-SYS-004 | Remote install allowlist fail-closed when auth required | P0 |
+| PLG-SYS-005 | Enable/disable/uninstall update catalog on refresh | P0 |
+| PLG-SYS-006 | Auto-install bundled PluginPackage when production/empty enabled list (unless skip) | P1 |
+| PLG-SYS-007 | Heavy deps prefer optional_dependencies; isolated venvs under GRAPHYN_HOME | P1 |
+| PLG-SYS-008 | Domain types in plugin `types.py`, not platform `app/models` | P0 |
+| PLG-SYS-009 | Worker/plugin compat: worker advertises plugins; missing type → skip claim / fail job | P0 |
+| PLG-SYS-010 | Version compat: `platform_version` constraint evaluated before enable | P0 |
+
+### 17.3 Trust model
+
+| Who | May install? | Code execution boundary |
+|---|---|---|
+| Bearer holder (single-tenant) | YES | Install executes package code on enable/load — **trusted operator plane** |
+| Unauthenticated-dev | YES if auth not required | Same — lab only |
+| MCP agent | YES via `install_plugin` when authorized | Same bearer implications |
+| Anonymous internet | NO | Endpoint must not be public without auth |
+
+| ID | Requirement | Pri |
+|---|---|---|
+| PLG-TRUST-001 | Document that plugin install/enable **executes third-party code** | P0 |
+| PLG-TRUST-002 | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` structural URL allowlist; empty + auth required → deny remotes | P0 |
+| PLG-TRUST-003 | Redirect hops re-validated against allowlist | P0 |
+| PLG-TRUST-004 | Never market inprocess plugins as sandboxed | P0 |
+
+## 18. Models vs pipeline environments (formal)
+
+### 18.1 Two parallel promotion axes
+
+| Axis | Stages / envs | Pointer meaning |
+|---|---|---|
+| **Pipeline environments** | `draft` (mutable head), `staging`, `prod`, `pending_prod` | Points at **pipeline version id** (`vN`) or null |
+| **Model stages** | `latest`, `staging`, `prod` (+ `pending_prod` sibling) | Points at `{run_id, slug, version?, updated_at}` |
+
+**MR-ENV-001** (P0) These axes are **independent** records. Promoting a pipeline env **shall not** silently promote a model stage, and vice versa.
+
+**MR-ENV-002** (P0) UX **shall** show linkage when a model’s training `run_id` used a pipeline version / dataset version (lineage).
+
+**MR-ENV-003** (P0) Pipeline promote to prod **shall** require `approve: true`. Model prod **shall** require request + approve gate.
+
+**Lineage chain (normative):**
+
+```
+dataset_version → run (graph_hash, actor) → artifact_id → model_version/stage → pipeline_env (optional stamp) → ship_package
+```
+
+| ID | Requirement | Pri |
+|---|---|---|
+| MR-001 | Register model from run artifact/slug | P0 |
+| MR-002 | Promote aliases latest\|staging\|prod on runs | P0 |
+| MR-003 | request-prod / approve-prod with audit | P0 |
+| MR-004 | Pipeline env pointers separate from model stages; linked in UX | P0 |
+| MR-005 | Model → training run → dataset version links first-class | P1 |
+
+## 19. Ship package model (normative)
+
+Device registry/flash/OTA APIs may be **needs-API**; **package side is fully specified**.
+
+### 19.1 Manifest fields
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `package_id` | string | YES | Stable id |
+| `schema_version` | string | YES | Package manifest schema e.g. `"1.0"` |
+| `created_at` | ISO-8601 | YES | |
+| `actor` | string | NO | |
+| `project` | string | YES | Workspace wire name |
+| `target` | object | YES | `{runtime, arch, os?, device_class?}` |
+| `runtime` | string | YES | e.g. `tflite`, `onnx`, `keras_lite`, `custom` |
+| `model_ref` | object | YES | `{name, stage_or_version, run_id, artifact_id}` |
+| `preprocessing_deps` | array | YES | Node types / plugin versions / config digests used |
+| `graph_hash` | string | NO | Source graph if packaged from run |
+| `files[]` | array | YES | `{path, sha256, size, role}` |
+| `checksums` | object | YES | Aggregate `{sha256: …}` of package archive |
+| `signatures` | array | NO | `{alg, value, key_id}` — P1 |
+| `compatibility` | object | YES | `{min_runtime_version, opset?, features[]}` |
+| `env` | enum | YES | `draft`\|`staging`\|`prod` package channel |
+| `status` | enum | YES | See lifecycle |
+| `lineage` | object | YES | `{run_id, model_name, dataset_versions[]}` |
+| `notes` | string | NO | |
+
+### 19.2 Lifecycle
+
+```
+creating → ready → staging → prod
+                ↘ failed
+ready|staging|prod → superseded (after rollback/replace)
+any non-terminal → cancelled
+```
+
+| ID | Requirement | Pri |
+|---|---|---|
+| SHIP-001 | Creating package from model/run **shall** write manifest + archive with per-file sha256 | P0 |
+| SHIP-002 | Download returns archive + manifest; UI shows checksums | P0 |
+| SHIP-003 | Promote package env staging/prod with audit | P1 |
+| SHIP-004 | Rollback points channel to prior `package_id`; marks current superseded | P1 |
+| SHIP-005 | Deployment status on package: `not_deployed`\|`pending`\|`deployed`\|`failed` (device side may be stub) | P1 |
+| SHIP-006 | Device identity fields on assign: `device_id`, `display_name`, `last_package_id`, `last_seen_at`, `ota_status` — **needs-API** for live OTA; UI honesty stub | P0 |
 | EDGE-001 | edge_optimizer + deployment_packager path via template/wizard | P0 |
 | EDGE-002 | Download package artifact from completed ship run | P0 |
-| EDGE-003 | Promote package env staging/prod when supported | P1 |
-| EDGE-004 | Device registry / flash / OTA | P2 |
-| EDGE-005 | Signed package / checksum display | P2 |
-| EDGE-006 | Multi-target batch packages | P2 |
 | EDGE-007 | Fake Devices UI without API **shall not** ship — stub + honesty only | P0 |
 
----
-
-## 19. Datasets / ingest
+## 20. Dataset version semantics (normative)
 
 | ID | Requirement | Pri |
 |---|---|---|
+| DATA-VER-001 | A **dataset version** under `datasets/output/{project}/{version}` is **immutable** after creation completes | P0 |
+| DATA-VER-002 | Content hashing: version manifest **shall** include aggregate sha256 of file digests | P0 |
+| DATA-VER-003 | Label (input label) is a mutable pointer name over files under `datasets/input/{label}`; **changing files under a label after a run does not rewrite history** | P0 |
+| DATA-VER-004 | Runs **shall** record referenced dataset paths/labels **and** content hash or version id in run meta / provenance when known | P0 |
+| DATA-VER-005 | Reproducibility: replay **shall** use recorded version id/hash when present; if only label recorded, replay **shall** warn `DATA-LABEL-MOVED` | P0 |
+| DATA-VER-006 | Deletion of a version referenced by any run/model/package **shall** default-deny (409) unless `force=true` (admin) — force **shall** audit | P0 |
+| DATA-VER-007 | Input label delete with referencing runs **should** warn; force same as above | P1 |
+| DATA-VER-008 | Merge creates a **new** version; sources unchanged | P0 |
 | DATA-SYS-001 | Inputs under `datasets/input/{label}`; outputs under `datasets/output/{project}/…` | P0 |
 | DATA-SYS-002 | URL + HuggingFace ingest | P1 |
-| DATA-SYS-003 | Project versions, snapshots, lineage, quality APIs **may** exceed UI coverage | P2 |
-| DATA-SYS-004 | Annotations / curation / quality-check **should** gain UI when product prioritizes label lite | P2 |
-| DATA-SYS-005 | Upload filenames **shall** be sanitized/timestamped | P0 |
+| DATA-SYS-005 | Upload filenames sanitized/timestamped | P0 |
 
-**Product loop:** Upload in Datasets → Build in Editor → Runs (outputs / lineage / compare) → manage on Home → package in Ship.
+## 21. Agents / MCP / proposals — parity for J1–J6
 
----
+### 21.1 Transport & auth
 
-## 20. Security & trust
+- Transport: stdio JSON-RPC (MCP).
+- Auth: `_meta.auth_token` mirrors REST bearer policy (fail-closed when auth required).
+- **MCP-001** (P0) Agents **shall not** receive secret values via list tools.
+- **MCP-002** (P0) Default apply path: propose → human Accept in UI (unless `GRAPHYN_MCP_HUMAN_APPROVAL=1` enables MCP `accept_proposal`).
+- **MCP-004** (P1) Agent-facing copy **shall** cite **path URLs**, not hashes.
 
-### 20.1 Single-tenant bearer model
+### 21.2 Decision: expand MCP to journey parity (LOCKED)
 
-**SEC-001** (P0) Shared-bearer single-tenant model **shall** be documented in product honesty; no fake RBAC claims. Bearer holder can read/write all workspaces until multi-user ships.
+**MCP-PARITY-001** (P0) The claim “agents are first-class / J1–J6 via MCP” **shall** be true. Therefore the required MCP tool set **shall** expand beyond the historical ~28–29 tools so an agent can complete J1–J6 without raw REST (except where noted as intentional human-only gates).
 
-**SEC-002** (P2) Future multi-user: cross-workspace access **shall** default-deny (membership/ACL).
+### 21.3 Required MCP tools (normative catalog)
 
-### 20.2 Secrets
+#### Core (existing — keep)
+
+| Tool | Purpose |
+|---|---|
+| `list_nodes` | Discovery |
+| `generate_graph` | Build IR |
+| `validate_graph` | Validate IR |
+| `get_graph_schema` | Schema |
+| `get_graph_capability_summary` | Caps |
+| `get_event_schema` | Events |
+| `execute_pipeline` | Run (returns `run_id` promptly) |
+| `inspect_run` | Meta/logs/graph/checkpoints |
+| `pause_run` / `resume_run` / `cancel_run` | Control |
+| `list_artifacts` / `get_artifact_lineage` / `replay_run` | Provenance |
+| `optimize_execution` | Hints |
+| `install_plugin` / `list_plugins` / `manage_plugin` | Plugins |
+| `secrets_list` / `secrets_set` | Secrets (names only on list) |
+| `propose_graph` / `list_proposals` / `get_proposal` / `reject_proposal` / `accept_proposal?` | Proposals |
+| `list_experiments` / `get_trace` / `list_projects` / `list_data_inputs` | Observe |
+
+#### P0 additions for J1–J6 parity
+
+| Tool | Journey | Purpose |
+|---|---|---|
+| `list_pipelines` | J1 | List workspace pipelines + env pointers |
+| `get_pipeline` | J1 | Get draft or env-resolved IR |
+| `save_pipeline` | J1 | Save draft IR (secret fail-closed) |
+| `publish_pipeline` | J1 | Create version; optional set staging |
+| `promote_pipeline` | J1 | Promote env; prod requires approve flag |
+| `rollback_pipeline` | J1 | Copy version onto draft |
+| `list_runs` | J1/J2/J6 | Filter by project/status |
+| `get_run` | J1–J6 | Run meta |
+| `get_run_outputs` | J1 | List/download descriptors for run outputs |
+| `list_templates` / `get_template` / `instantiate_template` | J1 | Template → workspace pipeline/editor graph |
+| `register_model` | J2 | From run |
+| `list_models` / `get_model` | J2 | Registry |
+| `request_model_prod` / `approve_model_prod` | J2 | Gates + audit |
+| `compare_runs` | J2 | Compare payload |
+| `list_schedules` / `upsert_schedule` / `enable_schedule` / `delete_schedule` / `run_schedule_now` | J3 | Always-on |
+| `get_webhooks` / `put_webhooks` / `test_webhook` | J3 | Outbound hooks |
+| `create_ship_package` / `get_ship_package` / `list_ship_packages` / `download_ship_package` | J4 | Package side |
+| `promote_ship_package` | J4 | P1 tool; P0 if promote API exists |
+| `list_dataset_versions` / `get_dataset_version` / `upload_dataset_file` | J1/J6 | Data |
+| `get_audit_events` / `export_audit` | J6 | Accountability |
+| `get_readiness` | ops | backend_mode, workers, store health |
+| `list_workers` / `list_jobs` | Mode B | Observe (admin mutate worker pool may stay REST) |
+
+**MCP-003** (revised P1→narrow): Worker **admin** deregister / force-drain and destructive `system/cleanup` **may** remain REST-only. Schedules, models, pipelines, ship packages, datasets, audit export **shall** be MCP tools (table above).
+
+### 21.4 Journey coverage matrix
+
+| Journey | Human | MCP tools (minimum) | Human-only gate |
+|---|---|---|---|
+| J1 | Editor/Templates/Runs | templates + save/publish/promote/rollback + execute + inspect + outputs | none required |
+| J2 | Compare/Models | compare_runs + register/list + request/approve prod + get_trace | approve may be human policy |
+| J3 | Ops/Home | schedule + webhook tools + list_runs | none |
+| J4 | Ship | create/list/get/download package (+ promote P1) | device flash needs-API |
+| J5 | Agent inbox | propose + list/get + reject; accept via UI or flag | default Accept in UI |
+| J6 | Lineage/Audit | get_trace + lineage + replay + audit export | none |
 
 | ID | Requirement | Pri |
 |---|---|---|
-| SEC-010 | Secrets: dir 0700, files 0600 under GRAPHYN_HOME/secrets | P0 |
-| SEC-011 | API/MCP/CLI list **names only**; no GET-by-name value endpoint | P0 |
-| SEC-012 | Secrets **shall never** appear in Graph IR, URLs, or logs | P0 |
-| SEC-013 | `resolve_secret(name)` in-process only; miss errors cite name never value | P0 |
+| AGT-SYS-001 | Propose → human Accept default | P0 |
+| AGT-SYS-002 | Create/accept/reject emit audit | P0 |
+| AGT-SYS-003 | Explain/fix from failed run creates proposal | P1 |
+| AGT-SYS-004 | Agents first-class actors — chips on proposals + audit | P1 |
+| MCP-005 | Tool errors **shall** use structured `{error_type, message}` aligned with error.code where possible | P0 |
 
-### 20.3 python_code & HTTP egress
+## 22. Audit & provenance event schemas (normative)
+
+### 22.1 Audit event
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `event_id` | string (UUID) | YES | Unique |
+| `timestamp` | ISO-8601 UTC | YES | Server time |
+| `actor` | string | YES | From X-Actor or `system`/`anonymous` |
+| `actor_kind` | enum | NO | `human`\|`agent`\|`system` |
+| `request_id` | string | YES | Correlation |
+| `action` | string | YES | e.g. `pipeline.publish`, `run.cancel`, `model.approve_prod`, `plugin.install` |
+| `resource_type` | string | YES | |
+| `resource_id` | string | YES | |
+| `resource_version` | string\|int\|null | NO | Before mutation |
+| `before` | object\|null | NO | Redacted snapshot |
+| `after` | object\|null | NO | Redacted snapshot |
+| `result` | enum | YES | `success`\|`failure`\|`denied` |
+| `error_code` | string\|null | NO | |
+| `verification` | object\|null | NO | `{prev_hash, entry_hash}` optional chain P1 |
+| `metadata` | object | NO | Non-secret extras |
+
+**AUD-001** (P0) Audit log **shall** be append-only; updates/deletes of past events **forbidden** via API.
+
+**AUD-002** (P0) Secret values **shall never** appear in `before`/`after` (names OK).
+
+**AUD-003** (P0) Retention default ≥ 90 days; configurable; export **shall** support JSONL.
+
+**AUD-004** (P1) Optional hash-chain verification fields for tamper evidence.
+
+**AUD-005** (P0) Required audited actions include: proposal create/accept/reject; pipeline publish/promote/rollback; model request/approve prod; secret set/delete (name only); plugin install/enable/disable/uninstall; schedule CRUD; ship package create/promote; run cancel; cleanup.
+
+### 22.2 Provenance record
+
+| Field | Type | Required |
+|---|---|---|
+| `artifact_id` | string | YES |
+| `run_id` | string | YES |
+| `node_id` / `node_type` | string | YES |
+| `input_artifact_ids` | string[] | YES (may empty) |
+| `graph_hash` | string | YES |
+| `plugin_versions` | object | NO |
+| `worker_id` | string\|null | NO |
+| `actor` | string\|null | NO |
+| `dataset_refs` | array | NO | `{label_or_version, content_hash?}` |
+| `created_at` | ISO-8601 | YES |
+
+**OBS-001** Append-only audit for mutations (P0).  
+**OBS-002** `GET /trace` unified backtrack (P0).  
+**OBS-003** Audit filters + export (P1).  
+**OBS-007** Partial chains render honestly (P0).
+
+## 23. Security & threat-model requirements
+
+### 23.1 Trust model summary
+
+Single-tenant shared bearer. Bearer holder can CRUD all workspaces until multi-user ships. No fake RBAC.
+
+### 23.2 Threats & mitigations (normative)
+
+| Threat ID | Threat | Requirement | Pri |
+|---|---|---|---|
+| THREAT-001 | XSS steals `localStorage` bearer | **SEC-XSS-001** Console **shall** ship CSP sufficiently strict to block inline script exfil where feasible; sanitize previews; **SEC-XSS-002** document residual risk of bearer-in-localStorage | P0 |
+| THREAT-002 | Bearer in localStorage | **SEC-TOKEN-001** Settings token storage in localStorage is **interim**; **SHOULD** prefer httpOnly cookie / session BFF (P1). Product honesty banner when token in localStorage (P0) | P0/P1 |
+| THREAT-003 | Shared worker bearer = full API power | **SEC-WORKER-001** Document implication; network-segment workers; **SHOULD** future separate worker token scope (P2) | P0 |
+| THREAT-004 | Plugin install executes code | **PLG-TRUST-*** + auth gate + allowlist; never public anonymous install | P0 |
+| THREAT-005 | `python_code` AST ≠ sandbox | **SEC-020** AST filters required; **shall not** market as sandbox; disable in multi-tenant future | P0 |
+| THREAT-006 | Pickle RCE from worker blobs | RestrictedUnpickler allowlist only (SEC-040/041) | P0 |
+| THREAT-007 | Path traversal | Safe-child / jail under workspace roots (SEC-030) | P0 |
+| THREAT-008 | SSRF via webhooks/ingest | Block private/loopback; pin-IP preferred (SEC-023) | P0 |
+| THREAT-009 | Secrets in IR/logs/URLs | Fail-closed validation + redaction (SEC-012, IR-006) | P0 |
+| THREAT-010 | CSRF on cookie auth (future) | If cookie session adopted, CSRF tokens required (P1 with cookie move) | P1 |
+
+### 23.3 Security requirements tables (retain + extend)
 
 | ID | Requirement | Pri |
 |---|---|---|
-| SEC-020 | `python_code` **shall** use AST filters; **shall not** be marketed as a sandbox | P0 |
-| SEC-021 | `allow_network` default false; `allowed_paths` empty unless intentional | P0 |
-| SEC-022 | HTTP egress restricted mode + allowlist **shall** be available (`GRAPHYN_HTTP_EGRESS_MODE`) | P1 |
-| SEC-023 | Platform webhooks **shall** block private/loopback; pin-IP connect preferred | P0 |
+| SEC-001 | Shared-bearer single-tenant documented; no fake RBAC | P0 |
+| SEC-002 | Future multi-user default-deny cross-workspace | P2 |
+| SEC-010 | Secrets dir 0700, files 0600 under GRAPHYN_HOME/secrets | P0 |
+| SEC-011 | List names only; no GET value endpoint | P0 |
+| SEC-012 | Secrets never in IR, URLs, logs | P0 |
+| SEC-013 | resolve_secret in-process only | P0 |
+| SEC-020 | python_code AST filters; not a sandbox | P0 |
+| SEC-021 | allow_network default false | P0 |
+| SEC-022 | HTTP egress restricted mode + allowlist | P1 |
+| SEC-023 | Webhooks block private/loopback | P0 |
+| SEC-030 | Path jail / safe-child | P0 |
+| SEC-031 | Run/artifact/template id charset hardening | P0 |
+| SEC-032 | Condition AST whitelist | P0 |
+| SEC-033 | Sanitize previews | P1 |
+| SEC-034 | CSP-friendly build; no inline secret logging | P0 |
+| SEC-040 | No unrestricted pickle on untrusted bytes | P0 |
+| SEC-041 | RestrictedUnpickler for worker/isolated outputs | P0 |
+| SEC-042 | Plugin remote allowlist structural match | P0 |
+| SEC-050 | Deployment boundary: reverse proxy TLS; do not expose workers/API to open internet without auth | P0 |
+| SEC-051 | CORS **shall** be explicit allowlist in non-dev | P1 |
 
-### 20.4 Path / ID hardening
-
-| ID | Requirement | Pri |
-|---|---|---|
-| SEC-030 | User path segments **shall** use safe-child checks; dataset paths jailed | P0 |
-| SEC-031 | Run IDs alphanumeric; artifact ids `^[A-Za-z0-9_-]+$`; template names restricted | P0 |
-| SEC-032 | Condition expressions AST whitelist only | P0 |
-| SEC-033 | Sanitize artifact/JSON previews in UI | P1 |
-| SEC-034 | CSP-friendly build; no inline secret logging | P1 |
-
-### 20.5 Pickle / isolation
-
-| ID | Requirement | Pri |
-|---|---|---|
-| SEC-040 | Never deserialize attacker-controlled bytes with unrestricted pickle | P0 |
-| SEC-041 | Host loads worker/isolated outputs via RestrictedUnpickler | P0 |
-| SEC-042 | Plugin remote sources: allowlist structural match; empty allowlist denies remotes when auth required | P0 |
-
-### 20.6 Authorization matrix (current target honesty)
-
-Bearer holder (or unauthenticated-dev caller): full CRUD/execute on projects, graphs, runs, artifacts, datasets, plugins install, workers, proposals. Secret **values**: never via list/get — only runtime resolve. **Not shipped:** RBAC roles, OIDC/SSO, per-workspace isolation, separate worker credentials.
-
----
-
-## 21. Observability & audit
+## 24. Operational requirements (normative)
 
 | ID | Requirement | Pri |
 |---|---|---|
-| OBS-001 | Append-only audit events for mutations (proposals, envs, model prod, …) | P0 |
-| OBS-002 | `GET /trace` unified backtrack payload (artifact → node → run → graph → worker) | P0 |
-| OBS-003 | Audit filters (actor/resource/time) + export | P1 |
-| OBS-004 | Client error reporting hook (env-flagged) | P2 |
-| OBS-005 | Correlation ids on failure UI (`run_id` / request id) | P1 |
-| OBS-006 | OTel span viewer | P2 |
-| OBS-007 | Partial chains when pieces missing **shall** still render honestly | P0 |
+| OPS-001 | Backup: documented procedure to backup GRAPHYN_HOME + project dir (or DB) consistently (run meta + artifacts + registry) | P0 |
+| OPS-002 | Restore: restore procedure **shall** bring runs/artifacts/models/schedules back; verify readiness | P0 |
+| OPS-003 | Migration: schema_version / store migrations **shall** be forward-compatible or provide migrate command; refuse start on unsupported major | P0 |
+| OPS-004 | Startup: load plugins, verify stores, set readiness; fail readiness on corrupt critical index | P0 |
+| OPS-005 | Shutdown: drain — stop new runs, wait in-flight up to grace, cancel remainder, flush audit | P0 |
+| OPS-006 | Corrupted state: quarantine + Ops alert; no silent empty (PERS-020) | P0 |
+| OPS-007 | Disk-full: detect ENOSPC; fail writes with 503 `disk_full`; readiness false | P0 |
+| OPS-008 | Log retention: configurable; default retain API/runtime logs ≥ 14 days | P1 |
+| OPS-009 | Artifact cleanup: `POST /system/cleanup` armed; dry-run; never delete artifacts referenced by non-forced model/prod pointers without confirm | P0 |
+| OPS-010 | Concurrent API: thread/async safe; run control serialized per run_id | P0 |
+| OPS-011 | Graceful shutdown signal (SIGTERM) handled per OPS-005 | P0 |
+| OPS-012 | Upgrade compatibility: N to N+1 minor API compatible; breaking changes bump /api/v2 or documented deprecation ≥ 1 minor | P0 |
+| OPS-013 | API compatibility policy: additive fields OK; rename/remove fields only with version negotiation or changelog deprecation | P0 |
+| OPS-014 | Health `GET /health` liveness vs `GET /system/readiness` readiness separated | P0 |
+| NFR-REL-002 | Stale RUNNING detection + cancel/fail path | P0 |
+| NFR-REL-003 | Schedule durability across restart | P1 |
 
----
+## 25. Non-functional requirements
 
-## 22. Non-functional requirements
-
-### 22.1 Performance
+### 25.1 Performance
 
 | ID | Requirement | Pri |
 |---|---|---|
 | NFR-PERF-001 | Route-level code splitting for features | P1 |
 | NFR-PERF-002 | Virtualize long run/log/artifact lists | P1 |
 | NFR-PERF-003 | Editor bundle isolated from observe routes | P1 |
-| NFR-PERF-004 | Catalog/list endpoints **should** respond < 2s on lab hardware for ≤1k nodes/runs page | P2 |
+| NFR-PERF-004 | Catalog/list endpoints should respond < 2s on lab hardware for ≤1k nodes/runs page | P2 |
 
-### 22.2 Accessibility
+### 25.2 Accessibility
 
 | ID | Requirement | Pri |
 |---|---|---|
@@ -1513,147 +2943,227 @@ Bearer holder (or unauthenticated-dev caller): full CRUD/execute on projects, gr
 | NFR-A11Y-002 | WCAG AA for core flows (contrast, labels, live regions) | P1 |
 | NFR-A11Y-003 | `aria-current` on active nav | P0 |
 
-### 22.3 i18n
+### 25.3 i18n
 
 | ID | Requirement | Pri |
 |---|---|---|
-| NFR-I18N-001 | New user-facing strings **should** be key-disciplined (i18n-ready) | P2 |
-| NFR-I18N-002 | Full locale packs **may** be deferred | P2 |
+| NFR-I18N-001 | New user-facing strings should be key-disciplined (i18n-ready) | P2 |
+| NFR-I18N-002 | Full locale packs may be deferred | P2 |
 
-### 22.4 Browser support
+### 25.4 Browser support
 
 | ID | Requirement | Pri |
 |---|---|---|
-| NFR-BRW-001 | Desktop Chrome/Edge/Firefox latest-2 **shall** be supported | P0 |
-| NFR-BRW-002 | Mobile observe-only **may** be later | P2 |
+| NFR-BRW-001 | Desktop Chrome/Edge/Firefox latest-2 shall be supported | P0 |
+| NFR-BRW-002 | Mobile observe-only may be later | P2 |
 | NFR-BRW-003 | Desktop-first Editor (wide canvas) | P0 |
 
-### 22.5 Reliability
+### 25.5 Reliability
 
 | ID | Requirement | Pri |
 |---|---|---|
 | NFR-REL-001 | SPA fallback for non-`/api` paths in Compose/nginx | P0 |
-| NFR-REL-002 | Stale RUNNING detection + cancel path | P0 |
-| NFR-REL-003 | Schedule durability across process restart **should** improve | P1 |
+| NFR-REL-002 | Stale RUNNING detection + cancel/fail path | P0 |
+| NFR-REL-003 | Schedule durability across process restart should improve | P1 |
 | NFR-REL-004 | Optional `GRAPHYN_UI_BASE_PATH` | P2 |
 
 ---
 
-## 23. Quality / acceptance strategy
+## 26. Quality / acceptance strategy
 
 | ID | Requirement | Pri |
 |---|---|---|
 | QA-001 | Unit tests for path helpers and cold-boot hash clear | P0 |
-| QA-002 | API/router unit tests for workspace scoping, runs filter, pipelines | P0 |
+| QA-002 | API/router unit tests for workspace scoping, runs filter, pipelines, state machine | P0 |
 | QA-003 | E2E smoke: login → workspace → run → lineage path in CI | P1 |
-| QA-004 | Console production build **shall** pass in CI | P0 |
+| QA-004 | Console production build shall pass in CI | P0 |
 | QA-005 | Contract tests path helpers ↔ API ids | P1 |
 | QA-006 | a11y CI checks on shell + Runs | P2 |
-| QA-007 | Docker IDE loop smoke (workspace→pipeline→run→Trace) **should** remain green | P1 |
-| QA-008 | RestrictedUnpickler + distributed transfer regression tests | P0 |
-
-Acceptance language for surfaces uses Given/When/Then in §12 and journeys in §24.
+| QA-007 | Docker IDE loop smoke (workspace→pipeline→run→Trace) should remain green | P1 |
+| QA-008 | RestrictedUnpickler + distributed claim CAS + cancel artifact-forbid tests | P0 |
+| QA-009 | Acceptance matrix AC-* automated where feasible | P1 |
 
 ---
 
-## 24. Journeys (E2E acceptance)
+
+## 27. Observability (console & API)
+
+| ID | Requirement | Pri |
+|---|---|---|
+| OBS-001 | Append-only audit events for mutations (proposals, envs, model prod, plugin install, run cancel, ship promote, …) | P0 |
+| OBS-002 | `GET /trace` unified backtrack payload (artifact → node → run → graph → worker) | P0 |
+| OBS-003 | Audit filters (actor/resource/time) + JSONL export | P1 |
+| OBS-004 | Client error reporting hook (env-flagged) | P2 |
+| OBS-005 | Correlation ids on failure UI (`run_id` / `request_id`) | P1 |
+| OBS-006 | OTel span viewer | P2 |
+| OBS-007 | Partial chains when pieces missing **shall** still render honestly | P0 |
+| OBS-008 | Run Live view **shall** stream node events when backend provides them | P1 |
+
+---
+
+## 28. Acceptance matrix (broadened)
+
+Format: Given / When / Then. Map to FR/RT/API/DIST/SEC IDs.
+
+### 28.1 Happy path
+
+| ID | Given | When | Then | Maps |
+|---|---|---|---|---|
+| AC-H-001 | Token + empty workspace | Template stamp → Validate → Run | Run succeeded; outputs listable; path URL works | J1, RT-001 |
+| AC-H-002 | Two training runs | Compare → register → request/approve prod | Model prod set; audit events | J2, MR-003 |
+| AC-H-003 | Saved pipeline | Create schedule → tick/run now | Run created env=prod | J3, RT-010 |
+| AC-H-004 | Registered model | Create ship package → download | Manifest checksums match archive | J4, SHIP-001 |
+| AC-H-005 | MCP propose | Human accept & save | Pipeline draft updated; audit | J5 |
+| AC-H-006 | Artifact id | Trace/lineage | Chain to run+graph+actor | J6, OBS-002 |
+
+### 28.2 Negative / error
+
+| ID | Given | When | Then | Maps |
+|---|---|---|---|---|
+| AC-N-001 | Graph with cycle | Validate/execute | 422; VAL-CYCLE error; no run | VAL-* |
+| AC-N-002 | IR with api_key inline | Save/validate | 422 secret fail-closed | IR-006 |
+| AC-N-003 | Unknown run_id | GET run | 404 envelope | API-ERR |
+| AC-N-004 | Pause on succeeded run | POST pause | 409 invalid_transition | RT-SM-001 |
+| AC-N-005 | Resume with different graph_hash | POST resume | fail closed | RT-015 |
+| AC-N-006 | Duplicate Idempotency-Key different body | POST run-async | 409 idempotency_conflict | API-CONV-004 |
+| AC-N-007 | Stale ETag save pipeline | PUT draft | 412/409 version_conflict | API-CONV-005 |
+| AC-N-008 | Delete dataset version used by run | DELETE | 409 unless force | DATA-VER-006 |
+
+### 28.3 Security
+
+| ID | Given | When | Then | Maps |
+|---|---|---|---|---|
+| AC-S-001 | Auth required, no bearer | GET /runs | 401 | API-CONV-002 |
+| AC-S-002 | Path `../etc/passwd` file fetch | GET outputs/file | 400/403 jail | SEC-030 |
+| AC-S-003 | Webhook URL http://127.0.0.1 | PUT webhooks | 400 blocked | SEC-023 |
+| AC-S-004 | Secrets list | GET /secrets | names only | SEC-011 |
+| AC-S-005 | Plugin remote not on allowlist + auth | install | rejected | PLG-TRUST-002 |
+
+### 28.4 Distributed / restart
+
+| ID | Given | When | Then | Maps |
+|---|---|---|---|---|
+| AC-D-001 | Two workers claim same job | Simultaneous claim | One winner CAS | DIST-020 |
+| AC-D-002 | Worker heartbeat stops | Lease TTL expires | Job requeued; generation++ | DIST-031 |
+| AC-D-003 | Cancel during remote node | Cancel + worker poll | Job cancelled; no artifact commit | RT-CANCEL-003, DIST-034 |
+| AC-D-004 | Control restart mid-run | Restart | Stale running detected; fail or reclaim per RT-CRASH-* | RT-CRASH-001 |
+| AC-D-005 | Kill API during artifact index write | Restart | No index→missing blob; orphans OK; no silent empty | PERS-011, PERS-020 |
+| AC-D-006 | Disk full | Start run | 503 disk_full; readiness false | OPS-007 |
+
+### 28.5 Quality strategy (retain)
+
+| ID | Requirement | Pri |
+|---|---|---|
+| QA-001 | Unit tests path helpers + cold-boot hash clear | P0 |
+| QA-002 | API tests workspace scoping, runs filter, pipelines, state machine | P0 |
+| QA-003 | E2E smoke login → run → lineage in CI | P1 |
+| QA-004 | Console production build passes CI | P0 |
+| QA-005 | Contract tests path helpers ↔ API ids | P1 |
+| QA-008 | RestrictedUnpickler + claim CAS + cancel artifact-forbid tests | P0 |
+| QA-009 | Acceptance matrix AC-* automated where feasible | P1 |
+
+## 29. Journeys (E2E acceptance)
 
 ### J1 — Human builds and runs
-
-**J-001** (P0)  
-Given a new operator with valid API token  
-When they open a workspace → stamp a Template or build in Editor → Validate → Run → view Run outputs → Save pipeline → Publish staging → Request/Approve prod → Rollback if needed  
-Then each step completes in-console with path URLs shareable; no hash navigation.
+**J-001** (P0) Given new operator with token When workspace → Template/Editor → Validate → Run → outputs → Save → Publish staging → Request/Approve prod → Rollback Then path URLs shareable; no hash nav.
 
 ### J2 — Train, compare, promote
-
-**J-002** (P0)  
-Given training runs with metrics  
-When Compare (table+charts when available) → Register model → Models stages → Request/Approve prod → Trace to data+run  
-Then promotion is auditable and model links back to run.
+**J-002** (P0) Given training runs When Compare → Register → stages → Request/Approve prod → Trace Then auditable; model links to run.
 
 ### J3 — Always-on
-
-**J-003** (P1)  
-Given a saved pipeline  
-When Triggers enable schedule/webhook → Home Always-on shows it → failure opens run → schedule error visible  
-Then operator reaches failed run in ≤2 clicks from Home.
+**J-003** (P1) Given saved pipeline When schedule/webhook → Home Always-on → failure opens run Then ≤2 clicks from Home.
 
 ### J4 — Edge ship
-
-**J-004** (P1)  
-Given a registered model  
-When Ship auto-pick → target configure → package → Download (and Device assign when API exists) → Lineage  
-Then package downloads and lineage reaches source run.
+**J-004** (P1) Given registered model When Ship package → Download (Device when API) → Lineage Then package downloads; lineage to run.
 
 ### J5 — Agent + human gate
-
-**J-005** (P0)  
-Given MCP or UI Generate creates a proposal  
-When human reviews rich/structural diff → Accept & save / Reject → audit actors  
-Then Accept loads Editor (and saves when chosen); optional fix-from-failure proposal works.
+**J-005** (P0) Given MCP/UI proposal When review → Accept & save / Reject → audit Then Editor loads; fix-from-failure optional.
 
 ### J6 — Backtrack
+**J-006** (P0) Given artifact/model/package When Lineage → Replay → Repro → Audit export Then who/what/where/when/code/data answered in-product.
 
-**J-006** (P0)  
-Given any artifact/model/package  
-When open Lineage → Replay → Repro pack → Audit filter/export  
-Then chain answers who/what/where/when/code/data without leaving Graphyn.
+**Done means:** J1–J6 by human **and** MCP agent (SM-008) using tools in §21.
 
-**Done means:** J1–J6 by a new human **and** an MCP agent without leaving Graphyn (SM-008).
-
----
-
-## 25. Out of scope
-
-- SSO / OIDC / full RBAC / multi-tenant isolation (Access stub only until APIs)
-- Device flash/OTA hardware loop without registry API
-- Nested MLflow parent-child runs; mandatory full MLflow package dependency
+## 30. Out of scope
+- SSO / OIDC / full RBAC / multi-tenant isolation (Access stub)
+- Device flash/OTA without registry API
+- Nested MLflow parent-child; mandatory full MLflow package
 - K8s-native executor as primary backend
-- Chat LLM product without Graph IR
-- Second Project type (Decision B locked)
+- Chat LLM without Graph IR
+- Second Project type
 - Fake Devices UI without API
-- Observe Trace/Compare as activity-bar peers
-- Hash-based navigation as product routing
-- FaceRecognition (or other) product surface as brand
+- Trace/Compare as activity-bar peers
+- Hash-based product routing
 - Cursor cloud product features
-- Becoming a generic chat LLM product
-- Audio-only identity — audio is a pack, not the brand
+- Audio-only brand identity
 
----
+## 31. Traceability (pillars → FR IDs)
 
-## 26. Traceability (pillars → FR IDs)
-
-| Pillar | Primary requirement IDs |
+| Pillar | Primary IDs |
 |---|---|
-| **n8n — Design** | FR-ED-*, FR-TPL-*, FR-HOME-002..005, RT-001, RT-007, RT-010, IR-* |
-| **MLflow — Learn** | FR-RUN-005..006, FR-MOD-*, MR-*, FR-ART-* |
-| **Orchestrator — Execute** | RT-*, FR-RUN-001..004,007, FR-WRK-*, DIST-*, FR-OPS-002 |
-| **Edge Impulse — Ship** | FR-SHIP-*, EDGE-*, FR-DATA-* |
-| **Agentic** | FR-AGT-*, MCP-*, AGT-SYS-*, FR-ED-007, FR-RUN-008 |
-| **Accountability** | FR-RUN-009..010, OBS-*, SEC-*, FR-ACS-*, FR-OPS-004 |
-| **Platform / IA** | UX-NAV-*, FR-ROUTE-*, FR-AUTH-*, UX-STATE-*, NFR-*, QA-*, ARCH-* |
+| Design | FR-ED-*, FR-TPL-*, IR-*, VAL-*, RT-001,007,010 |
+| Learn | FR-RUN-*, FR-MOD-*, MR-*, FR-ART-* |
+| Execute | RT-*, DIST-*, PERS-*, FR-WRK-*, FR-OPS-002 |
+| Ship | FR-SHIP-*, EDGE-*, SHIP-*, FR-DATA-*, DATA-VER-* |
+| Agentic | FR-AGT-*, MCP-*, AGT-SYS-* |
+| Accountability | OBS-*, AUD-*, SEC-*, THREAT-* |
+| Platform / IA | UX-NAV-*, FR-ROUTE-*, FR-AUTH-*, OPS-*, NFR-*, QA-*, ARCH-* |
 
-Journeys: **J1** FR-TPL + FR-ED + FR-RUN + FR-HOME · **J2** FR-RUN-005 + FR-MOD · **J3** FR-ED-006 + FR-HOME-005 · **J4** FR-MOD + FR-SHIP · **J5** FR-AGT · **J6** FR-RUN-009 + OBS + FR-ART.
+## 32. Open questions / TBD (true unknowns only)
 
----
+1. Settings full page vs permanent drawer pattern?
+2. Device API minimal registry shape before UI investment?
+3. Exact RBAC role set when multi-user ships?
+4. Compare charts: server aggregates vs client-only?
+5. Cookie/BFF token timeline vs localStorage interim?
+6. BASE_PATH subpath hosting customer demand?
+7. Partial proposal apply API?
+8. Dedicated HITL wait/approve node type vs UX-only?
 
-## 27. Open questions / TBD (true unknowns only)
+*(Cron durability, worker plugin sync enforcement, audit signing — decided as P0/P1 requirements above; removed from TBD.)*
 
-1. **Settings route vs drawer:** Promote `/settings` to full page or keep modal as permanent pattern?
-2. **Cron durability:** Persist scheduler across API restarts — file ticker vs external cron?
-3. **Device API shape:** Minimal registry (id, target, last package, OTA status) before UI investment?
-4. **RBAC roles:** Exact role set for prod-approve vs secret-write vs admin Ops when multi-user ships?
-5. **Compare charts:** Server aggregates vs client-only from existing compare payload?
-6. **Worker plugin sync:** Require identical packs on workers — enforce in heartbeat or document-only?
-7. **BASE_PATH:** First-class subpath hosting requirement for current customers?
-8. **Audit retention / signing:** Append-only verification UX timeline?
-9. **Partial proposal apply:** API support for accepting subset of node changes?
-10. **HITL node:** Dedicated wait/approve node type vs UX-only over existing delay nodes?
+## 33. Requirements Completeness Review
 
----
+### 33.1 Area coverage Current (v1.0) → v1.1
 
-## 28. Appendix
+| Area | v1.0 | v1.1 | Notes |
+|---|---|---|---|
+| Vision / pillars / IA / path URLs | Strong | Preserved | Workspace strip, Artifacts not strip peer |
+| Graph IR shape | Strong | Preserved + validation model | §14 complete checks |
+| REST inventory | Path list | **Field contracts + envelope + pagination + concurrency** | §9 |
+| Run state machine | Sketch | **Normative transitions + cancel/resume/crash** | §13.2 |
+| Distributed failure | Soft/deferred reclaim | **P0 CAS, lease, at-least-once, reassignment** | §15 |
+| Persistence | Implied files | **Durability + atomicity + quarantine** | §16 |
+| Plugins | Install basics | **Lifecycle SM + trust + rollback** | §17 |
+| Models vs pipeline envs | Mentioned | **Formal dual-axis + lineage** | §18 |
+| Ship package | Wizard sketch | **Manifest + lifecycle** | §19 |
+| Dataset versions | Paths | **Immutability/hash/delete/repro** | §20 |
+| MCP vs J1–J6 | Contradiction risk | **Expanded tool set for parity** | §21 |
+| Audit schemas | Light | **Event schema + immutability** | §22 |
+| Threat model | Trust notes | **XSS/localStorage/worker/plugin/python_code** | §23 |
+| Operational | Thin NFR | **Backup/migrate/shutdown/disk-full/compat** | §24 |
+| Acceptance | Journey happy | **Happy+negative+security+distributed** | §28 |
+| Completeness Review | Absent | **This section** | §33 |
+
+### 33.2 Priority counts (approximate unique IDs in this SRS)
+
+| Priority | Approx count | Role |
+|---|---|---|
+| P0 | ~220+ | Build blockers / greenfield must |
+| P1 | ~90+ | Journey completeness / product-feel |
+| P2 | ~40+ | Polish / future |
+
+*(Exact count may drift as IDs are added; treat tables as authoritative.)*
+
+### 33.3 Greenfield build statement
+
+**Yes — a greenfield team can build Graphyn P0 from this document alone**, including: console IA, Graph IR, REST contracts with error envelope, run state machine, Mode A execution, Mode B worker protocol with P0 failure behavior, persistence guarantees, validation model, plugin lifecycle, model/pipeline promotion, ship package manifests, dataset version rules, MCP tools for J1–J6, audit/provenance schemas, core threat mitigations, and operational backup/readiness/cleanup.
+
+**Residual P1/P2 judgment areas (not blocking P0):** cookie/BFF token migration UX; full device OTA; RBAC role taxonomy; compare chart aggregation locus; optional audit hash-chain UX; BASE_PATH; partial proposal apply; dedicated HITL node; OTel span viewer; mobile observe-only.
+
+**Residual undecidable TBDs:** listed in §32 only (product preference, not missing build contracts for P0).
+
+## 34. Appendix
 
 ### Appendix A — Full path map
 
@@ -1835,4 +3345,4 @@ Implementers **shall** support a typed port system. Platform examples include: `
 
 ---
 
-*End of GRAPHYN-SRS-001 v1.0.0 Draft — Standalone greenfield Software Requirements Specification — 2026-09-18 (Asia/Calcutta). Document author: Samir Kumar Mishra \<samir.nmiet@gmail.com\>.*
+*End of GRAPHYN-SRS-001 v1.1.0 Draft — Complete Build-Ready — 2026-09-18 (Asia/Calcutta). Document author: Samir Kumar Mishra \<samir.nmiet@gmail.com\>.*
