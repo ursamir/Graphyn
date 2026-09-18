@@ -22,6 +22,7 @@ import {
   EyeOff,
   Box,
   Shield,
+  ChevronDown,
 } from 'lucide-react'
 import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
 import { useAppStore, type AppView } from './store/appStore'
@@ -60,23 +61,35 @@ type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ classNa
 type NavGroup = { title: string; items: NavItem[] }
 
 /**
- * Workspace-scoped items — the only ones that genuinely require a project
- * (Editor/Runs have no meaning without one). Always rendered in the same
- * spot; disabled (not hidden) when no project is active, so the sidebar's
- * shape never changes based on which page you're on — only the enabled
- * state and the Workspace strip's own content adapt to activeProject.
+ * Workspace activity strip (IDE analogy) — shown when URL is `/workspaces/:id…`
+ * and activeProject is set. Models / Ship / Datasets are workspace-primary here;
+ * Artifacts stays in Library & admin (not on the strip).
  */
 const WORKSPACE_NAV_ITEMS: NavItem[] = [
   { id: 'projects', label: 'Home', icon: FolderKanban },
   { id: 'builder', label: 'Editor', icon: Workflow },
   { id: 'runs', label: 'Runs', icon: History },
+  { id: 'models', label: 'Models', icon: Box },
+  { id: 'edge', label: 'Ship', icon: Cpu },
+  { id: 'data', label: 'Datasets', icon: Database },
+]
+
+/** Library & admin — secondary when a workspace is open (strip owns Models/Ship/Datasets). */
+const LIBRARY_ADMIN_ITEMS: NavItem[] = [
+  { id: 'templates', label: 'Templates', icon: BookOpen },
+  { id: 'proposals', label: 'Agent inbox', icon: GitPullRequest },
+  { id: 'artifacts', label: 'Artifacts', icon: Archive },
+  { id: 'plugins', label: 'Plugins', icon: Package },
+  { id: 'workers', label: 'Workers', icon: Server },
+  { id: 'secrets', label: 'Secrets', icon: KeyRound },
+  { id: 'system', label: 'Ops', icon: Activity },
+  { id: 'access', label: 'Access', icon: Shield },
 ]
 
 /**
- * Everything else — one fixed set of grouped items, always visible in full,
- * regardless of whether a project is open. A page like Datasets/Models/Ship
- * still auto-scopes to activeProject via pathForView()/go(); it just never
- * disappears from or reappears in the nav depending on that state.
+ * Global chrome groups — shown when no workspace is open. Includes Models /
+ * Ship / Datasets for library / deploy browse. When a workspace is open these
+ * groups are replaced by a collapsed Library & admin list (no duplicate strip items).
  */
 const NAV_GROUPS: NavGroup[] = [
   {
@@ -329,6 +342,7 @@ export default function App() {
   const [narrow, setNarrow] = React.useState(() =>
     typeof window !== 'undefined' ? !window.matchMedia('(min-width: 768px)').matches : false,
   )
+  const [libraryAdminOpen, setLibraryAdminOpen] = React.useState(false)
   React.useEffect(() => {
     try {
       localStorage.setItem('graphyn.layout.navOpen', navOpen ? '1' : '0')
@@ -352,6 +366,8 @@ export default function App() {
   )
   /** Workspace chrome only when the URL carries a workspace id (not localStorage alone). */
   const workspaceOpen = Boolean(parsedLocation.workspaceId)
+  /** Strip vs global chrome: path has workspace id AND activeProject is set from it. */
+  const inWorkspaceChrome = workspaceOpen && Boolean(activeProject)
 
   /**
    * Collapse alias URLs onto one canonical spelling. `/`, `/workspaces` and any
@@ -762,22 +778,19 @@ export default function App() {
               )}
             >
               {/*
-                One fixed shape, always: a Workspace strip (Home/Editor/Runs, disabled
-                without an active project) followed by the same four groups whether or
-                not a project is open. Nothing here appears or disappears based on which
-                page is active — only which row is highlighted, and whether the
-                workspace-scoped rows are enabled, ever changes. See the user's complaint
-                about the sidebar "frequently switching" between a global and a
-                project shell — this replaces that with a single stable structure.
+                IDE chrome: when a workspace is open (path + activeProject), the
+                activity strip is Home · Editor · Runs · Models · Ship · Datasets.
+                Library & admin is a collapsed secondary list (no Models/Ship/Datasets).
+                Globally, Projects entry + full NAV_GROUPS (Models/Ship/Datasets there).
               */}
               <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
-                <div className="mb-3 space-y-0.5">
-                  <div className="flex items-center justify-between gap-2 px-2.5 pb-1">
-                    {activeProject ? (
-                      <>
+                {inWorkspaceChrome ? (
+                  <>
+                    <div className="mb-3 space-y-0.5">
+                      <div className="flex items-center justify-between gap-2 px-2.5 pb-1">
                         <div
                           className="truncate text-[10px] font-semibold uppercase tracking-wide text-ink-400"
-                          title={activeProject}
+                          title={activeProject || undefined}
                         >
                           {activeProject}
                         </div>
@@ -789,11 +802,84 @@ export default function App() {
                         >
                           Switch
                         </button>
-                      </>
-                    ) : (
-                      <>
+                      </div>
+                      <div className="space-y-0.5">
+                        {WORKSPACE_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
+                          const active = view === id
+                          return (
+                            <button
+                              key={`ws-${id}`}
+                              type="button"
+                              title={navTitle(id)}
+                              onClick={() => go(id)}
+                              className={clsx(
+                                'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                                active
+                                  ? 'bg-white font-medium text-ink-950 shadow-sm'
+                                  : 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
+                              )}
+                              aria-current={active ? 'page' : undefined}
+                            >
+                              <Icon className={clsx('h-4 w-4', active ? 'text-accent-800' : 'text-ink-400')} />
+                              <span className="flex-1 truncate">{label}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    <div className="mb-4">
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left text-[11px] font-medium text-ink-400 hover:bg-white/60 hover:text-ink-700"
+                        aria-expanded={libraryAdminOpen}
+                        onClick={() => setLibraryAdminOpen((o) => !o)}
+                      >
+                        <ChevronDown
+                          className={clsx(
+                            'h-3.5 w-3.5 transition-transform',
+                            !libraryAdminOpen && '-rotate-90',
+                          )}
+                        />
+                        Library &amp; admin
+                      </button>
+                      {libraryAdminOpen ? (
+                        <div className="mt-0.5 space-y-0.5">
+                          {LIBRARY_ADMIN_ITEMS.map(({ id, label, icon: Icon }) => {
+                            const active = view === id
+                            return (
+                              <button
+                                key={`lib-${id}`}
+                                type="button"
+                                title={navTitle(id)}
+                                onClick={() => go(id)}
+                                className={clsx(
+                                  'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                                  active
+                                    ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
+                                    : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
+                                )}
+                                aria-current={active ? 'page' : undefined}
+                              >
+                                <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
+                                <span className="flex-1 truncate">{label}</span>
+                                {id === 'proposals' && pendingProposalCount > 0 && (
+                                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                                    {pendingProposalCount}
+                                  </span>
+                                )}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="mb-3 space-y-0.5">
+                      <div className="flex items-center justify-between gap-2 px-2.5 pb-1">
                         <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                          No project open
+                          Global
                         </div>
                         <button
                           type="button"
@@ -803,71 +889,65 @@ export default function App() {
                         >
                           Open
                         </button>
-                      </>
-                    )}
-                  </div>
-                  <div className="space-y-0.5">
-                    {WORKSPACE_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-                      const active = view === id
-                      const enabled = id === 'projects' || Boolean(activeProject)
-                      return (
-                        <button
-                          key={`ws-${id}`}
-                          type="button"
-                          disabled={!enabled}
-                          title={enabled ? navTitle(id) : 'Open a project first'}
-                          onClick={() => go(id)}
+                      </div>
+                      <button
+                        type="button"
+                        title={navTitle('projects')}
+                        onClick={() => go('projects')}
+                        className={clsx(
+                          'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                          view === 'projects'
+                            ? 'bg-white font-medium text-ink-950 shadow-sm'
+                            : 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
+                        )}
+                        aria-current={view === 'projects' ? 'page' : undefined}
+                      >
+                        <FolderKanban
                           className={clsx(
-                            'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                            !enabled && 'cursor-not-allowed opacity-40',
-                            active
-                              ? 'bg-white font-medium text-ink-950 shadow-sm'
-                              : enabled && 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
+                            'h-4 w-4',
+                            view === 'projects' ? 'text-accent-800' : 'text-ink-400',
                           )}
-                          aria-current={active ? 'page' : undefined}
-                        >
-                          <Icon className={clsx('h-4 w-4', active ? 'text-accent-800' : 'text-ink-400')} />
-                          <span className="flex-1 truncate">{label}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-                {NAV_GROUPS.map((group) => (
-                  <div key={group.title} className="mb-4">
-                    <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
-                      {group.title}
+                        />
+                        <span className="flex-1 truncate">Projects</span>
+                      </button>
                     </div>
-                    <div className="space-y-0.5">
-                      {group.items.map(({ id, label, icon: Icon }) => {
-                        const active = view === id
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            title={navTitle(id)}
-                            onClick={() => go(id)}
-                            className={clsx(
-                              'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                              active
-                                ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
-                                : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
-                            )}
-                            aria-current={active ? 'page' : undefined}
-                          >
-                            <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
-                            <span className="flex-1 truncate">{label}</span>
-                            {id === 'proposals' && pendingProposalCount > 0 && (
-                              <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
-                                {pendingProposalCount}
-                              </span>
-                            )}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
+                    {NAV_GROUPS.map((group) => (
+                      <div key={group.title} className="mb-4">
+                        <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
+                          {group.title}
+                        </div>
+                        <div className="space-y-0.5">
+                          {group.items.map(({ id, label, icon: Icon }) => {
+                            const active = view === id
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                title={navTitle(id)}
+                                onClick={() => go(id)}
+                                className={clsx(
+                                  'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
+                                  active
+                                    ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
+                                    : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
+                                )}
+                                aria-current={active ? 'page' : undefined}
+                              >
+                                <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
+                                <span className="flex-1 truncate">{label}</span>
+                                {id === 'proposals' && pendingProposalCount > 0 && (
+                                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
+                                    {pendingProposalCount}
+                                  </span>
+                                )}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
               </nav>
             </aside>
   )
@@ -878,7 +958,14 @@ export default function App() {
       <LayoutPrefsProvider>
       <HashRedirect activeProject={activeProject} />
       <div className="flex h-full flex-col overflow-hidden bg-mesh">
-        <header className="relative z-40 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-200/70 bg-white/80 px-4 backdrop-blur-md">
+        <header
+          className={clsx(
+            'relative z-40 flex h-14 shrink-0 items-center justify-between gap-3 px-4 backdrop-blur-md',
+            inWorkspaceChrome
+              ? 'border-b border-accent-200/50 bg-accent-50/35'
+              : 'border-b border-ink-200/70 bg-white/80',
+          )}
+        >
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -967,6 +1054,16 @@ export default function App() {
               }
               return null
             })()}
+                        <span
+              className={clsx(
+                'hidden items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide sm:inline-flex',
+                inWorkspaceChrome
+                  ? 'border-accent-200/80 bg-accent-50/80 text-accent-800'
+                  : 'border-ink-200 bg-ink-50/80 text-ink-500',
+              )}
+            >
+              {inWorkspaceChrome ? 'In workspace' : 'Global'}
+            </span>
             {workspaceOpen && parsedLocation.workspaceId && (
               <div className="inline-flex max-w-[15rem] items-center gap-0.5">
                 <button
@@ -984,7 +1081,7 @@ export default function App() {
                 <button
                   type="button"
                   className="rounded-r-full border border-l-0 border-accent-300 bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800 hover:bg-accent-100"
-                  title="Switch workspace — show project picker"
+                  title="Switch workspace — leave to project picker"
                   onClick={switchProject}
                 >
                   Switch

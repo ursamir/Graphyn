@@ -13,3 +13,9 @@ Surface | Primary job | Bridges
 **Edge** | Deploy TFLite path | Open source run (secondary)
 **Proposals** | Review agent graphs | Empty → Editor; Accept → Editor
 **Plugins** | Install & deps | One primary CTA per card/panel
+
+---
+
+## Workspace vs global chrome
+
+Sidebar switches like an IDE: **workspace activity strip** (Home · Editor · Runs · Models · Ship · Datasets) when `/workspaces/:id` is open; **global** Build/Library/Deploy/Admin otherwise. Library & admin (Templates, Agent inbox, Artifacts, Plugins, Workers, Secrets, Ops, Access) stays collapsed secondary in workspace mode. Contract: `docs/UI_WORKSPACE_IDE.md`, `docs/IA_PROJECT_FIRST.md`.

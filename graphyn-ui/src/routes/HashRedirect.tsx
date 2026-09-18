@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { resolveLegacyHash, type LegacyHashContext } from './legacyHash'
+import { navigatePath } from './parsePath'
 
 type Props = LegacyHashContext & {
   /** When true (default), replace history so Back skips the hash URL. */
@@ -9,11 +9,10 @@ type Props = LegacyHashContext & {
 
 /**
  * On mount (and hashchange), if `location.hash` is a legacy `#/...` route,
- * navigate to the path equivalent and clear the hash fragment.
+ * navigate via navigatePath (Zustand + synthetic popstate) and clear the hash.
+ * Cold-load `#/…` must set the view correctly — RR navigate alone does not sync the store.
  */
 export function HashRedirect({ activeProject, replace = true }: Props) {
-  const navigate = useNavigate()
-
   useEffect(() => {
     const apply = () => {
       const { hash } = window.location
@@ -29,13 +28,13 @@ export function HashRedirect({ activeProject, replace = true }: Props) {
       if (window.location.hash) {
         window.history.replaceState(null, '', pathOnly)
       }
-      navigate(target, { replace })
+      navigatePath(target, replace)
     }
 
     apply()
     window.addEventListener('hashchange', apply)
     return () => window.removeEventListener('hashchange', apply)
-  }, [activeProject, navigate, replace])
+  }, [activeProject, replace])
 
   return null
 }

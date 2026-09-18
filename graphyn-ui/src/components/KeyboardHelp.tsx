@@ -3,19 +3,20 @@ import { X } from 'lucide-react'
 import type { AppView } from '../store/appStore'
 import { JUMP_KEYS, NAV_SHORTCUT_LABEL } from '../routes/nav'
 
-/** Sidebar order (Workspace strip, then Build / Library / Deploy / Admin groups) —
- * matching it here means this list reads the same as the nav a user just looked at. */
+/** Sidebar order: workspace strip (Home·Editor·Runs·Models·Ship·Datasets), then Library & admin. */
 const NAV_ORDER: AppView[] = [
+  // Workspace activity strip
   'projects',
   'builder',
   'runs',
+  'models',
+  'edge',
+  'data',
+  // Library & admin / global groups
   'templates',
   'proposals',
-  'data',
-  'plugins',
-  'models',
   'artifacts',
-  'edge',
+  'plugins',
   'workers',
   'secrets',
   'system',

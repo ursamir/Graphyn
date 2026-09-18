@@ -771,7 +771,13 @@ export default function DataView() {
     </label>
   )
 
-  return (
+  
+  const workspaceDatasetsPath =
+    typeof window !== 'undefined' &&
+    window.location.pathname.startsWith('/workspaces/') &&
+    window.location.pathname.includes('/datasets')
+
+return (
     // Top padding on the header, not the scroll container: a sticky child's
     // `top: 0` resolves against the scrollport's PADDING box, so `p-6` would pin
     // the file table's header row 24px low and let rows scroll through the strip
@@ -779,8 +785,12 @@ export default function DataView() {
     <div className="h-full min-h-0 overflow-y-auto px-6 pb-6 space-y-4">
       <PageHeader
         className="pt-6"
-        title="Datasets"
-        description="Shared Inputs and Outputs for pipelines — not the same as per-run downloads under Runs."
+        title={workspaceDatasetsPath ? 'Workspace datasets' : 'Datasets'}
+        description={
+          workspaceDatasetsPath
+            ? 'Datasets scoped to this workspace — Inputs/Outputs linked here. Browse Library for the global catalog.'
+            : 'Library — Shared Inputs and Outputs for pipelines (not per-run downloads under Runs).'
+        }
         actions={
           <div className="flex gap-2">
             {/* Not duplicated here — the Manage toolbar already has its own

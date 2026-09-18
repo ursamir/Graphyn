@@ -213,3 +213,19 @@ Modeled on VS Code + Prefect run tabs + W&B/MLflow compare-in-runs:
 | **Worker fleet** | Monitor Mode B workers | Summary strip (count, mode hint, refresh); client filter by label/pool/status; row → detail drawer; empty = short Mode B + copyable `graphyn worker start` |
 | **Secrets** | Create / rotate / delete named credentials | Searchable name list (values never shown); POST same name → **Replace value** confirm; note that usage index is not available yet |
 | **Ops** | Health, schedules, webhooks, cleanup, audit | Status: facts first, Raw JSON collapsed, no filler Projects card, Worker fleet link when distributed; Schedules: project/pipeline selects from `/projects` + `/projects/{name}/pipelines` (text fallback); denser Audit table; shorter Cleanup prose + CLEANUP confirm |
+
+---
+
+## Workspace vs global chrome (contract)
+
+Locked product decision (IDE analogy — VS Code / Cursor):
+
+| Mode | When | Primary nav | Secondary |
+|---|---|---|---|
+| **Workspace** | URL `/workspaces/:id…` **and** `activeProject` set from path | Activity strip: **Home · Editor · Runs · Models · Ship · Datasets** | Collapsed **Library & admin**: Templates · Agent inbox · Artifacts · Plugins · Workers · Secrets · Ops · Access |
+| **Global** | No workspace in URL | **Projects** + Build / Library / Deploy / Admin groups (Models, Ship, Datasets live in Library/Deploy) | — |
+
+- **Artifacts** is never on the workspace strip (library-secondary; ArtifactsView may still default-filter to the open workspace).
+- Models / Ship / Datasets when a workspace is open navigate to `/workspaces/:id/models|ship|datasets` and **scope data** to that workspace.
+- See `docs/UI_WORKSPACE_IDE.md` and `docs/UI_NORTH_STAR.md` §4.2.
+

@@ -179,25 +179,13 @@ export function CommandPalette({
         },
       })
       out.push({
-        id: 'workspace:data',
-        label: 'Datasets',
+        id: 'workspace:models',
+        label: 'Models',
         hint: activeProject,
         group: 'Workspace',
-        keywords: 'data datasets library',
+        keywords: 'models registry mlflow strip',
         run: () => {
-          openData({ project: activeProject })
-          setOpen(false)
-        },
-      })
-      out.push({
-        id: 'workspace:files',
-        label: 'Artifacts',
-        hint: activeProject,
-        group: 'Workspace',
-        keywords: 'artifacts files browse',
-        run: () => {
-          openArtifacts({ project: activeProject })
-          setOpen(false)
+          goView('models')
         },
       })
       out.push({
@@ -208,6 +196,28 @@ export function CommandPalette({
         keywords: 'edge tflite deploy package ship',
         run: () => {
           openEdge({ project: activeProject })
+          setOpen(false)
+        },
+      })
+      out.push({
+        id: 'workspace:data',
+        label: 'Datasets',
+        hint: activeProject,
+        group: 'Workspace',
+        keywords: 'data datasets library strip',
+        run: () => {
+          openData({ project: activeProject })
+          setOpen(false)
+        },
+      })
+      out.push({
+        id: 'workspace:files',
+        label: 'Artifacts',
+        hint: activeProject,
+        group: 'Library & admin',
+        keywords: 'artifacts files browse library',
+        run: () => {
+          openArtifacts({ project: activeProject })
           setOpen(false)
         },
       })

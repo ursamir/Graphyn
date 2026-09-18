@@ -1,7 +1,7 @@
 # Graphyn Console — North-star UI (100% expectation match)
 
 > **Purpose:** Complete **product** UI plan so Graphyn feels like **one** platform: **n8n + MLflow + orchestrator + Edge Impulse + agentic + full backtrack**.  
-> **Status:** Implementation wave 2026-09-15 continued. **Phase 0 path routing shipped** (hash writes banned; legacy `#/` → path redirect only); **Phase A largely shipped**; **Phase B/C/D UI items shipped where APIs exist** (Devices OTA, OTel, Subflows, full HITL, cron, job list-all remain needs-API). See roadmap checkmarks below.
+> **Status:** Implementation wave 2026-09-15 continued. **Phase 0 path routing shipped** (hash writes banned; legacy `#/` → path redirect only); **Phase A largely shipped**; **Phase B/C/D UI items shipped where APIs exist** (Devices OTA, OTel, Subflows, full HITL, cron, job list-all remain needs-API). **✓ Workspace activity strip shipped** (Home · Editor · Runs · Models · Ship · Datasets + collapsed Library & admin) — see §4.2 and `docs/UI_WORKSPACE_IDE.md`. See roadmap checkmarks below.
 > **Does not replace:** `IA_PROJECT_FIRST.md` for today’s shell notes. This doc is the **target product**.  
 > **Interactive:** canvas `graphyn-ui-north-star`.
 
@@ -104,6 +104,8 @@ Admin
 ```
 
 ### 4.2 Workspace open — activity strip
+
+**✓ Shipped (IDE chrome):** When URL is `/workspaces/:id…` and `activeProject` is set, the sidebar strip is the six items below; Library & admin is a collapsed secondary list (Artifacts is **not** on the strip). Global chrome keeps Models/Ship/Datasets inside Library/Deploy groups. Details: `docs/UI_WORKSPACE_IDE.md`.
 
 ```
 Home          Situation · pipelines · linked data · always-on · next actions

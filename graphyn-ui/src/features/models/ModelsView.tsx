@@ -25,6 +25,7 @@ export default function ModelsView() {
   const openData = useAppStore((s) => s.openData)
   const openProjects = useAppStore((s) => s.openProjects)
   const pushToast = useAppStore((s) => s.pushToast)
+  const setView = useAppStore((s) => s.setView)
   const [rows, setRows] = React.useState<ModelRow[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
@@ -35,6 +36,47 @@ export default function ModelsView() {
   const [regName, setRegName] = React.useState('')
   const [regRunId, setRegRunId] = React.useState('')
   const [regSlug, setRegSlug] = React.useState('model')
+  const [scopeMode, setScopeMode] = React.useState<'workspace' | 'all'>(
+    () => (useAppStore.getState().activeProject ? 'workspace' : 'all'),
+  )
+  const [projectRunIds, setProjectRunIds] = React.useState<Set<string>>(() => new Set())
+  const [projectRuns, setProjectRuns] = React.useState<
+    Array<{ run_id: string; status?: string; graph_name?: string }>
+  >([])
+
+
+  React.useEffect(() => {
+    setScopeMode(activeProject ? 'workspace' : 'all')
+  }, [activeProject])
+
+  React.useEffect(() => {
+    let cancelled = false
+    if (!activeProject) {
+      setProjectRunIds(new Set())
+      setProjectRuns([])
+      return
+    }
+    void (async () => {
+      try {
+        const runs = await apiJson<Array<{ run_id: string; status?: string; graph_name?: string }>>(
+          '/runs',
+          { query: { project: activeProject, limit: 100, offset: 0 } },
+        )
+        if (cancelled) return
+        const list = Array.isArray(runs) ? runs : []
+        setProjectRuns(list)
+        setProjectRunIds(new Set(list.map((r) => r.run_id).filter(Boolean)))
+      } catch {
+        if (!cancelled) {
+          setProjectRuns([])
+          setProjectRunIds(new Set())
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeProject])
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -135,6 +177,27 @@ export default function ModelsView() {
     }
   }
 
+
+  const modelRunIds = (row: ModelRow): string[] => {
+    const stages = row.stages || {}
+    const ids = [stages.prod?.run_id, stages.staging?.run_id, stages.latest?.run_id, row.pending_prod?.run_id]
+    return ids.filter((x): x is string => Boolean(x))
+  }
+
+  const inWorkspace = (row: ModelRow) => {
+    if (projectRunIds.size === 0) return false
+    return modelRunIds(row).some((id) => projectRunIds.has(id))
+  }
+
+  const filteredRows =
+    activeProject && scopeMode === 'workspace' ? rows.filter(inWorkspace) : rows
+
+  const openWorkspaceRuns = () => {
+    if (!activeProject) return
+    setView('runs')
+    navigatePath(paths.runs(activeProject))
+  }
+
   const stages = detail?.stages || {}
   const primaryRunId =
     stages.prod?.run_id || stages.staging?.run_id || stages.latest?.run_id || undefined
@@ -157,11 +220,47 @@ export default function ModelsView() {
     >
       <div className="space-y-4 p-5 h-full min-h-0 flex flex-col">
       {activeProject ? (
-        <p className="rounded-lg border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
-          This is the <span className="font-medium text-ink-800">global</span> model registry — every
-          model registered from any project is listed here, not just {activeProject}. There is no
-          per-project filter yet; double-check a model's linked run (below) before promoting it.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
+          <p>
+            {scopeMode === 'workspace' ? (
+              <>
+                <span className="font-medium text-ink-800">Models for this workspace</span>
+                {' '}
+                — showing registries whose staging/prod/latest run belongs to {activeProject}.
+              </>
+            ) : (
+              <>
+                Showing <span className="font-medium text-ink-800">all registries</span>
+                {' '}
+                (not filtered to {activeProject}).
+              </>
+            )}
+          </p>
+          <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-ink-200 bg-white text-[11px] font-medium">
+            <button
+              type="button"
+              className={
+                scopeMode === 'workspace'
+                  ? 'bg-accent-50 px-2.5 py-1 text-accent-900'
+                  : 'px-2.5 py-1 text-ink-500 hover:bg-ink-50'
+              }
+              onClick={() => setScopeMode('workspace')}
+            >
+              This workspace
+            </button>
+            <button
+              type="button"
+              className={
+                scopeMode === 'all'
+                  ? 'bg-accent-50 px-2.5 py-1 text-accent-900'
+                  : 'px-2.5 py-1 text-ink-500 hover:bg-ink-50'
+              }
+              onClick={() => setScopeMode('all')}
+            >
+              All registries
+            </button>
+          </div>
+        </div>
       ) : null}
       {registerOpen && (
         <div className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3 shadow-sm">
@@ -173,12 +272,35 @@ export default function ModelsView() {
             </label>
             <label className="text-[12px] text-ink-600">
               Run id
-              <input
-                className="field-control mt-1 font-mono"
-                value={regRunId}
-                onChange={(e) => setRegRunId(e.target.value)}
-                placeholder={activeProject ? `any run id — not limited to ${activeProject}` : 'run id'}
-              />
+              {activeProject && projectRuns.length > 0 ? (
+                <select
+                  className="field-control mt-1 font-mono"
+                  value={regRunId}
+                  onChange={(e) => setRegRunId(e.target.value)}
+                >
+                  <option value="">Select a recent workspace run…</option>
+                  {projectRuns.map((r) => (
+                    <option key={r.run_id} value={r.run_id}>
+                      {r.run_id.slice(0, 12)}… {r.status || ''} {r.graph_name || ''}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className="field-control mt-1 font-mono"
+                  value={regRunId}
+                  onChange={(e) => setRegRunId(e.target.value)}
+                  placeholder={activeProject ? `run id from ${activeProject}` : 'run id'}
+                />
+              )}
+              {activeProject && projectRuns.length > 0 ? (
+                <input
+                  className="field-control mt-1 font-mono"
+                  value={regRunId}
+                  onChange={(e) => setRegRunId(e.target.value)}
+                  placeholder="or paste run id"
+                />
+              ) : null}
             </label>
             <label className="text-[12px] text-ink-600">
               Slug
@@ -194,14 +316,32 @@ export default function ModelsView() {
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
       {loading ? (
         <LoadingBlock label="Loading models…" />
-      ) : rows.length === 0 ? (
+      ) : filteredRows.length === 0 ? (
         <EmptyState
-          title="No registered models"
-          description="Promote a run alias or register a model from Run outputs to populate the registry."
+          title={activeProject && scopeMode === 'workspace' ? 'No models for this workspace' : 'No registered models'}
+          description={
+            activeProject && scopeMode === 'workspace'
+              ? 'Run a train pipeline, then register a model from a workspace run — or switch to All registries.'
+              : 'Promote a run alias or register a model from Run outputs to populate the registry.'
+          }
           action={
-            <button type="button" className="btn-primary" onClick={() => setRegisterOpen(true)}>
-              Register model
-            </button>
+            activeProject && scopeMode === 'workspace' ? (
+              <div className="flex flex-wrap gap-2">
+                <button type="button" className="btn-primary" onClick={openWorkspaceRuns}>
+                  Open Runs
+                </button>
+                <button type="button" className="btn-secondary" onClick={() => setScopeMode('all')}>
+                  All registries
+                </button>
+                <button type="button" className="btn-secondary" onClick={() => setRegisterOpen(true)}>
+                  Register model
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="btn-primary" onClick={() => setRegisterOpen(true)}>
+                Register model
+              </button>
+            )
           }
         />
       ) : (
@@ -211,7 +351,7 @@ export default function ModelsView() {
           detailClassName="!p-0"
           master={
           <ul className="divide-y divide-ink-100 overflow-hidden rounded-2xl border border-ink-200 bg-white">
-            {rows.map((m) => (
+            {filteredRows.map((m) => (
               <li key={m.name}>
                 <button
                   type="button"

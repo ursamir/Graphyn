@@ -300,6 +300,13 @@ export default function EdgeWizardView() {
     }
   }, [linkedProject])
 
+  // Prefer a recent successful workspace run as the Ship source (don't leave blank / orphan to global).
+  React.useEffect(() => {
+    if (sourceRunId.trim()) return
+    const ok = projectRuns.find((r) => isTerminalSuccess(r.status || ''))
+    if (ok?.run_id) setSourceRunId(ok.run_id)
+  }, [projectRuns, sourceRunId])
+
   // Keep project/version/run_id on path search; devices tab via pathname segment.
   React.useEffect(() => {
     const W = linkedProject.trim() || activeProject || ''
