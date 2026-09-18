@@ -131,8 +131,14 @@ export function CommandPalette({
 
   const goView = React.useCallback(
     (id: AppView) => {
+      const path = pathForView(id, { workspaceId: useAppStore.getState().activeProject })
+      if (!path) {
+        setView('projects')
+        navigatePath(paths.workspaces())
+        setOpen(false)
+        return
+      }
       setView(id)
-      const path = pathForView(id, { workspaceId: useAppStore.getState().activeProject }) || paths.workspaces()
       navigatePath(path)
       setOpen(false)
     },

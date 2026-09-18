@@ -18,4 +18,4 @@ Surface | Primary job | Bridges
 
 ## Workspace vs global chrome
 
-Sidebar switches like an IDE: **workspace activity strip** (Home · Editor · Runs · Models · Ship · Datasets) when `/workspaces/:id` is open; **global** Build/Library/Deploy/Admin otherwise. Library & admin (Templates, Agent inbox, Artifacts, Plugins, Workers, Secrets, Ops, Access) stays collapsed secondary in workspace mode. Contract: `docs/UI_WORKSPACE_IDE.md`, `docs/IA_PROJECT_FIRST.md`.
+Stable IDE rail (VS Code pattern): workspace strip always shows Home · Editor · Runs · Models · Ship · Datasets (disabled until a project is open); Build / Library (Plugins, Artifacts) / Deploy (Workers) / Admin always below — never morph chrome or put Models/Ship/Datasets in global Library/Deploy. Contract: `docs/UI_WORKSPACE_IDE.md`, `docs/IA_PROJECT_FIRST.md`.

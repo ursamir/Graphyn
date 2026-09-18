@@ -105,7 +105,7 @@ Admin
 
 ### 4.2 Workspace open — activity strip
 
-**✓ Shipped (IDE chrome):** When URL is `/workspaces/:id…` and `activeProject` is set, the sidebar strip is the six items below; Library & admin is a collapsed secondary list (Artifacts is **not** on the strip). Global chrome keeps Models/Ship/Datasets inside Library/Deploy groups. Details: `docs/UI_WORKSPACE_IDE.md`.
+**✓ Shipped (IDE chrome):** Stable rail always — strip Home · Editor · Runs · Models · Ship · Datasets (enabled only with `activeProject`); groups Build / Library (Plugins, Artifacts) / Deploy (Workers) / Admin never include Models/Ship/Datasets. Details: `docs/UI_WORKSPACE_IDE.md`.
 
 ```
 Home          Situation · pipelines · linked data · always-on · next actions

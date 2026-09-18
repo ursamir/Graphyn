@@ -35,8 +35,9 @@ export function pathForView(view: AppView, ctx: ViewPathContext = {}): string | 
       return paths.runs(W)
 
     case 'data':
-      if (W && ctx.preferWorkspaceDatasets !== false) return paths.datasets(W)
-      return paths.libraryDatasets()
+      // Workspace-strip only — no global /library/datasets destination in the rail.
+      if (!W) return null
+      return paths.datasets(W)
 
     case 'plugins':
       return paths.libraryPlugins()
@@ -48,10 +49,10 @@ export function pathForView(view: AppView, ctx: ViewPathContext = {}): string | 
       return paths.agentInbox()
 
     case 'edge':
-      return W ? paths.ship(W) : paths.deployShip()
+      return W ? paths.ship(W) : null
 
     case 'devices':
-      return W ? paths.shipDevices(W) : paths.deployShipDevices()
+      return W ? paths.shipDevices(W) : null
 
     case 'workers':
       return paths.deployWorkers()
@@ -69,7 +70,7 @@ export function pathForView(view: AppView, ctx: ViewPathContext = {}): string | 
       return W ? paths.runsCompare(W) : null
 
     case 'models':
-      return W ? paths.models(W) : paths.libraryModels()
+      return W ? paths.models(W) : null
 
     case 'access':
       return paths.adminAccess()

@@ -94,17 +94,16 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
     return { view: 'proposals', proposalId: c ? decodeURIComponent(c) : undefined }
   }
   if (a === 'library') {
-    if (b === 'datasets') return { view: 'data' }
+    // Models/Datasets are workspace-strip only — legacy global URLs land on picker.
+    if (b === 'datasets' || b === 'models') {
+      return { view: 'projects', canonical: '/workspaces' }
+    }
     if (b === 'plugins') return { view: 'plugins' }
     if (b === 'artifacts') return { view: 'artifacts' }
-    if (b === 'models') return { view: 'models' as AppView }
   }
   if (a === 'deploy') {
     if (b === 'ship') {
-      return {
-        view: 'edge',
-        shipTab: c === 'devices' ? 'devices' : 'package',
-      }
+      return { view: 'projects', canonical: '/workspaces' }
     }
     if (b === 'workers') return { view: 'workers' }
   }

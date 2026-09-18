@@ -2,38 +2,41 @@
 
 Brief contract for the Graphyn console shell (think **VS Code / Cursor**: folder open vs empty window).
 
-## Modes
+## Stable rail (ALWAYS the same shape)
 
-### Workspace open
+The left sidebar **does not morph** between global and workspace. Same DOM structure always:
 
-**When:** pathname is `/workspaces/:id…` **and** `activeProject` is set from that path.
+1. **Workspace strip** (always visible)
+2. **Build / Library / Deploy / Admin** groups (always visible, same titles and style)
 
-**Activity strip (primary):**
+Only **enabled vs disabled** (and active highlight) change when a project is open — never a different collapsed “Library & admin” chrome, mode pills that recolor the panel, or swapping Models/Ship/Datasets into global Library/Deploy.
 
-Home · Editor · Runs · **Models** · **Ship** · **Datasets**
+### Workspace strip
 
-**Library & admin (collapsed secondary):**
+| Item | Enabled when |
+|------|----------------|
+| **Home** (projects) | Always |
+| **Editor**, **Runs**, **Models**, **Ship**, **Datasets** | `activeProject` set; otherwise disabled + title “Open a project first” |
 
-Templates · Agent inbox · Artifacts · Plugins · Workers · Secrets · Ops · Access
+Optional quiet header in the strip: `Workspace: {name}` + **Switch**, or “No project open” + **Open** — same padding/fonts as before.
 
-- Clicking Models / Ship / Datasets uses `pathForView` / `go` with `workspaceId` so URLs stay `/workspaces/:id/models|ship|datasets`.
-- Those surfaces **scope data** to the open workspace (Models: filter by project run ids; Ship: prefer workspace ship path + recent successful runs; Datasets: workspace datasets path + “Workspace datasets” copy).
-- **Artifacts** is **not** on the strip — it stays under Library & admin (may still default-filter inside ArtifactsView).
+### Groups below (global + workspace — identical)
 
-### Global (no workspace)
+- **Build:** Templates, Agent inbox
+- **Library:** Plugins, **Artifacts only** (NO Models, NO Datasets)
+- **Deploy:** Worker fleet only (NO Ship)
+- **Admin:** Secrets, Ops, Access
 
-**Projects** · Build (Templates, Agent inbox) · Library (Datasets, Plugins, Models browse, Artifacts) · Deploy (Ship, Workers) · Admin (Secrets, Ops, Access)
+## Data scoping
 
-Models / Ship / Datasets appear in Library / Deploy groups and use global paths (`/library/models`, `/deploy/ship`, `/library/datasets`).
+- With a workspace open, Models / Ship / Datasets use workspace paths and filter/scope to that project (`pathForView` + view logic from the IDE shell work).
+- `pathForView('models'|'edge'|'data')` without a workspace id returns **`null`** → `go()` opens the projects picker (toast: open a workspace first).
+- Legacy/global URLs `/library/models`, `/library/datasets`, `/deploy/ship` canonicalize to **`/workspaces`** (not primary nav destinations).
+- HashRedirect → `navigatePath` remains the cold-load path for `#/…`.
 
 ## Header
 
-Calm distinction: subtle tint/border when **In workspace**; chip shows workspace name with **Switch** to leave. Global mode shows a quiet **Global** label / open-workspace affordance.
-
-## Routing notes
-
-- Legacy `#/…` cold loads go through `HashRedirect` → `navigatePath` (Zustand + synthetic `popstate`), not React Router `navigate` alone.
-- Standalone Devices with a workspace redirects into Ship → Devices (`/workspaces/:id/ship/devices`).
+Keep prior calm chrome (stable border/background). Prefer the workspace name chip + Switch when a workspace URL is open; avoid loud **In workspace** / **Global** pills that make the shell feel like two different apps.
 
 ## Related
 

@@ -169,8 +169,8 @@ function stripProjectFromWorkspaceHash() {
     navigatePath(paths.workspaces(), true)
     return
   }
-  if (pathname.startsWith('/library/datasets')) {
-    navigatePath(paths.libraryDatasets(), true)
+  if (pathname.startsWith('/library/datasets') || pathname.startsWith('/library/models') || pathname.startsWith('/deploy/ship')) {
+    navigatePath(paths.workspaces(), true)
   }
 }
 
@@ -287,7 +287,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ activeProject: proj })
     }
     const W = proj || get().activeProject || ''
-    const base = W ? paths.ship(W) : paths.deployShip()
+    if (!W) {
+      navigatePath(paths.workspaces())
+      set({ view: 'projects' })
+      return
+    }
+    const base = paths.ship(W)
     // version/runId were accepted here but silently dropped — callers like
     // ProjectsView's "Use in Ship" passed a run_id that never made it into
     // the URL, so the Ship wizard always landed on "project + source run
@@ -303,19 +308,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     const proj = project?.trim() || ''
     if (proj) {
       persistActiveProject(proj)
-      set({ activeProject: proj, view: 'data' })
-    } else {
-      set({ view: 'data' })
+      set({ activeProject: proj })
     }
     const W = proj || get().activeProject || ''
-    const base = W ? paths.datasets(W) : paths.libraryDatasets()
+    if (!W) {
+      navigatePath(paths.workspaces())
+      set({ view: 'projects' })
+      return
+    }
+    set({ view: 'data' })
+    const base = paths.datasets(W)
     const qs = new URLSearchParams()
     if (mode) qs.set('mode', mode)
     if (version?.trim()) qs.set('version', version.trim())
     if (label?.trim()) qs.set('label', label.trim())
     if (mode === 'ingest' || mode === 'merge') qs.set('manage', '1')
-    const s = qs.toString()
-    navigatePath(s ? `${base}?${s}` : base)
+    const q = qs.toString()
+    navigatePath(q ? `${base}?${q}` : base)
   },
   openProjects: ({ project } = {}) => {
     const name = project?.trim()

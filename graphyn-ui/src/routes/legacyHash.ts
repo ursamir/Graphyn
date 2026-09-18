@@ -82,7 +82,7 @@ export function resolveLegacyHash(
     }
 
     case 'data':
-      return W ? paths.datasets(W) : paths.libraryDatasets()
+      return W ? paths.datasets(W) : paths.workspaces()
 
     case 'artifacts':
       return paths.libraryArtifacts(
@@ -100,7 +100,7 @@ export function resolveLegacyHash(
     }
 
     case 'edge':
-      return W ? paths.ship(W) : paths.deployShip()
+      return W ? paths.ship(W) : paths.workspaces()
 
     case 'workers':
       return paths.deployWorkers()
@@ -115,7 +115,7 @@ export function resolveLegacyHash(
       return paths.libraryPlugins()
 
     case 'models':
-      return needWorkspace((id) => paths.models(id), paths.libraryModels())
+      return needWorkspace((id) => paths.models(id), paths.workspaces())
 
     case 'access':
       return paths.adminAccess()

@@ -28,7 +28,7 @@
 |---|---|---|
 | **Projects** | Projects | Primary entry — picker / create / open |
 | **Build** | Templates, Proposals | Builder optional for canvas-only; **Run** path should go through a project |
-| **Library** | Datasets, Plugins, Models, Artifacts | Global library + plugin catalog |
+| **Library** | Plugins, Artifacts | Global library + plugin catalog (Models/Datasets are workspace-strip only) |
 | **Deploy** | Ship, Worker fleet | Unchanged |
 | **Admin** | Secrets, Ops, Access | Credentials and platform ops (Plugins stay in **Library**, shipped UI) |
 
@@ -222,8 +222,8 @@ Locked product decision (IDE analogy — VS Code / Cursor):
 
 | Mode | When | Primary nav | Secondary |
 |---|---|---|---|
-| **Workspace** | URL `/workspaces/:id…` **and** `activeProject` set from path | Activity strip: **Home · Editor · Runs · Models · Ship · Datasets** | Collapsed **Library & admin**: Templates · Agent inbox · Artifacts · Plugins · Workers · Secrets · Ops · Access |
-| **Global** | No workspace in URL | **Projects** + Build / Library / Deploy / Admin groups (Models, Ship, Datasets live in Library/Deploy) | — |
+| **Workspace** | URL `/workspaces/:id…` **and** `activeProject` set from path | Same stable rail; strip items **enabled**; Models/Ship/Datasets on strip only | Build / Library (Plugins, Artifacts) / Deploy (Workers) / Admin — unchanged shape |
+| **Global** | No workspace in URL | Same stable rail; Editor/Runs/Models/Ship/Datasets **disabled** until a project opens | Same groups — Models/Ship/Datasets are **not** in Library/Deploy |
 
 - **Artifacts** is never on the workspace strip (library-secondary; ArtifactsView may still default-filter to the open workspace).
 - Models / Ship / Datasets when a workspace is open navigate to `/workspaces/:id/models|ship|datasets` and **scope data** to that workspace.

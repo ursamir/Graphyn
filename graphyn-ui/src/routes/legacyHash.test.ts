@@ -49,8 +49,8 @@ describe('resolveLegacyHash', () => {
   it('falls back when workspace is missing', () => {
     expect(resolveLegacyHash('#/builder')).toBe('/workspaces')
     expect(resolveLegacyHash('#/runs/abc')).toBe('/workspaces?run=abc')
-    expect(resolveLegacyHash('#/data')).toBe('/library/datasets')
-    expect(resolveLegacyHash('#/edge')).toBe('/deploy/ship')
+    expect(resolveLegacyHash('#/data')).toBe('/workspaces')
+    expect(resolveLegacyHash('#/edge')).toBe('/workspaces')
   })
 
   it('maps global legacy surfaces', () => {
