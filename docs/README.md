@@ -9,7 +9,7 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 | Document | Audience |
 |---|---|
 | [GETTING_STARTED.md](./GETTING_STARTED.md) | Install + Mode A/B operations (single vs multi-machine) |
-| [REQUIREMENTS_SPEC.md](./REQUIREMENTS_SPEC.md) | **Master SRS / PRD** — full product requirements (UI + API + runtime + security) |
+| [REQUIREMENTS_SPEC.md](./REQUIREMENTS_SPEC.md) | **Standalone greenfield SRS** — complete build-from-scratch Software Requirements Specification (vision, architecture, data model, Graph IR, REST/MCP/CLI, console, runtime, security, journeys); no cross-doc dependencies |
 | [PRODUCT_VISION.md](./PRODUCT_VISION.md) | Product north star and console IA |
 | [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) | Product UI plan — path routes, Phase 0 foundation, pillar checklist |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Docker Compose and production baseline |
