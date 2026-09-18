@@ -403,7 +403,140 @@ Looking at it properly found four things code-reading had missed:
 not only after.** Reading source and API payloads finds a different class of defect than
 looking does, and this page proved both classes were present.
 
+## Artifacts page — looked at it first this time
+Applied the process correction: opened the rendered page and used it as a user *before*
+reading a line of source. That immediately surfaced a defect I would not have found in
+code — a horizontal scrollbar across the master pane.
+
+- **Horizontal overflow (measured, then root-caused).** The master pane reported
+  `scrollWidth 436 vs clientWidth 350`. Cause: the filter row was `flex flex-wrap` holding
+  selects with `min-w-[12rem]` and `min-w-[8rem]`. A min-width cannot shrink, so the row's
+  intrinsic width (~416px) exceeded the ~310px pane and pushed a horizontal scrollbar onto
+  the entire list. In a narrow pane those controls now stack full-width. Verified after:
+  the pane no longer overflows (the only remaining entries are `truncate` elements, which
+  legitimately report scrollWidth > clientWidth while rendering an ellipsis).
+- **Full 32-char artifact ids** were printed unwrapped in ~310px cards — the second
+  overflow source, and unreadable. Shortened, full id on the tooltip and Copy path.
+- **Silent list collapse.** Selecting an artifact adopts its run into the Run filter, so
+  the cross-run list you were browsing silently shrank (100 → 3) with no explanation on a
+  page whose own description calls it a *cross-run* registry. Added a count line that says
+  which state you are in: "100 artifacts across all runs" / "3 artifacts in run c0bb2845".
+  Left the behaviour alone — it has a real rationale (see the run's siblings); it just
+  needed to be legible. My earlier audit had recorded this as "auto-scopes correctly",
+  which was true mechanically and wrong experientially.
+- **Internal TODO shown to users**: "Downstream consumers — needs provenance API". A note
+  about a missing backend, rendered verbatim, telling the user nothing they can act on and
+  implying something is broken. Now says what it means and where provenance does live.
+- **Same bug class again**: `registerModelFromArtifact()` bails with a toast on an empty
+  name, but the Register model button was only `disabled={registerBusy}`. Now disabled on
+  empty name with a title. Verified: disabled + "Enter a model name first", enables on type.
+- **Guidance stated three times on one screen** (page description, above the list, and the
+  detail footer). Kept the page description; deleted both repeats.
+
+Verified live after a hard reload; tsc + oxlint clean; no console errors.
+
+## Artifact scope question — answered from evidence, and the UI made honest
+User asked why artifacts are visible with no workspace set, and whether artifacts are
+project-scoped or global. Checked three layers rather than guessing; all three agree:
+- **Record:** `ArtifactRecord` has no project field — artifact_id, content_hash,
+  artifact_type, node_id, node_type, run_id, name, metadata, created_at, schema_version,
+  data_path. Verified against a live response.
+- **API:** `GET /api/v1/artifacts` accepts only `run_id`, `node_type`, `artifact_type`,
+  `limit`, `offset`. There is no project parameter to pass.
+- **Storage:** `workspace/artifacts/` is keyed by graph name and run
+  (`workspace/artifacts/edge-deploy/runs/<run_id>`), plus `by_name/` and `by_run/`
+  indexes. Not by project. (I previously misread `workspace/artifacts/<name>` as a project
+  dir — it is the graph name, which merely coincides with the project name in the e2e
+  fixtures.)
+
+**So artifacts are global, and showing all of them with no workspace open is correct
+behaviour, not a leak.** The nav placement under Library (the global group) matches.
+
+What was actually wrong was that nothing said so:
+- The description said "Cross-run artifact registry", which reads as "across the runs of
+  this workspace". Now: "Every artifact on this API, across all workspaces."
+- The count line said "across all runs"; now "across all workspaces".
+- `ArtifactsView` uses `activeProject` **only** to populate the Run picker
+  (`/runs?project=…`); the artifact list itself is never project-filtered. With a workspace
+  open that is genuinely easy to misread, so the page now says it outright and points at
+  the Run picker as the way to narrow.
+
+**Caveat on my own earlier work:** the "Browse artifacts" link I added to Home's Activity
+passes `{ project }`, which cannot filter the list — it only seeds the Run picker. It is
+not useless, but it does not scope, and that is now stated on the destination page rather
+than implied by the link.
+
+**CORRECTION — I was wrong that this needs a backend change.** The user pointed out the
+obvious: a run belongs to a project and an artifact belongs to a run, so project → runs →
+artifacts is a join the client can already do. It needs no new API. Implemented:
+- `/runs?project=X` (already fetched for the Run picker, limit raised 20 → 200) yields the
+  workspace's run ids; artifacts are filtered on `run_id ∈ thatSet`.
+- Scope toggle "This workspace" / "All workspaces", defaulting to the open workspace.
+- Verified live against an offline join computed from the raw API: 13 runs →
+  **14 artifacts** for e2e-ex-06-speech-commands-e2e, and 121 under All workspaces. Both
+  match exactly.
+
+**Found while doing it — a silent truncation the page never disclosed.** `load()` passed
+no `limit`, so it took the endpoint default of 100 while 121 artifacts exist: the list had
+been quietly dropping 21, and the count line read as a total. Now requests the endpoint
+maximum (1000) and says so if that is ever hit.
+
+**Honest about the join's edges rather than implying completeness:** 88 of 128 runs on this
+API carry no project at all, so their artifacts belong to no workspace view. With the
+workspace scope active the page states the number ("107 artifacts come from runs with no
+workspace recorded…") and links to All workspaces, instead of letting them silently vanish.
+A per-record project field would still be the more robust fix, but it is an optimisation,
+not a prerequisite — the view works today without it.
+
+## Clicking an artifact silently opened a workspace (user-reported) — reproduced and fixed
+Reproduced exactly as described. With no workspace open, one click on a row in the browse
+list:
+1. wrote `graphyn.activeProject = e2e-ex-06-speech-commands-e2e` to **localStorage**,
+2. flipped the sidebar from "No project open" to that workspace with Home/Editor/Runs
+   enabled, and it survived navigation,
+3. collapsed the list from **121 artifacts to 3**.
+
+**Chain:** `open()` set `runFilter` to the artifact's run on every click → an effect
+watching `runFilter` fetched the run, read `meta.project`, and called `setActiveProject()`,
+which persists. A selection in a browse list was reconfiguring the whole app.
+
+**Why it existed:** the detail actions need a workspace — `openRun()` builds
+`/workspaces/<W>/runs/<id>` and silently no-ops without one (a real trap already noted
+elsewhere in this file). Adopting the project globally was a way to make those links work.
+
+**Fix — resolve it locally instead of hijacking global state:**
+- `detailProject`: the selected artifact's workspace, resolved from its run, used for
+  building that artifact's links and displayed as "Produced in workspace X". Never written
+  to the store.
+- `openRun`/`openTrace` now receive that project explicitly, so the links work with no
+  workspace open — removing the reason for the adoption.
+- Opening the workspace is an explicit "Open workspace" button; narrowing to the run is an
+  explicit "Show this run's artifacts" button.
+- Run adoption now happens only on a genuine deep link, not on every click.
+
+**Two self-inflicted bugs found while fixing it, both caught only by re-testing:**
+- The URL write that selection performs dispatches the same path-change event the view
+  listens to, so `apply()` re-opened the just-opened artifact with `adoptRun` set — the list
+  still collapsed. Needed a re-entry guard.
+- Guarding on `selected` broke deep links: `selected` is seeded from the URL before effects
+  run, so the guard skipped the one `open()` that was needed and the detail pane stayed
+  blank. Guard on `openedRef`, which only `open()` sets.
+
+**Verified both paths live:** click from browse → 121 stays 121, detail loads, no workspace
+opened. Deep link `?artifactId=…` → scopes to that run (3), detail loads, no workspace
+opened. No console errors.
+
 ## Testing-tool gotchas learned this round
+- **`npx tsc --noEmit` does NOT catch what the real build catches.** It passed clean on an
+  ArtifactsView change that used `clsx` without importing it; `npm run build` (which runs
+  `tsc -b`, using the project-reference configs) failed with TS2304. Two rounds of
+  "tsc_exit=0, lint_exit=0" were false confidence. Verify with `npm run build` — or accept
+  that the docker build is the real gate and read its error output instead of only `tail`ing
+  the success line.
+- **`tsc -b` exits non-zero locally for an unrelated reason:** EACCES writing
+  `node_modules/.tmp/*.tsbuildinfo` (same permission problem that blocks vitest). So a
+  non-zero local build exit is not by itself a type error — read the actual TS codes, and
+  treat the docker build as authoritative.
 - **The dev server serves a stale bundle after a rebuild unless you hard-reload.** A
   plain `navigate` to the page after `docker compose up -d` returned the PREVIOUS build:
   the screenshot showed single-column cards and the repeated venv note as though none of

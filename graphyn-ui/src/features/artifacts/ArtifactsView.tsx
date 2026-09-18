@@ -1,4 +1,5 @@
 import React from 'react'
+import clsx from 'clsx'
 import { Copy, Download, GitBranch, History, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
 import { fetchRunGraph } from '../../lib/runGraph'
@@ -93,7 +94,6 @@ function writeArtifactsLocation(runId: string, artifactId: string) {
 export default function ArtifactsView() {
   const openRun = useAppStore((s) => s.openRun)
   const openTrace = useAppStore((s) => s.openTrace)
-  const setActiveProject = useAppStore((s) => s.setActiveProject)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
   const pushToast = useAppStore((s) => s.pushToast)
   const focusArtifactId = useAppStore((s) => s.focusArtifactId)
@@ -114,12 +114,36 @@ export default function ArtifactsView() {
   const [regModelName, setRegModelName] = React.useState('')
   const [regModelSlug, setRegModelSlug] = React.useState('')
   const [registerBusy, setRegisterBusy] = React.useState(false)
+  /* Workspace scoping needs no API change: a run record carries `project` and an
+     artifact carries `run_id`, so project → runs → artifacts is a join the client
+     can do. `projectRunIds` is the set of run ids for the open workspace. */
+  const [projectRunIds, setProjectRunIds] = React.useState<Set<string>>(new Set())
+  const [scope, setScope] = React.useState<'workspace' | 'all'>('workspace')
+  const [runsTruncated, setRunsTruncated] = React.useState(false)
+  const [listTruncated, setListTruncated] = React.useState(false)
 
   const idOf = (a: Artifact) => String(a.artifact_id ?? a.id ?? '')
 
   const hasActiveFilters = Boolean(
     runFilter.trim() || nodeTypeFilter.trim() || artifactTypeFilter.trim(),
   )
+
+  /* project → runs → artifacts, resolved on the client. Only meaningful when a
+     workspace is open and no explicit run filter is already narrowing the list. */
+  const scopedToWorkspace = Boolean(
+    activeProject && scope === 'workspace' && !runFilter.trim() && projectRunIds.size > 0,
+  )
+  const visibleItems = React.useMemo(() => {
+    if (!items) return []
+    if (!scopedToWorkspace) return items
+    return items.filter((a) => projectRunIds.has(String(a.run_id ?? '')))
+  }, [items, scopedToWorkspace, projectRunIds])
+  /* Artifacts whose run recorded no project can never match any workspace — on
+     this API that is most runs, so it is worth saying out loud. */
+  const orphanCount = React.useMemo(() => {
+    if (!items || !scopedToWorkspace) return 0
+    return items.filter((a) => !projectRunIds.has(String(a.run_id ?? ''))).length
+  }, [items, scopedToWorkspace, projectRunIds])
 
   const clearFilters = () => {
     setRunFilter('')
@@ -129,18 +153,29 @@ export default function ArtifactsView() {
     setDetail(null)
   }
 
+  const RUN_SCOPE_LIMIT = 200
   const loadRecentRuns = React.useCallback(async () => {
     if (!activeProject) {
       setRecentRuns([])
+      setProjectRunIds(new Set())
+      setRunsTruncated(false)
       return
     }
     try {
+      /* Was limit 20 — enough to fill the picker, but the picker is no longer the
+         only consumer: the same rows define which artifacts belong to this
+         workspace, so a short page would silently drop older ones. */
       const rows = await apiJson<RecentRun[]>('/runs', {
-        query: { limit: 20, project: activeProject },
+        query: { limit: RUN_SCOPE_LIMIT, project: activeProject },
       })
-      setRecentRuns(Array.isArray(rows) ? rows : [])
+      const list = Array.isArray(rows) ? rows : []
+      setRecentRuns(list)
+      setProjectRunIds(new Set(list.map((r) => String(r.run_id)).filter(Boolean)))
+      setRunsTruncated(list.length >= RUN_SCOPE_LIMIT)
     } catch {
       setRecentRuns([])
+      setProjectRunIds(new Set())
+      setRunsTruncated(false)
     }
   }, [activeProject])
 
@@ -151,14 +186,21 @@ export default function ArtifactsView() {
   const load = React.useCallback(async () => {
     setError(null)
     try {
+      /* No limit was passed, so this silently took the API default of 100 — with
+         121 artifacts stored, the list quietly omitted 21 of them and the count
+         read as a total. 1000 is the endpoint's maximum; past that we say so
+         rather than truncating in silence. */
+      const ARTIFACT_LIMIT = 1000
       const rows = await apiJson<Artifact[]>('/artifacts', {
         query: {
           run_id: runFilter || undefined,
           node_type: nodeTypeFilter || undefined,
           artifact_type: artifactTypeFilter || undefined,
+          limit: ARTIFACT_LIMIT,
         },
       })
       setItems(rows)
+      setListTruncated(Array.isArray(rows) && rows.length >= ARTIFACT_LIMIT)
       const types = Array.from(
         new Set(
           rows
@@ -181,38 +223,64 @@ export default function ArtifactsView() {
     void load()
   }, [load])
 
+  /*
+   * Resolve which workspace the SELECTED artifact belongs to — for display and
+   * for building its action links — without touching global app state.
+   *
+   * This used to call setActiveProject(), which persists to localStorage. So with
+   * no workspace open, clicking one row in a browse list silently opened a
+   * workspace you never chose, enabled Home/Editor/Runs in the sidebar, and
+   * survived navigation. A selection in a list must not reconfigure the app.
+   */
+  const [detailProject, setDetailProject] = React.useState<string | null>(null)
+  const detailRunId = React.useMemo(() => {
+    const rec = (detail && typeof detail === 'object' ? detail : {}) as Record<string, unknown>
+    return String(rec.run_id ?? '').trim()
+  }, [detail])
+
   React.useEffect(() => {
-    const rid = runFilter.trim()
-    if (!rid) return
+    const rid = detailRunId
+    if (!rid) {
+      setDetailProject(null)
+      return
+    }
     let cancelled = false
     void (async () => {
       try {
         const d = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(rid)}`)
         if (cancelled) return
         const meta = d?.meta && typeof d.meta === 'object' ? (d.meta as Record<string, unknown>) : null
-        const proj = String(meta?.project ?? d?.project ?? '').trim()
-        if (proj && useAppStore.getState().activeProject !== proj) {
-          setActiveProject(proj)
-        }
+        setDetailProject(String(meta?.project ?? d?.project ?? '').trim() || null)
       } catch {
-        /* optional sync */
+        if (!cancelled) setDetailProject(null)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [runFilter, setActiveProject])
+  }, [detailRunId])
 
-  const open = React.useCallback(async (id: string) => {
+  /** Workspace to use when building this artifact's deep links. */
+  const linkProject = detailProject || activeProject || undefined
+
+  /** Last artifact id passed to open(), so the path-sync effect can tell a real
+   *  navigation from the URL write that selecting an artifact performs. */
+  const openedRef = React.useRef<string | null>(null)
+
+  const open = React.useCallback(async (id: string, opts?: { adoptRun?: boolean }) => {
     const aid = id.trim()
     if (!aid) return
+    openedRef.current = aid
     setSelected(aid)
     setDetail(null)
     try {
       const d = await apiJson(`/artifacts/${aid}`)
       setDetail(d)
-      // If deep-linked by artifact_id alone, adopt run_id from the record.
-      if (d && typeof d === 'object') {
+      /* Adopt the run only when arriving by deep link with no run in the URL.
+         Doing it on every click meant selecting a row re-filtered the list to
+         that row's run — browsing 121 artifacts, clicking one, and being left
+         with 3. Selection should not rewrite the query behind it. */
+      if (opts?.adoptRun && d && typeof d === 'object') {
         const rid = String((d as Artifact).run_id ?? '').trim()
         if (rid) {
           setRunFilter((prev) => (prev ? prev : rid))
@@ -224,11 +292,22 @@ export default function ArtifactsView() {
     }
   }, [])
 
+  /* Selecting an artifact writes it into the URL, and that write dispatches the
+     same path-change event this effect listens to. Without a guard, apply() then
+     re-opened the artifact we had just opened — with adoptRun set, because the URL
+     carried no run yet — which is what collapsed the list to the selection's own
+     run even after adoption was made deep-link-only. Re-open only when the URL
+     actually points at a different artifact. */
   React.useEffect(() => {
     const apply = () => {
       const { runId, artifactId } = parseArtifactsLocation()
       setRunFilter((prev) => (prev === runId ? prev : runId))
-      if (artifactId) void open(artifactId)
+      /* Compare against what we have actually fetched, not `selected`: on a fresh
+         deep link `selected` is seeded from the URL before any effect runs, so
+         guarding on it skipped the one open() that was needed and left the detail
+         pane blank. openedRef is only set by open() itself. */
+      if (!artifactId || artifactId === openedRef.current) return
+      void open(artifactId, { adoptRun: !runId })
     }
     apply()
     return onPathChange(apply)
@@ -334,20 +413,30 @@ export default function ArtifactsView() {
   return (
     <ViewShell
       title="Artifacts"
-      description="Cross-run artifact registry. For one run's downloads, use Runs → Run outputs."
+      /* The store is global — an ArtifactRecord has no project field and
+         GET /artifacts takes only run_id/node_type/artifact_type. But a run
+         carries its project and an artifact carries its run, so the view resolves
+         the workspace itself and defaults to the open one. */
+      description="Artifacts produced by your runs. Defaults to the open workspace — switch to All workspaces to search the whole API. For one run's downloads, use Runs → Run outputs."
     >
       <MasterDetail
         master={
       <>
+        {/* The filter row used to be `flex flex-wrap` holding selects with
+            `min-w-[12rem]` and `min-w-[8rem]`. A min-width can't shrink, so the
+            row's intrinsic width (~416px) exceeded the master pane (~310px) and
+            forced a horizontal scrollbar across the whole list — measured
+            scrollWidth 436 vs clientWidth 350. In a narrow pane these controls
+            stack full-width instead. */}
         <div className="mb-3 space-y-2">
-          <div className="flex flex-wrap items-end gap-2">
+          <div className="space-y-2">
             {activeProject ? (
-              <label className="text-[11px] font-medium text-ink-500">
+              <label className="block text-[11px] font-medium text-ink-500">
                 Run
                 <select
                   value={runFilter.trim()}
                   onChange={(e) => setRunFilter(e.target.value)}
-                  className="mt-0.5 block min-w-[12rem] rounded-lg border border-ink-200 px-2 py-1 text-sm"
+                  className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1 text-sm"
                 >
                   <option value="">Any run</option>
                   {!runInPicker && runFilter.trim() ? (
@@ -369,12 +458,12 @@ export default function ArtifactsView() {
                 Open a project for a recent-run picker, or use advanced ID below.
               </p>
             )}
-            <label className="text-[11px] font-medium text-ink-500">
+            <label className="block text-[11px] font-medium text-ink-500">
               Type
               <select
                 value={artifactTypeFilter}
                 onChange={(e) => setArtifactTypeFilter(e.target.value)}
-                className="mt-0.5 block min-w-[8rem] rounded-lg border border-ink-200 px-2 py-1 text-sm"
+                className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1 text-sm"
               >
                 <option value="">All types</option>
                 {typeOptions.map((t) => (
@@ -382,14 +471,16 @@ export default function ArtifactsView() {
                 ))}
               </select>
             </label>
-            <button type="button" onClick={() => void load()} className="btn-secondary">
-              <RefreshCw className="h-3.5 w-3.5" /> Apply
-            </button>
-            {hasActiveFilters ? (
-              <button type="button" className="btn-quiet text-[12px]" onClick={clearFilters}>
-                Clear filters
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => void load()} className="btn-secondary">
+                <RefreshCw className="h-3.5 w-3.5" /> Apply
               </button>
-            ) : null}
+              {hasActiveFilters ? (
+                <button type="button" className="btn-quiet text-[12px]" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              ) : null}
+            </div>
           </div>
           <details className="rounded-lg border border-ink-100 bg-ink-50/60">
             <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[12px] font-medium text-ink-600">
@@ -425,9 +516,10 @@ export default function ArtifactsView() {
               </label>
             </div>
           </details>
-          <p className="text-[11px] leading-relaxed text-ink-400">
-            Runs → Run outputs shows downloads for one run. Use this registry only for cross-run search or a specific artifact id.
-          </p>
+          {/* "For one run's downloads use Runs → Run outputs" was stated three times
+              on one screen: the page description, here above the list, and again in
+              the detail pane's footer. The page description is the right place for
+              it, so both repeats are gone. */}
         </div>
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
         {items === null ? (
@@ -463,8 +555,89 @@ export default function ArtifactsView() {
             }
           />
         ) : (
-          <ul className="space-y-2">
-            {items.map((a) => {
+          <>
+            {/* Selecting an artifact adopts its run into the Run filter, so the list
+                you were browsing silently collapses to that run's artifacts. Saying
+                how many are shown, and why, makes that legible instead of alarming. */}
+            {/* Scope toggle. The artifact record has no project field, but it does
+                have run_id, and a run record has project — so the workspace view is
+                a client-side join over the run ids fetched above, not a missing API. */}
+            {activeProject && !runFilter.trim() ? (
+              <div className="mb-2 flex overflow-hidden rounded-md border border-ink-200 text-[11px]">
+                {(
+                  [
+                    ['workspace', 'This workspace'],
+                    ['all', 'All workspaces'],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={scope === id}
+                    className={clsx(
+                      'flex-1 px-2 py-1',
+                      id === 'all' && 'border-l border-ink-200',
+                      scope === id
+                        ? 'bg-ink-100 font-medium text-ink-900'
+                        : 'bg-white text-ink-500 hover:text-ink-800',
+                    )}
+                    onClick={() => setScope(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <p className="mb-2 text-[12px] text-ink-500">
+              {visibleItems.length} artifact{visibleItems.length === 1 ? '' : 's'}
+              {runFilter.trim()
+                ? ` in run ${shortRunId(runFilter.trim())}`
+                : scopedToWorkspace
+                  ? ` in ${activeProject}`
+                  : ' across all workspaces'}
+              {scopedToWorkspace && items.length > visibleItems.length
+                ? ` · ${items.length - visibleItems.length} hidden from other workspaces`
+                : ''}
+            </p>
+            {/* Honest about the join's edges rather than implying completeness:
+                most runs on this API carry no project at all, so their artifacts
+                belong to no workspace view. */}
+            {scopedToWorkspace && orphanCount > 0 ? (
+              <p className="mb-2 rounded-lg border border-ink-100 bg-ink-50/70 px-2.5 py-1.5 text-[11px] leading-relaxed text-ink-500">
+                {orphanCount} artifact{orphanCount === 1 ? '' : 's'} come from runs with no
+                workspace recorded, so they appear only under{' '}
+                <button
+                  type="button"
+                  className="font-medium text-accent-800 hover:underline"
+                  onClick={() => setScope('all')}
+                >
+                  All workspaces
+                </button>
+                .
+              </p>
+            ) : null}
+            {(runsTruncated || listTruncated) && (
+              <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50/70 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900">
+                {listTruncated
+                  ? 'Showing the first 1000 artifacts — narrow by run or type to see the rest.'
+                  : `Scoped using this workspace's ${RUN_SCOPE_LIMIT} most recent runs; artifacts from older runs may be missing.`}
+              </p>
+            )}
+            {scopedToWorkspace && visibleItems.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-ink-200 bg-ink-50/50 px-3 py-3 text-[12px] leading-relaxed text-ink-600">
+                No artifacts from {activeProject}’s runs yet.{' '}
+                <button
+                  type="button"
+                  className="font-medium text-accent-800 hover:underline"
+                  onClick={() => setScope('all')}
+                >
+                  See all {items.length} across every workspace
+                </button>
+                .
+              </p>
+            ) : null}
+            <ul className="space-y-2">
+            {visibleItems.map((a) => {
               const id = idOf(a)
               return (
                 <li key={id}>
@@ -478,15 +651,21 @@ export default function ArtifactsView() {
                     <div className="font-medium" title={String(a.node_type ?? '') || undefined}>
                       {artifactHumanTitle(a)}
                     </div>
-                    <div className="text-[11px] text-ink-500">
+                    <div className="truncate text-[11px] text-ink-500">
                       {shortRunId(String(a.run_id ?? ''))} · {String(a.artifact_type ?? '—')}
                     </div>
-                    <div className="font-mono text-[10px] text-ink-400">{id}</div>
+                    {/* Was the full 32-char id, unwrapped, in a ~310px pane — the
+                        second source of the horizontal scrollbar, and unreadable
+                        besides. The full id is on the detail pane and on Copy path. */}
+                    <div className="truncate font-mono text-[10px] text-ink-400" title={id}>
+                      {shortRunId(id)}
+                    </div>
                   </button>
                 </li>
               )
             })}
-          </ul>
+            </ul>
+          </>
         )}
       </>
         }
@@ -561,6 +740,37 @@ export default function ArtifactsView() {
                 </div>
               )
             })()}
+            {/* Which workspace this artifact came from, stated rather than assumed.
+                Opening it is now a deliberate click instead of a side effect of
+                selecting a row. */}
+            {detailProject ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2 text-[12px] text-ink-600">
+                <span>
+                  Produced in workspace{' '}
+                  <span className="font-medium text-ink-900">{detailProject}</span>
+                </span>
+                {activeProject === detailProject ? (
+                  <span className="text-ink-400">· currently open</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="ide-quiet-btn text-[11px]"
+                    onClick={() => useAppStore.getState().openProject(detailProject)}
+                  >
+                    Open workspace
+                  </button>
+                )}
+                {!runFilter.trim() ? (
+                  <button
+                    type="button"
+                    className="ide-quiet-btn text-[11px]"
+                    onClick={() => setRunFilter(detailRunId)}
+                  >
+                    Show this run’s artifacts
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -571,7 +781,8 @@ export default function ArtifactsView() {
                   openTrace({
                     artifactId: selected,
                     runId: runId || undefined,
-                    project: useAppStore.getState().activeProject || undefined,
+                    // The artifact's own workspace, not whatever happens to be open.
+                    project: linkProject,
                   })
                 }}
               >
@@ -587,7 +798,15 @@ export default function ArtifactsView() {
                 const runId = String(rec.run_id ?? '').trim()
                 if (!runId) return null
                 return (
-                  <button type="button" className="btn-primary" onClick={() => openRun(runId)}>
+                  /* Must pass the project: openRun() builds /workspaces/<W>/runs/<id>
+                     and silently no-ops when it has no workspace. Needing that is
+                     why the view used to force-open a workspace globally; passing
+                     the artifact's own project gets the link working without it. */
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => openRun(runId, linkProject ? { project: linkProject } : undefined)}
+                  >
                     <History className="h-3.5 w-3.5" /> Open run
                   </button>
                 )
@@ -667,8 +886,14 @@ export default function ArtifactsView() {
                 )
               }
               return (
+                /* Was "Downstream consumers — needs provenance API": an internal
+                   TODO about a missing backend, shown verbatim to users, who have
+                   no idea what a provenance API is or whether they broke it. Says
+                   what it means for them and where the answer does live. */
                 <div className="rounded-xl border border-dashed border-ink-200 bg-ink-50/50 px-3 py-2 text-sm text-ink-500">
-                  Downstream consumers — needs provenance API
+                  No downstream consumers recorded for this artifact. Full provenance is
+                  tracked per run — see{' '}
+                  <span className="font-medium text-ink-700">Runs → Lineage</span>.
                 </div>
               )
             })()}
@@ -701,10 +926,15 @@ export default function ArtifactsView() {
                         placeholder="artifact slug"
                       />
                     </label>
+                    {/* registerModelFromArtifact() already bailed with a toast on an
+                        empty name, but the button stayed enabled — the same
+                        visible-yet-inert control fixed on Home, the picker and
+                        Templates. The requirement is knowable before the click. */}
                     <button
                       type="button"
                       className="btn-secondary"
-                      disabled={registerBusy}
+                      disabled={registerBusy || !regModelName.trim()}
+                      title={!regModelName.trim() ? 'Enter a model name first' : undefined}
                       onClick={() => void registerModelFromArtifact(runId)}
                     >
                       {registerBusy ? 'Registering…' : 'Register model'}
@@ -713,9 +943,6 @@ export default function ArtifactsView() {
                 </div>
               )
             })()}
-            <p className="rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-600">
-              Prefer Runs → Run outputs for one run. Provenance lives on Runs → Lineage (or this deep link for artifact ids).
-            </p>
           </>
         )}
       </div>
