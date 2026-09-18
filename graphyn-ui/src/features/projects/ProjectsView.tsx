@@ -1154,7 +1154,7 @@ export default function ProjectsView() {
             <div className="min-w-0">
               <h1 className="text-type-page text-ink-950">Workspaces</h1>
               <p className="mt-1 max-w-2xl text-type-body text-ink-500">
-                Every project on this API. A workspace holds its own pipelines, linked datasets and
+                Every workspace on this API. A workspace holds its own pipelines, linked datasets and
                 run history — Editor and Runs stay greyed out in the sidebar until one is open.
               </p>
             </div>
@@ -1177,7 +1177,7 @@ export default function ProjectsView() {
                 className="btn-secondary"
                 onClick={() => openData({ mode: 'inputs' })}
               >
-                <Database className="h-3.5 w-3.5" /> Browse datasets
+                <Database className="h-3.5 w-3.5" /> Browse shared library
               </button>
             </div>
           </div>

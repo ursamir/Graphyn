@@ -1,5 +1,5 @@
 /**
- * Map legacy AppView ids → path builders for gradual migration off hash routing.
+ * Map AppView ids → path builders (path-era navigation).
  */
 
 import type { AppView } from '../store/appStore'
@@ -35,7 +35,8 @@ export function pathForView(view: AppView, ctx: ViewPathContext = {}): string | 
       return paths.runs(W)
 
     case 'data':
-      // Workspace-strip only — no global /library/datasets destination in the rail.
+      // Workspace-strip only in the rail. Secondary /library/datasets catalog is
+      // opened via explicit "Browse shared library" CTA, not go('data').
       if (!W) return null
       return paths.datasets(W)
 

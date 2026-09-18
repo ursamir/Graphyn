@@ -455,7 +455,7 @@ export default function ArtifactsView() {
               </label>
             ) : (
               <p className="text-[12px] text-ink-400 self-center">
-                Open a project for a recent-run picker, or use advanced ID below.
+                Open a workspace for a recent-run picker, or use advanced ID below.
               </p>
             )}
             <label className="block text-[11px] font-medium text-ink-500">

@@ -77,7 +77,7 @@ Aligned with [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) §3 noun dictionary.
 
 | Term | Definition | Not |
 |---|---|---|
-| **Workspace / Home** | Project context (pipelines + runs + linked data) | Dataset-only folder |
+| **Workspace / Home** | Project context (pipelines + runs + linked data). **UI term is Workspace** (Project = Workspace); API may still say `project`. | Dataset-only folder |
 | **Editor** | GraphIR canvas (Builder) | Raw route ids in chrome |
 | **Runs** | Execution History + Live + Compare | The Editor **Run** button |
 | **Run outputs** | Per-run downloadable files | Datasets or Artifacts library |

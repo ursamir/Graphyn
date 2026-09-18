@@ -330,12 +330,12 @@ export function ScopeBadge({ scope }: { scope: 'project' | 'global' }) {
           : 'border border-ink-200 bg-ink-50 text-ink-600',
       )}
     >
-      {project ? 'Project' : 'Global'}
+      {project ? 'Workspace' : 'Global'}
     </span>
   )
 }
 
-/** Calm gate when Editor / Runs / Compare need an active project. */
+/** Calm gate when Editor / Runs / Compare need an active workspace. */
 export function NeedProjectPrompt({
   onOpenProjects,
 }: {
@@ -349,7 +349,7 @@ export function NeedProjectPrompt({
           Editor, Runs, and Compare need an active workspace.
         </p>
         <button type="button" className="btn-primary mt-5" onClick={onOpenProjects}>
-          Projects
+          Workspaces
         </button>
       </div>
     </div>
@@ -366,7 +366,7 @@ export function PageHeader({
   title: string
   description?: string
   actions?: React.ReactNode
-  /** Prefer omitting — scope is already clear from the activity bar / project chip. */
+  /** Prefer omitting — scope is already clear from the activity bar / workspace strip. */
   scope?: 'project' | 'global'
   /** Extra classes on the wrapper — e.g. a page whose scroll container drops its
    *  top padding so a sticky toolbar can pin flush, and needs the header to carry
@@ -378,7 +378,7 @@ export function PageHeader({
       <div className="min-w-0 max-w-3xl">
         <div className="flex flex-wrap items-baseline gap-2">
           <h1 className="text-type-page tracking-tight text-ink-950">{title}</h1>
-          {scope ? <span className="sr-only">{scope === 'project' ? 'Project scope' : 'Global scope'}</span> : null}
+          {scope ? <span className="sr-only">{scope === 'project' ? 'Workspace scope' : 'Global scope'}</span> : null}
         </div>
         {description && <p className="mt-1 max-w-xl text-type-secondary leading-relaxed text-ink-500">{description}</p>}
       </div>

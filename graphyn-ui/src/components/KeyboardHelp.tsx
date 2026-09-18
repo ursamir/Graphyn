@@ -51,7 +51,7 @@ const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: strin
   {
     title: 'Editor',
     rows: [
-      { keys: '/ or ⌘/Ctrl+K', action: 'Open command palette (views / projects / runs)' },
+      { keys: '/ or ⌘/Ctrl+K', action: 'Open command palette (views / workspaces / runs)' },
       { keys: 'Drag from handle', action: 'Connect nodes (ports show type on hover)' },
       { keys: 'Delete / Backspace', action: 'Remove selected node or edge' },
       { keys: 'Click canvas', action: 'Clear selection / show graph settings' },

@@ -94,8 +94,10 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
     return { view: 'proposals', proposalId: c ? decodeURIComponent(c) : undefined }
   }
   if (a === 'library') {
-    // Models/Datasets are workspace-strip only — legacy global URLs land on picker.
-    if (b === 'datasets' || b === 'models') {
+    // Datasets library catalog (shared Inputs/Outputs) may remain as secondary CTA.
+    // Models stay workspace-strip only — global URL lands on picker.
+    if (b === 'datasets') return { view: 'data' }
+    if (b === 'models') {
       return { view: 'projects', canonical: '/workspaces' }
     }
     if (b === 'plugins') return { view: 'plugins' }

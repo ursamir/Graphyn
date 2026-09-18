@@ -231,8 +231,8 @@ export default function TemplatesView() {
     } catch (err) {
       pushToast(
         err instanceof Error
-          ? `Opened Editor but could not save project pipeline: ${err.message}`
-          : 'Opened Editor but could not save project pipeline',
+          ? `Opened Editor but could not save workspace pipeline: ${err.message}`
+          : 'Opened Editor but could not save workspace pipeline',
         'error',
       )
     }
@@ -273,7 +273,7 @@ export default function TemplatesView() {
     const picked = projectPick.trim()
     const project = created || picked
     if (!project) {
-      pushToast('Create or select a project first', 'error')
+      pushToast('Create or select a workspace first', 'error')
       return
     }
     setProjectGateBusy(true)
@@ -970,13 +970,13 @@ export default function TemplatesView() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 id="project-gate-title" className="text-lg font-semibold text-ink-950">
-              Templates stamp into a project
+              Templates stamp into a workspace
             </h2>
             <p className="mt-2 text-sm text-ink-500">
-              Create or select a project workspace, then open the graph in the Editor.
+              Create or select a workspace, then open the graph in the Editor.
             </p>
             <label className="mt-4 block text-sm text-ink-600">
-              Existing project
+              Existing workspace
               <select
                 className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
                 value={projectPick}
@@ -984,7 +984,7 @@ export default function TemplatesView() {
                 disabled={projectChoices.length === 0}
               >
                 {projectChoices.length === 0 ? (
-                  <option value="">No projects yet</option>
+                  <option value="">No workspaces yet</option>
                 ) : (
                   projectChoices.map((n) => (
                     <option key={n} value={n}>

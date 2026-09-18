@@ -491,7 +491,7 @@ export default function ModelsView() {
                       className="btn-quiet"
                       onClick={() => openProjects()}
                     >
-                      Open a project for dataset pins
+                      Open a workspace for dataset pins
                     </button>
                   )}
                 </div>

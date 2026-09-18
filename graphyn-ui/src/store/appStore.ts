@@ -138,9 +138,9 @@ interface AppState {
   pushToast: (message: string, tone?: ToastTone, opts?: PushToastOpts) => void
   dismissToast: (id: string) => void
   dismissAllToasts: () => void
-  /** Clear active project and strip ?project= from Data/Projects hash so global library is unscoped. */
+  /** Clear active workspace and leave /workspaces/:id for the Workspaces picker (path-era). */
   closeProject: () => void
-  /** Bumped when workspace project is cleared — DataView resets selection / hash scope. */
+  /** Bumped when workspace is cleared — DataView resets selection / path scope. */
   dataUnscopeEpoch: number
   bootError: string | null
   bootStatus: number | null
@@ -163,13 +163,13 @@ interface AppState {
 
 
 /** Close workspace: leave /workspaces/:id for picker or library. */
-function stripProjectFromWorkspaceHash() {
+function stripProjectFromWorkspacePath() {
   const { pathname } = window.location
   if (pathname.startsWith('/workspaces/')) {
     navigatePath(paths.workspaces(), true)
     return
   }
-  if (pathname.startsWith('/library/datasets') || pathname.startsWith('/library/models') || pathname.startsWith('/deploy/ship')) {
+  if (pathname.startsWith('/library/models') || pathname.startsWith('/deploy/ship')) {
     navigatePath(paths.workspaces(), true)
   }
 }
@@ -311,13 +311,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ activeProject: proj })
     }
     const W = proj || get().activeProject || ''
-    if (!W) {
-      navigatePath(paths.workspaces())
-      set({ view: 'projects' })
-      return
-    }
     set({ view: 'data' })
-    const base = paths.datasets(W)
+    // No workspace → shared library catalog (secondary CTA), not Models/Ship globals.
+    const base = W ? paths.datasets(W) : paths.libraryDatasets()
     const qs = new URLSearchParams()
     if (mode) qs.set('mode', mode)
     if (version?.trim()) qs.set('version', version.trim())
@@ -355,7 +351,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         statusMessage: null,
         isRunning: false,
       }))
-      stripProjectFromWorkspaceHash()
+      stripProjectFromWorkspacePath()
     } else {
       set({ activeProject: next })
     }
@@ -376,7 +372,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       statusMessage: null,
       isRunning: false,
     }))
-    stripProjectFromWorkspaceHash()
+    stripProjectFromWorkspacePath()
   },
   openProject: (name, opts) => {
     const n = name.trim()

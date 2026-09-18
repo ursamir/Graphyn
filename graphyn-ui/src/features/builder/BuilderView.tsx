@@ -1014,7 +1014,7 @@ function BuilderInner() {
   const saveToProject = async () => {
     const project = (activeProject || '').trim()
     if (!project) {
-      pushToast('Open a project workspace first', 'error')
+      pushToast('Open a workspace first', 'error')
       return
     }
     const name = (templateName.trim() || graphName || 'main').replace(/[^A-Za-z0-9_-]/g, '_') || 'main'
@@ -1556,7 +1556,7 @@ function BuilderInner() {
             type="button"
             className="btn-secondary"
             disabled={!activeProject}
-            title={activeProject ? `Save Graph IR to project ${activeProject}` : 'Open a project to save'}
+            title={activeProject ? `Save Graph IR to workspace ${activeProject}` : 'Open a workspace to save'}
             onClick={() => void saveToProject()}
           >
             <BookmarkPlus className="h-3.5 w-3.5" /> Save

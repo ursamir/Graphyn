@@ -339,7 +339,7 @@ export default function ProposalsView() {
       if (andSave) {
         const project = (activeProject || '').trim()
         if (!project) {
-          pushToast('Accepted → Editor. Open a project workspace to save as a pipeline.', 'info')
+          pushToast('Accepted → Editor. Open a workspace to save as a pipeline.', 'info')
         } else {
           const name = pipelineSlugFromSummary(detail.summary || accepted.summary)
           await apiJson(`/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(name)}`, {
@@ -425,7 +425,7 @@ export default function ProposalsView() {
                   Will bind to workspace <code className="font-mono">{activeProject}</code>.
                 </>
               ) : (
-                <> Open a project workspace to auto-bind the proposal.</>
+                <> Open a workspace to auto-bind the proposal.</>
               )}
             </p>
             <div className="flex flex-wrap gap-2">
@@ -625,7 +625,7 @@ export default function ProposalsView() {
                         title={
                           activeProject
                             ? `Save draft under ${activeProject}/${pipelineSlugFromSummary(detail.summary)}`
-                            : 'Accept then save requires an open project workspace'
+                            : 'Accept then save requires an open workspace'
                         }
                       >
                         <Save className="h-3.5 w-3.5" />

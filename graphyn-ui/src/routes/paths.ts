@@ -1,6 +1,6 @@
 /**
  * Typed path builders for Graphyn console (UI_NORTH_STAR §4.3).
- * Prefer these over ad-hoc string URLs or hash fragments.
+ * Prefer these over ad-hoc string URLs. Path-only (no hash routing).
  */
 
 export type RunPanel = 'logs' | 'outputs' | 'lineage' | 'details' | 'checkpoints'
@@ -61,6 +61,7 @@ export const paths = {
 
   proposal: (pid: string) => `/agent/inbox/${enc(pid)}`,
 
+  /** Shared library catalog (secondary CTA from workspace Datasets — not Models/Ship). */
   libraryDatasets: () => '/library/datasets',
 
   libraryPlugins: () => '/library/plugins',
@@ -68,11 +69,18 @@ export const paths = {
   libraryArtifacts: (q?: { artifactId?: string }) =>
     withSearch('/library/artifacts', { artifactId: q?.artifactId }),
 
-  libraryModels: () => '/library/models',
+  /** Removed global Models/Ship — use paths.models / paths.ship with a workspace id. */
+  libraryModels: (): never => {
+    throw new Error('paths.libraryModels removed — use paths.models(workspaceId)')
+  },
 
-  deployShip: () => '/deploy/ship',
+  deployShip: (): never => {
+    throw new Error('paths.deployShip removed — use paths.ship(workspaceId)')
+  },
 
-  deployShipDevices: () => '/deploy/ship/devices',
+  deployShipDevices: (): never => {
+    throw new Error('paths.deployShipDevices removed — use paths.shipDevices(workspaceId)')
+  },
 
   deployWorkers: () => '/deploy/workers',
 

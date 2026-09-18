@@ -307,19 +307,17 @@ export default function EdgeWizardView() {
     if (ok?.run_id) setSourceRunId(ok.run_id)
   }, [projectRuns, sourceRunId])
 
-  // Keep project/version/run_id on path search; devices tab via pathname segment.
+  // Prefer path workspace id; devices tab via pathname segment.
+  // Do not mirror ?project= when /workspaces/:id/ship already carries the id.
   React.useEffect(() => {
     const W = linkedProject.trim() || activeProject || ''
-    const base = W
-      ? shipTab === 'devices'
-        ? paths.shipDevices(W)
-        : paths.ship(W)
-      : shipTab === 'devices'
-        ? paths.deployShipDevices()
-        : paths.deployShip()
+    if (!W) {
+      replacePathSearch({}, paths.workspaces())
+      return
+    }
+    const base = shipTab === 'devices' ? paths.shipDevices(W) : paths.ship(W)
     replacePathSearch(
       {
-        project: linkedProject.trim() || undefined,
         version: linkedVersion.trim() || undefined,
         run_id: sourceRunId.trim() || undefined,
       },
@@ -425,7 +423,7 @@ export default function EdgeWizardView() {
 
   const useEdgeTemplate = () => {
     if (!linkedProject.trim()) {
-      pushToast('Select a project first — Edge packages must hang off a workspace', 'error')
+      pushToast('Select a workspace first — Edge packages must hang off a workspace', 'error')
       return
     }
     if (!sourceRunId.trim()) {

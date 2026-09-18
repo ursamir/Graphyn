@@ -294,8 +294,8 @@ export function CommandPalette({
         id: `project:${p.name}`,
         label: p.name,
         hint: 'Open workspace',
-        group: 'Projects',
-        keywords: `project workspace ${p.name}`,
+        group: 'Workspaces',
+        keywords: `workspace ${p.name}`,
         run: () => {
           setActiveProject(p.name)
           openProject(p.name)

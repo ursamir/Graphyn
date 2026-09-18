@@ -49,8 +49,6 @@ import ModelsView from './features/models/ModelsView'
 import AccessView from './features/access/AccessView'
 import DevicesView from './features/ship/DevicesView'
 import LoginView from './features/auth/LoginView'
-import { HashRedirect } from './routes/HashRedirect'
-import { resolveLegacyHash } from './routes/legacyHash'
 import { paths } from './routes/paths'
 import { pathForView } from './routes/viewMap'
 import { navigatePath, parsePathname, panelToFocus, stripLegacyAppHash } from './routes/parsePath'
@@ -62,7 +60,7 @@ type NavGroup = { title: string; items: NavItem[] }
 /**
  * Workspace strip — always the same rows (VS Code Activity/Explorer pattern).
  * Home is always enabled; Editor/Runs/Models/Ship/Datasets require activeProject
- * (disabled + "Open a project first" otherwise). Shape never changes.
+ * (disabled + "Open a workspace first" otherwise). Shape never changes.
  */
 const WORKSPACE_NAV_ITEMS: NavItem[] = [
   { id: 'projects', label: 'Home', icon: FolderKanban },
@@ -364,23 +362,15 @@ export default function App() {
   }, [parsedLocation])
 
   /**
-   * Reconcile legacy `#/…` fragments on path URLs.
-   *
-   * This effect also used to auto-resume: landing on `/` or `/workspaces`
-   * redirected straight into whichever workspace you had open last, so the app
-   * had no landing page you could actually reach — every entry bounced past it
-   * into a workspace you might not have wanted, and typing `/workspaces`
-   * silently took you somewhere else. The workspaces console surfaces recents
-   * itself (sorted recently-opened first, with a Recent tag), so getting back to
-   * yesterday's work is one visible click instead of a redirect that overrides
-   * the address you asked for.
+   * Cold boot: if address still has a legacy `#/` fragment, clear it and land
+   * on `/workspaces` once. No compatibility matrix — hash routing is gone.
+   * (Recents live on the Workspaces picker; we do not auto-resume into a workspace.)
    */
   React.useEffect(() => {
     const { hash } = window.location
     if (!hash || !/^#\//.test(hash)) return
-    const target = resolveLegacyHash(hash, { activeProject: useAppStore.getState().activeProject })
-    if (target) navigatePath(target, true)
-    else stripLegacyAppHash()
+    window.history.replaceState(null, '', '/workspaces')
+    navigatePath('/workspaces', true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -492,7 +482,7 @@ export default function App() {
     }
   }, [setPendingProposalCount, bootStatus])
 
-  /** Path ↔ store sync (HTML5 History). Hash handled by <HashRedirect />. */
+  /** Path ↔ store sync (HTML5 History). */
   React.useEffect(() => {
     const apply = () => {
       stripLegacyAppHash()
@@ -599,7 +589,7 @@ export default function App() {
     if (narrow) setNavOpen(false)
   }
 
-  /** Switch workspace: clear active project, then show the Projects picker. */
+  /** Switch workspace: clear active project, then show the Workspaces picker. */
   const switchProject = () => {
     closeProject()
     setView('projects')
@@ -783,7 +773,7 @@ export default function App() {
                         <button
                           type="button"
                           className="shrink-0 text-[10px] font-medium text-ink-400 hover:text-ink-800"
-                          title="Switch workspace — show project picker"
+                          title="Switch workspace — show workspace picker"
                           onClick={switchProject}
                         >
                           Switch
@@ -792,12 +782,12 @@ export default function App() {
                     ) : (
                       <>
                         <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                          No project open
+                          No workspace open
                         </div>
                         <button
                           type="button"
                           className="shrink-0 text-[10px] font-medium text-accent-800 hover:text-accent-950"
-                          title="Open a project"
+                          title="Open a workspace"
                           onClick={() => go('projects')}
                         >
                           Open
@@ -814,7 +804,7 @@ export default function App() {
                           key={`ws-${id}`}
                           type="button"
                           disabled={!enabled}
-                          title={enabled ? navTitle(id) : 'Open a project first'}
+                          title={enabled ? navTitle(id) : 'Open a workspace first'}
                           onClick={() => go(id)}
                           className={clsx(
                             'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
@@ -875,7 +865,6 @@ export default function App() {
   return (
     <ErrorBoundary>
       <LayoutPrefsProvider>
-      <HashRedirect activeProject={activeProject} />
       <div className="flex h-full flex-col overflow-hidden bg-mesh">
         <header className="relative z-40 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-200/70 bg-white/80 px-4 backdrop-blur-md">
           <div className="flex min-w-0 items-center gap-2">
@@ -966,33 +955,9 @@ export default function App() {
               }
               return null
             })()}
-            {workspaceOpen && parsedLocation.workspaceId && (
-              <div className="inline-flex max-w-[15rem] items-center gap-0.5">
-                <button
-                  type="button"
-                  className="inline-flex max-w-[12rem] items-center gap-1 truncate rounded-l-full border border-accent-300 bg-accent-50 px-2.5 py-0.5 text-[11px] font-medium text-accent-900 hover:border-accent-400"
-                  title="Open workspace Home"
-                  onClick={() => {
-                    const W = parsedLocation.workspaceId || activeProject
-                    if (W) openProject(W)
-                  }}
-                >
-                  <FolderKanban className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{parsedLocation.workspaceId || activeProject}</span>
-                </button>
-                <button
-                  type="button"
-                  className="rounded-r-full border border-l-0 border-accent-300 bg-accent-50 px-1.5 py-0.5 text-[11px] font-medium text-accent-800 hover:bg-accent-100"
-                  title="Switch workspace — leave to project picker"
-                  onClick={switchProject}
-                >
-                  Switch
-                </button>
-              </div>
-            )}
-            {/* With no project open, this chip said "Open workspace" and navigated to
-                the projects picker — which, on the picker itself, is the page you are
-                already looking at. A visible, enabled, no-op control; hidden there. */}
+            {/* One Switch only — sidebar Workspace strip. Header keeps a single
+                "Open workspace" / "Back to …" affordance on global pages when the
+                URL has no workspace id (hidden on the Workspaces picker itself). */}
             {(!activeProject || !workspaceOpen) && !(!activeProject && view === 'projects') && (
               <button
                 type="button"
@@ -1006,7 +971,7 @@ export default function App() {
                 // set from earlier — the workspace was never closed, just not part of this URL.
                 // Say so explicitly instead of the generic "Open workspace", which reads as
                 // "nothing is open" and made the project feel silently lost.
-                title={activeProject ? `${activeProject} is still open — return to it` : 'Open a project'}
+                title={activeProject ? `${activeProject} is still open — return to it` : 'Open a workspace'}
                 onClick={() => {
                   if (activeProject) openProject(activeProject)
                   else go('projects')

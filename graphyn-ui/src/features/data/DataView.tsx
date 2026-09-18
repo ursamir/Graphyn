@@ -50,6 +50,7 @@ function parseDataLocation(): {
   version?: string
   label?: string
   manage?: boolean
+  onWorkspaceDatasets?: boolean
 } {
   const params = readSearchParams()
   const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
@@ -68,16 +69,22 @@ function parseDataLocation(): {
       : manageRaw === '0' || manageRaw === 'false'
         ? false
         : undefined
+  const onWorkspaceDatasets = Boolean(projectFromPath)
+  // On /workspaces/:id/datasets the path id is SoT — do not prefer redundant ?project=.
+  const projectParam = sanitizePathSeg(params.get('project'))
   return {
     mode,
     // Workspace path id seeds Outputs only; Inputs use ?label= / list pick.
     project:
       mode === 'inputs'
-        ? sanitizePathSeg(params.get('project'))
-        : sanitizePathSeg(params.get('project')) ?? sanitizePathSeg(projectFromPath),
+        ? projectParam
+        : onWorkspaceDatasets
+          ? sanitizePathSeg(projectFromPath)
+          : projectParam ?? sanitizePathSeg(projectFromPath),
     version: sanitizePathSeg(params.get('version')),
     label: sanitizePathSeg(params.get('label')),
     manage,
+    onWorkspaceDatasets,
   }
 }
 
@@ -102,7 +109,7 @@ function humanizeDataError(
     if (kind === 'outputs') {
       return {
         message:
-          'That output path is invalid or no longer inside the Graphyn workspace. Selection was cleared — pick a project/version again.',
+          'That output path is invalid or no longer inside the Graphyn workspace. Selection was cleared — pick a workspace/version again.',
         detail,
         invalidPath: true,
       }
@@ -174,7 +181,7 @@ export default function DataView() {
   const skippedInputLabels = React.useRef<Set<string>>(new Set())
   /** After closeProject: keep outputs dropdown empty; do not revive prior project via loadSources/path-sync. */
   const libraryClearRef = React.useRef(false)
-  /** Omit project from search while clearing — prevents stale React state from re-writing ?project=. */
+  /** Omit project from search while clearing — prevents stale React state from re-writing query. */
   const skipProjectHashRef = React.useRef(false)
   const appliedUnscopeEpochRef = React.useRef<number | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -195,7 +202,7 @@ export default function DataView() {
     const prevEpoch = appliedUnscopeEpochRef.current
     appliedUnscopeEpochRef.current = dataUnscopeEpoch
     if (first) {
-      // Mounted after a close into global Data (no ?project=): prevent loadSources from auto-picking
+      // Mounted after a close into library Data (unscoped): prevent loadSources from auto-picking
       // the previous workspace project. Honor explicit openData({ project }) / deep links.
       if (dataUnscopeEpoch > 0 && activeProject == null && !initialLoc.project) {
         libraryClearRef.current = true
@@ -322,8 +329,12 @@ export default function DataView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Mirror Projects: write selection into pathname search (no popstate — avoid echo loops via replacePathSearch).
+  // Write selection into pathname search (no popstate — avoid echo loops via replacePathSearch).
+  // On /workspaces/:id/datasets the path id is SoT — never mirror ?project= (strip if present).
   React.useEffect(() => {
+    const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+    const onWorkspaceDatasets =
+      parts[0] === 'workspaces' && Boolean(parts[1]) && parts[2] === 'datasets'
     const params: Record<string, string | undefined> = {}
     if (mode) params.mode = mode
     if (uxMode === 'manage' && (mode === 'inputs' || mode === 'outputs')) {
@@ -335,6 +346,9 @@ export default function DataView() {
         skipProjectHashRef.current = false
       }
       // omit project + version while clearing / stale
+    } else if (onWorkspaceDatasets) {
+      // Path already has workspace id — keep version/label only; strip ?project=.
+      if (version.trim()) params.version = version.trim()
     } else if (project.trim()) {
       params.project = project.trim()
       if (version.trim()) params.version = version.trim()
@@ -383,10 +397,11 @@ export default function DataView() {
             skipProjectHashRef.current = true
             setProject('')
             setVersion('')
-            // Leave workspace datasets URL without re-seeding Outputs from path id.
+            // Stay on workspace datasets URL; skipProjectHashRef omits ?project= so path id
+            // does not immediately re-seed Outputs. User can Browse shared library separately.
             const parts = window.location.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
             if (parts[0] === 'workspaces' && parts[2] === 'datasets') {
-              replacePathSearch({ mode: 'outputs' }, paths.libraryDatasets())
+              replacePathSearch({ mode: 'outputs' })
             }
             void loadSources()
           }
@@ -788,7 +803,7 @@ return (
         title={workspaceDatasetsPath ? 'Workspace datasets' : 'Datasets'}
         description={
           workspaceDatasetsPath
-            ? 'Datasets scoped to this workspace — Inputs/Outputs linked here. Browse Library for the global catalog.'
+            ? 'Datasets scoped to this workspace — Inputs/Outputs linked here. Use Browse shared library for the catalog.'
             : 'Library — Shared Inputs and Outputs for pipelines (not per-run downloads under Runs).'
         }
         actions={
@@ -798,6 +813,22 @@ return (
                 which used to render alongside this one whenever
                 uxMode==='manage' && manageTab==='upload', showing the exact
                 same action twice at once. */}
+            {workspaceDatasetsPath ? (
+              <button
+                type="button"
+                className="btn-quiet text-[12px]"
+                title="Browse shared Inputs/Outputs catalog (not Models/Ship)"
+                onClick={() => {
+                  skipProjectHashRef.current = true
+                  libraryClearRef.current = true
+                  setProject('')
+                  setVersion('')
+                  replacePathSearch({ mode: mode === 'inputs' ? 'inputs' : 'outputs' }, paths.libraryDatasets())
+                }}
+              >
+                Browse shared library
+              </button>
+            ) : null}
             <button type="button" className="btn-secondary" onClick={() => void loadSources()}>
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </button>
@@ -990,7 +1021,7 @@ return (
                     ? 'The selected path was invalid or outside the workspace, so selection was cleared.'
                     : uxMode === 'manage'
                       ? 'Upload files or ingest URLs, then run a template to populate Outputs.'
-                      : 'Outputs appear after a template or export writes version folders. Link a project workspace, or browse templates to produce data.'
+                      : 'Outputs appear after a template or export writes version folders. Link a workspace, or browse templates to produce data.'
                 }
                 action={
                   pathRecovery && outputs.length > 0 ? (
@@ -1031,7 +1062,7 @@ return (
                         openProjects()
                       }}
                     >
-                      Open Projects
+                      Open Workspaces
                     </button>
                   )
                 }
@@ -1052,7 +1083,7 @@ return (
                   }}
                   className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
                 >
-                  <option value="">Select project…</option>
+                  <option value="">Select workspace…</option>
                   {(listFilter.trim() ? filteredOutputs : outputs).map((o) => (
                     <option key={o.project} value={o.project}>{o.project}</option>
                   ))}
@@ -1228,7 +1259,7 @@ return (
                   }}
                   className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
                 >
-                  <option value="">Select project…</option>
+                  <option value="">Select workspace…</option>
                   {outputs.map((o) => (
                     <option key={o.project} value={o.project}>{o.project}</option>
                   ))}
