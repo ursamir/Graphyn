@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** |  on  (P1 defaults) |
+| **Tip probed** | `d624b14d834002c5a27d0a82a7c6c20597056be1` on `cursor/usecase-plugins-workflows` (P1 defaults) |
 | **Phase** | 2 — Waves A/B/C + **P1 defaults landed** (envelope default ON; universal store_corrupt) |
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
 | **Generated** | 2026-09-25 21:12 IST; Wave A/B/C; **P1 2026-09-25 ~23:30 IST** |
