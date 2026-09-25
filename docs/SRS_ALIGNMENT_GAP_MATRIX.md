@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** | `e618baa95ada9e5e5153c3731fd89efb83db222a` on `cursor/usecase-plugins-workflows` |
-| **Phase** | 1 — architecture map + living P0 gap matrix (no large fixes) |
+| **Tip probed** | `038c38a570b933523b536c589dece1f70a90389c` on `cursor/usecase-plugins-workflows` (includes matrix `85ac3e75` + Wave A batch 1) |
+| **Phase** | 2 — Wave A batch 1 implemented (envelope, idempotency, run SM, GET project, VAL schema) |
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
-| **Generated** | 2026-09-25 21:12 IST |
+| **Generated** | 2026-09-25 21:12 IST; Wave A batch 1 update 2026-09-25 ~21:47 IST |
 | **Method** | Static code evidence only (grep/read). Live Server-99 verify = Phase 2 (DESKTOP/CloudAgent not used). |
 
 > **Honesty rule:** Status is **Confirmed** only with file:symbol evidence. Thin/partial contracts → **Partial**. Absent symbols/routes → **Missing**. Product TBD / device APIs → **needs-API**. Not inspected this pass → **Not probed**.
@@ -141,26 +141,26 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | API-CONV-001 `/api/v1` | 9.0 | `main.py` include_router prefix | Confirmed | | — |
 | API-CONV-002 Bearer fail-closed | 9.0 / 9.1 | `main.py` AUTH_REQUIRED / ENV | Confirmed | | — |
 | API-CONV-003 X-Actor | 9.0 | `actor.py`; CORS allow `X-Actor` | Confirmed | | — |
-| API-CONV-004 Idempotency-Key | 9.0 | **no matches** under `app/` | Missing | Required on proposals, schedules, ship creates, etc. | A |
+| API-CONV-004 Idempotency-Key | 9.0 | `app/api/idempotency.py`; wired on run-async, proposals accept, schedules POST, projects POST | Confirmed | Ship create deferred until Ship REST | A |
 | API-CONV-005 If-Match / resource_version | 9.0 | not found on pipeline/secret/webhook writers | Missing | Optimistic concurrency | B |
-| API-ERR-001 error envelope | 9.0.1 | `main.py` returns `{"detail":…}`; routers raise `HTTPException(detail=…)` | Missing | Normative `error.{code,message,…}` absent; plugins occasionally nest `detail.error` ad-hoc | A |
+| API-ERR-001 error envelope | 9.0.1 | `app/api/errors.py` + handlers in `main.py`; dual-emit legacy `detail` | Confirmed | Wave A batch 1 | A |
 | FR-AUTH-001/002/005 console | 11.1 | features/auth, Settings, login path | Partial | Login/Settings exist; full honesty banner + returnTo not fully audited this pass | B |
 | API-PAGE-001 list envelope | 9.0.2 | runs pagination present; many lists still bare arrays | Partial | `?envelope=1` migration incomplete | B |
 
-**Domain rollup:** Auth gate **Confirmed**; contract envelope/idempotency **Missing**.
+**Domain rollup:** Auth gate **Confirmed**; envelope/idempotency **Confirmed** (Wave A batch 1). Residual: If-Match (Wave B).
 
 ### 3.3 REST P0 endpoints (§9.2) — sample all P0 route families
 
 | Route cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | `GET/POST /projects` | 9.2.1 | `projects.py` list/create | Confirmed | | — |
-| `GET /projects/{name}` | 9.2.1 | **no** `@router.get("/{name}")` | Missing | Only patch/delete + subresources | A |
-| `PUT /projects/{name}` | 9.2.1 | uses `PATCH /{name}` | Partial | Method/shape mismatch | A |
+| `GET /projects/{name}` | 9.2.1 | `projects.py` GET + `ProjectManager.get` | Confirmed | Wave A batch 1 | A |
+| `PUT /projects/{name}` | 9.2.1 | `PUT` metadata update; legacy `PATCH` rename retained | Confirmed | Wave A batch 1 | A |
 | Pipelines CRUD + versions/envs | 9.2.2 | `projects.py` + `pipeline_environments.py` | Confirmed | publish/promote/rollback present; approve flag on promote | — |
 | `POST /pipelines/validate|run|run-async` | 9.2.3 | `pipelines.py` | Confirmed | | — |
 | Templates / examples / nodes / types | 9.2.3 | `pipelines.py`, `nodes.py` | Confirmed | | — |
 | Runs list/get + sub-resources | 9.2.4 | `runs.py` graph/status/checkpoints/artifacts/outputs/zip/provenance/debug-report/promote | Confirmed | Wire status uses `completed` not `succeeded` (see §13.2) | — |
-| Run pause/resume/cancel | 9.2.4 | `run_control.py` | Partial | No 409 `invalid_transition`; inactive → 404; no durable transition matrix | A |
+| Run pause/resume/cancel | 9.2.4 | `run_control.py` + `run_status.py` matrix | Confirmed | 409 invalid_transition; cancel-on-cancelled idempotent | A |
 | Artifacts list/lineage/blob | 9.2.5 | `artifacts.py`, `workers.py` blob | Confirmed | | — |
 | Models + request/approve prod | 9.2.6 | `models.py`, `model_registry.py` | Confirmed | | — |
 | Data inputs/outputs/merge + ingest | 9.2.7 | `data.py`, `ingest.py` | Confirmed | Ingest P1 in DATA-SYS-002 but routes exist | — |
@@ -172,15 +172,15 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | System health/readiness/auth/metrics/cleanup/audit/trace/experiments | 9.2.13 | system/trace/experiments routers | Confirmed | readiness field names differ slightly (`status` vs `ready`) | B |
 | **Ship packages REST** | 9.2.14 | **zero** `/ship/packages` under `app/` | Missing | UI wizard packages via run+artifact paths only | A |
 
-**Domain rollup (route-level):** many Confirmed; critical Missing = Ship packages + GET project; Partial = run control transitions + PUT vs PATCH.
+**Domain rollup (route-level):** GET/PUT project + run control **Confirmed** (Wave A). Critical Missing remaining = Ship packages REST.
 
 ### 3.4 Run state machine — §13.2
 
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
-| Canonical states pending/running/paused/succeeded/failed/cancelled | 13.2 | `run_journal.py` writes `running`/`completed`/`failed`/`cancelled`/`paused` | Partial | **`completed` ≠ `succeeded`**; `pending` not clearly ack'd before start | A |
-| Current×Action matrix + 409 invalid_transition | RT-SM-001/003 | `run_control.py` only if `get_active_run` | Missing | Terminal resume/pause not 409; silent SDK no-ops | A |
-| Resume failed/cancelled/succeeded = NO | 13.2 locked | no matrix enforcement | Missing | | A |
+| Canonical states pending/running/paused/succeeded/failed/cancelled | 13.2 | writers: `pending`→`running`→`succeeded`; reads map `completed`→`succeeded` | Confirmed | Wave A: migrate writes; alias legacy journals on read | A |
+| Current×Action matrix + 409 invalid_transition | RT-SM-001/003 | `app/core/run_status.py` + API gates | Confirmed | SDK silent no-ops still Wave B | A |
+| Resume failed/cancelled/succeeded = NO | 13.2 locked | enforced via `next_status` → 409 | Confirmed | Wave A batch 1 | A |
 | Cancel durable + forbid artifact commit | RT-CANCEL-* | cancel marks cancelled; artifact forbid not fully proven | Partial | Need Phase 2 tests | B |
 | graph_hash on resume | RT-RESUME-001 | `orchestrator.py` hash check | Confirmed | | — |
 | Crash reconcile stale running | RT-CRASH / NFR-REL-002 | `run_cleanup.py` reconcile → failed | Confirmed | | — |
@@ -191,8 +191,8 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | VAL-001 validate before execute / API | 14 | `pipelines.py` validate; IR load; secret_policy | Confirmed | | — |
-| Check IDs VAL-DUP/CYCLE/SECRET/… | 14.2 | `validation.py` string messages; secret_policy | Partial | No stable `VAL-*` codes / severity objects | A |
-| Result schema valid/errors[]/warnings[] | 14.3 | returns `{valid, error, errors:[str]}` | Partial | Missing severity, node_ids, field, warnings array shape | A |
+| Check IDs VAL-DUP/CYCLE/SECRET/… | 14.2 | `validate_graph_ir_result` emits VAL-* + severity | Confirmed | Wave A batch 1 | A |
+| Result schema valid/errors[]/warnings[] | 14.3 | full §14.3 shape from validate endpoint | Confirmed | Wave A batch 1 | A |
 | IR-006 secret fail-closed | 8.7 | `ir/secret_policy.py` | Confirmed | | — |
 | schema_version 1.2 | IR-001/002 | `ir/loader.py` CURRENT_IR_VERSION=1.2 | Confirmed | | — |
 
@@ -214,7 +214,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Atomic meta / os.replace+fsync | 16.1–16.2 | run_journal, secrets, schedules, artifact_store, distributed/store | Confirmed | | — |
 | Quarantine corrupt index | PERS-020 | artifact_store, provenance, plugins/store quarantine | Partial | API 503 `store_corrupt` code not universal | B |
 | Readiness false on corrupt | PERS-021 | readiness checks dirs/registry; not full corrupt signal | Partial | | B |
-| PERS-001 pending before run_id ack | 16.1 | journal starts often as `running` | Partial | Align with pending→running SM | A |
+| PERS-001 pending before run_id ack | 16.1 | `RunManager` writes `pending`; `mark_running` at execute start | Confirmed | Wave A batch 1 | A |
 
 ### 3.8 Plugins — §17
 
@@ -318,9 +318,9 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 
 | Status | Approx count |
 |---|---|
-| **Confirmed** | ~62 |
-| **Partial** | ~38 |
-| **Missing** | ~18 |
+| **Confirmed** | ~72 |
+| **Partial** | ~30 |
+| **Missing** | ~14 |
 | **needs-API** | ~2 |
 | **Not probed** | ~4 |
 
@@ -332,16 +332,16 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 
 ### Wave A — highest-impact P0 Missing/Partial, code-searchable, no product TBD
 
-1. **API-ERR-001** — Normative error envelope middleware (`error.code`, message, request_id); map HTTPException.
-2. **API-CONV-004** — Idempotency-Key store for proposals accept, schedules POST, ship create (when added), run-async.
-3. **RT-SM / run wire** — Canonical statuses (`succeeded` not `completed`; emit `pending`); pause/resume/cancel enforce Current×Action → **409 invalid_transition**.
+1. **API-ERR-001** — ✅ Closed (Wave A batch 1): `app/api/errors.py` + handlers.
+2. **API-CONV-004** — ✅ Closed for run-async / proposals accept / schedules POST / projects POST (ship create when Ship REST lands).
+3. **RT-SM / run wire** — ✅ Closed: `succeeded` writes + `completed`→`succeeded` on read; `pending` ack; 409 matrix.
 4. **Ship packages REST** — Implement §9.2.14 + manifest lifecycle (§19) store under workspace; wire Edge wizard to it.
 5. **MCP P0 additions (J1–J3 first)** — list/get/save/publish/promote/rollback pipeline; list/get_run; templates; schedules/webhooks; models; get_readiness.
-6. **GET /projects/{name}** (+ align PUT vs PATCH).
-7. **VAL result schema** — Emit VAL-* codes, severity, warnings[]; keep execute refuse on errors.
+6. **GET /projects/{name}** (+ PUT) — ✅ Closed (Wave A batch 1).
+7. **VAL result schema** — ✅ Closed: VAL-* + warnings[]; execute refuses on errors.
 8. **MCP Ship + audit tools** — after REST ship exists; get_audit_events/export_audit.
-9. **Run control from durable meta** — allow cancel ack on already-cancelled; forbid resume on terminal.
-10. **PERS-001** — Durable `pending` meta+graph before returning async `run_id`.
+9. **Run control from durable meta** — ✅ Closed (idempotent cancel; terminal resume 409).
+10. **PERS-001** — ✅ Closed (`pending` before async ack; `mark_running` on execute).
 
 ### Wave B — contract depth / concurrency / schema polish
 
@@ -373,3 +373,10 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 ## 7. Related machine-readable summary
 
 See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
+
+
+### Wave A batch 1 landing
+
+- Tip: `038c38a570b933523b536c589dece1f70a90389c`
+- Closed: API-ERR-001, API-CONV-004 (key routes), RT-SM/PERS-001, GET/PUT projects, VAL schema.
+- Remaining Wave A: Ship packages REST, MCP P0 tools.

@@ -1,14 +1,14 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "e618baa95ada9e5e5153c3731fd89efb83db222a",
+  "tip_sha": "038c38a570b933523b536c589dece1f70a90389c",
   "branch": "cursor/usecase-plugins-workflows",
-  "generated_at": "2026-09-25 21:12 IST",
+  "generated_at": "2026-09-25 21:47 IST",
   "method": "static-code-evidence",
   "phase2_live_verify": "blocked_no_desktop",
   "totals": {
-    "confirmed": 62,
-    "partial": 38,
-    "missing": 18,
+    "confirmed": 72,
+    "partial": 30,
+    "missing": 14,
     "needs_api": 2,
     "not_probed": 4
   },
@@ -217,5 +217,20 @@
         "remote CLI"
       ]
     }
-  ]
+  ],
+  "wave_a_batch1_closed": [
+    "API-ERR-001",
+    "API-CONV-004 (run-async, proposals accept, schedules POST, projects POST)",
+    "RT-SM canonical statuses + 409 invalid_transition + durable meta control",
+    "GET/PUT /projects/{name}",
+    "VAL-* result schema",
+    "PERS-001 pending before ack"
+  ],
+  "wave_a_remaining": [
+    "SHIP packages REST \u00a79.2.14 + lifecycle \u00a719",
+    "MCP P0 J1\u2013J3 tools",
+    "MCP ship + audit tools (after ship REST)"
+  ],
+  "phase": "wave_a_batch1",
+  "matrix_base_sha": "85ac3e75a56cdd29e526fa6ae21631017bd23782"
 }
