@@ -251,7 +251,7 @@ def upload_file(request: Request, file: UploadFile = File(...)):
 
 @router.get("/outputs", summary="List output dataset projects")
 def list_output_datasets(
-    envelope: str | None = Query(None, description="Set to 1 for list envelope"),
+    envelope: str | None = Query(None, description="List envelope (default on). Pass 0/false/no/off for bare array."),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -259,7 +259,7 @@ def list_output_datasets(
 
     Version dirs must match ProjectManager ``_VERSION_RE`` (e.g. v1, v1.0.0).
     ``snapshots/`` and other non-version directories are excluded.
-    Pass ``?envelope=1`` for API-PAGE-001 list envelope (additive).
+    Envelope by default (API-PAGE-001 P1). Pass ``?envelope=0`` for bare array.
     """
     from app.api.pagination import maybe_envelope, parse_envelope_flag
 

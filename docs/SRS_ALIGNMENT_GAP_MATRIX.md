@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** | `017bcf17e6d6deb6de5b80bd9835569a581e69b4` (docs `1e60c071`) on `cursor/usecase-plugins-workflows` (Wave C) |
-| **Phase** | 2 — Waves A/B/C landed (honesty, ops, security polish, prove capture) |
+| **Tip probed** |  on  (P1 defaults) |
+| **Phase** | 2 — Waves A/B/C + **P1 defaults landed** (envelope default ON; universal store_corrupt) |
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
-| **Generated** | 2026-09-25 21:12 IST; Wave A batch 2 ~21:50 IST; Wave B ~21:40 IST; Wave C 2026-09-25 ~21:50 IST |
+| **Generated** | 2026-09-25 21:12 IST; Wave A/B/C; **P1 2026-09-25 ~23:30 IST** |
 | **Method** | Static code evidence only (grep/read). Live Server-99 verify = Phase 2 (DESKTOP/CloudAgent not used). |
 
 > **Honesty rule:** Status is **Confirmed** only with file:symbol evidence. Thin/partial contracts → **Partial**. Absent symbols/routes → **Missing**. Product TBD / device APIs → **needs-API**. Not inspected this pass → **Not probed**.
@@ -146,7 +146,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | API-CONV-005 If-Match / resource_version | 9.0 | `app/api/concurrency.py`; pipeline PUT, secrets, webhooks, ship promote/transition | Confirmed | 412 If-Match / 409 body; ETag on writers | B |
 | API-ERR-001 error envelope | 9.0.1 | `app/api/errors.py` + handlers in `main.py`; dual-emit legacy `detail` | Confirmed | Wave A batch 1 | A |
 | FR-AUTH-001/002/005 console | 11.1 | features/auth, Settings, login path | Partial | Login/Settings exist; full honesty banner + returnTo not fully audited this pass | B |
-| API-PAGE-001 list envelope | 9.0.2 | `app/api/pagination.py`; nodes/projects/artifacts/data outputs accept `?envelope=1` | Confirmed | Additive; bare arrays default (P1 default-envelope deferred) | B |
+| API-PAGE-001 list envelope | 9.0.2 | `app/api/pagination.py` default ON; `?envelope=0` bare escape; UI `unwrapList` | Confirmed | P1 default-envelope landed | P1 |
 
 **Domain rollup:** Auth gate **Confirmed**; envelope/idempotency **Confirmed** (Wave A batch 1). Residual: If-Match (Wave B).
 
@@ -213,7 +213,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Atomic meta / os.replace+fsync | 16.1–16.2 | run_journal, secrets, schedules, artifact_store, distributed/store | Confirmed | | — |
-| Quarantine corrupt index | PERS-020 | quarantine + readiness; artifacts list → 503 store_corrupt | Partial | Helper + critical list path; not universal on all reads | C |
+| Quarantine corrupt index | PERS-020 | quarantine + readiness; critical reads → 503 store_corrupt via `store_guard` | Confirmed | artifacts/runs/projects/models/plugins list+get | P1 |
 | Readiness false on corrupt | PERS-021 | `ready=false` when store_corrupt/disk_full/unwritable | Confirmed | Wave B | B |
 | PERS-001 pending before run_id ack | 16.1 | `RunManager` writes `pending`; `mark_running` at execute start | Confirmed | Wave A batch 1 | A |
 
@@ -348,7 +348,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 
 - ✅ If-Match / resource_version on pipeline draft, secrets, webhooks, ship promote/transition.
 - ✅ Audit schema field rename/align (`timestamp`, `result`, `request_id`, `actor_kind`; `ts`/`meta` aliases).
-- ✅ List `?envelope=1` additive on key list endpoints (P1 default-envelope deferred).
+- ✅ List envelope default ON on key list endpoints; `?envelope=0` bare escape (P1).
 - ✅ CLI global flags + exit code matrix; optional remote `nodes`.
 - ✅ Dataset version force-delete 409 + manifest sha256 enforcement.
 - ✅ Readiness `ready` boolean + store_corrupt / disk_full signals.
@@ -364,7 +364,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 - ✅ Prove capture set (`app/core/prove.py` + unit test on succeeded run).
 - ⏳ Perf TBD-PERF-* measurement (GA gate — not invented).
 - ⏳ Device registry / OTA APIs (needs-API — product TBD).
-- Deferred P1: default-envelope migration; universal 503 store_corrupt on every read.
+- P1 closed (this turn): default-envelope migration; universal 503 store_corrupt on critical reads.
 
 ---
 
@@ -395,10 +395,26 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 
 - Tip: `e3f3dc4328cae7292040b02713a546d2314ed23a` (matrix stamp `ee7db75b8b0c78fab2bee6fab4e370619aa19681`)
 - Closed: API-CONV-005, API-PAGE-001 (`?envelope=1`), audit §22.1 fields, CLI-000 globals+exits, DATA-VER-002/006, readiness ready/signals, API-FORBID-005 cancel-artifact, MCP dataset versions + workers/jobs.
-- Deferred to Wave C: default-envelope migration (P1), universal 503 store_corrupt on all reads, Devices OTA, CSP/token honesty, backup runbook, SIGTERM drain, Perf TBD.
+- Wave C deferred items closed in P1 where closable; Devices OTA + Perf TBD remain honest.
 
 ### Wave C landing
 
 - Tip: `017bcf17e6d6deb6de5b80bd9835569a581e69b4` (matrix stamp `1e60c07149a1660e73c394cf273747bfed21102e`)
 - Closed: Devices needs-API honesty; CSP + token localStorage honesty; OPS backup runbook; SIGTERM drain; DIST-AUTH/SEC-WORKER UI copy; Prove capture required fields + unit test; SDK pause/resume InvalidTransition; Edge checksum polish; artifacts list 503 store_corrupt helper.
-- Remaining honest TBDs: Perf TBD-PERF-*; device registry/flash/OTA APIs; P1 default-envelope; universal store_corrupt on all reads; Server-99 live verify (Phase 2).
+- P1 closed: default-envelope ON + `envelope=0` escape; universal 503 store_corrupt on critical reads; UI unwrapList.
+- Remaining honest TBDs: Perf TBD-PERF-*; device registry/flash/OTA APIs (needs-API).
+- Server-99 live verify: pending (this turn).
+
+---
+
+## P1 defaults (API-PAGE-001 + PERS-020)
+
+| Item | Status | Evidence |
+|---|---|---|
+| Default list envelope ON | Confirmed | `parse_envelope_flag(None) -> True`; `?envelope=0` bare |
+| UI dual-shape unwrap | Confirmed | `graphyn-ui/src/api/unwrapList.ts` + list consumers |
+| Critical-read 503 store_corrupt | Confirmed | `app/api/store_guard.py` on artifacts/runs/projects/models/plugins |
+| Perf TBD-PERF-* | needs-numbers | Do not invent |
+| Device registry/flash/OTA | needs-API | Honesty stub stays |
+| Server-99 verify | pending | DESKTOP SSH rebuild graphyn-api + graphyn-ui |
+

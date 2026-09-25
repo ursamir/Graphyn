@@ -2,6 +2,7 @@ import React from 'react'
 import { Search, X } from 'lucide-react'
 import { useAppStore, type AppView } from '../store/appStore'
 import { apiJson } from '../api/client'
+import { unwrapList } from '../api/unwrapList'
 import { shortRunId } from '../lib/format'
 import { pathForView } from '../routes/viewMap'
 import { navigatePath } from '../routes/parsePath'
@@ -107,7 +108,7 @@ export function CommandPalette({
     void (async () => {
       try {
         const [plist, runs] = await Promise.all([
-          apiJson<Array<{ name: string }>>('/projects').catch(() => []),
+          apiJson('/projects').then(unwrapList<{ name: string }>).catch(() => []),
           apiJson<Array<{ run_id: string; status?: string; graph_name?: string; project?: string }>>(
             '/runs',
             { query: { limit: 12, offset: 0, ...(activeProject ? { project: activeProject } : {}) } },

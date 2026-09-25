@@ -137,3 +137,71 @@ class TestSdkPauseResume:
         p = Pipeline([], name="sdk-wave-c-2")
         with pytest.raises(InvalidTransition):
             p.resume()
+
+
+class TestPaginationDefaultOn:
+    def test_parse_envelope_flag_default_and_escape(self):
+        from app.api.pagination import parse_envelope_flag, maybe_envelope
+
+        assert parse_envelope_flag(None) is True
+        assert parse_envelope_flag("1") is True
+        assert parse_envelope_flag("true") is True
+        assert parse_envelope_flag("0") is False
+        assert parse_envelope_flag("false") is False
+        assert parse_envelope_flag("no") is False
+        assert parse_envelope_flag("off") is False
+        assert isinstance(maybe_envelope([1], envelope=True), dict)
+        assert maybe_envelope([1], envelope=False) == [1]
+
+    def test_projects_default_envelope_and_escape(self, api_client, monkeypatch):
+        monkeypatch.setattr(
+            "app.core.store_integrity.readiness_store_corrupt",
+            lambda: False,
+        )
+        env = api_client.get("/api/v1/projects")
+        assert env.status_code == 200
+        body = env.json()
+        assert isinstance(body, dict)
+        assert "items" in body
+        bare = api_client.get("/api/v1/projects?envelope=0")
+        assert bare.status_code == 200
+        assert isinstance(bare.json(), list)
+
+
+class TestStoreCorruptUniversal:
+    def test_projects_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
+        monkeypatch.setattr(
+            "app.core.store_integrity.readiness_store_corrupt",
+            lambda: True,
+        )
+        resp = api_client.get("/api/v1/projects")
+        assert resp.status_code == 503
+        assert "store_corrupt" in resp.text.lower()
+
+    def test_runs_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
+        monkeypatch.setattr(
+            "app.core.store_integrity.readiness_store_corrupt",
+            lambda: True,
+        )
+        resp = api_client.get("/api/v1/runs")
+        assert resp.status_code == 503
+        assert "store_corrupt" in resp.text.lower()
+
+    def test_models_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
+        monkeypatch.setattr(
+            "app.core.store_integrity.readiness_store_corrupt",
+            lambda: True,
+        )
+        resp = api_client.get("/api/v1/models")
+        assert resp.status_code == 503
+        assert "store_corrupt" in resp.text.lower()
+
+    def test_plugins_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
+        monkeypatch.setattr(
+            "app.core.store_integrity.readiness_store_corrupt",
+            lambda: True,
+        )
+        resp = api_client.get("/api/v1/plugins")
+        assert resp.status_code == 503
+        assert "store_corrupt" in resp.text.lower()
+

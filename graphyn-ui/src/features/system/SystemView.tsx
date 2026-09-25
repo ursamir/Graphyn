@@ -1,6 +1,7 @@
 import React from 'react'
 import { RefreshCw, Trash2 } from 'lucide-react'
 import { apiJson } from '../../api/client'
+import { unwrapList } from '../../api/unwrapList'
 import {
   formatCleanupToast,
   formatLocaleDateTime,
@@ -221,8 +222,8 @@ export default function SystemView() {
 
   const loadProjects = React.useCallback(async () => {
     try {
-      const list = await apiJson<unknown[]>('/projects')
-      const names = (Array.isArray(list) ? list : []).map(projectName).filter(Boolean)
+      const list = unwrapList(await apiJson('/projects'))
+      const names = list.map(projectName).filter(Boolean)
       setProjectOptions(names)
       setProjectsApiOk(true)
     } catch {

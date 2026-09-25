@@ -141,8 +141,10 @@ def list_plugins() -> list[dict[str, Any]]:
     Each record is enriched with ``runtime`` and a compact dependency summary.
     Requirements: req-07 §8.2
     """
+    from app.api.store_guard import ensure_store_readable
     from app.core.plugins.manager import PluginManager
 
+    ensure_store_readable()
     manager = PluginManager()
     records = manager.list_installed()
     out: list[dict[str, Any]] = []

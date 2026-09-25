@@ -1,8 +1,8 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "1e60c07149a1660e73c394cf273747bfed21102e",
+  "tip_sha": "adfd92f7d7aa90d353eb6126f16417d0fab54e58",
   "branch": "cursor/usecase-plugins-workflows",
-  "generated_at": "2026-09-25 ~21:50 IST",
+  "generated_at": "2026-09-25T23:30:00+05:30",
   "method": "static-code-evidence",
   "phase2_live_verify": "blocked_no_desktop",
   "totals": {
@@ -217,7 +217,7 @@
     "dataset version MCP tools (list/get/upload) \u2014 deferred Wave B",
     "list_workers / list_jobs MCP \u2014 deferred Wave B"
   ],
-  "phase": "wave_c_landed",
+  "phase": "p1_defaults_landed",
   "matrix_base_sha": "85ac3e75a56cdd29e526fa6ae21631017bd23782",
   "wave_a_batch2_closed": [
     "SHIP packages REST \u00a79.2.14 + lifecycle \u00a719",
@@ -248,15 +248,21 @@
   ],
   "wave_c_remaining": [
     "Perf TBD-PERF-* (do not invent)",
-    "Device registry / flash / OTA APIs (needs-API)",
-    "P1 default-envelope migration",
-    "Universal 503 store_corrupt on all critical reads",
-    "Server-99 live verify (Phase 2)"
+    "Device registry / flash / OTA APIs (needs-API)"
   ],
   "waves_complete": [
     "A",
     "B",
     "C"
   ],
-  "wave_c_feature_sha": "017bcf17e6d6deb6de5b80bd9835569a581e69b4"
+  "wave_c_feature_sha": "017bcf17e6d6deb6de5b80bd9835569a581e69b4",
+  "p1": {
+    "closed": [
+      "API-PAGE-001 default list envelope ON (envelope=0 escape)",
+      "Universal 503 store_corrupt on critical reads (artifacts/runs/projects/models/plugins)",
+      "UI unwrapList dual-shape helper"
+    ],
+    "server99_verify": "pending_push"
+  },
+  "p1_feature_sha": "adfd92f7d7aa90d353eb6126f16417d0fab54e58"
 }

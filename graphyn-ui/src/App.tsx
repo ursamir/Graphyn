@@ -24,6 +24,7 @@ import {
   Shield,
 } from 'lucide-react'
 import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
+import { unwrapList } from './api/unwrapList'
 import { useAppStore, type AppView } from './store/appStore'
 import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
@@ -428,7 +429,7 @@ export default function App() {
 
   const refreshCatalog = React.useCallback(async () => {
     try {
-      const nodes = await apiJson<NodeCatalogEntry[]>('/nodes')
+      const nodes = unwrapList<NodeCatalogEntry>(await apiJson('/nodes'))
       setCatalog(nodes)
       setBootError(null, null)
     } catch (err) {

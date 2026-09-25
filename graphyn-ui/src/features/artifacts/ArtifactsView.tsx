@@ -2,6 +2,7 @@ import React from 'react'
 import clsx from 'clsx'
 import { Copy, Download, GitBranch, History, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
+import { unwrapList } from '../../api/unwrapList'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
@@ -191,14 +192,14 @@ export default function ArtifactsView() {
          read as a total. 1000 is the endpoint's maximum; past that we say so
          rather than truncating in silence. */
       const ARTIFACT_LIMIT = 1000
-      const rows = await apiJson<Artifact[]>('/artifacts', {
+      const rows = unwrapList<Artifact>(await apiJson('/artifacts', {
         query: {
           run_id: runFilter || undefined,
           node_type: nodeTypeFilter || undefined,
           artifact_type: artifactTypeFilter || undefined,
           limit: ARTIFACT_LIMIT,
         },
-      })
+      }))
       setItems(rows)
       setListTruncated(Array.isArray(rows) && rows.length >= ARTIFACT_LIMIT)
       const types = Array.from(

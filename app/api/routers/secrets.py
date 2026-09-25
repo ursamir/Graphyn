@@ -61,11 +61,13 @@ def _check_existing_version(name: str, expected: str | None, *, via_if_match: bo
 
 @router.get("", summary="List secret names (values never returned)")
 def list_secrets(
-    envelope: Optional[str] = Query(None, description="Set to 1 for list envelope"),
+    envelope: Optional[str] = Query(None, description="Set to 1 for list envelope; omitted keeps {names} shape."),
 ):
     names = list_secret_names()
     items = [{"name": n} for n in names]
-    if parse_envelope_flag(envelope):
+    # Secrets historically returned {"names": ...}, not a bare array — keep that
+    # default; only emit API-PAGE-001 envelope when explicitly requested.
+    if envelope is not None and parse_envelope_flag(envelope):
         return maybe_envelope(items, envelope=True, total=len(items), limit=len(items), offset=0)
     return {"names": names}
 

@@ -81,7 +81,7 @@ class TestGetInputDataset:
 
 class TestListOutputDatasets:
     def test_returns_200_with_json_array(self, api_client, tmp_path):
-        """GET /api/v1/data/outputs returns 200 with a JSON array.
+        """GET /api/v1/data/outputs returns 200 with envelope by default (P1).
 
         Validates: Req 24 criteria 15
         """
@@ -89,15 +89,16 @@ class TestListOutputDatasets:
         with patcher:
             resp = api_client.get("/api/v1/data/outputs")
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert isinstance(body, dict) and "items" in body
 
     def test_returns_empty_list_when_no_projects(self, api_client, tmp_path):
-        """GET /api/v1/data/outputs returns [] when output directory is empty."""
+        """GET /api/v1/data/outputs returns empty items when output directory is empty."""
         patcher, _ = _patch_output(tmp_path)
         with patcher:
             resp = api_client.get("/api/v1/data/outputs")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.json()["items"] == []
 
 
 class TestGetOutputDataset:
@@ -239,7 +240,8 @@ class TestListOutputVersionFilter:
         with patcher:
             resp = api_client.get("/api/v1/data/outputs")
         assert resp.status_code == 200
-        body = resp.json()
+        raw = resp.json()
+        body = raw["items"] if isinstance(raw, dict) and "items" in raw else raw
         assert len(body) == 1
         assert body[0]["project"] == "demo"
         assert body[0]["versions"] == ["v1", "v1.0.0"]
@@ -297,8 +299,10 @@ class TestSafeChildLexicalJail:
         with patcher:
             listed = api_client.get('/api/v1/data/outputs')
             assert listed.status_code == 200
+            listed_body = listed.json()
+            listed_items = listed_body["items"] if isinstance(listed_body, dict) and "items" in listed_body else listed_body
             assert any(
-                p['project'] == 'proj' and 'v1' in p['versions'] for p in listed.json()
+                p['project'] == 'proj' and 'v1' in p['versions'] for p in listed_items
             )
             resp = api_client.get('/api/v1/data/outputs/proj/v1')
         assert resp.status_code == 200, resp.text

@@ -6,6 +6,7 @@ import {
   apiUrl,
   getApiToken,
 } from '../../api/client'
+import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
 import { FileViewer } from '../../components/FileViewer'
@@ -237,7 +238,7 @@ export default function DataView() {
     setLoading(true)
     try {
       const [out, inp] = await Promise.all([
-        apiJson<OutputProject[]>('/data/outputs'),
+        apiJson('/data/outputs').then((r) => unwrapList<OutputProject>(r)),
         apiJson<InputLabel[]>('/data/inputs'),
       ])
       setOutputs(out)

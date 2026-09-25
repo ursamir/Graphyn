@@ -78,7 +78,9 @@ class TestListNodes:
             resp = api_client.get("/api/v1/nodes")
         assert resp.status_code == 200
         data = resp.json()
-        assert isinstance(data, list)
+        # P1 default envelope
+        assert isinstance(data, dict) and "items" in data
+        assert isinstance(data["items"], list)
 
     def test_list_contains_node_type_field(self, api_client):
         """Each item in the list has a node_type field."""
@@ -86,7 +88,8 @@ class TestListNodes:
         with patch("app.api.routers.nodes.get_registry", return_value=reg):
             resp = api_client.get("/api/v1/nodes")
         assert resp.status_code == 200
-        items = resp.json()
+        body = resp.json()
+        items = body["items"] if isinstance(body, dict) else body
         assert len(items) >= 1
         assert "node_type" in items[0]
 

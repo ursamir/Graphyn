@@ -87,17 +87,23 @@ class TestAuditSchema:
 
 
 class TestEnvelope:
-    def test_nodes_envelope_flag(self, api_client):
-        bare = api_client.get("/api/v1/nodes")
-        assert bare.status_code == 200
-        assert isinstance(bare.json(), list)
-        env = api_client.get("/api/v1/nodes?envelope=1&limit=5")
+    def test_nodes_envelope_default_on_and_escape(self, api_client):
+        # P1: omitted query → envelope
+        env = api_client.get("/api/v1/nodes?limit=5")
         assert env.status_code == 200
         body = env.json()
         assert "items" in body
         assert "total" in body
         assert "limit" in body
         assert "offset" in body
+        # Escape hatch: envelope=0 → bare array
+        bare = api_client.get("/api/v1/nodes?envelope=0")
+        assert bare.status_code == 200
+        assert isinstance(bare.json(), list)
+        # Explicit envelope=1 still works
+        env1 = api_client.get("/api/v1/nodes?envelope=1&limit=5")
+        assert env1.status_code == 200
+        assert "items" in env1.json()
 
 
 class TestReadiness:

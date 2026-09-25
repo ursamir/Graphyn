@@ -19,6 +19,7 @@ import {
   Star,
 } from 'lucide-react'
 import { apiJson } from '../../api/client'
+import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import {
@@ -227,7 +228,7 @@ export default function ProjectsView() {
     setError(null)
     setLoading(true)
     try {
-      setProjects(await apiJson<Project[]>('/projects'))
+      setProjects(unwrapList<Project>(await apiJson('/projects')))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setProjects([])

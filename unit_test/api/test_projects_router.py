@@ -30,15 +30,16 @@ class TestListProjects:
         with patch("app.api.routers.projects._pm", pm):
             resp = api_client.get("/api/v1/projects")
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert isinstance(body, dict) and "items" in body
 
     def test_returns_empty_list_when_no_projects(self, api_client):
-        """GET /api/v1/projects returns [] when no projects exist."""
+        """GET /api/v1/projects returns empty items when no projects exist."""
         pm = _make_pm(projects=[])
         with patch("app.api.routers.projects._pm", pm):
             resp = api_client.get("/api/v1/projects")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.json()["items"] == []
 
     def test_returns_project_entries(self, api_client):
         """GET /api/v1/projects returns project metadata entries."""
@@ -47,7 +48,8 @@ class TestListProjects:
         with patch("app.api.routers.projects._pm", pm):
             resp = api_client.get("/api/v1/projects")
         assert resp.status_code == 200
-        data = resp.json()
+        raw = resp.json()
+        data = raw["items"] if isinstance(raw, dict) and "items" in raw else raw
         assert len(data) == 1
         assert data[0]["name"] == "proj-a"
 

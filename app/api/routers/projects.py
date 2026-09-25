@@ -137,14 +137,16 @@ class ProjectLinksBody(BaseModel):
 
 @router.get("")
 def list_projects(
-    envelope: Optional[str] = Query(None, description="Set to 1 for list envelope"),
+    envelope: Optional[str] = Query(None, description="List envelope (default on). Pass 0/false/no/off for bare array."),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     q: Optional[str] = Query(None),
 ):
-    """GET /projects — list all projects. ``?envelope=1`` → API-PAGE-001 shape."""
+    """GET /projects — list all projects. Envelope by default (API-PAGE-001 P1); ``?envelope=0`` → bare array."""
     from app.api.pagination import maybe_envelope, parse_envelope_flag
+    from app.api.store_guard import ensure_store_readable
 
+    ensure_store_readable()
     items = _handle(_pm.list_all)
     if not isinstance(items, list):
         items = list(items or [])

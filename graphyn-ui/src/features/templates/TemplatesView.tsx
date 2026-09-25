@@ -1,6 +1,7 @@
 import React from 'react'
 import { RefreshCw, ChevronRight, Database, Download, MoreHorizontal, Search, Upload } from 'lucide-react'
 import { apiJson } from '../../api/client'
+import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
@@ -256,8 +257,8 @@ export default function TemplatesView() {
     setProjectPick('')
     setProjectCreate('')
     try {
-      const list = await apiJson<Array<{ name: string } | string>>('/projects')
-      const names = (Array.isArray(list) ? list : [])
+      const list = unwrapList<{ name: string } | string>(await apiJson('/projects'))
+      const names = list
         .map((p) => (typeof p === 'string' ? p : p.name))
         .filter(Boolean)
       setProjectChoices(names)

@@ -42,7 +42,8 @@ class TestListArtifacts:
         with patch("app.core.artifact_store.ArtifactStore", return_value=store):
             resp = api_client.get("/api/v1/artifacts")
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        assert isinstance(body, dict) and "items" in body
 
     def test_run_id_filter_passed_to_store(self, api_client):
         """GET /api/v1/artifacts?run_id=r1 passes run_id filter to ArtifactStore.list().
@@ -61,7 +62,8 @@ class TestListArtifacts:
         with patch("app.core.artifact_store.ArtifactStore", return_value=store):
             resp = api_client.get("/api/v1/artifacts")
         assert resp.status_code == 200
-        data = resp.json()
+        raw = resp.json()
+        data = raw["items"] if isinstance(raw, dict) and "items" in raw else raw
         assert len(data) == 1
         assert data[0]["artifact_id"] == "art-001"
 

@@ -167,8 +167,10 @@ def list_runs(
     Use limit/offset for large run histories. Default: first 50 runs.
     When ``project`` is set, return only runs scoped to that project (Phase 2).
     """
+    from app.api.store_guard import ensure_store_readable
     from app.core.run_project import normalize_project_name, project_matches
 
+    ensure_store_readable()
     runs_root = _get_runs_root()
     if not runs_root.exists():
         return []
@@ -230,6 +232,9 @@ def list_runs(
 @router.get("/{run_id}", summary="Get a run's config and logs")
 def get_run(run_id: str):
     """Return the config YAML and log entries for a specific run."""
+    from app.api.store_guard import ensure_store_readable
+
+    ensure_store_readable()
     run_path = _run_dir(run_id)
 
     config_yaml: str | None = None
@@ -501,9 +506,16 @@ def promote_run(run_id: str, request: Request, body: dict | None = Body(None)):
 @router.get("/{run_id}/artifacts", summary="List artifacts for a run")
 def list_run_artifacts(run_id: str):
     """Return all artifacts registered for a specific run."""
-    _run_dir(run_id)  # raises 404 if run not found
+    from app.api.store_guard import ensure_store_readable, raise_http_store_corrupt
     from app.core.artifact_store import ArtifactStore
-    records = ArtifactStore().list(run_id=run_id)
+    from app.core.store_integrity import StoreCorrupt
+
+    ensure_store_readable()
+    _run_dir(run_id)  # raises 404 if run not found
+    try:
+        records = ArtifactStore().list(run_id=run_id)
+    except StoreCorrupt as exc:
+        raise_http_store_corrupt(exc=exc)
     return [r.model_dump(mode="json") for r in records]
 
 

@@ -34,15 +34,19 @@ class RequestProdBody(BaseModel):
 
 @router.get("", summary="List registered models")
 def list_models_endpoint():
+    from app.api.store_guard import ensure_store_readable
     from app.core.model_registry import list_models
 
+    ensure_store_readable()
     return {"models": list_models()}
 
 
 @router.get("/{name}", summary="Get one registered model")
 def get_model_endpoint(name: str):
+    from app.api.store_guard import ensure_store_readable
     from app.core.model_registry import get_model
 
+    ensure_store_readable()
     try:
         return get_model(name)
     except FileNotFoundError as exc:

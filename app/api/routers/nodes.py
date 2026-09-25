@@ -109,13 +109,13 @@ def find_compatible_nodes(
 @router.get("/nodes", summary="List all registered nodes")
 def list_nodes(
     category: str | None = Query(None, description="Filter by category"),
-    envelope: str | None = Query(None, description="Set to 1 for list envelope"),
+    envelope: str | None = Query(None, description="List envelope (default on). Pass 0/false/no/off for bare array."),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
     """Return metadata for all registered nodes, optionally filtered by category.
 
-    Bare array by default (SRS allows until P1). Pass ``?envelope=1`` for envelope.
+    Envelope by default (API-PAGE-001 P1). Pass ``?envelope=0`` for bare array.
     """
     from app.api.pagination import maybe_envelope, parse_envelope_flag
 

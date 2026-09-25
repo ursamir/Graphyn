@@ -14,13 +14,23 @@ from typing import Any, Optional, Sequence
 
 
 def parse_envelope_flag(raw: Any) -> bool:
-    """Return True when client requested ``?envelope=1`` (or true/yes)."""
+    """Return whether the list envelope should be used (API-PAGE-001 P1).
+
+    Default **ON** when the query param is omitted (``None``).
+    Escape hatch for bare arrays: ``?envelope=0`` / ``false`` / ``no`` / ``off``.
+    Explicit on: ``?envelope=1`` / ``true`` / ``yes`` / ``on``.
+    """
     if raw is None:
-        return False
+        return True
     if isinstance(raw, bool):
         return raw
     s = str(raw).strip().lower()
-    return s in ("1", "true", "yes", "on")
+    if s in ("0", "false", "no", "off"):
+        return False
+    if s in ("1", "true", "yes", "on"):
+        return True
+    # Unknown non-empty values keep the normative default (envelope on).
+    return True
 
 
 def list_envelope(
@@ -57,7 +67,7 @@ def maybe_envelope(
     limit: Optional[int] = None,
     offset: int = 0,
 ) -> Any:
-    """Return bare list or envelope depending on ``envelope`` flag (additive P0)."""
+    """Return envelope (default) or bare list when ``envelope`` is False."""
     if not envelope:
         return list(items)
     return list_envelope(items, total=total, limit=limit, offset=offset)

@@ -53,29 +53,23 @@ def list_artifacts(
     artifact_type: Optional[str] = Query(None, description="Filter by artifact type"),
     limit: int = Query(100, ge=1, le=1000, description="Max records to return"),
     offset: int = Query(0, ge=0, description="Records to skip after sort"),
-    envelope: Optional[str] = Query(None, description="Set to 1 for list envelope"),
+    envelope: Optional[str] = Query(None, description="List envelope (default on). Pass 0/false/no/off for bare array."),
 ):
     """Return all artifacts matching the provided filters, sorted by created_at descending.
 
-    Requirements: req-05 §1.3 (GET /api/v1/artifacts). ``?envelope=1`` → API-PAGE-001.
+    Requirements: req-05 §1.3 (GET /api/v1/artifacts). Envelope by default (API-PAGE-001 P1); ``?envelope=0`` → bare.
     """
     from app.api.pagination import maybe_envelope, parse_envelope_flag
+    from app.api.store_guard import ensure_store_readable, raise_http_store_corrupt
     from app.core.artifact_store import ArtifactStore
-    from app.core.store_integrity import StoreCorrupt, readiness_store_corrupt
+    from app.core.store_integrity import StoreCorrupt
 
-    if readiness_store_corrupt():
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "store_corrupt", "message": "Critical store index corrupt"},
-        )
+    ensure_store_readable()
     try:
         store = ArtifactStore()
         records = store.list(run_id=run_id, node_type=node_type, artifact_type=artifact_type)
     except StoreCorrupt as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "store_corrupt", "message": str(exc)},
-        ) from exc
+        raise_http_store_corrupt(exc=exc)
     total = len(records)
     page = records[offset : offset + limit]
     items = [r.model_dump(mode="json") for r in page]
@@ -101,11 +95,16 @@ def get_artifact(artifact_id: str):
     """
     _validate_artifact_id(artifact_id)
 
+    from app.api.store_guard import ensure_store_readable, raise_http_store_corrupt
     from app.core.artifact_store import ArtifactNotFoundError, ArtifactStore
+    from app.core.store_integrity import StoreCorrupt
 
+    ensure_store_readable()
     store = ArtifactStore()
     try:
         record = store.get(artifact_id)
+    except StoreCorrupt as exc:
+        raise_http_store_corrupt(exc=exc)
     except ArtifactNotFoundError:
         raise HTTPException(status_code=404, detail="Artifact not found")
 

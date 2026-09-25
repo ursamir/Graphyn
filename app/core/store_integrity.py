@@ -47,3 +47,9 @@ def readiness_store_corrupt() -> bool:
     except Exception:
         return False
     return False
+
+
+def ensure_store_ok(*, message: str = "Critical store index corrupt") -> None:
+    """Raise StoreCorrupt when readiness reports store_corrupt (callers map to 503)."""
+    raise_if_store_corrupt(readiness_store_corrupt(), message=message)
+

@@ -11,6 +11,7 @@ import {
   Workflow,
 } from 'lucide-react'
 import { apiFetch, apiJson, downloadOutputFile } from '../../api/client'
+import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import {
@@ -611,10 +612,10 @@ export default function EdgeWizardView() {
           }
           let pkg = guessPackagePath(target, packageName, artsDir)
           try {
-            const arts = await apiJson<Array<Record<string, unknown>>>('/artifacts', {
+            const arts = unwrapList<Record<string, unknown>>(await apiJson('/artifacts', {
               query: { run_id: runId },
-            })
-            if (!cancelled && Array.isArray(arts)) {
+            }))
+            if (!cancelled) {
               let checksum: string | null = null
               for (const a of arts) {
                 if (!checksum) checksum = pickChecksum(a)
