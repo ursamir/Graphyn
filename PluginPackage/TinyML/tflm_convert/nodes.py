@@ -1,12 +1,13 @@
 """TflmConvertNode — Convert→.tflite micro + CMSIS-NN metadata
 
-Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=True writes a placeholder DeploymentArtifact.
+When stub=False, converts SavedModel/Keras/.tflite via TensorFlow Lite.
 """
 from __future__ import annotations
 
-import importlib
+import json
 import logging
+import shutil
 from pathlib import Path
 from typing import ClassVar, Any
 from pydantic import Field
@@ -33,8 +34,8 @@ class TflmConvertNode(Node):
         label="Tflm Convert",
         description="Convert→.tflite micro + CMSIS-NN metadata",
         category="ML",
-        version="0.1.0",
-        tags=["tinyml", "stub"],
+        version="0.2.0",
+        tags=["tinyml", "wave1"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -53,46 +54,91 @@ class TflmConvertNode(Node):
     class Config(NodeConfig):
         stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
         cmsis_nn: bool = Field(default=True, title="Cmsis nn", description="Cmsis nn.")
-        optimize_for: str = Field(default='cortex_m55', title="Optimize for", description="Optimize for.")
-        output_path: str = Field(default='workspace/artifacts/optimized/tflite_micro', title="Output path", description="Output path.")
+        optimize_for: str = Field(default="cortex_m55", title="Optimize for", description="Optimize for.")
+        output_path: str = Field(default="workspace/artifacts/optimized/tflite_micro", title="Output path", description="Output path.")
 
     def process(self, inputs=None, **kwargs):
-        """Stub-capable process — real backends optional."""
         if inputs is None:
             inputs = kwargs
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
-        out_dir = Path('workspace/artifacts') / 'tinyml' / 'tflm_convert'
+        stub = bool(getattr(self.config, "stub", True))
+        out_dir = Path(getattr(self.config, "output_path", None) or "workspace/artifacts/optimized/tflite_micro")
+        out_dir.mkdir(parents=True, exist_ok=True)
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            result = DeploymentArtifact(package_path=str(_out), target="stub", metadata={"stub": True})
-            return {"output": result}
-        # Non-stub: attempt real backend; fall back with install hint
+            _out = out_dir / "stub"
+            _out.mkdir(parents=True, exist_ok=True)
+            return {
+                "output": DeploymentArtifact(
+                    package_path=str(_out),
+                    target="stub",
+                    metadata={"stub": True},
+                )
+            }
         try:
-            return self._process_real(inputs)
+            return self._process_real(inputs, out_dir)
         except ImportError as exc:
-            raise ImportError(f"tflm_convert: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
+            from app.core.plugins.wave1_runtime import install_hint
 
-    def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'tinyml' / 'tflm_convert'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": DeploymentArtifact(package_path=str(_out), target="stub", metadata={"stub": True})}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+            raise ImportError(install_hint("tinyml", ["tensorflow>=2.13"])) from exc
+
+    def _process_real(self, inputs: dict, out_dir: Path):
+        import tensorflow as tf  # type: ignore
+
+        src = inputs.get("input") or inputs.get("model")
+        src_path = None
+        labels: list = []
+        if isinstance(src, TFLiteArtifact) or hasattr(src, "tflite_path"):
+            src_path = getattr(src, "tflite_path", None)
+            labels = list(getattr(src, "labels", None) or [])
+        elif isinstance(src, ModelArtifact) or hasattr(src, "model_path"):
+            src_path = getattr(src, "model_path", None)
+            labels = list(getattr(src, "labels", None) or [])
+        elif isinstance(src, str):
+            src_path = src
+        elif isinstance(src, dict):
+            src_path = src.get("tflite_path") or src.get("model_path") or src.get("path")
+
+        if not src_path:
+            raise RuntimeError("tflm_convert: ModelArtifact/TFLiteArtifact path required when stub=False")
+
+        src_p = Path(str(src_path))
+        out_tflite = out_dir / "model_micro.tflite"
+        if src_p.suffix == ".tflite" and src_p.is_file():
+            shutil.copy2(src_p, out_tflite)
+            blob_size = out_tflite.stat().st_size
+        elif src_p.is_dir():
+            converter = tf.lite.TFLiteConverter.from_saved_model(str(src_p))
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            blob = converter.convert()
+            out_tflite.write_bytes(blob)
+            blob_size = len(blob)
+        elif src_p.suffix in {".keras", ".h5"} and src_p.is_file():
+            model = tf.keras.models.load_model(str(src_p))
+            converter = tf.lite.TFLiteConverter.from_keras_model(model)
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            blob = converter.convert()
+            out_tflite.write_bytes(blob)
+            blob_size = len(blob)
+        else:
+            raise RuntimeError(f"tflm_convert: unsupported source {src_p}")
+
+        meta = {
+            "backend": "tensorflow.lite",
+            "stub": False,
+            "cmsis_nn": bool(getattr(self.config, "cmsis_nn", True)),
+            "optimize_for": str(getattr(self.config, "optimize_for", "cortex_m55")),
+            "tflite_path": str(out_tflite),
+            "file_size_bytes": blob_size,
+            "labels": labels,
+        }
+        (out_dir / "tflm_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        log.info("tflm_convert wrote %s (%d bytes)", out_tflite, blob_size)
+        return {
+            "output": DeploymentArtifact(
+                package_path=str(out_dir),
+                target=str(getattr(self.config, "optimize_for", "cortex_m55")),
+                metadata=meta,
+            )
+        }

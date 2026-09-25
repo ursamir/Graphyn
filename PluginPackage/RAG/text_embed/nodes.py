@@ -41,8 +41,8 @@ class TextEmbedNode(Node):
         label="Text Embed",
         description="Text embeddings for chunks",
         category="Features",
-        version="0.1.0",
-        tags=["rag", "stub"],
+        version="0.2.0",
+        tags=["rag", "wave1"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -89,11 +89,14 @@ class TextEmbedNode(Node):
                 )
             return {"output": out}
         try:
+            from app.core.plugins.wave1_runtime import force_cpu_torch_env
+
+            force_cpu_torch_env()
             from sentence_transformers import SentenceTransformer  # type: ignore
         except ImportError as exc:
-            raise ImportError(
-                "text_embed: install sentence-transformers or set config.stub=True"
-            ) from exc
+            from app.core.plugins.wave1_runtime import install_hint
+
+            raise ImportError(install_hint("rag", ["sentence-transformers>=2.2"])) from exc
         model = SentenceTransformer(str(getattr(self.config, "model_name_or_path", "sentence-transformers/all-MiniLM-L6-v2")))
         texts = [getattr(x, "text", None) or (x if isinstance(x, str) else str(x)) for x in raw]
         vectors = model.encode(texts, normalize_embeddings=bool(getattr(self.config, "normalize", True)))

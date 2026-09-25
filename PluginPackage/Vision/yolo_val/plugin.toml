@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["vision", "yolo", "stub"]
+tags = ["vision", "yolo", "wave1"]
 
 dependencies = [
     "numpy>=1.24",
@@ -18,7 +18,7 @@ optional_dependencies = [
     "torch>=2.0",
 ]
 
-runtime = "inprocess"
+runtime = "isolated"
 node_types = ["yolo_val"]
 
 [config_schema.yolo_val]

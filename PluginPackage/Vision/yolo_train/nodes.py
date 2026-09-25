@@ -42,8 +42,8 @@ class YoloTrainNode(Node):
         label="Yolo Train",
         description="Ultralytics YOLO train",
         category="ML",
-        version="0.1.0",
-        tags=["vision", "stub"],
+        version="0.2.0",
+        tags=["vision", "wave1"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -96,12 +96,14 @@ class YoloTrainNode(Node):
                 )
             }
         try:
+            from app.core.plugins.wave1_runtime import force_cpu_torch_env
+
+            force_cpu_torch_env()
             from ultralytics import YOLO  # type: ignore
         except ImportError as exc:
-            raise ImportError(
-                "yolo_train: install ultralytics (optional). "
-                "venv/bin/pip install ultralytics  OR set config.stub=True"
-            ) from exc
+            from app.core.plugins.wave1_runtime import install_hint
+
+            raise ImportError(install_hint("vision", ["ultralytics>=8.0", "torch>=2.0"])) from exc
         model_name = str(getattr(self.config, "model", "yolov8n.pt") or "yolov8n.pt")
         data = inputs.get("dataset") or inputs.get("input")
         data_yaml = None

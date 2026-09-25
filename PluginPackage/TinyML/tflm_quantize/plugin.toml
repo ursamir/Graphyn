@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["tinyml", "tflm", "stub"]
+tags = ["tinyml", "tflm", "wave1"]
 
 dependencies = [
     "numpy>=1.24",
@@ -17,7 +17,7 @@ optional_dependencies = [
     "tensorflow>=2.13",
 ]
 
-runtime = "inprocess"
+runtime = "isolated"
 node_types = ["tflm_quantize"]
 
 [config_schema.tflm_quantize]

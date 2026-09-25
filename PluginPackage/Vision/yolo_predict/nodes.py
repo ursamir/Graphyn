@@ -1,7 +1,7 @@
 """YoloPredictNode — YOLO predict images/video
 
-Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=True returns empty detections.
+When stub=False, runs ultralytics YOLO.predict (Wave-1 vision venv).
 """
 from __future__ import annotations
 
@@ -33,6 +33,21 @@ ImageSample = _types.ImageSample
 log = logging.getLogger(__name__)
 
 
+def _image_sources(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    items = raw if isinstance(raw, list) else [raw]
+    out: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            out.append(item)
+        elif hasattr(item, "path") and getattr(item, "path"):
+            out.append(str(item.path))
+        elif isinstance(item, dict) and item.get("path"):
+            out.append(str(item["path"]))
+    return out
+
+
 class YoloPredictNode(Node):
     """YOLO predict images/video"""
 
@@ -43,8 +58,8 @@ class YoloPredictNode(Node):
         label="Yolo Predict",
         description="YOLO predict images/video",
         category="Inference",
-        version="0.1.0",
-        tags=["vision", "stub"],
+        version="0.2.0",
+        tags=["vision", "wave1"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -63,49 +78,84 @@ class YoloPredictNode(Node):
 
     class Config(NodeConfig):
         stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
-        task: str = Field(default='detect', title="Task", description="Task.")
+        task: str = Field(default="detect", title="Task", description="Task.")
         imgsz: int = Field(default=640, title="Imgsz", description="Imgsz.")
         conf: float = Field(default=0.25, title="Conf", description="Conf.")
         iou: float = Field(default=0.7, title="Iou", description="Iou.")
         max_det: int = Field(default=300, title="Max det", description="Max det.")
+        device: str = Field(default="cpu", title="Device", description="Prefer cpu when GPU is contested.")
 
     def process(self, inputs=None, **kwargs):
-        """Stub-capable process — real backends optional."""
         if inputs is None:
             inputs = kwargs
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
-        out_dir = Path('workspace/artifacts') / 'vision' / 'yolo_predict'
+        stub = bool(getattr(self.config, "stub", True))
+        out_dir = Path("workspace/artifacts") / "vision" / "yolo_predict"
+        out_dir.mkdir(parents=True, exist_ok=True)
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            result = []
-            return {"output": result}
-        # Non-stub: attempt real backend; fall back with install hint
-        try:
-            return self._process_real(inputs)
-        except ImportError as exc:
-            raise ImportError(f"yolo_predict: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
-
-    def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'vision' / 'yolo_predict'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
             return {"output": []}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        return self._process_real(inputs, out_dir)
+
+    def _process_real(self, inputs: dict, out_dir: Path):
+        try:
+            from app.core.plugins.wave1_runtime import force_cpu_torch_env
+
+            force_cpu_torch_env()
+            from ultralytics import YOLO  # type: ignore
+        except ImportError as exc:
+            from app.core.plugins.wave1_runtime import install_hint
+
+            raise ImportError(install_hint("vision", ["ultralytics>=8.0", "torch>=2.0"])) from exc
+
+        model_in = inputs.get("model") or inputs.get("input")
+        weights = None
+        if isinstance(model_in, ModelArtifact) or hasattr(model_in, "model_path"):
+            weights = getattr(model_in, "model_path", None)
+        elif isinstance(model_in, str):
+            weights = model_in
+        elif isinstance(model_in, dict):
+            weights = model_in.get("model_path") or model_in.get("path")
+        if not weights:
+            weights = "yolov8n.pt"
+
+        sources = _image_sources(inputs.get("images"))
+        if not sources:
+            raise RuntimeError("yolo_predict: images paths required when stub=False")
+
+        device = str(getattr(self.config, "device", "cpu") or "cpu")
+        model = YOLO(str(weights))
+        results = model.predict(
+            source=sources,
+            imgsz=int(getattr(self.config, "imgsz", 640) or 640),
+            conf=float(getattr(self.config, "conf", 0.25) or 0.25),
+            iou=float(getattr(self.config, "iou", 0.7) or 0.7),
+            max_det=int(getattr(self.config, "max_det", 300) or 300),
+            device=device,
+            project=str(out_dir),
+            exist_ok=True,
+            verbose=False,
+        )
+        out: list[Any] = []
+        for r in results or []:
+            boxes, scores, labels = [], [], []
+            if getattr(r, "boxes", None) is not None and len(r.boxes):
+                xyxy = r.boxes.xyxy.cpu().tolist()
+                confs = r.boxes.conf.cpu().tolist()
+                clss = r.boxes.cls.cpu().tolist()
+                names = getattr(r, "names", None) or {}
+                for b, c, cls_id in zip(xyxy, confs, clss):
+                    boxes.append(b)
+                    scores.append(float(c))
+                    labels.append(str(names.get(int(cls_id), int(cls_id))))
+            out.append(
+                DetectionResult(
+                    boxes=boxes,
+                    scores=scores,
+                    labels=labels,
+                    metadata={"backend": "ultralytics", "weights": str(weights)},
+                )
+            )
+        log.info("yolo_predict ultralytics produced %d result(s)", len(out))
+        return {"output": out}

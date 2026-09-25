@@ -33,8 +33,8 @@ class TflmQuantizeNode(Node):
         label="Tflm Quantize",
         description="Int8/int16 TFLM-compatible quantize",
         category="ML",
-        version="0.1.0",
-        tags=["tinyml", "stub"],
+        version="0.2.0",
+        tags=["tinyml", "wave1"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -83,9 +83,9 @@ class TflmQuantizeNode(Node):
         try:
             import tensorflow as tf  # type: ignore
         except ImportError as exc:
-            raise ImportError(
-                "tflm_quantize: install tensorflow (optional) or set config.stub=True"
-            ) from exc
+            from app.core.plugins.wave1_runtime import install_hint
+
+            raise ImportError(install_hint("tinyml", ["tensorflow>=2.13"])) from exc
         src = inputs.get("input") or inputs.get("model")
         src_path = getattr(src, "model_path", None) or (src if isinstance(src, str) else None)
         if not src_path:

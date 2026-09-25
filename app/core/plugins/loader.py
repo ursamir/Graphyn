@@ -66,6 +66,15 @@ _ISOLATED_BOOT_OPTIONAL_ALLOWLIST = frozenset(
         "tf2onnx",
         "matplotlib",
         "seaborn",
+        # Wave-1 deep runtimes (YOLO / TFLM / RAG) — still not in API image.
+        "ultralytics",
+        "opencv-python-headless",
+        "pillow",
+        "chromadb",
+        "faiss-cpu",
+        "sentence-transformers",
+        "tflite-runtime",
+        "ai-edge-litert",
     }
 )
 

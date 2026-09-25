@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["rag", "text", "stub"]
+tags = ["rag", "text", "wave1"]
 
 dependencies = [
     "numpy>=1.24",
@@ -19,7 +19,7 @@ optional_dependencies = [
     "httpx>=0.24",
 ]
 
-runtime = "inprocess"
+runtime = "isolated"
 node_types = ["text_embed"]
 
 [config_schema.text_embed]

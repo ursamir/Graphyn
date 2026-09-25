@@ -97,6 +97,12 @@ Trainer/evaluator still retry on GPU OOM by rebuilding on CPU. Do not run `nvidi
 
 The default **spectral** backend for podcast-leveling uses `scipy` and `noisereduce` (3.x). Those packages are in `setup.py` `install_requires` and mirrored in `requirements.txt`, so the Compose image installs them via the Dockerfile install path above. **Do not** add `torch` or `deepfilternet` to the base image; they remain optional for the DeepFilterNet backend.
 
+## Wave-1 deep runtimes (YOLO / TFLM / RAG)
+
+See [ops/WAVE1_PLUGIN_VENVS.md](./ops/WAVE1_PLUGIN_VENVS.md). Install capability
+venvs with `scripts/install_wave1_plugin_venvs.sh` (CPU torch by default so
+FaceRecognition keeps the GPU).
+
 ## Isolated plugin venvs (trainer / edge-optimizer)
 
 TensorFlow and Keras are **not** in the API image. Isolated plugins install them into per-plugin venvs under `GRAPHYN_HOME` (`/data/graphyn-home/plugins/venvs/<name>/`). Existing volumes that predate this need a one-liner:
