@@ -1,13 +1,13 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "477130068570f1f8e9467a94ff05bd564dced86c",
+  "tip_sha": "320bc839a2eb86729060efdba69d904c69e8d82a",
   "branch": "cursor/usecase-plugins-workflows",
   "generated_at": "2026-09-25T23:30:00+05:30",
   "method": "static-code-evidence",
   "phase2_live_verify": {
     "status": "verified",
     "host": "server99",
-    "tip": "477130068570f1f8e9467a94ff05bd564dced86c",
+    "tip": "320bc839a2eb86729060efdba69d904c69e8d82a",
     "feature_sha": "dda472753a973c3fad2861954fea69dbec3e33dd",
     "probes": {
       "health": "200 /api/v1/system/health",
