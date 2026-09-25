@@ -151,6 +151,10 @@ export default function EdgeWizardView() {
   const [promoteAlias, setPromoteAlias] = React.useState<'staging' | 'prod'>('staging')
   const [promoting, setPromoting] = React.useState(false)
   const [packageChecksum, setPackageChecksum] = React.useState<string | null>(null)
+  const [shipPackages, setShipPackages] = React.useState<
+    Array<{ package_id?: string; status?: string; checksum?: string; env?: string; created_at?: string }>
+  >([])
+  const [creatingShipPkg, setCreatingShipPkg] = React.useState(false)
 
   const resolvedPackagePath = downloadPath || guessPackagePath(target, packageName)
   const runFailed = Boolean(runId && runStatus && isTerminalFailure(runStatus))
@@ -160,6 +164,42 @@ export default function EdgeWizardView() {
       .then((res) => setRegistryModels(Array.isArray(res?.models) ? res.models : []))
       .catch(() => setRegistryModels([]))
   }, [])
+
+  // Wave A: list ship packages for workspace (SRS §9.2.14) — non-blocking.
+  React.useEffect(() => {
+    const project = (linkedProject.trim() || activeProject || '').trim()
+    if (!project) {
+      setShipPackages([])
+      return
+    }
+    let cancelled = false
+    void apiJson<{ items?: Array<Record<string, unknown>>; total?: number }>(
+      `/projects/${encodeURIComponent(project)}/ship/packages`,
+    )
+      .then((res) => {
+        if (cancelled) return
+        const items = Array.isArray(res?.items) ? res.items : []
+        setShipPackages(
+          items.map((it) => ({
+            package_id: typeof it.package_id === 'string' ? it.package_id : undefined,
+            status: typeof it.status === 'string' ? it.status : undefined,
+            checksum: typeof it.checksum === 'string' ? it.checksum : undefined,
+            env: typeof it.env === 'string' ? it.env : undefined,
+            created_at: typeof it.created_at === 'string' ? it.created_at : undefined,
+          })),
+        )
+        const firstChecksum = items.find((it) => typeof it.checksum === 'string')?.checksum
+        if (typeof firstChecksum === 'string' && firstChecksum) {
+          setPackageChecksum((prev) => prev || firstChecksum)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setShipPackages([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [linkedProject, activeProject])
 
   // Probe model path: 404 => missing; 400 "directory" / 200 / other jailed hit => present.
   React.useEffect(() => {
@@ -353,6 +393,73 @@ export default function EdgeWizardView() {
     },
     [probeFetch],
   )
+
+  const createShipPackageFromRegistry = async () => {
+    const project = (linkedProject.trim() || activeProject || '').trim()
+    if (!project) {
+      pushToast('Select a workspace first', 'error')
+      return
+    }
+    if (!pickedModel) {
+      pushToast('Pick a registered model first', 'error')
+      return
+    }
+    const model = registryModels.find((m) => m.name === pickedModel)
+    const stages = model?.stages || {}
+    const stageKey =
+      stages.staging
+        ? 'staging'
+        : stages.prod
+          ? 'prod'
+          : stages.latest
+            ? 'latest'
+            : Object.keys(stages)[0] || 'staging'
+    setCreatingShipPkg(true)
+    try {
+      const res = await apiJson<{
+        package_id?: string
+        status?: string
+        manifest?: { checksums?: { sha256?: string } }
+      }>(`/projects/${encodeURIComponent(project)}/ship/packages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': `ui-ship-${project}-${pickedModel}-${Date.now()}`,
+        },
+        body: JSON.stringify({
+          model_name: pickedModel,
+          model_stage_or_version: stageKey,
+          target: { runtime: backend || 'tflite', arch: 'any' },
+          env: 'draft',
+          unsigned_allowed: true,
+        }),
+      })
+      const sha = res?.manifest?.checksums?.sha256
+      if (sha) setPackageChecksum(sha)
+      pushToast(
+        `Ship package ${res?.package_id || ''} created (${res?.status || 'ready'})`,
+        'success',
+      )
+      // refresh list
+      const listed = await apiJson<{ items?: Array<Record<string, unknown>> }>(
+        `/projects/${encodeURIComponent(project)}/ship/packages`,
+      )
+      const items = Array.isArray(listed?.items) ? listed.items : []
+      setShipPackages(
+        items.map((it) => ({
+          package_id: typeof it.package_id === 'string' ? it.package_id : undefined,
+          status: typeof it.status === 'string' ? it.status : undefined,
+          checksum: typeof it.checksum === 'string' ? it.checksum : undefined,
+          env: typeof it.env === 'string' ? it.env : undefined,
+          created_at: typeof it.created_at === 'string' ? it.created_at : undefined,
+        })),
+      )
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ship package create failed', 'error')
+    } finally {
+      setCreatingShipPkg(false)
+    }
+  }
 
   const applyRegistryModel = (name: string) => {
     setPickedModel(name)
@@ -884,7 +991,23 @@ export default function EdgeWizardView() {
                     <p className="mb-2 text-[11px] text-ink-400">
                       No models in GET /models yet — register from Runs, or paste a path below.
                     </p>
-                  ) : null}
+                  ) : (
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="ide-quiet-btn text-[12px]"
+                        disabled={creatingShipPkg || !pickedModel}
+                        onClick={() => void createShipPackageFromRegistry()}
+                      >
+                        {creatingShipPkg ? 'Creating ship package…' : 'Create ship package (API)'}
+                      </button>
+                      {shipPackages.length > 0 ? (
+                        <span className="text-[11px] text-ink-400">
+                          {shipPackages.length} package{shipPackages.length === 1 ? '' : 's'} in workspace
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
                 </label>
                 <label className="block text-sm sm:col-span-2">
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">

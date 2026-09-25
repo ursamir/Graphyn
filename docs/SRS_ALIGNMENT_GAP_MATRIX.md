@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** | `038c38a570b933523b536c589dece1f70a90389c` on `cursor/usecase-plugins-workflows` (includes matrix `85ac3e75` + Wave A batch 1) |
-| **Phase** | 2 — Wave A batch 1 implemented (envelope, idempotency, run SM, GET project, VAL schema) |
+| **Tip probed** | (pending commit) on `cursor/usecase-plugins-workflows` (Wave A batch 2: ship REST + MCP P0)
+| **Phase** | 2 — Wave A batch 2 implemented (ship packages REST + MCP J1–J3/ship/audit)
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
-| **Generated** | 2026-09-25 21:12 IST; Wave A batch 1 update 2026-09-25 ~21:47 IST |
+| **Generated** | 2026-09-25 21:12 IST; Wave A batch 2 update 2026-09-25 ~21:50 IST
 | **Method** | Static code evidence only (grep/read). Live Server-99 verify = Phase 2 (DESKTOP/CloudAgent not used). |
 
 > **Honesty rule:** Status is **Confirmed** only with file:symbol evidence. Thin/partial contracts → **Partial**. Absent symbols/routes → **Missing**. Product TBD / device APIs → **needs-API**. Not inspected this pass → **Not probed**.
@@ -57,12 +57,13 @@ Routers mounted in `app/api/main.py` under `/api/v1` (auth deps):
 | `routers/secrets.py` | `/secrets` |
 | `routers/system.py` | health/readiness/auth-status/metrics/cleanup/schedules/webhooks |
 | `routers/models.py` | `/models` + request-prod/approve-prod |
+| `routers/ship.py` | `/projects/{name}/ship/packages*` |
 | `routers/proposals.py` | `/proposals` |
 | `routers/trace.py` | `/trace`, `/audit` |
 | `routers/experiments.py` | `/experiments` |
 | `routers/outputs.py` | `/outputs/file` |
 
-**Absent as first-class router:** `/projects/{name}/ship/packages*` (Ship package REST §9.2.14).
+**Ship packages router:** `app/api/routers/ship.py` → `/projects/{name}/ship/packages*` (Wave A batch 2).
 
 Auth: `app/api/main.py` HTTPBearer + fail-closed when `GRAPHYN_AUTH_REQUIRED` / prod|staging. Actor: `app/api/actor.py` (`X-Actor`).
 
@@ -86,7 +87,7 @@ Auth: `app/api/main.py` HTTPBearer + fail-closed when `GRAPHYN_AUTH_REQUIRED` / 
 - Transport: `server.py`, auth `auth.py`, registry `tool_registry.py`
 - Handlers: discovery, graph, execution, run_control, artifacts, provenance, plugins, secrets, proposals, workspace, optimization, …
 - **Registered tools (~29):** list_nodes, generate_graph, validate_graph, get_graph_schema, get_graph_capability_summary, get_event_schema, execute_pipeline, inspect_run, pause/resume/cancel_run, list_artifacts, get_artifact_lineage, replay_run, optimize_execution, install/list/manage_plugin, secrets_list/set, propose/list/get/reject/(accept)_proposal, list_experiments, get_trace, list_projects, list_data_inputs
-- **Missing vs §21 P0 additions:** pipeline CRUD/publish/promote/rollback, list/get_run/outputs, templates, models, schedules/webhooks, ship packages, dataset versions, audit export, readiness, workers/jobs
+- **§21 P0 additions:** J1–J3 + ship + audit + readiness **Confirmed** (Wave A batch 2). Residual Missing/Partial: dataset versions MCP, workers/jobs MCP
 
 ### 1.6 CLI / SDK
 
@@ -170,9 +171,9 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Workers + jobs claim/complete | 9.2.11 | `workers.py` + distributed queue | Confirmed | | — |
 | Proposals CRUD/accept/reject | 9.2.12 | `proposals.py` + agentic | Confirmed | Idempotency-Key missing on accept | A |
 | System health/readiness/auth/metrics/cleanup/audit/trace/experiments | 9.2.13 | system/trace/experiments routers | Confirmed | readiness field names differ slightly (`status` vs `ready`) | B |
-| **Ship packages REST** | 9.2.14 | **zero** `/ship/packages` under `app/` | Missing | UI wizard packages via run+artifact paths only | A |
+| **Ship packages REST** | 9.2.14 | `app/api/routers/ship.py` + `app/core/ship_packages.py` | Confirmed | list/create/get/download/promote/transition; Idempotency-Key on create/promote; 409 invalid_transition | A |
 
-**Domain rollup (route-level):** GET/PUT project + run control **Confirmed** (Wave A). Critical Missing remaining = Ship packages REST.
+**Domain rollup (route-level):** GET/PUT project + run control + Ship packages REST **Confirmed** (Wave A).
 
 ### 3.4 Run state machine — §13.2
 
@@ -238,9 +239,9 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
-| Package REST create/list/get/download/promote | 9.2.14 / SHIP-001 | **absent** | Missing | Highest product gap for J4 MCP+REST | A |
-| Lifecycle states draft…deployed | 19.2 | N/A without store | Missing | | A |
-| Edge wizard template path | EDGE-001 | `features/edge/EdgeWizardView.tsx` | Partial | Packages via pipeline run + artifact download, not ShipPackage entity | A |
+| Package REST create/list/get/download/promote | 9.2.14 / SHIP-001 | `ship.py` + `ship_packages.py` | Confirmed | Wave A batch 2; archive+manifest sha256 | A |
+| Lifecycle states draft…deployed | 19.2 | `ship_packages.next_status` matrix | Confirmed | aliases creating→draft, ready→built on read/wire | A |
+| Edge wizard template path | EDGE-001 | `features/edge/EdgeWizardView.tsx` | Partial | Wizard still runs packager pipeline; also lists/creates via ship REST | A |
 | Devices honesty stub | SHIP-006 / EDGE-007 | `DevicesView.tsx` honesty copy | needs-API | Correct stub | — |
 | Checksum display in UI | SHIP-002 | EdgeWizard checksum state | Partial | Depends on artifact path not package API | B |
 
@@ -258,7 +259,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Core ~29 tools | 21.3 core | `tool_registry.py` | Confirmed | | — |
-| P0 J1–J6 additions | 21.3 table | **not registered** | Missing | pipelines, runs list/get, templates, models, schedules, webhooks, ship, datasets versions, audit, readiness, workers | A |
+| P0 J1–J6 additions | 21.3 table | `tool_registry.py` + `handlers/journey.py`/`ship_ops.py`/`audit_ops.py` | Confirmed | J1–J3 + ship + audit + readiness registered; dataset versions / workers/jobs still Wave B | A |
 | MCP-001 secrets names only | 21.1 | secrets_list handler | Confirmed | | — |
 | MCP-005 structured tool errors | 21.4 | mixed | Partial | | B |
 | accept_proposal gated | MCP-002 | conditional register | Confirmed | | — |
@@ -269,7 +270,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 |---|---|---|---|---|---|
 | Append-only JSONL audit | AUD-001 | `audit.py` events.jsonl | Confirmed | | — |
 | Schema fields request_id/result/actor_kind/timestamp | 22.1 | writes `ts` not `timestamp`; no `result`/`request_id` | Partial | | B |
-| Required audited actions | AUD-005 | cancel, rollback, model, plugin partially | Partial | Ship package N/A until API; schedule CRUD coverage uneven | B |
+| Required audited actions | AUD-005 | cancel, rollback, model, plugin, ship.create/promote | Partial | Ship create/promote audited; schema field rename still Wave B | B |
 | ProvenanceRecord fields | 22.2 | `provenance.py` ProvenanceRecord | Confirmed | plugin_versions optional thin | C |
 | GET /trace | OBS-002 | `trace.py` | Confirmed | | — |
 | Prove capture set completeness | 22.2 | Not probed end-to-end | Not probed | Phase 2 | C |
@@ -335,11 +336,11 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 1. **API-ERR-001** — ✅ Closed (Wave A batch 1): `app/api/errors.py` + handlers.
 2. **API-CONV-004** — ✅ Closed for run-async / proposals accept / schedules POST / projects POST (ship create when Ship REST lands).
 3. **RT-SM / run wire** — ✅ Closed: `succeeded` writes + `completed`→`succeeded` on read; `pending` ack; 409 matrix.
-4. **Ship packages REST** — Implement §9.2.14 + manifest lifecycle (§19) store under workspace; wire Edge wizard to it.
-5. **MCP P0 additions (J1–J3 first)** — list/get/save/publish/promote/rollback pipeline; list/get_run; templates; schedules/webhooks; models; get_readiness.
+4. **Ship packages REST** — ✅ Closed (Wave A batch 2): `ship_packages.py` + `routers/ship.py`; Edge wizard list/create wired.
+5. **MCP P0 additions (J1–J3 first)** — ✅ Closed (Wave A batch 2): journey handlers + registry.
 6. **GET /projects/{name}** (+ PUT) — ✅ Closed (Wave A batch 1).
 7. **VAL result schema** — ✅ Closed: VAL-* + warnings[]; execute refuses on errors.
-8. **MCP Ship + audit tools** — after REST ship exists; get_audit_events/export_audit.
+8. **MCP Ship + audit tools** — ✅ Closed (Wave A batch 2): ship_ops + audit_ops.
 9. **Run control from durable meta** — ✅ Closed (idempotent cancel; terminal resume 409).
 10. **PERS-001** — ✅ Closed (`pending` before async ack; `mark_running` on execute).
 
@@ -379,4 +380,10 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 
 - Tip: `038c38a570b933523b536c589dece1f70a90389c`
 - Closed: API-ERR-001, API-CONV-004 (key routes), RT-SM/PERS-001, GET/PUT projects, VAL schema.
-- Remaining Wave A: Ship packages REST, MCP P0 tools.
+- Remaining after batch 2: dataset-version / workers MCP (Wave B); Edge checksum UI polish.
+
+### Wave A batch 2 landing
+
+- Tip: (set after commit)
+- Closed: Ship packages REST §9.2.14/§19; MCP P0 J1–J3 + ship + audit + readiness.
+- Residual Wave A→B: dataset version MCP tools, list_workers/list_jobs MCP, checksum UI polish.

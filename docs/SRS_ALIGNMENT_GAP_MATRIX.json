@@ -2,13 +2,13 @@
   "srs_version": "1.2.0",
   "tip_sha": "038c38a570b933523b536c589dece1f70a90389c",
   "branch": "cursor/usecase-plugins-workflows",
-  "generated_at": "2026-09-25 21:47 IST",
+  "generated_at": "2026-09-25 ~21:50 IST",
   "method": "static-code-evidence",
   "phase2_live_verify": "blocked_no_desktop",
   "totals": {
-    "confirmed": 72,
+    "confirmed": 77,
     "partial": 30,
-    "missing": 14,
+    "missing": 9,
     "needs_api": 2,
     "not_probed": 4
   },
@@ -52,12 +52,11 @@
     {
       "id": "REST-P0",
       "srs": "\u00a79.2",
-      "status": "Partial",
+      "status": "Confirmed",
       "p0_confirmed": 14,
       "p0_partial": 3,
-      "p0_missing": 3,
+      "p0_missing": 0,
       "top_gaps": [
-        "Ship packages REST",
         "GET /projects/{name}",
         "run control 409 matrix"
       ]
@@ -227,10 +226,14 @@
     "PERS-001 pending before ack"
   ],
   "wave_a_remaining": [
-    "SHIP packages REST \u00a79.2.14 + lifecycle \u00a719",
-    "MCP P0 J1\u2013J3 tools",
-    "MCP ship + audit tools (after ship REST)"
+    "dataset version MCP tools (list/get/upload) \u2014 deferred Wave B",
+    "list_workers / list_jobs MCP \u2014 deferred Wave B"
   ],
-  "phase": "wave_a_batch1",
-  "matrix_base_sha": "85ac3e75a56cdd29e526fa6ae21631017bd23782"
+  "phase": "wave_a_batch2",
+  "matrix_base_sha": "85ac3e75a56cdd29e526fa6ae21631017bd23782",
+  "wave_a_batch2_closed": [
+    "SHIP packages REST \u00a79.2.14 + lifecycle \u00a719",
+    "MCP P0 J1\u2013J3 tools (pipelines/runs/templates/schedules/models/webhooks/readiness)",
+    "MCP ship + audit tools"
+  ]
 }

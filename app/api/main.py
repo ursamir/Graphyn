@@ -52,6 +52,7 @@ from app.api.routers.trace import router as trace_router
 from app.api.routers.experiments import router as experiments_router
 from app.api.routers.proposals import router as proposals_router
 from app.api.routers.models import router as models_router
+from app.api.routers.ship import router as ship_router
 from app.api.observability import record_request
 from app.core.config import api_token, auth_required, datasets_output_dir, datasets_input_dir, runs_dir
 
@@ -276,6 +277,7 @@ app.include_router(trace_router,       prefix="/api/v1", dependencies=_deps)
 app.include_router(experiments_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(proposals_router,   prefix="/api/v1", dependencies=_deps)
 app.include_router(models_router,      prefix="/api/v1", dependencies=_deps)
+app.include_router(ship_router,        prefix="/api/v1", dependencies=_deps)
 
 
 @app.get("/")
