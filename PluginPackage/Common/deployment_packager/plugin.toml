@@ -16,7 +16,7 @@ dependencies = [
 node_types = ["deployment_packager"]
 
 [config_schema.deployment_packager]
-target = {  type = "string", title = "Target", default = "mobile", description = "Deployment target package format. One of: mobile, mcu, docker, edge.", enum = ["mobile", "mcu", "docker", "edge"]  }
+target = { type = "string", title = "Target", default = "mobile", description = "One of: mobile, mcu, docker, edge, cmsis_pack, arduino, zephyr, pte_bundle.", enum = ["mobile", "mcu", "docker", "edge", "cmsis_pack", "arduino", "zephyr", "pte_bundle"] }
 output_path = { type = "string", title = "Output path", default = "workspace/artifacts/packages", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
 include_inference_script = { type = "boolean", title = "Include inference script", default = true, description = "Bundle a minimal inference script with the package (On/Off)." }
 include_metadata = { type = "boolean", title = "Include metadata", default = true, description = "Bundle model metadata / labels JSON with the package (On/Off)." }

@@ -94,9 +94,9 @@ class RealtimeInferenceNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str = Field(..., title="Model path", description="Model file under workspace/artifacts (or empty for built-in).")
-        backend: Literal["tflite", "pytorch", "onnx", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: tflite, pytorch, onnx, auto.")
-        mode: Literal["classification", "wake_word", "streaming_asr"] = Field(default='classification', title="Mode", description="Operating mode. One of: classification, wake_word, streaming_asr.")
+        model_path: str = Field(default="", title="Model path", description="Model file under workspace/artifacts (or empty for built-in).")
+        backend: Literal["tflite", "pytorch", "onnx", "ultralytics", "tflm_host", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: tflite, pytorch, onnx, ultralytics, tflm_host, auto.")
+        mode: Literal["classification", "wake_word", "streaming_asr", "detect", "segment"] = Field(default='classification', title="Mode", description="Operating mode. One of: classification, wake_word, streaming_asr, detect, segment.")
         wake_word_threshold: float = Field(default=0.8, title="Wake-word threshold", description="Detection threshold in [0, 1]; higher = fewer false accepts.")
         batch_size: int = Field(default=1, title="Batch size", description="Process in batches of N (0 = all at once).")
         adaptive: bool = Field(default=False, title="Adaptive", description="Adaptively skip frames under load using adaptive_skip_ratio (On/Off).")
@@ -175,14 +175,35 @@ class RealtimeInferenceNode(Node):
             self._setup_pytorch(model_path)
         elif self._backend == "onnx":
             self._setup_onnx(model_path)
+        elif self._backend in ("ultralytics", "tflm_host"):
+            # Additive backends — defer to optional deps; keep audio path intact.
+            self._setup_additive_backend(model_path, self._backend)
         else:
             raise ValueError(
                 f"RealtimeInferenceNode: unknown backend '{self._backend}'. "
-                "Must be 'tflite', 'pytorch', or 'onnx'."
+                "Must be 'tflite', 'pytorch', 'onnx', 'ultralytics', or 'tflm_host'."
             )
 
         log.info("RealtimeInferenceNode: loaded model from %s", model_path)
         log.info("RealtimeInferenceNode: backend=%s labels=%s", self._backend, self._labels)
+
+
+    def _setup_additive_backend(self, model_path: Path, backend: str) -> None:
+        """Load ultralytics / tflm_host when optional deps exist; else clear message."""
+        if backend == "ultralytics":
+            try:
+                from ultralytics import YOLO  # type: ignore
+            except ImportError as exc:
+                raise ImportError(
+                    "RealtimeInferenceNode: backend=ultralytics requires ultralytics. "
+                    "venv/bin/pip install ultralytics"
+                ) from exc
+            self._model = YOLO(str(model_path))
+            self._predict_fn = "ultralytics"
+            return
+        # tflm_host — reuse TFLite interpreter path
+        self._setup_tflite(model_path)
+        self._predict_fn = "tflm_host"
 
     def _setup_tflite(self, model_path: Path) -> None:
         """Load TFLite interpreter and allocate tensors."""

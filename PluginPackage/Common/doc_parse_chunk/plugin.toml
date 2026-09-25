@@ -23,3 +23,6 @@ path = { type = "string", title = "Path", default = "", description = "Dataset p
 recursive = { type = "boolean", title = "Recursive", default = true, description = "Walk subdirectories when scanning the filesystem (On/Off)." }
 max_chars = { type = "integer", title = "Max chars", default = 1200, description = "Maximum characters per chunk when splitting documents." }
 use_unstructured = { type = "boolean", title = "Use Unstructured", default = false, description = "Enable use unstructured." }
+chunk_strategy = { type = "string", title = "Chunk strategy", default = "structure", description = "Chunking strategy. One of: structure, fixed, recursive, markdown.", enum = ["structure", "fixed", "recursive", "markdown"] }
+overlap = { type = "integer", title = "Overlap", default = 0, description = "Character overlap between adjacent chunks (0 disables)." }
+metadata_keys = { type = "array", title = "Metadata keys", default = [], description = "Optional metadata keys to propagate onto each Chunk." }

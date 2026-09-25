@@ -89,7 +89,7 @@ class EdgeOptimizerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: Literal["tflite", "onnx", "auto"] = Field(default='tflite', title="Backend", description="Implementation backend. One of: tflite, onnx, auto.")
+        backend: Literal["tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"] = Field(default='tflite', title="Backend", description="Implementation backend. One of: tflite, onnx, tflm, executorch, ultralytics_export, auto.")
         quantization: Literal["float32", "float16", "int8"] = Field(default='int8', title="Quantization", description="Weight/activation quantization mode. One of: float32, float16, int8.")
         output_path: str = Field(default='workspace/artifacts/optimized', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
         representative_samples: int = Field(default=100, title="Representative samples", description="Number of calibration samples for int8 quantization.")
@@ -98,7 +98,7 @@ class EdgeOptimizerNode(Node):
 
     def __init__(self, config=None, seed: int = 0, observer=None) -> None:
         super().__init__(config=config, seed=seed, observer=observer)
-        allowed_backends = {"tflite", "onnx", "auto"}
+        allowed_backends = {"tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"}
         if self.config.backend not in allowed_backends:
             raise ValueError(
                 f"EdgeOptimizerNode: backend must be one of {allowed_backends}, "
@@ -116,10 +116,10 @@ class EdgeOptimizerNode(Node):
     def _detect_backend(self) -> str:
         """Resolve the effective backend to use.
 
-        Returns "tflite" or "onnx". Raises ImportError if neither is available
-        and backend="auto".
+        Returns a concrete backend name. Raises ImportError if neither tflite
+        nor onnx is available and backend="auto".
         """
-        if self.config.backend in ("tflite", "onnx"):
+        if self.config.backend in ("tflite", "onnx", "tflm", "executorch", "ultralytics_export"):
             return self.config.backend
         # auto: prefer tflite if tensorflow available, else onnx
         try:
@@ -384,5 +384,30 @@ class EdgeOptimizerNode(Node):
 
         if backend == "tflite":
             return self._export_tflite(artifact, out_path)
-        else:
+        if backend == "onnx":
             return self._export_onnx(artifact, out_path)
+        # Additive backends (tflm / executorch / ultralytics_export): stub package
+        # unless optional deps present — prefer dedicated TinyML/Vision nodes.
+        return self._export_stub_backend(artifact, out_path, backend)
+
+    def _export_stub_backend(self, artifact, out_path: Path, backend: str):
+        """Minimal DeploymentArtifact for additive backends without heavy deps."""
+        from app.models.deployment_artifact import DeploymentArtifact
+        dest = out_path / f"optimized_{backend}"
+        dest.mkdir(parents=True, exist_ok=True)
+        marker = dest / "BACKEND_STUB.txt"
+        marker.write_text(
+            f"EdgeOptimizerNode backend={backend} stub.\n"
+            f"Prefer dedicated nodes (tflm_quantize / executorch_export / yolo_export).\n"
+            f"source={artifact.model_path}\n",
+            encoding="utf-8",
+        )
+        labels = list(getattr(artifact, "labels", None) or [])
+        return DeploymentArtifact(
+            artifact_path=str(dest),
+            model_format=backend,
+            target_hardware="mcu" if backend in ("tflm", "executorch") else "cpu",
+            quantization=str(self.config.quantization),
+            labels=labels,
+            metadata={"backend": backend, "stub": True, "source": artifact.model_path},
+        )

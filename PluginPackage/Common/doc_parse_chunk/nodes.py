@@ -7,7 +7,7 @@ import logging
 import re
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
@@ -173,6 +173,17 @@ class DocParseChunkNode(Node):
         recursive: bool = Field(default=True, title="Recursive", description="Walk subdirectories when scanning the filesystem (On/Off).")
         max_chars: int = Field(default=1200, title="Max chars", description="Maximum characters per chunk when splitting documents.")
         use_unstructured: bool = Field(default=False, title="Use Unstructured", description="Enable use unstructured.")
+        chunk_strategy: Literal["structure", "fixed", "recursive", "markdown"] = Field(
+            default="structure",
+            title="Chunk strategy",
+            description="Chunking strategy. One of: structure, fixed, recursive, markdown.",
+        )
+        overlap: int = Field(default=0, title="Overlap", description="Character overlap between adjacent chunks (0 disables).")
+        metadata_keys: list[str] = Field(
+            default_factory=list,
+            title="Metadata keys",
+            description="Optional metadata keys to propagate onto each Chunk.",
+        )
 
     def process(self, value):
         paths: list[Path] = []

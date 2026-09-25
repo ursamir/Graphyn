@@ -176,7 +176,7 @@ class DeploymentPackagerNode(Node):
     }
 
     class Config(NodeConfig):
-        target: Literal["mobile", "mcu", "docker", "edge"] = Field(default='mobile', title="Target", description="Deployment target. One of: mobile, mcu, docker, edge.")
+        target: Literal["mobile", "mcu", "docker", "edge", "cmsis_pack", "arduino", "zephyr", "pte_bundle"] = Field(default='mobile', title="Target", description="Deployment target. One of: mobile, mcu, docker, edge, cmsis_pack, arduino, zephyr, pte_bundle.")
         output_path: str = Field(default='workspace/artifacts/packages', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
         include_inference_script: bool = Field(default=True, title="Include inference script", description="Bundle a minimal inference script with the package (On/Off).")
         include_metadata: bool = Field(default=True, title="Include metadata", description="Bundle model metadata / labels JSON with the package (On/Off).")
@@ -201,10 +201,12 @@ class DeploymentPackagerNode(Node):
             pkg_path = self._package_docker(model_path, labels, artifact, out_dir, pkg_name)
         elif target == "edge":
             pkg_path = self._package_edge(model_path, labels, artifact, out_dir, pkg_name)
+        elif target in ("cmsis_pack", "arduino", "zephyr", "pte_bundle"):
+            pkg_path = self._package_additive_target(model_path, labels, artifact, out_dir, pkg_name, target)
         else:
             raise ValueError(
                 f"DeploymentPackagerNode: unknown target '{target}'. "
-                "Choose from: mobile, mcu, docker, edge"
+                "Choose from: mobile, mcu, docker, edge, cmsis_pack, arduino, zephyr, pte_bundle"
             )
 
         new_meta = dict(artifact.metadata)
@@ -226,6 +228,17 @@ class DeploymentPackagerNode(Node):
         return result
 
     # ── mobile package ────────────────────────────────────────────────────────
+
+
+    def _package_additive_target(self, model_path, labels, artifact, out_dir, pkg_name, target: str):
+        """Stub packagers for cmsis_pack/arduino/zephyr/pte_bundle (prefer TinyML nodes)."""
+        dest = Path(out_dir) / f"{pkg_name}_{target}"
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "PACKAGE_STUB.txt").write_text(
+            f"target={target}\nsource={model_path}\nprefer=cmsis_pack_exporter|executorch_export\n",
+            encoding="utf-8",
+        )
+        return dest
 
     def _package_mobile(self, model_path, labels, artifact, out_dir, name) -> Path:
         zip_path = out_dir / f"{name}.zip"

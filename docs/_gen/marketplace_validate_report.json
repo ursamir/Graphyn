@@ -1,0 +1,175 @@
+{
+  "plugins_installed": 154,
+  "plugin_install_errors": [],
+  "plugin_install_error_count": 0,
+  "templates_total": 2998,
+  "validate_ok": 2972,
+  "validate_fail": 26,
+  "materialize_or_load_fail": 0,
+  "ok_pct": 99.13,
+  "unknown_node_types": {},
+  "sample_failures": [
+    {
+      "id": "tpl-audio-sed-smart-home",
+      "errors": [
+        "Edge n5.output \u2192 n6.dataset: Type mismatch \u2014 Incompatible connection: 'Isolated_audio_event_detector.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_evaluator.dataset' expects <class 'app.models.dataset_artifact.DatasetArtifact'>"
+      ]
+    },
+    {
+      "id": "tpl-audio-sed-automotive",
+      "errors": [
+        "Edge n5.output \u2192 n6.dataset: Type mismatch \u2014 Incompatible connection: 'Isolated_audio_event_detector.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_evaluator.dataset' expects <class 'app.models.dataset_artifact.DatasetArtifact'>"
+      ]
+    },
+    {
+      "id": "tpl-audio-sed-industrial",
+      "errors": [
+        "Edge n5.output \u2192 n6.dataset: Type mismatch \u2014 Incompatible connection: 'Isolated_audio_event_detector.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_evaluator.dataset' expects <class 'app.models.dataset_artifact.DatasetArtifact'>"
+      ]
+    },
+    {
+      "id": "tpl-audio-sed-healthcare",
+      "errors": [
+        "Edge n5.output \u2192 n6.dataset: Type mismatch \u2014 Incompatible connection: 'Isolated_audio_event_detector.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_evaluator.dataset' expects <class 'app.models.dataset_artifact.DatasetArtifact'>"
+      ]
+    },
+    {
+      "id": "tpl-audio-sed-callcenter",
+      "errors": [
+        "Edge n5.output \u2192 n6.dataset: Type mismatch \u2014 Incompatible connection: 'Isolated_audio_event_detector.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_evaluator.dataset' expects <class 'app.models.dataset_artifact.DatasetArtifact'>"
+      ]
+    },
+    {
+      "id": "tpl-audio-sed-media",
+      "errors": [
+        "Edge n5.output \u2192 n6.dataset: Type mismatch \u2014 Incompatible connection: 'Isolated_audio_event_detector.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_evaluator.dataset' expects <class 'app.models.dataset_artifact.DatasetArtifact'>"
+      ]
+    },
+    {
+      "id": "tpl-audio-sed-security",
+      "errors": [
+        "Edge n5.output \u2192 n6.dataset: Type mismatch \u2014 Incompatible connection: 'Isolated_audio_event_detector.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_evaluator.dataset' expects <class 'app.models.dataset_artifact.DatasetArtifact'>"
+      ]
+    },
+    {
+      "id": "tpl-audio-sed-retail",
+      "errors": [
+        "Edge n5.output \u2192 n6.dataset: Type mismatch \u2014 Incompatible connection: 'Isolated_audio_event_detector.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_evaluator.dataset' expects <class 'app.models.dataset_artifact.DatasetArtifact'>"
+      ]
+    },
+    {
+      "id": "tpl-audio-speaker-verify-smart-home",
+      "errors": [
+        "Edge n2.output \u2192 n4.input: Type mismatch \u2014 Incompatible connection: 'SegmenterNode.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-audio-speaker-verify-automotive",
+      "errors": [
+        "Edge n2.output \u2192 n4.input: Type mismatch \u2014 Incompatible connection: 'SegmenterNode.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-audio-speaker-verify-industrial",
+      "errors": [
+        "Edge n2.output \u2192 n4.input: Type mismatch \u2014 Incompatible connection: 'SegmenterNode.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-audio-speaker-verify-healthcare",
+      "errors": [
+        "Edge n2.output \u2192 n4.input: Type mismatch \u2014 Incompatible connection: 'SegmenterNode.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-audio-speaker-verify-callcenter",
+      "errors": [
+        "Edge n2.output \u2192 n4.input: Type mismatch \u2014 Incompatible connection: 'SegmenterNode.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-audio-speaker-verify-media",
+      "errors": [
+        "Edge n2.output \u2192 n4.input: Type mismatch \u2014 Incompatible connection: 'SegmenterNode.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-audio-speaker-verify-security",
+      "errors": [
+        "Edge n2.output \u2192 n4.input: Type mismatch \u2014 Incompatible connection: 'SegmenterNode.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-audio-speaker-verify-retail",
+      "errors": [
+        "Edge n2.output \u2192 n4.input: Type mismatch \u2014 Incompatible connection: 'SegmenterNode.output' produces list[app.models.audio_sample.AudioSample] but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-common-embed-fusion-general",
+      "errors": [
+        "Edge n1.output \u2192 n2.input: Type mismatch \u2014 Incompatible connection: 'Isolated_multimodal_fusion.output' produces <class 'list'> but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-common-realtime-infer-general",
+      "errors": [
+        "Edge n0.output \u2192 n1.input: 'n1' has no input port 'input'. Available: []",
+        "Edge n1.output \u2192 n2.input: 'n1' has no output port 'output'. Available: []"
+      ]
+    },
+    {
+      "id": "tpl-common-embed-fusion-mlops",
+      "errors": [
+        "Edge n1.output \u2192 n2.input: Type mismatch \u2014 Incompatible connection: 'Isolated_multimodal_fusion.output' produces <class 'list'> but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-common-realtime-infer-mlops",
+      "errors": [
+        "Edge n0.output \u2192 n1.input: 'n1' has no input port 'input'. Available: []",
+        "Edge n1.output \u2192 n2.input: 'n1' has no output port 'output'. Available: []"
+      ]
+    },
+    {
+      "id": "tpl-common-embed-fusion-support",
+      "errors": [
+        "Edge n1.output \u2192 n2.input: Type mismatch \u2014 Incompatible connection: 'Isolated_multimodal_fusion.output' produces <class 'list'> but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-common-realtime-infer-support",
+      "errors": [
+        "Edge n0.output \u2192 n1.input: 'n1' has no input port 'input'. Available: []",
+        "Edge n1.output \u2192 n2.input: 'n1' has no output port 'output'. Available: []"
+      ]
+    },
+    {
+      "id": "tpl-common-embed-fusion-retail",
+      "errors": [
+        "Edge n1.output \u2192 n2.input: Type mismatch \u2014 Incompatible connection: 'Isolated_multimodal_fusion.output' produces <class 'list'> but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-common-realtime-infer-retail",
+      "errors": [
+        "Edge n0.output \u2192 n1.input: 'n1' has no input port 'input'. Available: []",
+        "Edge n1.output \u2192 n2.input: 'n1' has no output port 'output'. Available: []"
+      ]
+    },
+    {
+      "id": "tpl-common-embed-fusion-security",
+      "errors": [
+        "Edge n1.output \u2192 n2.input: Type mismatch \u2014 Incompatible connection: 'Isolated_multimodal_fusion.output' produces <class 'list'> but 'Isolated_dataset_builder.input' expects list[app.models.feature_array.FeatureArray]"
+      ]
+    },
+    {
+      "id": "tpl-common-realtime-infer-security",
+      "errors": [
+        "Edge n0.output \u2192 n1.input: 'n1' has no input port 'input'. Available: []",
+        "Edge n1.output \u2192 n2.input: 'n1' has no output port 'output'. Available: []"
+      ]
+    }
+  ],
+  "registry_node_types": 0
+}

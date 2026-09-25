@@ -23,9 +23,9 @@ runtime = "isolated"
 node_types = ["realtime_inference"]
 
 [config_schema.realtime_inference]
-model_path = { type = "string", title = "Model path", description = "Model file under workspace/artifacts (or empty for built-in)." }
-backend = {  type = "string", title = "Backend", default = "auto", description = "Implementation backend. One of: tflite, pytorch, onnx, auto.", enum = ["tflite", "pytorch", "onnx", "auto"]  }
-mode = {  type = "string", title = "Mode", default = "classification", description = "Operating mode. One of: classification, wake_word, streaming_asr.", enum = ["classification", "wake_word", "streaming_asr"]  }
+model_path = { type = "string", default = "", title = "Model path", description = "Model file under workspace/artifacts (or empty for built-in)." }
+backend = { type = "string", title = "Backend", default = "auto", description = "One of: tflite, pytorch, onnx, ultralytics, tflm_host, auto.", enum = ["tflite", "pytorch", "onnx", "ultralytics", "tflm_host", "auto"] }
+mode = { type = "string", title = "Mode", default = "classification", description = "One of: classification, wake_word, streaming_asr, detect, segment.", enum = ["classification", "wake_word", "streaming_asr", "detect", "segment"] }
 wake_word_threshold = { type = "number", title = "Wake-word threshold", default = 0.8, description = "Detection threshold in [0, 1]; higher = fewer false accepts." }
 batch_size = { type = "integer", title = "Batch size", default = 1, description = "Process in batches of N (0 = all at once)." }
 adaptive = {  type = "boolean", title = "Adaptive", default = false, description = "Adaptively skip frames under load using adaptive_skip_ratio (On/Off)."  }
