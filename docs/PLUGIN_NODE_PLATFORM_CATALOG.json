@@ -875,7 +875,7 @@
       "outputs": [
         {
           "name": "output",
-          "type": "list[EmbeddingVector]"
+          "type": "list[FeatureArray]"
         }
       ],
       "config": [

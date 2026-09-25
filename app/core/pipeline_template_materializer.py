@@ -126,18 +126,15 @@ def _compatibility_score(src_type: str, dst_type: str) -> int:
         return 4
     if "DeploymentArtifact" in s and "DeploymentArtifact" in d:
         return 4
-    # soft list <-> DatasetArtifact (vision/tinyml stubs)
-    if "DatasetArtifact" in s and d.startswith("list"):
-        return 2
-    if s.startswith("list") and "DatasetArtifact" in d:
-        return 2
+    # Same-family soft matches (validator still enforces concrete port types).
     if "FeatureArray" in s and "FeatureArray" in d:
         return 3
     if "AudioSample" in s and "AudioSample" in d:
         return 3
-    if "FeatureArray" in s and "AudioSample" in d:
+    # Soft list[EmbeddingVector] -> list[FeatureArray] when fusion/adapters emit features.
+    if "EmbeddingVector" in s and "FeatureArray" in d:
         return 2
-    if "AudioSample" in s and "FeatureArray" in d:
+    if "FeatureArray" in s and "EmbeddingVector" in d:
         return 2
     if "Embedding" in s and "Embedding" in d:
         return 3

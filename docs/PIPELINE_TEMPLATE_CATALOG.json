@@ -1,12 +1,12 @@
 {
   "title": "Graphyn Pipeline Template Marketplace Catalog",
   "schema_version": "1.0",
-  "generated_at": "2026-09-25T22:07:43.269939+00:00",
+  "generated_at": "2026-09-25T22:27:25.272138+00:00",
   "generator": "scripts/generate_pipeline_template_catalog.py",
-  "total_templates": 2998,
+  "total_templates": 3014,
   "counts_by_pack": {
     "Agents": 48,
-    "Audio": 166,
+    "Audio": 182,
     "Common": 26,
     "MLOps": 30,
     "RAG": 960,
@@ -16,14 +16,14 @@
     "WakeWord": 98
   },
   "counts_by_status": {
-    "alter-existing": 21,
+    "alter-existing": 37,
     "needs-api": 127,
-    "proposed": 2821,
-    "seeded": 29
+    "proposed": 2822,
+    "seeded": 28
   },
   "counts_by_family": {
     "agents": 48,
-    "audio": 152,
+    "audio": 168,
     "common": 25,
     "coverage": 1,
     "cross": 74,
@@ -71,9 +71,7 @@
     "examples/templates/marketplace/tpl-video-safety-monitor-security.graph.json",
     "examples/templates/marketplace/tpl-agents-run-pipeline-security.graph.json",
     "examples/templates/marketplace/tpl-mlops-drift-watch-audio.graph.json",
-    "examples/templates/marketplace/tpl-common-doc-chunk-store-general.graph.json",
-    "examples/templates/marketplace/tpl-cross-meeting-audio-asr-rag-factory.graph.json",
-    "examples/templates/marketplace/tpl-audio-kws-automotive-edge-tflite.graph.json"
+    "examples/templates/marketplace/tpl-common-doc-chunk-store-general.graph.json"
   ],
   "templates": [
     {
@@ -1314,14 +1312,17 @@
       "description": "Audio sed pipeline for smart-home industry use case.",
       "pack": "Audio",
       "packs_used": [
-        "Audio"
+        "Audio",
+        "Common"
       ],
       "industry": "smart-home",
       "modality": [
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -1346,7 +1347,13 @@
           "node_type": "feature_frontend"
         },
         {
-          "node_type": "audio_event_detector"
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -1374,19 +1381,102 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-sed-smart-home-edge-tflite",
+      "name": "Sed Smart Home Edge Tflite",
+      "description": "Edge TFLite deploy after audio sed for smart-home.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "smart-home",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "sed"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-sed-smart-home-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in smart-home audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-sed-automotive",
       "name": "Sed Automotive",
       "description": "Audio sed pipeline for automotive industry use case.",
       "pack": "Audio",
       "packs_used": [
-        "Audio"
+        "Audio",
+        "Common"
       ],
       "industry": "automotive",
       "modality": [
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -1411,7 +1501,13 @@
           "node_type": "feature_frontend"
         },
         {
-          "node_type": "audio_event_detector"
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -1439,19 +1535,102 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-sed-automotive-edge-tflite",
+      "name": "Sed Automotive Edge Tflite",
+      "description": "Edge TFLite deploy after audio sed for automotive.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "automotive",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "sed"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-sed-automotive-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in automotive audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-sed-industrial",
       "name": "Sed Industrial",
       "description": "Audio sed pipeline for industrial industry use case.",
       "pack": "Audio",
       "packs_used": [
-        "Audio"
+        "Audio",
+        "Common"
       ],
       "industry": "industrial",
       "modality": [
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -1476,7 +1655,13 @@
           "node_type": "feature_frontend"
         },
         {
-          "node_type": "audio_event_detector"
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -1504,19 +1689,102 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-sed-industrial-edge-tflite",
+      "name": "Sed Industrial Edge Tflite",
+      "description": "Edge TFLite deploy after audio sed for industrial.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "industrial",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "sed"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-sed-industrial-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in industrial audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-sed-healthcare",
       "name": "Sed Healthcare",
       "description": "Audio sed pipeline for healthcare industry use case.",
       "pack": "Audio",
       "packs_used": [
-        "Audio"
+        "Audio",
+        "Common"
       ],
       "industry": "healthcare",
       "modality": [
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -1541,7 +1809,13 @@
           "node_type": "feature_frontend"
         },
         {
-          "node_type": "audio_event_detector"
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -1569,19 +1843,102 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-sed-healthcare-edge-tflite",
+      "name": "Sed Healthcare Edge Tflite",
+      "description": "Edge TFLite deploy after audio sed for healthcare.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "healthcare",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "sed"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-sed-healthcare-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in healthcare audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-sed-callcenter",
       "name": "Sed Callcenter",
       "description": "Audio sed pipeline for callcenter industry use case.",
       "pack": "Audio",
       "packs_used": [
-        "Audio"
+        "Audio",
+        "Common"
       ],
       "industry": "callcenter",
       "modality": [
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -1606,7 +1963,13 @@
           "node_type": "feature_frontend"
         },
         {
-          "node_type": "audio_event_detector"
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -1634,19 +1997,102 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-sed-callcenter-edge-tflite",
+      "name": "Sed Callcenter Edge Tflite",
+      "description": "Edge TFLite deploy after audio sed for callcenter.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "callcenter",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "sed"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-sed-callcenter-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in callcenter audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-sed-media",
       "name": "Sed Media",
       "description": "Audio sed pipeline for media industry use case.",
       "pack": "Audio",
       "packs_used": [
-        "Audio"
+        "Audio",
+        "Common"
       ],
       "industry": "media",
       "modality": [
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -1671,7 +2117,13 @@
           "node_type": "feature_frontend"
         },
         {
-          "node_type": "audio_event_detector"
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -1699,19 +2151,102 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-sed-media-edge-tflite",
+      "name": "Sed Media Edge Tflite",
+      "description": "Edge TFLite deploy after audio sed for media.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "media",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "sed"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-sed-media-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in media audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-sed-security",
       "name": "Sed Security",
       "description": "Audio sed pipeline for security industry use case.",
       "pack": "Audio",
       "packs_used": [
-        "Audio"
+        "Audio",
+        "Common"
       ],
       "industry": "security",
       "modality": [
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -1736,7 +2271,13 @@
           "node_type": "feature_frontend"
         },
         {
-          "node_type": "audio_event_detector"
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -1764,19 +2305,102 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-sed-security-edge-tflite",
+      "name": "Sed Security Edge Tflite",
+      "description": "Edge TFLite deploy after audio sed for security.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "security",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "sed"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-sed-security-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in security audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-sed-retail",
       "name": "Sed Retail",
       "description": "Audio sed pipeline for retail industry use case.",
       "pack": "Audio",
       "packs_used": [
-        "Audio"
+        "Audio",
+        "Common"
       ],
       "industry": "retail",
       "modality": [
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -1801,7 +2425,13 @@
           "node_type": "feature_frontend"
         },
         {
-          "node_type": "audio_event_detector"
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -1825,6 +2455,86 @@
         "agent_brief": "Instantiate tpl-audio-sed-retail, validate, save, execute, inspect."
       },
       "status": "proposed",
+      "value_prop": "Proves Audio pack in retail audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-audio-sed-retail-edge-tflite",
+      "name": "Sed Retail Edge Tflite",
+      "description": "Edge TFLite deploy after audio sed for retail.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "retail",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "sed"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-sed-retail-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
       "value_prop": "Proves Audio pack in retail audio pipeline.",
       "metadata_extra": {}
     },
@@ -5218,7 +5928,9 @@
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -5237,10 +5949,16 @@
           "node_type": "segmenter"
         },
         {
-          "node_type": "embedding_generator"
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -5268,6 +5986,86 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-speaker-verify-smart-home-edge-tflite",
+      "name": "Speaker Verify Smart Home Edge Tflite",
+      "description": "Edge TFLite deploy after audio speaker-verify for smart-home.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "smart-home",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "speaker-verify"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-speaker-verify-smart-home-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in smart-home audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-speaker-verify-automotive",
       "name": "Speaker Verify Automotive",
       "description": "Audio speaker-verify pipeline for automotive industry use case.",
@@ -5281,7 +6079,9 @@
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -5300,10 +6100,16 @@
           "node_type": "segmenter"
         },
         {
-          "node_type": "embedding_generator"
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -5331,6 +6137,86 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-speaker-verify-automotive-edge-tflite",
+      "name": "Speaker Verify Automotive Edge Tflite",
+      "description": "Edge TFLite deploy after audio speaker-verify for automotive.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "automotive",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "speaker-verify"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-speaker-verify-automotive-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in automotive audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-speaker-verify-industrial",
       "name": "Speaker Verify Industrial",
       "description": "Audio speaker-verify pipeline for industrial industry use case.",
@@ -5344,7 +6230,9 @@
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -5363,10 +6251,16 @@
           "node_type": "segmenter"
         },
         {
-          "node_type": "embedding_generator"
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -5394,6 +6288,86 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-speaker-verify-industrial-edge-tflite",
+      "name": "Speaker Verify Industrial Edge Tflite",
+      "description": "Edge TFLite deploy after audio speaker-verify for industrial.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "industrial",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "speaker-verify"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-speaker-verify-industrial-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in industrial audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-speaker-verify-healthcare",
       "name": "Speaker Verify Healthcare",
       "description": "Audio speaker-verify pipeline for healthcare industry use case.",
@@ -5407,7 +6381,9 @@
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -5426,10 +6402,16 @@
           "node_type": "segmenter"
         },
         {
-          "node_type": "embedding_generator"
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -5457,6 +6439,86 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-speaker-verify-healthcare-edge-tflite",
+      "name": "Speaker Verify Healthcare Edge Tflite",
+      "description": "Edge TFLite deploy after audio speaker-verify for healthcare.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "healthcare",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "speaker-verify"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-speaker-verify-healthcare-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in healthcare audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-speaker-verify-callcenter",
       "name": "Speaker Verify Callcenter",
       "description": "Audio speaker-verify pipeline for callcenter industry use case.",
@@ -5470,7 +6532,9 @@
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -5489,10 +6553,16 @@
           "node_type": "segmenter"
         },
         {
-          "node_type": "embedding_generator"
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -5520,6 +6590,86 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-speaker-verify-callcenter-edge-tflite",
+      "name": "Speaker Verify Callcenter Edge Tflite",
+      "description": "Edge TFLite deploy after audio speaker-verify for callcenter.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "callcenter",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "speaker-verify"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-speaker-verify-callcenter-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in callcenter audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-speaker-verify-media",
       "name": "Speaker Verify Media",
       "description": "Audio speaker-verify pipeline for media industry use case.",
@@ -5533,7 +6683,9 @@
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -5552,10 +6704,16 @@
           "node_type": "segmenter"
         },
         {
-          "node_type": "embedding_generator"
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -5583,6 +6741,86 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-speaker-verify-media-edge-tflite",
+      "name": "Speaker Verify Media Edge Tflite",
+      "description": "Edge TFLite deploy after audio speaker-verify for media.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "media",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "speaker-verify"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-speaker-verify-media-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in media audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-speaker-verify-security",
       "name": "Speaker Verify Security",
       "description": "Audio speaker-verify pipeline for security industry use case.",
@@ -5596,7 +6834,9 @@
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -5615,10 +6855,16 @@
           "node_type": "segmenter"
         },
         {
-          "node_type": "embedding_generator"
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -5646,6 +6892,86 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-audio-speaker-verify-security-edge-tflite",
+      "name": "Speaker Verify Security Edge Tflite",
+      "description": "Edge TFLite deploy after audio speaker-verify for security.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "security",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "speaker-verify"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-speaker-verify-security-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
+      "value_prop": "Proves Audio pack in security audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-audio-speaker-verify-retail",
       "name": "Speaker Verify Retail",
       "description": "Audio speaker-verify pipeline for retail industry use case.",
@@ -5659,7 +6985,9 @@
         "audio"
       ],
       "lifecycle": [
-        "prep"
+        "prep",
+        "train",
+        "eval"
       ],
       "tags": [
         "audio",
@@ -5678,10 +7006,16 @@
           "node_type": "segmenter"
         },
         {
-          "node_type": "embedding_generator"
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
         },
         {
           "node_type": "evaluator"
@@ -5705,6 +7039,86 @@
         "agent_brief": "Instantiate tpl-audio-speaker-verify-retail, validate, save, execute, inspect."
       },
       "status": "proposed",
+      "value_prop": "Proves Audio pack in retail audio pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-audio-speaker-verify-retail-edge-tflite",
+      "name": "Speaker Verify Retail Edge Tflite",
+      "description": "Edge TFLite deploy after audio speaker-verify for retail.",
+      "pack": "Audio",
+      "packs_used": [
+        "Audio",
+        "Common"
+      ],
+      "industry": "retail",
+      "modality": [
+        "audio"
+      ],
+      "lifecycle": [
+        "train",
+        "deploy"
+      ],
+      "tags": [
+        "audio",
+        "edge",
+        "tflite",
+        "speaker-verify"
+      ],
+      "family": "audio",
+      "node_chain": [
+        {
+          "node_type": "dataset_ingest"
+        },
+        {
+          "node_type": "audio_conditioner"
+        },
+        {
+          "node_type": "feature_frontend"
+        },
+        {
+          "node_type": "dataset_builder"
+        },
+        {
+          "node_type": "model_builder"
+        },
+        {
+          "node_type": "trainer"
+        },
+        {
+          "node_type": "evaluator"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "config_overrides": {
+            "backend": "tflite",
+            "quantization": "int8"
+          }
+        },
+        {
+          "node_type": "deployment_packager",
+          "config_overrides": {
+            "target": "edge"
+          }
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "export_format": "tflite"
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "search_templates",
+          "get_template",
+          "materialize_template",
+          "validate_graph",
+          "save_pipeline",
+          "execute_pipeline"
+        ],
+        "agent_brief": "Instantiate tpl-audio-speaker-verify-retail-edge-tflite, validate, save, execute, inspect."
+      },
+      "status": "alter-existing",
       "value_prop": "Proves Audio pack in retail audio pipeline.",
       "metadata_extra": {}
     },
@@ -196948,13 +198362,13 @@
           "src_id": "n1",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "a"
+          "dst_port": "input_a"
         },
         {
           "src_id": "n2",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "b"
+          "dst_port": "input_b"
         },
         {
           "src_id": "n3",
@@ -197110,6 +198524,9 @@
           "node_type": "stream_ingest"
         },
         {
+          "node_type": "feature_frontend"
+        },
+        {
           "node_type": "realtime_inference"
         },
         {
@@ -197243,13 +198660,13 @@
           "src_id": "n1",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "a"
+          "dst_port": "input_a"
         },
         {
           "src_id": "n2",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "b"
+          "dst_port": "input_b"
         },
         {
           "src_id": "n3",
@@ -197405,6 +198822,9 @@
           "node_type": "stream_ingest"
         },
         {
+          "node_type": "feature_frontend"
+        },
+        {
           "node_type": "realtime_inference"
         },
         {
@@ -197538,13 +198958,13 @@
           "src_id": "n1",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "a"
+          "dst_port": "input_a"
         },
         {
           "src_id": "n2",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "b"
+          "dst_port": "input_b"
         },
         {
           "src_id": "n3",
@@ -197700,6 +199120,9 @@
           "node_type": "stream_ingest"
         },
         {
+          "node_type": "feature_frontend"
+        },
+        {
           "node_type": "realtime_inference"
         },
         {
@@ -197833,13 +199256,13 @@
           "src_id": "n1",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "a"
+          "dst_port": "input_a"
         },
         {
           "src_id": "n2",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "b"
+          "dst_port": "input_b"
         },
         {
           "src_id": "n3",
@@ -197995,6 +199418,9 @@
           "node_type": "stream_ingest"
         },
         {
+          "node_type": "feature_frontend"
+        },
+        {
           "node_type": "realtime_inference"
         },
         {
@@ -198128,13 +199554,13 @@
           "src_id": "n1",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "a"
+          "dst_port": "input_a"
         },
         {
           "src_id": "n2",
           "src_port": "output",
           "dst_id": "n3",
-          "dst_port": "b"
+          "dst_port": "input_b"
         },
         {
           "src_id": "n3",
@@ -198288,6 +199714,9 @@
       "node_chain": [
         {
           "node_type": "stream_ingest"
+        },
+        {
+          "node_type": "feature_frontend"
         },
         {
           "node_type": "realtime_inference"
@@ -198515,7 +199944,7 @@
         ],
         "agent_brief": "Instantiate tpl-cross-meeting-audio-asr-rag-factory, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Audio pack in factory cross pipeline.",
       "metadata_extra": {}
     },

@@ -69,7 +69,7 @@ def tpl(*, family, name, description, pack, packs_used, industry, modality, life
 AUDIO_DOMAINS = ["smart-home","automotive","industrial","healthcare","callcenter","media","security","retail"]
 AUDIO_TASKS = {
   "kws": ["dataset_ingest","audio_conditioner","segmenter","augmentation_pipeline","feature_frontend","dataset_builder","model_builder","trainer","evaluator"],
-  "sed": ["dataset_ingest","audio_conditioner","audio_quality_gate","augmentation_pipeline","feature_frontend","audio_event_detector","evaluator"],
+  "sed": ["dataset_ingest","audio_conditioner","audio_quality_gate","augmentation_pipeline","feature_frontend","dataset_builder","model_builder","trainer","evaluator"],
   "enhancement": ["dataset_ingest","audio_conditioner","speech_enhancer","audio_quality_gate","audio_exporter"],
   "diarization": ["dataset_ingest","audio_conditioner","speaker_separator","alignment_node","caption_export"],
   "captions": ["dataset_ingest","audio_conditioner","asr_transcribe","pii_redact","caption_export"],
@@ -77,7 +77,7 @@ AUDIO_TASKS = {
   "podcast-level": ["dataset_ingest","audio_conditioner","speech_enhancer","audio_exporter"],
   "meeting-crm": ["dataset_ingest","audio_conditioner","speaker_separator","asr_transcribe","structured_llm","http_webhook"],
   "compliance": ["schedule_trigger","dataset_ingest","asr_transcribe","pii_redact","eval_gate","http_webhook"],
-  "speaker-verify": ["dataset_ingest","audio_conditioner","segmenter","embedding_generator","dataset_builder","evaluator"],
+  "speaker-verify": ["dataset_ingest","audio_conditioner","segmenter","feature_frontend","dataset_builder","model_builder","trainer","evaluator"],
   "edge-kws": ["dataset_ingest","audio_conditioner","feature_frontend","dataset_builder","model_builder","trainer","evaluator","edge_optimizer","deployment_packager"],
   "stream-sed": ["stream_ingest","stream_processor","feature_frontend","audio_event_detector","http_webhook"],
 }
@@ -416,7 +416,7 @@ def build_all() -> list[dict]:
                 tags=["common","multimodal"], node_chain=chain("embedding_generator","multimodal_fusion","dataset_builder","dataset_balancer")))
         add(tpl(family="common", name=f"realtime-infer-{industry}", description=f"Realtime inference for {industry}.",
                 pack="Common", packs_used=["Common"], industry=industry, modality=["audio"], lifecycle=["observe"],
-                tags=["common","realtime"], node_chain=chain("stream_ingest","realtime_inference","http_webhook")))
+                tags=["common","realtime"], node_chain=chain("stream_ingest","feature_frontend","realtime_inference","http_webhook")))
 
     # Cross-pack
     cross = [

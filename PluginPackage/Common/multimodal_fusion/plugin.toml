@@ -1,6 +1,6 @@
 [plugin]
 name             = "multimodal-fusion"
-version          = "1.0.0"
+version          = "1.0.1"
 description      = "Fuse audio embeddings with text, video, or sensor modalities. Strategies: concat, attention, late fusion, cross-attention."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"

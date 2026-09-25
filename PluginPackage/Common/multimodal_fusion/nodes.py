@@ -6,8 +6,6 @@ Fusion strategies:
     late            — separate predictions per modality, weighted average
     cross_attention — bidirectional cross-attention between modalities
 """
-from __future__ import annotations
-
 import logging
 from typing import ClassVar, Literal
 from pydantic import Field
@@ -18,15 +16,9 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+from app.models.feature_array import FeatureArray
 
 log = logging.getLogger(__name__)
-
-# Import EmbeddingVector — available when embedding_generator plugin is installed
-try:
-    from embedding_generator.types import EmbeddingVector  # type: ignore
-except ImportError:
-    # Fallback: use object type if embedding_generator not installed
-    EmbeddingVector = object  # type: ignore
 
 
 class MultimodalFusionNode(Node):
@@ -38,7 +30,7 @@ class MultimodalFusionNode(Node):
         video  — list[EmbeddingVector] (optional)
 
     Output port:
-        output — list[EmbeddingVector] (fused representations)
+        output — list[FeatureArray] (fused representations, shape [1, D])
 
     Config:
         fusion_type (str): "concat" | "attention" | "late" | "cross_attention"
@@ -59,7 +51,7 @@ class MultimodalFusionNode(Node):
             "Strategies: concat, attention, late fusion, cross-attention."
         ),
         category="Features",
-        version="1.0.0",
+        version="1.0.1",
         tags=["multimodal", "fusion", "embeddings", "audio", "text", "video", "clap"],
         requires_gpu=False,
         supports_cpu=True,
@@ -73,10 +65,11 @@ class MultimodalFusionNode(Node):
     input_ports: ClassVar[dict[str, InputPort]] = {
         "audio": InputPort(
             name="audio",
+            # Bare list accepts EmbeddingVector lists from isolated embedding_generator.
             data_type=list,
             cardinality="single",
             required=True,
-            description="Audio embedding vectors",
+            description="Audio embedding vectors (list[EmbeddingVector] or list[ndarray])",
         ),
         "text": InputPort(
             name="text",
@@ -97,8 +90,8 @@ class MultimodalFusionNode(Node):
     output_ports: ClassVar[dict[str, OutputPort]] = {
         "output": OutputPort(
             name="output",
-            data_type=list,
-            description="Fused embedding vectors",
+            data_type=list[FeatureArray],
+            description="Fused representations as FeatureArray (shape [1, D]).",
         )
     }
 
@@ -177,27 +170,24 @@ class MultimodalFusionNode(Node):
                 if norm > 1e-8:
                     fused = fused / norm
 
-            # Wrap in EmbeddingVector if available
-            try:
-                source_path = getattr(audio_ev, "source_path", "")
-                label = getattr(audio_ev, "label", "")
-                meta = dict(getattr(audio_ev, "metadata", {}))
-                meta["multimodal_fusion"] = {
-                    "fusion_type": fusion_type,
-                    "modalities": ["audio"] + (["text"] if text_vecs else []) + (["video"] if video_vecs else []),
-                }
-                from embedding_generator.types import EmbeddingVector as EV  # type: ignore
-                result = EV(
-                    embedding=fused.astype(np.float32),
-                    source_path=source_path,
-                    label=label,
-                    embedding_model=f"multimodal_fusion_{fusion_type}",
-                    pooling="none",
-                    metadata=meta,
-                )
-            except ImportError:
-                result = fused.astype(np.float32)
-
+            source_path = getattr(audio_ev, "source_path", "")
+            label = getattr(audio_ev, "label", "")
+            meta = dict(getattr(audio_ev, "metadata", {}) or {})
+            meta["multimodal_fusion"] = {
+                "fusion_type": fusion_type,
+                "modalities": ["audio"]
+                + (["text"] if text_vecs else [])
+                + (["video"] if video_vecs else []),
+            }
+            # Emit FeatureArray so downstream dataset_builder / train nodes type-check.
+            vec = fused.astype(np.float32).reshape(1, -1)
+            result = FeatureArray(
+                data=vec,
+                label=label,
+                source_path=source_path,
+                feature_type=f"multimodal_fusion_{fusion_type}",
+                metadata=meta,
+            )
             output.append(result)
 
         return {"output": output}
