@@ -138,13 +138,14 @@ class VectorStoreWriteNode(Node):
             vec = _vec(item)
             if not vec:
                 continue
-            cid = str(getattr(item, "metadata", {}) or {}).get("chunk_id") if isinstance(getattr(item, "metadata", None), dict) else None
+            meta = getattr(item, "metadata", None)
+            cid = meta.get("chunk_id") if isinstance(meta, dict) else None
             if not cid:
                 cid = f"emb-{i}"
             text = ""
             if i < len(chunks):
                 text = getattr(chunks[i], "text", None) or ""
-                if not cid or cid.startswith("emb-"):
+                if not cid or str(cid).startswith("emb-"):
                     cid = getattr(chunks[i], "chunk_id", None) or cid
             ids.append(str(cid))
             docs.append(text or f"doc-{i}")
