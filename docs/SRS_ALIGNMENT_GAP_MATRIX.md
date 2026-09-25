@@ -379,7 +379,7 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 
 ### Wave A batch 1 landing
 
-- Tip: `038c38a570b933523b536c589dece1f70a90389c`
+- Tip: `e3f3dc4328cae7292040b02713a546d2314ed23a`
 - Closed: API-ERR-001, API-CONV-004 (key routes), RT-SM/PERS-001, GET/PUT projects, VAL schema.
 - Remaining after batch 2: dataset-version / workers MCP (Wave B); Edge checksum UI polish.
 
@@ -391,6 +391,6 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 
 ### Wave B landing
 
-- Tip: see commit on `cursor/usecase-plugins-workflows` after this docs update (filled in JSON).
+- Tip: `e3f3dc4328cae7292040b02713a546d2314ed23a`  # was `cursor/usecase-plugins-workflows` after this docs update (filled in JSON).
 - Closed: API-CONV-005, API-PAGE-001 (`?envelope=1`), audit §22.1 fields, CLI-000 globals+exits, DATA-VER-002/006, readiness ready/signals, API-FORBID-005 cancel-artifact, MCP dataset versions + workers/jobs.
 - Deferred to Wave C: default-envelope migration (P1), universal 503 store_corrupt on all reads, Devices OTA, CSP/token honesty, backup runbook, SIGTERM drain, Perf TBD.
