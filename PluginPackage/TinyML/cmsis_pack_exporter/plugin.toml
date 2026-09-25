@@ -1,0 +1,24 @@
+[plugin]
+name             = "cmsis-pack-exporter"
+version          = "0.1.0"
+description      = "CMSIS-Pack / static lib exporter"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "cmsis", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["cmsis_pack_exporter"]
+
+[config_schema.cmsis_pack_exporter]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+pack_vendor = { type = "string", title = "Pack vendor", default = "Graphyn", description = "Pack vendor." }
+target_rtos = { type = "string", title = "Target rtos", default = "none", description = "Target rtos." }
+include_cmsis_nn = { type = "boolean", title = "Include cmsis nn", default = true, description = "Include cmsis nn." }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/packages/cmsis", description = "Output path." }

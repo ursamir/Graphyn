@@ -1,0 +1,27 @@
+[plugin]
+name             = "onnx-runtime-infer"
+version          = "0.1.0"
+description      = "ONNX Runtime vision infer"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["vision", "onnx", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "onnxruntime>=1.16",
+]
+
+runtime = "inprocess"
+node_types = ["onnx_runtime_infer"]
+
+[config_schema.onnx_runtime_infer]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+providers = { type = "array", title = "Providers", default = [], description = "Providers." }
+imgsz = { type = "integer", title = "Imgsz", default = 640, description = "Imgsz." }
+task = { type = "string", title = "Task", default = "detect", description = "Task." }

@@ -1,0 +1,22 @@
+[plugin]
+name             = "parent-doc-retriever"
+version          = "0.1.0"
+description      = "Retrieve child chunks then expand to parent documents"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "parent", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["parent_doc_retriever"]
+
+[config_schema.parent_doc_retriever]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+child_top_k = { type = "integer", title = "Child top k", default = 8, description = "Child top k." }
+parent_top_k = { type = "integer", title = "Parent top k", default = 4, description = "Parent top k." }

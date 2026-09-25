@@ -1,0 +1,27 @@
+[plugin]
+name             = "memory-store"
+version          = "0.1.0"
+description      = "Short/long-term agent memory"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "memory", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "faiss-cpu>=1.7",
+]
+
+runtime = "inprocess"
+node_types = ["memory_store"]
+
+[config_schema.memory_store]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+backend = { type = "string", title = "Backend", default = "json", description = "Backend." }
+persist_path = { type = "string", title = "Persist path", default = "workspace/artifacts/agent_memory", description = "Persist path." }
+namespace = { type = "string", title = "Namespace", default = "default", description = "Namespace." }

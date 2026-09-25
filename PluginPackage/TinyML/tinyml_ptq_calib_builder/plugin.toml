@@ -1,0 +1,23 @@
+[plugin]
+name             = "tinyml-ptq-calib-builder"
+version          = "0.1.0"
+description      = "Build PTQ representative set"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "tinyml", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["tinyml_ptq_calib_builder"]
+
+[config_schema.tinyml_ptq_calib_builder]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+max_samples = { type = "integer", title = "Max samples", default = 100, description = "Max samples." }
+stratify = { type = "boolean", title = "Stratify", default = true, description = "Stratify." }
+seed = { type = "integer", title = "Seed", default = 42, description = "Seed." }

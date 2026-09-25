@@ -1,0 +1,27 @@
+[plugin]
+name             = "kg-light-extract"
+version          = "0.1.0"
+description      = "Light entity/relation extract"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "kg", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "httpx>=0.24",
+]
+
+runtime = "inprocess"
+node_types = ["kg_light_extract"]
+
+[config_schema.kg_light_extract]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+backend = { type = "string", title = "Backend", default = "llm", description = "Backend." }
+schema = { type = "object", title = "Schema", default = {}, description = "Schema." }
+api_secret_name = { type = "string", title = "Api secret name", default = "OPENAI_API_KEY", description = "Api secret name." }

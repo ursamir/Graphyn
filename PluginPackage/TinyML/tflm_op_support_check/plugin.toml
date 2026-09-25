@@ -1,0 +1,26 @@
+[plugin]
+name             = "tflm-op-support-check"
+version          = "0.1.0"
+description      = "Check ops vs TFLM kernel allowlist"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "tflm", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.13",
+]
+
+runtime = "inprocess"
+node_types = ["tflm_op_support_check"]
+
+[config_schema.tflm_op_support_check]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+tflm_version = { type = "string", title = "Tflm version", default = "latest", description = "Tflm version." }
+fail_on_unsupported = { type = "boolean", title = "Fail on unsupported", default = true, description = "Fail on unsupported." }

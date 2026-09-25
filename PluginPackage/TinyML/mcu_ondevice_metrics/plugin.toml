@@ -1,0 +1,22 @@
+[plugin]
+name             = "mcu-ondevice-metrics"
+version          = "0.1.0"
+description      = "On-device metrics placeholder (needs-API)"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "mcu", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["mcu_ondevice_metrics"]
+
+[config_schema.mcu_ondevice_metrics]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+device_id = { type = "string", title = "Device id", default = "", description = "Device id." }
+dry_run = { type = "boolean", title = "Dry run", default = true, description = "Dry run." }

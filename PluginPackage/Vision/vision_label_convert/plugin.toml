@@ -1,0 +1,28 @@
+[plugin]
+name             = "vision-label-convert"
+version          = "0.1.0"
+description      = "COCO↔YOLO↔VOC label convert"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["vision", "vision", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "ultralytics>=8.0",
+    "torch>=2.0",
+]
+
+runtime = "inprocess"
+node_types = ["vision_label_convert"]
+
+[config_schema.vision_label_convert]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+from_format = { type = "string", title = "From format", default = "coco", description = "From format." }
+to_format = { type = "string", title = "To format", default = "yolo", description = "To format." }
+class_map = { type = "object", title = "Class map", default = {}, description = "Class map." }

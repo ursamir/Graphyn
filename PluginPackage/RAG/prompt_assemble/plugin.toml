@@ -1,0 +1,23 @@
+[plugin]
+name             = "prompt-assemble"
+version          = "0.1.0"
+description      = "Assemble RAG prompt slots"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "prompt", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["prompt_assemble"]
+
+[config_schema.prompt_assemble]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+system_template = { type = "string", title = "System template", default = "", description = "System template." }
+context_template = { type = "string", title = "Context template", default = "", description = "Context template." }
+max_context_chars = { type = "integer", title = "Max context chars", default = 8000, description = "Max context chars." }

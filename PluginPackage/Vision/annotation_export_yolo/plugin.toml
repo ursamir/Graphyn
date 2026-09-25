@@ -1,0 +1,27 @@
+[plugin]
+name             = "annotation-export-yolo"
+version          = "0.1.0"
+description      = "Export YOLO labels + data.yaml"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["vision", "annotation", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "ultralytics>=8.0",
+    "torch>=2.0",
+]
+
+runtime = "inprocess"
+node_types = ["annotation_export_yolo"]
+
+[config_schema.annotation_export_yolo]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/vision/yolo", description = "Output dir." }
+create_data_yaml = { type = "boolean", title = "Create data yaml", default = true, description = "Create data yaml." }

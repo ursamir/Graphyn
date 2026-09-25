@@ -1,0 +1,26 @@
+[plugin]
+name             = "wakeword-export-onnx"
+version          = "0.1.0"
+description      = "WakeWord ONNX exporter node"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["wakeword", "wakeword", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "torch>=2.0",
+]
+
+runtime = "inprocess"
+node_types = ["wakeword_export_onnx"]
+
+[config_schema.wakeword_export_onnx]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+opset = { type = "integer", title = "Opset", default = 13, description = "Opset." }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/optimized/wakeword", description = "Output path." }

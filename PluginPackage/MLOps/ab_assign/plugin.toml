@@ -1,0 +1,23 @@
+[plugin]
+name             = "ab-assign"
+version          = "0.1.0"
+description      = "Deterministic A/B assignment"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["mlops", "ab", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["ab_assign"]
+
+[config_schema.ab_assign]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+experiment_key = { type = "string", title = "Experiment key", default = "default", description = "Experiment key." }
+variants = { type = "array", title = "Variants", default = [], description = "Variants." }
+weights = { type = "array", title = "Weights", default = [0.9, 0.1], description = "Weights." }

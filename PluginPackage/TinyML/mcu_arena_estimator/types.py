@@ -1,0 +1,15 @@
+"""Port types for mcu_arena_estimator (TinyML).
+
+Do NOT use `from __future__ import annotations`.
+"""
+from typing import Any, Optional
+
+from pydantic import Field
+
+from app.core.nodes.ports import PortDataType
+
+
+class ArenaEstimate(PortDataType):
+    arena_bytes: int = 0
+    peak_bytes: int = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)

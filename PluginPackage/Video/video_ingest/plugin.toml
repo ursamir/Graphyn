@@ -1,0 +1,27 @@
+[plugin]
+name             = "video-ingest"
+version          = "0.1.0"
+description      = "Ingest video files/folders"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["video", "video", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "opencv-python-headless>=4.8",
+]
+
+runtime = "inprocess"
+node_types = ["video_ingest"]
+
+[config_schema.video_ingest]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+path = { type = "string", title = "Path", default = "", description = "Path." }
+recursive = { type = "boolean", title = "Recursive", default = true, description = "Recursive." }
+extensions = { type = "array", title = "Extensions", default = [], description = "Extensions." }

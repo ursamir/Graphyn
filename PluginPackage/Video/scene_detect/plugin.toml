@@ -1,0 +1,27 @@
+[plugin]
+name             = "scene-detect"
+version          = "0.1.0"
+description      = "Scene boundary detection"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["video", "scene", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "opencv-python-headless>=4.8",
+]
+
+runtime = "inprocess"
+node_types = ["scene_detect"]
+
+[config_schema.scene_detect]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+threshold = { type = "number", title = "Threshold", default = 27.0, description = "Threshold." }
+min_scene_len_s = { type = "number", title = "Min scene len s", default = 1.0, description = "Min scene len s." }
+backend = { type = "string", title = "Backend", default = "content", description = "Backend." }

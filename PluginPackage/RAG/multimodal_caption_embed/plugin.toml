@@ -1,0 +1,26 @@
+[plugin]
+name             = "multimodal-caption-embed"
+version          = "0.1.0"
+description      = "Caption then embed images/pages"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "multimodal", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "torch>=2.0",
+]
+
+runtime = "inprocess"
+node_types = ["multimodal_caption_embed"]
+
+[config_schema.multimodal_caption_embed]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+caption_model = { type = "string", title = "Caption model", default = "blip", description = "Caption model." }
+embed_model = { type = "string", title = "Embed model", default = "sentence-transformers/all-MiniLM-L6-v2", description = "Embed model." }

@@ -1,0 +1,22 @@
+[plugin]
+name             = "dataset-diff"
+version          = "0.1.0"
+description      = "Diff two DatasetArtifacts"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["mlops", "dataset", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["dataset_diff"]
+
+[config_schema.dataset_diff]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+hash_fields = { type = "array", title = "Hash fields", default = [], description = "Hash fields." }
+fail_on_drift = { type = "boolean", title = "Fail on drift", default = false, description = "Fail on drift." }

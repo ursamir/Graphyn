@@ -1,0 +1,22 @@
+[plugin]
+name             = "mcu-window"
+version          = "0.1.0"
+description      = "Fixed/sliding windowing for MCU audio/IMU streams"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "mcu", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["mcu_window"]
+
+[config_schema.mcu_window]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+window_ms = { type = "integer", title = "Window ms", default = 1000, description = "Window ms." }
+hop_ms = { type = "integer", title = "Hop ms", default = 200, description = "Hop ms." }

@@ -1,0 +1,29 @@
+[plugin]
+name             = "mcu-model-zoo"
+version          = "0.1.0"
+description      = "DS-CNN/MobileNetTiny/MCUNet/KWS zoo"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "mcu", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "torch>=2.0",
+    "tensorflow>=2.13",
+]
+
+runtime = "inprocess"
+node_types = ["mcu_model_zoo"]
+
+[config_schema.mcu_model_zoo]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+architecture = { type = "string", title = "Architecture", default = "ds_cnn", description = "Architecture." }
+num_classes = { type = "integer", title = "Num classes", default = 12, description = "Num classes." }
+input_shape = { type = "array", title = "Input shape", default = [49, 10, 1], description = "Input shape." }
+width_multiplier = { type = "number", title = "Width multiplier", default = 0.25, description = "Width multiplier." }

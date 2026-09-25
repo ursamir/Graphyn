@@ -1,0 +1,24 @@
+[plugin]
+name             = "ethos-u-vela-compile"
+version          = "0.1.0"
+description      = "Arm Vela compile for Ethos-U (needs-tool)"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "ethos", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["ethos_u_vela_compile"]
+
+[config_schema.ethos_u_vela_compile]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+accelerator = { type = "string", title = "Accelerator", default = "ethos-u55-128", description = "Accelerator." }
+system_config = { type = "string", title = "System config", default = "Ethos_U55_High_End_Embedded", description = "System config." }
+vela_bin = { type = "string", title = "Vela bin", default = "vela", description = "Vela bin." }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/optimized/vela", description = "Output path." }

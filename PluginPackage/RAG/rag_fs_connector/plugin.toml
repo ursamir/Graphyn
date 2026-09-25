@@ -1,0 +1,23 @@
+[plugin]
+name             = "rag-fs-connector"
+version          = "0.1.0"
+description      = "Filesystem docs connector"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "rag", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["rag_fs_connector"]
+
+[config_schema.rag_fs_connector]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+path = { type = "string", title = "Path", default = "", description = "Path." }
+recursive = { type = "boolean", title = "Recursive", default = true, description = "Recursive." }
+extensions = { type = "array", title = "Extensions", default = [], description = "Extensions." }

@@ -1,0 +1,22 @@
+[plugin]
+name             = "run-metadata-stamp"
+version          = "0.1.0"
+description      = "Stamp git/versions/seed metadata"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["mlops", "run", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["run_metadata_stamp"]
+
+[config_schema.run_metadata_stamp]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+include_git = { type = "boolean", title = "Include git", default = true, description = "Include git." }
+seed = { type = "integer", title = "Seed", default = 0, description = "Seed." }

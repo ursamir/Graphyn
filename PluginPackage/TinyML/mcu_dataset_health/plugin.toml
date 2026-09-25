@@ -1,0 +1,22 @@
+[plugin]
+name             = "mcu-dataset-health"
+version          = "0.1.0"
+description      = "MCU dataset class balance health"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "mcu", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["mcu_dataset_health"]
+
+[config_schema.mcu_dataset_health]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+min_per_class = { type = "integer", title = "Min per class", default = 50, description = "Min per class." }
+max_imbalance_ratio = { type = "number", title = "Max imbalance ratio", default = 5.0, description = "Max imbalance ratio." }

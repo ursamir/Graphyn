@@ -1,0 +1,28 @@
+[plugin]
+name             = "micro-speech-pipeline"
+version          = "0.1.0"
+description      = "Opinionated KWS→int8 tflite helper"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "micro", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.13",
+    "tflite-runtime>=2.14",
+]
+
+runtime = "inprocess"
+node_types = ["micro_speech_pipeline"]
+
+[config_schema.micro_speech_pipeline]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+labels = { type = "array", title = "Labels", default = [], description = "Labels." }
+architecture = { type = "string", title = "Architecture", default = "ds_cnn", description = "Architecture." }
+quantize = { type = "string", title = "Quantize", default = "int8", description = "Quantize." }

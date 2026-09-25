@@ -1,0 +1,22 @@
+[plugin]
+name             = "tool-router"
+version          = "0.1.0"
+description      = "Route tool-calls to registered tools"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "tool", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["tool_router"]
+
+[config_schema.tool_router]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+tools = { type = "array", title = "Tools", default = [], description = "Tools." }
+strict = { type = "boolean", title = "Strict", default = true, description = "Strict." }

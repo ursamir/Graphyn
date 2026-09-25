@@ -1,0 +1,28 @@
+[plugin]
+name             = "action-classify"
+version          = "0.1.0"
+description      = "Action/activity classify"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["video", "action", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "torch>=2.0",
+    "onnxruntime>=1.16",
+]
+
+runtime = "inprocess"
+node_types = ["action_classify"]
+
+[config_schema.action_classify]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+model_path = { type = "string", title = "Model path", default = "", description = "Model path." }
+backend = { type = "string", title = "Backend", default = "auto", description = "Backend." }
+num_frames = { type = "integer", title = "Num frames", default = 16, description = "Num frames." }

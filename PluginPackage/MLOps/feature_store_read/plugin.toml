@@ -1,0 +1,22 @@
+[plugin]
+name             = "feature-store-read"
+version          = "0.1.0"
+description      = "Light feature store read"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["mlops", "feature", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["feature_store_read"]
+
+[config_schema.feature_store_read]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+persist_path = { type = "string", title = "Persist path", default = "workspace/artifacts/feature_store", description = "Persist path." }
+as_of = { type = "string", title = "As of", default = "", description = "As of." }

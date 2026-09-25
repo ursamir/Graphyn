@@ -1,0 +1,22 @@
+[plugin]
+name             = "model-card"
+version          = "0.1.0"
+description      = "Generate model card md/json"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["mlops", "model", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["model_card"]
+
+[config_schema.model_card]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/model_cards", description = "Output path." }
+include_confusion = { type = "boolean", title = "Include confusion", default = true, description = "Include confusion." }

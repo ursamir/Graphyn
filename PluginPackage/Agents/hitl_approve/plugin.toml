@@ -1,0 +1,23 @@
+[plugin]
+name             = "hitl-approve"
+version          = "0.1.0"
+description      = "Human-in-the-loop approval gate before promote/ship/destructive ops"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "hitl", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["hitl_approve"]
+
+[config_schema.hitl_approve]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+timeout_s = { type = "integer", title = "Timeout s", default = 3600, description = "Timeout s." }
+approver_roles = { type = "array", title = "Approver roles", default = [], description = "Approver roles." }
+reason_required = { type = "boolean", title = "Reason required", default = true, description = "Reason required." }

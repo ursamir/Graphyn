@@ -1,0 +1,28 @@
+[plugin]
+name             = "vector-store-query"
+version          = "0.1.0"
+description      = "Dense vector similarity query"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "vector", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "faiss-cpu>=1.7",
+    "chromadb>=0.4",
+]
+
+runtime = "inprocess"
+node_types = ["vector_store_query"]
+
+[config_schema.vector_store_query]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+top_k = { type = "integer", title = "Top k", default = 5, description = "Top k." }
+backend = { type = "string", title = "Backend", default = "faiss", description = "Backend." }
+persist_path = { type = "string", title = "Persist path", default = "workspace/artifacts/vectorstores/default", description = "Persist path." }

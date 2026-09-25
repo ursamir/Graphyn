@@ -1,0 +1,29 @@
+[plugin]
+name             = "wakeword-infer"
+version          = "0.1.0"
+description      = "WakeWord realtime infer node"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["wakeword", "wakeword", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "tflite-runtime>=2.14",
+    "onnxruntime>=1.16",
+    "tensorflow>=2.13",
+]
+
+runtime = "inprocess"
+node_types = ["wakeword_infer"]
+
+[config_schema.wakeword_infer]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+model_path = { type = "string", title = "Model path", default = "", description = "Model path." }
+threshold = { type = "number", title = "Threshold", default = 0.8, description = "Threshold." }
+backend = { type = "string", title = "Backend", default = "auto", description = "Backend." }

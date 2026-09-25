@@ -1,0 +1,22 @@
+[plugin]
+name             = "mcu-arena-estimator"
+version          = "0.1.0"
+description      = "Tensor arena / peak RAM estimate"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "mcu", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["mcu_arena_estimator"]
+
+[config_schema.mcu_arena_estimator]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+target_ram_kb = { type = "integer", title = "Target ram kb", default = 256, description = "Target ram kb." }
+headroom_pct = { type = "number", title = "Headroom pct", default = 15.0, description = "Headroom pct." }

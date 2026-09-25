@@ -1,0 +1,29 @@
+[plugin]
+name             = "mcu-train"
+version          = "0.1.0"
+description      = "MCU train + PTQ calib + optional QAT"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "mcu", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.13",
+]
+
+runtime = "inprocess"
+node_types = ["mcu_train"]
+
+[config_schema.mcu_train]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+epochs = { type = "integer", title = "Epochs", default = 30, description = "Epochs." }
+qat = { type = "boolean", title = "Qat", default = false, description = "Qat." }
+qat_epochs = { type = "integer", title = "Qat epochs", default = 5, description = "Qat epochs." }
+calib_fraction = { type = "number", title = "Calib fraction", default = 0.1, description = "Calib fraction." }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/models/mcu", description = "Output path." }

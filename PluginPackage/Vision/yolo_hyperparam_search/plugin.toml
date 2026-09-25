@@ -1,0 +1,29 @@
+[plugin]
+name             = "yolo-hyperparam-search"
+version          = "0.1.0"
+description      = "Optuna-style hyperparameter search over YOLO train configs"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["vision", "yolo", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "ultralytics>=8.0",
+    "torch>=2.0",
+]
+
+runtime = "inprocess"
+node_types = ["yolo_hyperparam_search"]
+
+[config_schema.yolo_hyperparam_search]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+n_trials = { type = "integer", title = "N trials", default = 20, description = "N trials." }
+search_space = { type = "object", title = "Search space", default = {}, description = "Search space." }
+metric = { type = "string", title = "Metric", default = "mAP50", description = "Metric." }
+direction = { type = "string", title = "Direction", default = "maximize", description = "Direction." }

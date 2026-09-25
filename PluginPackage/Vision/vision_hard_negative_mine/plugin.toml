@@ -1,0 +1,22 @@
+[plugin]
+name             = "vision-hard-negative-mine"
+version          = "0.1.0"
+description      = "Hard-negative mining from preds"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["vision", "vision", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["vision_hard_negative_mine"]
+
+[config_schema.vision_hard_negative_mine]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+iou_thresh = { type = "number", title = "Iou thresh", default = 0.5, description = "Iou thresh." }
+max_negatives = { type = "integer", title = "Max negatives", default = 500, description = "Max negatives." }

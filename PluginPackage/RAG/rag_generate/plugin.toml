@@ -1,0 +1,28 @@
+[plugin]
+name             = "rag-generate"
+version          = "0.1.0"
+description      = "Generate answer (wrap structured_llm pattern)"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "rag", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "httpx>=0.24",
+]
+
+runtime = "inprocess"
+node_types = ["rag_generate"]
+
+[config_schema.rag_generate]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+provider = { type = "string", title = "Provider", default = "openai_compat", description = "Provider." }
+model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Model." }
+temperature = { type = "number", title = "Temperature", default = 0.0, description = "Temperature." }
+api_secret_name = { type = "string", title = "Api secret name", default = "OPENAI_API_KEY", description = "Api secret name." }

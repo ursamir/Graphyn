@@ -1,0 +1,22 @@
+[plugin]
+name             = "citation-attach"
+version          = "0.1.0"
+description      = "Attach citations to RagAnswer"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "citation", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["citation_attach"]
+
+[config_schema.citation_attach]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+style = { type = "string", title = "Style", default = "numeric", description = "Style." }
+min_overlap = { type = "number", title = "Min overlap", default = 0.2, description = "Min overlap." }

@@ -1,0 +1,29 @@
+[plugin]
+name             = "yolo-dataset-yaml-build"
+version          = "0.1.0"
+description      = "Build Ultralytics data.yaml + path layout from Vision dataset artifacts"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["vision", "yolo", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "ultralytics>=8.0",
+]
+
+runtime = "inprocess"
+node_types = ["yolo_dataset_yaml_build"]
+
+[config_schema.yolo_dataset_yaml_build]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+task = { type = "string", title = "Task", default = "detect", description = "Task." }
+names = { type = "array", title = "Names", default = [], description = "Names." }
+path = { type = "string", title = "Path", default = "", description = "Path." }
+train = { type = "string", title = "Train", default = "images/train", description = "Train." }
+val = { type = "string", title = "Val", default = "images/val", description = "Val." }

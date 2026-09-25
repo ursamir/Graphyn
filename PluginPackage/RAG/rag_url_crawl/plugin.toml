@@ -1,0 +1,27 @@
+[plugin]
+name             = "rag-url-crawl"
+version          = "0.1.0"
+description      = "URL crawl for RAG ingest"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "rag", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "httpx>=0.24",
+]
+
+runtime = "inprocess"
+node_types = ["rag_url_crawl"]
+
+[config_schema.rag_url_crawl]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+urls = { type = "array", title = "Urls", default = [], description = "Urls." }
+max_pages = { type = "integer", title = "Max pages", default = 20, description = "Max pages." }
+same_host_only = { type = "boolean", title = "Same host only", default = true, description = "Same host only." }

@@ -1,0 +1,22 @@
+[plugin]
+name             = "chunk-markdown"
+version          = "0.1.0"
+description      = "Markdown header-aware chunker"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "chunk", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["chunk_markdown"]
+
+[config_schema.chunk_markdown]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+headers_to_split_on = { type = "array", title = "Headers to split on", default = [], description = "Headers to split on." }
+chunk_size = { type = "integer", title = "Chunk size", default = 1200, description = "Chunk size." }

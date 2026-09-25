@@ -1,0 +1,23 @@
+[plugin]
+name             = "canary-gate"
+version          = "0.1.0"
+description      = "Canary promote/hold gate"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["mlops", "canary", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["canary_gate"]
+
+[config_schema.canary_gate]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+metric_key = { type = "string", title = "Metric key", default = "test_accuracy", description = "Metric key." }
+min_value = { type = "number", title = "Min value", default = 0.0, description = "Min value." }
+max_regression = { type = "number", title = "Max regression", default = 0.02, description = "Max regression." }

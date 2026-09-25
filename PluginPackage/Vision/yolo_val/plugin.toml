@@ -1,0 +1,29 @@
+[plugin]
+name             = "yolo-val"
+version          = "0.1.0"
+description      = "Ultralytics YOLO validation"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["vision", "yolo", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "ultralytics>=8.0",
+    "torch>=2.0",
+]
+
+runtime = "inprocess"
+node_types = ["yolo_val"]
+
+[config_schema.yolo_val]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+task = { type = "string", title = "Task", default = "detect", description = "Task." }
+imgsz = { type = "integer", title = "Imgsz", default = 640, description = "Imgsz." }
+conf = { type = "number", title = "Conf", default = 0.001, description = "Conf." }
+iou = { type = "number", title = "Iou", default = 0.6, description = "Iou." }

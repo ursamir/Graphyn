@@ -1,0 +1,29 @@
+[plugin]
+name             = "tflm-quantize"
+version          = "0.1.0"
+description      = "Int8/int16 TFLM-compatible quantize"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["tinyml", "tflm", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "tensorflow>=2.13",
+]
+
+runtime = "inprocess"
+node_types = ["tflm_quantize"]
+
+[config_schema.tflm_quantize]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+quantization = { type = "string", title = "Quantization", default = "int8", description = "Quantization." }
+full_integer = { type = "boolean", title = "Full integer", default = true, description = "Full integer." }
+representative_samples = { type = "integer", title = "Representative samples", default = 100, description = "Representative samples." }
+ensure_tflm_ops = { type = "boolean", title = "Ensure tflm ops", default = true, description = "Ensure tflm ops." }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/optimized/tflm", description = "Output path." }

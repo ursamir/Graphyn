@@ -1,0 +1,22 @@
+[plugin]
+name             = "mcp-tool-call"
+version          = "0.1.0"
+description      = "Invoke Graphyn MCP tool by name"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["agents", "mcp", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["mcp_tool_call"]
+
+[config_schema.mcp_tool_call]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+timeout_s = { type = "number", title = "Timeout s", default = 60.0, description = "Timeout s." }
+server = { type = "string", title = "Server", default = "graphyn", description = "Server." }

@@ -1,0 +1,22 @@
+[plugin]
+name             = "av-align"
+version          = "0.1.0"
+description      = "Align video with AudioSample streams"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["video", "av", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["av_align"]
+
+[config_schema.av_align]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+method = { type = "string", title = "Method", default = "timestamp", description = "Method." }
+max_offset_ms = { type = "integer", title = "Max offset ms", default = 500, description = "Max offset ms." }

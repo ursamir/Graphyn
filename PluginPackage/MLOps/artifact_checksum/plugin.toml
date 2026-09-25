@@ -1,0 +1,22 @@
+[plugin]
+name             = "artifact-checksum"
+version          = "0.1.0"
+description      = "SHA256 checksum + sidecar"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["mlops", "artifact", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["artifact_checksum"]
+
+[config_schema.artifact_checksum]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+algo = { type = "string", title = "Algo", default = "sha256", description = "Algo." }
+write_sidecar = { type = "boolean", title = "Write sidecar", default = true, description = "Write sidecar." }

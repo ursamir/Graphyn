@@ -1,0 +1,23 @@
+[plugin]
+name             = "wakeword-data-gen"
+version          = "0.1.0"
+description      = "Promote data_generator→plugin"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["wakeword", "wakeword", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["wakeword_data_gen"]
+
+[config_schema.wakeword_data_gen]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+phrases = { type = "array", title = "Phrases", default = [], description = "Phrases." }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Sample rate." }
+output_dir = { type = "string", title = "Output dir", default = "workspace/datasets/wakeword", description = "Output dir." }

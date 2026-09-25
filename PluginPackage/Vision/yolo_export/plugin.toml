@@ -1,0 +1,32 @@
+[plugin]
+name             = "yolo-export"
+version          = "0.1.0"
+description      = "Export onnx/engine/coreml/openvino/tflite/ncnn/rknn"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["vision", "yolo", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "ultralytics>=8.0",
+    "tflite-runtime>=2.14",
+    "tensorflow>=2.13",
+]
+
+runtime = "inprocess"
+node_types = ["yolo_export"]
+
+[config_schema.yolo_export]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+format = { type = "string", title = "Format", default = "onnx", description = "Format." }
+imgsz = { type = "integer", title = "Imgsz", default = 640, description = "Imgsz." }
+half = { type = "boolean", title = "Half", default = false, description = "Half." }
+int8 = { type = "boolean", title = "Int8", default = false, description = "Int8." }
+nms = { type = "boolean", title = "Nms", default = true, description = "Nms." }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/optimized/yolo", description = "Output path." }

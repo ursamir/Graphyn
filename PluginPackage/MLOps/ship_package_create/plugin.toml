@@ -1,0 +1,26 @@
+[plugin]
+name             = "ship-package-create"
+version          = "0.1.0"
+description      = "Create ship package (REST semantics)"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["mlops", "ship", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+runtime = "inprocess"
+node_types = ["ship_package_create"]
+
+[config_schema.ship_package_create]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+project = { type = "string", title = "Project", default = "", description = "Project." }
+model_name = { type = "string", title = "Model name", default = "", description = "Model name." }
+model_stage_or_version = { type = "string", title = "Model stage or version", default = "latest", description = "Model stage or version." }
+target = { type = "object", title = "Target", default = {}, description = "Target." }
+env = { type = "string", title = "Env", default = "draft", description = "Env." }
+unsigned_allowed = { type = "boolean", title = "Unsigned allowed", default = true, description = "Unsigned allowed." }

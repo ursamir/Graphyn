@@ -1,0 +1,30 @@
+[plugin]
+name             = "text-embed"
+version          = "0.1.0"
+description      = "Text embeddings for chunks"
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["rag", "text", "stub"]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "torch>=2.0",
+    "sentence-transformers>=2.2",
+    "httpx>=0.24",
+]
+
+runtime = "inprocess"
+node_types = ["text_embed"]
+
+[config_schema.text_embed]
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+backend = { type = "string", title = "Backend", default = "sentence_transformers", description = "Backend." }
+model_name_or_path = { type = "string", title = "Model name or path", default = "sentence-transformers/all-MiniLM-L6-v2", description = "Model name or path." }
+normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize." }
+api_secret_name = { type = "string", title = "Api secret name", default = "OPENAI_API_KEY", description = "Api secret name." }
