@@ -33,6 +33,11 @@ from app.core.errors import ResumeError
 
 log = logging.getLogger(__name__)
 
+
+class ArtifactCommitForbidden(RuntimeError):
+    """Raised when a cancelled run attempts to commit an artifact (API-FORBID-005)."""
+
+
 if TYPE_CHECKING:
     from app.core.artifact_store import ArtifactRecord, ArtifactStore
     from app.core.provenance import ProvenanceStore
@@ -368,6 +373,26 @@ class RunManager:
         name: str | None = None,
     ) -> "ArtifactRecord":
         from app.core.artifact_store import ArtifactRecord
+
+        # API-FORBID-005 / RT-CANCEL: hard-forbid artifact commit after cancel.
+        if self.is_cancelled:
+            raise ArtifactCommitForbidden(
+                f"Cannot commit artifact for cancelled run {self.run_id}"
+            )
+        # Also refuse when durable meta already terminal cancelled (race).
+        try:
+            meta_path = os.path.join(self.base_path, "meta.json")
+            if os.path.exists(meta_path):
+                with open(meta_path, encoding="utf-8") as fh:
+                    meta = json.load(fh)
+                if isinstance(meta, dict) and str(meta.get("status") or "").lower() == "cancelled":
+                    raise ArtifactCommitForbidden(
+                        f"Cannot commit artifact for cancelled run {self.run_id}"
+                    )
+        except ArtifactCommitForbidden:
+            raise
+        except Exception:
+            pass
 
         record, deduplicated = self._get_artifact_store().register(
             run_id=self.run_id,

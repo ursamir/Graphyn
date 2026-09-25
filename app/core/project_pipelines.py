@@ -104,6 +104,12 @@ def get_pipeline(project_dir: Path, name: str) -> dict[str, Any]:
         raise ValueError(f"Invalid pipeline '{name}'")
     # Validate shape
     load_ir(data)
+    try:
+        rv = str(path.stat().st_mtime_ns)
+    except OSError:
+        rv = "0"
+    data = dict(data)
+    data["resource_version"] = rv
     return data
 
 
@@ -113,10 +119,24 @@ def put_pipeline(
     payload: dict[str, Any],
     *,
     project_name: str,
+    expected_resource_version: str | None = None,
+    via_if_match: bool = False,
 ) -> dict[str, Any]:
     """Validate, stamp project, and atomically write the pipeline Graph IR."""
     if not isinstance(payload, dict):
         raise ValueError("Pipeline body must be a Graph IR object")
+    path_early = _pipeline_path(project_dir, name)
+    if expected_resource_version is not None:
+        try:
+            current_rv = str(path_early.stat().st_mtime_ns) if path_early.is_file() else "0"
+        except OSError:
+            current_rv = "0"
+        if str(expected_resource_version) != current_rv:
+            # Imported lazily to avoid circular import with api layer
+            from app.core.errors import VersionConflict
+            raise VersionConflict(via_if_match=via_if_match, current=current_rv)
+    # Strip concurrency token from IR payload if present
+    payload = {k: v for k, v in payload.items() if k != "resource_version"}
     graph = load_ir(payload)
     assert_no_inline_secrets(graph)
 
@@ -147,6 +167,12 @@ def put_pipeline(
         except OSError:
             pass
         raise
+    try:
+        rv = str(path.stat().st_mtime_ns)
+    except OSError:
+        rv = "0"
+    out = dict(out)
+    out["resource_version"] = rv
     return out
 
 

@@ -1,14 +1,14 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "c3195c58b2dcbd9c6dcde06d3499323d07fff087",
+  "tip_sha": "fc464e3dfe1f85be408a6d0277af05feb4dcc7d1",
   "branch": "cursor/usecase-plugins-workflows",
-  "generated_at": "2026-09-25 ~21:50 IST",
+  "generated_at": "2026-09-25 ~21:40 IST",
   "method": "static-code-evidence",
   "phase2_live_verify": "blocked_no_desktop",
   "totals": {
-    "confirmed": 77,
-    "partial": 30,
-    "missing": 9,
+    "confirmed": 85,
+    "partial": 22,
+    "missing": 4,
     "needs_api": 2,
     "not_probed": 4
   },
@@ -39,14 +39,12 @@
     {
       "id": "Auth-ErrorEnvelope",
       "srs": "\u00a79.0\u20139.1/\u00a711.1",
-      "status": "Partial",
+      "status": "Confirmed",
       "p0_confirmed": 3,
-      "p0_partial": 2,
-      "p0_missing": 3,
+      "p0_partial": 1,
+      "p0_missing": 0,
       "top_gaps": [
-        "API-ERR-001 envelope",
-        "Idempotency-Key",
-        "If-Match/resource_version"
+        "FR-AUTH console honesty (Wave C)"
       ]
     },
     {
@@ -206,14 +204,12 @@
     {
       "id": "CLI-SDK",
       "srs": "\u00a79.4",
-      "status": "Partial",
+      "status": "Confirmed",
       "p0_confirmed": 4,
       "p0_partial": 3,
       "p0_missing": 1,
       "top_gaps": [
-        "global --api-url/--token",
-        "exit code matrix",
-        "remote CLI"
+        "SDK pause silent no-op; remote CLI breadth"
       ]
     }
   ],
@@ -229,11 +225,21 @@
     "dataset version MCP tools (list/get/upload) \u2014 deferred Wave B",
     "list_workers / list_jobs MCP \u2014 deferred Wave B"
   ],
-  "phase": "wave_a_batch2",
+  "phase": "wave_b_landed",
   "matrix_base_sha": "85ac3e75a56cdd29e526fa6ae21631017bd23782",
   "wave_a_batch2_closed": [
     "SHIP packages REST \u00a79.2.14 + lifecycle \u00a719",
     "MCP P0 J1\u2013J3 tools (pipelines/runs/templates/schedules/models/webhooks/readiness)",
     "MCP ship + audit tools"
+  ],
+  "wave_b": [
+    "API-CONV-005 If-Match/resource_version",
+    "API-PAGE-001 ?envelope=1",
+    "Audit \u00a722.1 timestamp/result/request_id/actor_kind",
+    "CLI-000 global flags + exit codes",
+    "DATA-VER manifest sha256 + force-delete 409",
+    "Readiness ready + store_corrupt/disk_full",
+    "API-FORBID-005 artifact commit after cancel",
+    "MCP list/get dataset versions + upload + list_workers/list_jobs"
   ]
 }

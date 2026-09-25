@@ -47,45 +47,10 @@ def health_check():
 
 @router.get("/readiness", summary="Readiness check")
 def readiness_check():
-    """Return readiness status with minimal dependency checks.
+    """Return readiness status with dependency checks (Wave B ready/signals)."""
+    from app.core.readiness import readiness_snapshot
 
-    Includes backend mode (local vs distributed) and registered worker count so
-    the console System page can surface Mode A/B without guessing.
-
-    ``registry_ready`` is false while the API is still installing/loading
-    isolated plugin venvs in the background (health stays ok so Docker/UI can
-    reach the process).
-    """
-    import os
-
-    from app.core.nodes import is_registry_ready, registry, registry_init_error
-
-    backend_id = (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python"
-    backend_mode = "distributed" if backend_id == "distributed" else "local"
-    worker_count = 0
-    try:
-        from app.core.distributed.registry import get_worker_registry
-
-        worker_count = len(get_worker_registry().list(include_stale=True))
-    except Exception:
-        worker_count = 0
-    reg_ready = is_registry_ready()
-    init_err = registry_init_error()
-    return {
-        "status": "ready" if reg_ready else ("failed" if init_err else "starting"),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "backend": backend_id,
-        "backend_mode": backend_mode,
-        "worker_count": worker_count,
-        "registry_ready": reg_ready,
-        "registry_init_error": init_err,
-        "node_type_count": len(registry) if reg_ready else 0,
-        "checks": {
-            "runs_dir_exists": _runs_dir().exists(),
-            "cache_dir_exists": _cache_dir().exists(),
-            "registry_ready": reg_ready,
-        },
-    }
+    return readiness_snapshot()
 
 
 @router.get("/metrics", summary="In-process API metrics snapshot")
@@ -177,19 +142,45 @@ def get_projects_registry(
 class WebhookBody(BaseModel):
     url: str
     events: list[str] = []
+    resource_version: Optional[str] = None
 
 
 @router.get("/webhooks", summary="Get webhook configuration")
 def get_webhooks():
     """Return the current webhook configuration (``url`` + ``events``, possibly empty)."""
-    return _webhook_svc.load()
+    from fastapi.responses import JSONResponse
+    from app.api.concurrency import etag_value
+
+    cfg = _webhook_svc.load()
+    resp = JSONResponse(content=cfg)
+    if cfg.get("resource_version") is not None:
+        resp.headers["ETag"] = etag_value(cfg["resource_version"])
+    return resp
 
 
 @router.put("/webhooks", summary="Set webhook configuration")
 def set_webhooks(body: WebhookBody, request: Request):
-    """Save webhook configuration."""
+    """Save webhook configuration.
+
+    Supports ``If-Match`` / ``resource_version`` (API-CONV-005).
+    """
+    from fastapi.responses import JSONResponse
+    from app.api.concurrency import (
+        etag_value,
+        resolve_expected_version,
+        version_conflict_http,
+    )
+    from app.core.errors import VersionConflict
+
+    expected, via_if_match = resolve_expected_version(request, body.resource_version)
+    if expected is not None:
+        current = str(_webhook_svc.load().get("resource_version") or "0")
+        if str(expected) != current:
+            raise version_conflict_http(
+                VersionConflict(via_if_match=via_if_match, current=current)
+            )
     try:
-        _webhook_svc.save(body.url, body.events)
+        cfg = _webhook_svc.save(body.url, body.events)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
@@ -201,10 +192,17 @@ def set_webhooks(body: WebhookBody, request: Request):
             resource_type="webhook",
             resource_id=body.url[:64] or "webhook",
             meta={"events": list(body.events or [])},
+            request_id=getattr(request.state, "request_id", None),
         )
     except Exception:
         pass
-    return {"ok": True, "url": body.url, "events": body.events}
+    out = {"ok": True, "url": body.url, "events": body.events, **{
+        k: cfg.get(k) for k in ("resource_version", "secret_name") if isinstance(cfg, dict)
+    }}
+    resp = JSONResponse(content=out)
+    if out.get("resource_version") is not None:
+        resp.headers["ETag"] = etag_value(out["resource_version"])
+    return resp
 
 
 @router.post("/webhooks/test", summary="Send a test webhook notification")

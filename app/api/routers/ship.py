@@ -61,6 +61,7 @@ class CreateShipPackageBody(BaseModel):
 class PromoteShipPackageBody(BaseModel):
     to_env: str = Field(..., description="staging|prod")
     approve: bool = False
+    resource_version: Optional[str] = None
 
 
 class TransitionShipPackageBody(BaseModel):
@@ -68,6 +69,7 @@ class TransitionShipPackageBody(BaseModel):
         ...,
         description="validate|build|sign|publish|deploy|fail|supersede",
     )
+    resource_version: Optional[str] = None
 
 
 @router.get("/{name}/ship/packages", summary="List ship packages")
@@ -218,6 +220,10 @@ def promote_ship_package(
     if cached is not None:
         return cached
 
+    from app.api.concurrency import resolve_expected_version, version_conflict_http
+    from app.core.errors import VersionConflict
+
+    expected, via_if_match = resolve_expected_version(request, body.resource_version)
     project_dir = _require_project(name)
     try:
         result = promote_package(
@@ -226,7 +232,11 @@ def promote_ship_package(
             to_env=body.to_env,
             approve=body.approve,
             actor=resolve_actor(request),
+            expected_resource_version=expected,
+            via_if_match=via_if_match,
         )
+    except VersionConflict as exc:
+        raise version_conflict_http(exc) from exc
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,
@@ -258,6 +268,10 @@ def transition_ship_package(
 ):
     from app.core.ship_packages import InvalidPackageTransition, transition_package
 
+    from app.api.concurrency import resolve_expected_version, version_conflict_http
+    from app.core.errors import VersionConflict
+
+    expected, via_if_match = resolve_expected_version(request, body.resource_version)
     project_dir = _require_project(name)
     try:
         return transition_package(
@@ -265,7 +279,11 @@ def transition_ship_package(
             package_id,
             body.action,
             actor=resolve_actor(request),
+            expected_resource_version=expected,
+            via_if_match=via_if_match,
         )
+    except VersionConflict as exc:
+        raise version_conflict_http(exc) from exc
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,

@@ -1682,6 +1682,37 @@ def build_parser():
         prog="graphyn",
         description="Graphyn CLI — build and manage AI/workflow pipelines",
     )
+    # CLI-000 global flags (also readable from GRAPHYN_API_URL / GRAPHYN_API_TOKEN)
+    parser.add_argument(
+        "--api-url",
+        default=None,
+        metavar="URL",
+        help="Remote API base URL (env GRAPHYN_API_URL). Enables remote mode for supported commands.",
+    )
+    parser.add_argument(
+        "--token",
+        default=None,
+        metavar="TOKEN",
+        help="Bearer token (env GRAPHYN_API_TOKEN).",
+    )
+    parser.add_argument(
+        "--actor",
+        default=None,
+        metavar="ACTOR",
+        help="X-Actor value for remote mutations (env GRAPHYN_ACTOR).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Machine-readable JSON on stdout where supported.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Verbose diagnostics on stderr.",
+    )
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
     subparsers.required = True
 
@@ -2129,14 +2160,123 @@ def build_parser():
     return parser
 
 
+def _apply_global_env(args) -> None:
+    """Propagate global CLI flags into process env for remote helpers."""
+    import os
+
+    api_url = getattr(args, "api_url", None) or os.environ.get("GRAPHYN_API_URL")
+    token = getattr(args, "token", None) or os.environ.get("GRAPHYN_API_TOKEN")
+    actor = getattr(args, "actor", None) or os.environ.get("GRAPHYN_ACTOR")
+    if api_url:
+        os.environ["GRAPHYN_API_URL"] = str(api_url).rstrip("/")
+        args.api_url = os.environ["GRAPHYN_API_URL"]
+    if token:
+        os.environ["GRAPHYN_API_TOKEN"] = str(token)
+        args.token = str(token)
+    if actor:
+        os.environ["GRAPHYN_ACTOR"] = str(actor)
+        args.actor = str(actor)
+
+
+def _remote_get(path: str, *, api_url: str, token: str | None) -> tuple[int, object]:
+    """Low-risk GET helper for optional remote mode. Returns (http_status, json_or_text)."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    url = api_url.rstrip("/") + path
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+            try:
+                return resp.status, _json.loads(raw)
+            except Exception:
+                return resp.status, raw
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            body = _json.loads(raw)
+        except Exception:
+            body = raw
+        return exc.code, body
+
+
 def main():
+    from app.cli.exit_codes import (
+        EXIT_AUTH,
+        EXIT_CANCELLED,
+        EXIT_CONFLICT,
+        EXIT_GENERAL,
+        EXIT_NOT_FOUND,
+        EXIT_VALIDATION,
+        CliError,
+    )
+
     parser = build_parser()
     args = parser.parse_args()
+    _apply_global_env(args)
+
+    # Optional remote mode for low-risk list commands
+    if getattr(args, "api_url", None) and getattr(args, "command", None) == "nodes":
+        status, body = _remote_get(
+            "/api/v1/nodes",
+            api_url=args.api_url,
+            token=getattr(args, "token", None),
+        )
+        if status == 401:
+            print("Error: unauthorized", file=sys.stderr)
+            sys.exit(EXIT_AUTH)
+        if status == 404:
+            print("Error: not found", file=sys.stderr)
+            sys.exit(EXIT_NOT_FOUND)
+        if status >= 400:
+            print(f"Error: remote nodes failed ({status})", file=sys.stderr)
+            sys.exit(EXIT_GENERAL)
+        if getattr(args, "json", False):
+            print(json.dumps(body, indent=2))
+        else:
+            items = body.get("items", body) if isinstance(body, dict) else body
+            if isinstance(items, list):
+                for n in items:
+                    if isinstance(n, dict):
+                        print(n.get("node_type") or n.get("name") or n)
+                    else:
+                        print(n)
+            else:
+                print(body)
+        sys.exit(0)
+
     try:
         args.func(args)
+    except CliError as exc:
+        print(f"Error: {exc.message}", file=sys.stderr)
+        sys.exit(exc.code)
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(EXIT_NOT_FOUND)
+    except PermissionError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(EXIT_AUTH)
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
-        sys.exit(130)
+        sys.exit(EXIT_CANCELLED)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        # Map common conflict markers
+        msg = str(exc)
+        if "version_conflict" in msg or "invalid_transition" in msg or "conflict" in msg.lower():
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(EXIT_CONFLICT)
+        if "valid" in msg.lower() and "fail" in msg.lower():
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(EXIT_VALIDATION)
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(EXIT_GENERAL)
 
 
 if __name__ == "__main__":

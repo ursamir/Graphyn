@@ -268,9 +268,11 @@ class ProjectManager:
             current_rv = str(proj_file.stat().st_mtime_ns)
         except OSError:
             current_rv = "0"
-        expected = if_match.strip('"') if isinstance(if_match, str) and if_match else resource_version
+        via_if_match = bool(isinstance(if_match, str) and if_match.strip())
+        expected = if_match.strip('"') if via_if_match else resource_version
         if expected is not None and str(expected) != str(current_rv):
-            raise ValueError("version_conflict")
+            from app.core.errors import VersionConflict
+            raise VersionConflict(via_if_match=via_if_match, current=str(current_rv))
         if display_name is not None:
             meta["display_name"] = display_name
         if description is not None:

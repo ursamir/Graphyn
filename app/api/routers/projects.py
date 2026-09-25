@@ -136,9 +136,34 @@ class ProjectLinksBody(BaseModel):
 # ------------------------------------------------------------------ #
 
 @router.get("")
-def list_projects():
-    """GET /projects — list all projects."""
-    return _handle(_pm.list_all)
+def list_projects(
+    envelope: Optional[str] = Query(None, description="Set to 1 for list envelope"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    q: Optional[str] = Query(None),
+):
+    """GET /projects — list all projects. ``?envelope=1`` → API-PAGE-001 shape."""
+    from app.api.pagination import maybe_envelope, parse_envelope_flag
+
+    items = _handle(_pm.list_all)
+    if not isinstance(items, list):
+        items = list(items or [])
+    if q:
+        ql = q.lower()
+        items = [
+            p for p in items
+            if ql in str(p.get("name", "")).lower()
+            or ql in str(p.get("display_name", "")).lower()
+        ]
+    total = len(items)
+    page = items[offset : offset + limit]
+    return maybe_envelope(
+        page,
+        envelope=parse_envelope_flag(envelope),
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("")
@@ -182,14 +207,18 @@ def update_project(name: str, body: UpdateProjectBody, request: Request):
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        msg = str(exc)
-        if msg == "version_conflict":
-            raise HTTPException(
-                status_code=409,
-                detail={"error": "version_conflict", "message": "resource_version / If-Match mismatch"},
+    except Exception as exc:
+        from app.api.concurrency import version_conflict_http
+        from app.core.errors import VersionConflict
+        if isinstance(exc, VersionConflict) or str(exc) == "version_conflict":
+            if isinstance(exc, VersionConflict):
+                raise version_conflict_http(exc) from exc
+            raise version_conflict_http(
+                VersionConflict(via_if_match=bool(if_match))
             ) from exc
-        raise HTTPException(status_code=422, detail=msg) from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise
 
 
 @router.patch("/{name}")
@@ -722,20 +751,53 @@ def get_project_pipeline(
 
 
 @router.put("/{name}/pipelines/{pipeline}", summary="Save a project pipeline")
-def put_project_pipeline(name: str, pipeline: str, payload: dict = Body(...)):
-    """PUT /projects/{name}/pipelines/{pipeline} — validate, stamp, write IR (draft)."""
+def put_project_pipeline(
+    name: str,
+    pipeline: str,
+    request: Request,
+    payload: dict = Body(...),
+):
+    """PUT /projects/{name}/pipelines/{pipeline} — validate, stamp, write IR (draft).
+
+    Supports optimistic concurrency via ``If-Match`` / body ``resource_version``
+    (API-CONV-005). Mismatch → 412 (If-Match) or 409 ``version_conflict``.
+    """
+    from app.api.concurrency import (
+        optional_resource_version_from_payload,
+        resolve_expected_version,
+        version_conflict_http,
+    )
+    from app.core.errors import VersionConflict
     from app.core.ir.secret_policy import InlineSecretError
     from app.core.project_pipelines import put_pipeline
 
     project_dir = _handle(_pm._require_project, name)
+    expected, via_if_match = resolve_expected_version(
+        request, optional_resource_version_from_payload(payload)
+    )
     try:
-        return put_pipeline(project_dir, pipeline, payload, project_name=name)
+        result = put_pipeline(
+            project_dir,
+            pipeline,
+            payload,
+            project_name=name,
+            expected_resource_version=expected,
+            via_if_match=via_if_match,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except InlineSecretError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except VersionConflict as exc:
+        raise version_conflict_http(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    from fastapi.responses import JSONResponse
+    from app.api.concurrency import etag_value
+    resp = JSONResponse(content=result)
+    if result.get("resource_version") is not None:
+        resp.headers["ETag"] = etag_value(result["resource_version"])
+    return resp
 
 
 @router.delete("/{name}/pipelines/{pipeline}", summary="Delete a project pipeline")

@@ -250,39 +250,65 @@ def upload_file(request: Request, file: UploadFile = File(...)):
 # ── Output datasets ───────────────────────────────────────────────────────────
 
 @router.get("/outputs", summary="List output dataset projects")
-def list_output_datasets():
+def list_output_datasets(
+    envelope: str | None = Query(None, description="Set to 1 for list envelope"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
     """Return a list of output dataset projects and their versions.
 
     Version dirs must match ProjectManager ``_VERSION_RE`` (e.g. v1, v1.0.0).
     ``snapshots/`` and other non-version directories are excluded.
+    Pass ``?envelope=1`` for API-PAGE-001 list envelope (additive).
     """
+    from app.api.pagination import maybe_envelope, parse_envelope_flag
+
     output_root = _output_root()
-    if not output_root.exists():
-        return []
     result = []
-    for project in sorted(os.listdir(output_root)):
-        project_path = output_root / project
-        if not project_path.is_dir():
-            continue
-        versions = sorted(
-            v for v in os.listdir(project_path)
-            if (project_path / v).is_dir() and bool(_VERSION_RE.match(v))
-        )
-        result.append({"project": project, "versions": versions})
-    return result
+    if output_root.exists():
+        for project in sorted(os.listdir(output_root)):
+            project_path = output_root / project
+            if not project_path.is_dir():
+                continue
+            versions = sorted(
+                v for v in os.listdir(project_path)
+                if (project_path / v).is_dir() and bool(_VERSION_RE.match(v))
+            )
+            result.append({"project": project, "versions": versions})
+    total = len(result)
+    page = result[offset : offset + limit]
+    return maybe_envelope(
+        page,
+        envelope=parse_envelope_flag(envelope),
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/outputs/{project}/{version}", summary="Get an output dataset")
 def get_output_dataset(project: str, version: str):
-    """Return the sample list for a specific project/version dataset."""
+    """Return dataset version detail with files + content_hash (DATA-VER-002)."""
+    from app.core.dataset_versions import read_manifest
+
     output_root = _output_root()
     dataset_path = _safe_child(output_root, project, version)
     if not dataset_path.exists():
         raise HTTPException(status_code=404, detail="Dataset not found")
 
+    man = read_manifest(dataset_path, ensure=True, enforce_sha256=True)
+    files = list(man.get("files") or [])
+    created_at = None
+    try:
+        created_at = datetime.fromtimestamp(
+            dataset_path.stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+    except OSError:
+        created_at = None
+
+    samples = []
     labels_file = dataset_path / "labels.csv"
     if labels_file.exists():
-        rows = []
         with open(labels_file, newline="") as f:
             for row in csv.DictReader(f):
                 rel_path = row.get("path")
@@ -290,42 +316,70 @@ def get_output_dataset(project: str, version: str):
                 label = row.get("label")
                 if not rel_path or not split or not label:
                     continue
-                rows.append({
+                samples.append({
                     "path": f"{project}/{version}/{rel_path}".replace("\\", "/"),
                     "split": split,
                     "label": label,
                 })
-        return rows
-
-    # Fallback: walk split/label/file structure
-    data = []
-    for split in ["train", "val", "test"]:
-        split_path = dataset_path / split
-        if not split_path.exists():
-            continue
-        for label in os.listdir(split_path):
-            label_path = split_path / label
-            if not label_path.is_dir():
+    else:
+        for split in ["train", "val", "test"]:
+            split_path = dataset_path / split
+            if not split_path.exists():
                 continue
-            for f in os.listdir(label_path):
-                if f.lower().endswith(".wav"):
-                    data.append({
-                        "path": f"{project}/{version}/{split}/{label}/{f}",
-                        "split": split,
-                        "label": label,
-                    })
-    return data
+            for label in os.listdir(split_path):
+                label_path = split_path / label
+                if not label_path.is_dir():
+                    continue
+                for f in os.listdir(label_path):
+                    if f.lower().endswith(".wav"):
+                        samples.append({
+                            "path": f"{project}/{version}/{split}/{label}/{f}",
+                            "split": split,
+                            "label": label,
+                        })
+
+    return {
+        "project": project,
+        "version": version,
+        "files": files,
+        "content_hash": man.get("content_hash") or man.get("sha256"),
+        "created_at": created_at,
+        "samples": samples,
+    }
 
 
 @router.delete("/outputs/{project}/{version}", summary="Delete an output dataset version")
-def delete_output_dataset(project: str, version: str):
-    """Delete a version dir under datasets/output; remove the project if empty."""
+def delete_output_dataset(
+    project: str,
+    version: str,
+    request: Request,
+    force: bool = Query(False, description="Admin force-delete when referenced (audited)"),
+):
+    """Delete a version dir under datasets/output; remove the project if empty.
+
+    DATA-VER-006: referenced versions return 409 unless ``force=true``.
+    """
     import shutil
+    from app.api.actor import resolve_actor
+    from app.core.dataset_versions import find_references
 
     output_root = _output_root()
     dataset_path = _safe_child(output_root, project, version)
     if not dataset_path.exists():
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    refs = find_references(project, version)
+    if refs and not force:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "conflict",
+                "code": "conflict",
+                "message": f"Dataset version {project}/{version} is referenced",
+                "references": refs,
+            },
+        )
+
     shutil.rmtree(dataset_path)
     project_path = _safe_child(output_root, project)
     try:
@@ -334,7 +388,20 @@ def delete_output_dataset(project: str, version: str):
             project_path.rmdir()
     except OSError:
         pass
-    return {"deleted": f"{project}/{version}"}
+    try:
+        from app.core.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="dataset.version_delete",
+            resource_type="dataset_version",
+            resource_id=f"{project}/{version}",
+            meta={"force": bool(force), "references": refs},
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except Exception:
+        pass
+    return {"deleted": f"{project}/{version}", "forced": bool(force)}
 
 
 @router.get("/outputs/{project}/{version}/stats", summary="Get dataset statistics")
@@ -397,27 +464,27 @@ def merge_datasets(body: MergeRequest):
     except HTTPException:
         raise
     # Ensure project workspace exists for Projects sidebar discovery.
+    # Prefer writing project.json under the (possibly patched) output root so
+    # tests and alternate roots do not depend on ProjectManager's global path.
     if not (project_root / "project.json").exists():
         try:
-            if project_root.exists():
-                now = datetime.now(timezone.utc).isoformat()
-                (project_root / "project.json").write_text(
-                    __import__("json").dumps(
-                        {
-                            "name": body.target_project,
-                            "status": "draft",
-                            "created_at": now,
-                            "updated_at": now,
-                            "versions": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
+            project_root.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            (project_root / "project.json").write_text(
+                __import__("json").dumps(
+                    {
+                        "name": body.target_project,
+                        "status": "draft",
+                        "created_at": now,
+                        "updated_at": now,
+                        "versions": [],
+                    },
+                    indent=2,
                 )
-            else:
-                pm.create(body.target_project)
-        except ValueError as exc:
+                + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     target_dir = _safe_child(output_root, body.target_project, body.target_version)
@@ -489,9 +556,15 @@ def merge_datasets(body: MergeRequest):
         writer.writeheader()
         writer.writerows(label_rows)
 
+    from app.core.dataset_versions import write_manifest
+
+    man = write_manifest(target_dir)
     return {
+        "project": body.target_project,
+        "version": body.target_version,
         "target": f"{body.target_project}/{body.target_version}",
         "files_copied": files_copied,
         "errors": errors,
         "labels_written": len(label_rows),
+        "content_hash": man.get("content_hash"),
     }

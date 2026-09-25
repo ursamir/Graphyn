@@ -44,7 +44,7 @@ class WebhookService:
     def CONFIG_PATH(self):
         return _webhooks_path()
 
-    def save(self, url: str, events: list[str]) -> None:
+    def save(self, url: str, events: list[str]) -> dict:
         """Persist webhook configuration to workspace/webhooks.json.
 
         An empty (or whitespace-only) ``url`` clears the configured webhook —
@@ -76,15 +76,21 @@ class WebhookService:
             validate_webhook_target_url(url)
 
         self.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        config = {"url": url, "events": events}
+        prev = self.load()
+        try:
+            cur_rv = int(prev.get("resource_version") or 0)
+        except (TypeError, ValueError):
+            cur_rv = 0
+        config = {"url": url, "events": events, "resource_version": cur_rv + 1}
         with self.CONFIG_PATH.open("w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         # Invalidate class-level cache so all instances pick up the new config.
         WebhookService._class_config_cache = None
+        return self.load()
 
     def load(self) -> dict:
         """Read webhook configuration. Always returns ``url`` + ``events`` keys."""
-        empty = {"url": "", "events": []}
+        empty = {"url": "", "events": [], "resource_version": "0", "secret_name": None}
         if not self.CONFIG_PATH.exists():
             return dict(empty)
         try:
@@ -93,9 +99,22 @@ class WebhookService:
             if not isinstance(raw, dict):
                 return dict(empty)
             events = raw.get("events")
+            rv = raw.get("resource_version")
+            try:
+                rv_int = int(rv) if rv is not None else 0
+            except (TypeError, ValueError):
+                rv_int = 0
+            # Also derive from mtime when missing for If-Match clients
+            if rv_int == 0:
+                try:
+                    rv_int = int(self.CONFIG_PATH.stat().st_mtime_ns)
+                except OSError:
+                    rv_int = 0
             return {
                 "url": str(raw.get("url") or ""),
                 "events": list(events) if isinstance(events, list) else [],
+                "resource_version": str(rv_int),
+                "secret_name": raw.get("secret_name"),
             }
         except Exception as exc:
             logger.warning(

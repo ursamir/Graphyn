@@ -3,8 +3,8 @@
 Bounded Context:  Platform Infrastructure (shared by all BCs)
 Responsibility:   Platform-level exception hierarchy. Errors that cross bounded
                   context boundaries and cannot belong to a single BC.
-Owns:             ResumeError.
-Public Surface:   ResumeError.
+Owns:             ResumeError, VersionConflict.
+Public Surface:   ResumeError, VersionConflict.
 Must NOT:         Import from app.domain, app.api, or any specific BC module.
                   Pure stdlib only.
 Dependencies:     stdlib only.
@@ -32,3 +32,16 @@ class ResumeError(RuntimeError):
     - resume_state.json is missing or corrupt.
     - The graph has changed since the checkpoint was written (hash mismatch).
     """
+
+
+class VersionConflict(ValueError):
+    """Optimistic concurrency mismatch (API-CONV-005).
+
+    ``via_if_match`` True → HTTP 412 precondition_failed;
+    False → HTTP 409 version_conflict.
+    """
+
+    def __init__(self, *, via_if_match: bool = False, current: str | None = None):
+        self.via_if_match = via_if_match
+        self.current = current
+        super().__init__("version_conflict")

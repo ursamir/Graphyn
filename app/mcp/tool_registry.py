@@ -240,6 +240,26 @@ def register_all_tools(register: Callable) -> None:
         get_audit_events_handler,
     )
 
+    from app.mcp.handlers.data_ops import (
+        GET_DATASET_VERSION_DESCRIPTION,
+        GET_DATASET_VERSION_SCHEMA,
+        LIST_DATASET_VERSIONS_DESCRIPTION,
+        LIST_DATASET_VERSIONS_SCHEMA,
+        UPLOAD_DATASET_FILE_DESCRIPTION,
+        UPLOAD_DATASET_FILE_SCHEMA,
+        get_dataset_version_handler,
+        list_dataset_versions_handler,
+        upload_dataset_file_handler,
+    )
+    from app.mcp.handlers.workers_ops import (
+        LIST_JOBS_DESCRIPTION,
+        LIST_JOBS_SCHEMA,
+        LIST_WORKERS_DESCRIPTION,
+        LIST_WORKERS_SCHEMA,
+        list_jobs_handler,
+        list_workers_handler,
+    )
+
     register("list_nodes", LIST_NODES_DESCRIPTION, LIST_NODES_SCHEMA, list_nodes_handler)
     register("generate_graph", GENERATE_GRAPH_DESCRIPTION, GENERATE_GRAPH_SCHEMA, generate_graph_handler)
     register("validate_graph", VALIDATE_GRAPH_DESCRIPTION, VALIDATE_GRAPH_SCHEMA, validate_graph_handler)
@@ -310,3 +330,10 @@ def register_all_tools(register: Callable) -> None:
     register("promote_ship_package", PROMOTE_SHIP_PACKAGE_DESCRIPTION, PROMOTE_SHIP_PACKAGE_SCHEMA, promote_ship_package_handler)
     register("get_audit_events", GET_AUDIT_EVENTS_DESCRIPTION, GET_AUDIT_EVENTS_SCHEMA, get_audit_events_handler)
     register("export_audit", EXPORT_AUDIT_DESCRIPTION, EXPORT_AUDIT_SCHEMA, export_audit_handler)
+
+    # Wave B — dataset versions + workers/jobs observe
+    register("list_dataset_versions", LIST_DATASET_VERSIONS_DESCRIPTION, LIST_DATASET_VERSIONS_SCHEMA, list_dataset_versions_handler)
+    register("get_dataset_version", GET_DATASET_VERSION_DESCRIPTION, GET_DATASET_VERSION_SCHEMA, get_dataset_version_handler)
+    register("upload_dataset_file", UPLOAD_DATASET_FILE_DESCRIPTION, UPLOAD_DATASET_FILE_SCHEMA, upload_dataset_file_handler)
+    register("list_workers", LIST_WORKERS_DESCRIPTION, LIST_WORKERS_SCHEMA, list_workers_handler)
+    register("list_jobs", LIST_JOBS_DESCRIPTION, LIST_JOBS_SCHEMA, list_jobs_handler)

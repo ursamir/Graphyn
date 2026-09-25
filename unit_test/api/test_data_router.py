@@ -119,7 +119,14 @@ class TestGetOutputDataset:
         with patcher:
             resp = api_client.get("/api/v1/data/outputs/myproject/v1")
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        body = resp.json()
+        # SRS DATA-VER / §9.2.7: object with files + content_hash (samples legacy)
+        assert isinstance(body, dict)
+        assert body.get("project") == "myproject"
+        assert body.get("version") == "v1"
+        assert "content_hash" in body
+        assert "files" in body
+        assert "samples" in body
 
 
 class TestMergeDatasets:
@@ -295,9 +302,11 @@ class TestSafeChildLexicalJail:
             )
             resp = api_client.get('/api/v1/data/outputs/proj/v1')
         assert resp.status_code == 200, resp.text
-        rows = resp.json()
-        assert isinstance(rows, list)
-        assert len(rows) >= 1
+        body = resp.json()
+        assert isinstance(body, dict)
+        assert body.get("content_hash")
+        samples = body.get("samples") or []
+        assert len(samples) >= 1
 
     def test_symlink_escape_rejected_by_default(self, tmp_path, monkeypatch):
         """Default: symlink target outside root is rejected (passwd-style escape)."""

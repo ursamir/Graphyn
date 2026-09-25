@@ -107,11 +107,30 @@ def find_compatible_nodes(
 # ── /nodes ────────────────────────────────────────────────────────────────────
 
 @router.get("/nodes", summary="List all registered nodes")
-def list_nodes(category: str | None = Query(None, description="Filter by category")):
-    """Return metadata for all registered nodes, optionally filtered by category."""
+def list_nodes(
+    category: str | None = Query(None, description="Filter by category"),
+    envelope: str | None = Query(None, description="Set to 1 for list envelope"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Return metadata for all registered nodes, optionally filtered by category.
+
+    Bare array by default (SRS allows until P1). Pass ``?envelope=1`` for envelope.
+    """
+    from app.api.pagination import maybe_envelope, parse_envelope_flag
+
     registry = get_registry()
     metas = registry.list_nodes(category=category)
-    return [_node_response(m.node_type, registry) for m in metas]
+    items = [_node_response(m.node_type, registry) for m in metas]
+    total = len(items)
+    page = items[offset : offset + limit]
+    return maybe_envelope(
+        page,
+        envelope=parse_envelope_flag(envelope),
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/nodes/{node_type}", summary="Get a single node's metadata")

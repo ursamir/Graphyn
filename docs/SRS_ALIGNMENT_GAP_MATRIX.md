@@ -143,10 +143,10 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | API-CONV-002 Bearer fail-closed | 9.0 / 9.1 | `main.py` AUTH_REQUIRED / ENV | Confirmed | | — |
 | API-CONV-003 X-Actor | 9.0 | `actor.py`; CORS allow `X-Actor` | Confirmed | | — |
 | API-CONV-004 Idempotency-Key | 9.0 | `app/api/idempotency.py`; wired on run-async, proposals accept, schedules POST, projects POST | Confirmed | Ship create deferred until Ship REST | A |
-| API-CONV-005 If-Match / resource_version | 9.0 | not found on pipeline/secret/webhook writers | Missing | Optimistic concurrency | B |
+| API-CONV-005 If-Match / resource_version | 9.0 | `app/api/concurrency.py`; pipeline PUT, secrets, webhooks, ship promote/transition | Confirmed | 412 If-Match / 409 body; ETag on writers | B |
 | API-ERR-001 error envelope | 9.0.1 | `app/api/errors.py` + handlers in `main.py`; dual-emit legacy `detail` | Confirmed | Wave A batch 1 | A |
 | FR-AUTH-001/002/005 console | 11.1 | features/auth, Settings, login path | Partial | Login/Settings exist; full honesty banner + returnTo not fully audited this pass | B |
-| API-PAGE-001 list envelope | 9.0.2 | runs pagination present; many lists still bare arrays | Partial | `?envelope=1` migration incomplete | B |
+| API-PAGE-001 list envelope | 9.0.2 | `app/api/pagination.py`; nodes/projects/artifacts/data outputs accept `?envelope=1` | Confirmed | Additive; bare arrays default (P1 default-envelope deferred) | B |
 
 **Domain rollup:** Auth gate **Confirmed**; envelope/idempotency **Confirmed** (Wave A batch 1). Residual: If-Match (Wave B).
 
@@ -166,11 +166,11 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Models + request/approve prod | 9.2.6 | `models.py`, `model_registry.py` | Confirmed | | — |
 | Data inputs/outputs/merge + ingest | 9.2.7 | `data.py`, `ingest.py` | Confirmed | Ingest P1 in DATA-SYS-002 but routes exist | — |
 | Plugins lifecycle APIs | 9.2.8 | `plugins.py` | Confirmed | | — |
-| Secrets | 9.2.9 | `secrets.py` names-only list | Confirmed | resource_version / If-Match thin | B |
+| Secrets | 9.2.9 | `secrets.py` names-only; If-Match / resource_version on PUT/DELETE | Confirmed | Wave B | B |
 | Schedules + webhooks | 9.2.10 | `system.py` | Confirmed | Idempotency-Key missing | A |
 | Workers + jobs claim/complete | 9.2.11 | `workers.py` + distributed queue | Confirmed | | — |
 | Proposals CRUD/accept/reject | 9.2.12 | `proposals.py` + agentic | Confirmed | Idempotency-Key missing on accept | A |
-| System health/readiness/auth/metrics/cleanup/audit/trace/experiments | 9.2.13 | system/trace/experiments routers | Confirmed | readiness field names differ slightly (`status` vs `ready`) | B |
+| System health/readiness/auth/metrics/cleanup/audit/trace/experiments | 9.2.13 | system/trace/experiments; `ready` + store_corrupt/disk_full | Confirmed | Wave B `app/core/readiness.py` | B |
 | **Ship packages REST** | 9.2.14 | `app/api/routers/ship.py` + `app/core/ship_packages.py` | Confirmed | list/create/get/download/promote/transition; Idempotency-Key on create/promote; 409 invalid_transition | A |
 
 **Domain rollup (route-level):** GET/PUT project + run control + Ship packages REST **Confirmed** (Wave A).
@@ -182,7 +182,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Canonical states pending/running/paused/succeeded/failed/cancelled | 13.2 | writers: `pending`→`running`→`succeeded`; reads map `completed`→`succeeded` | Confirmed | Wave A: migrate writes; alias legacy journals on read | A |
 | Current×Action matrix + 409 invalid_transition | RT-SM-001/003 | `app/core/run_status.py` + API gates | Confirmed | SDK silent no-ops still Wave B | A |
 | Resume failed/cancelled/succeeded = NO | 13.2 locked | enforced via `next_status` → 409 | Confirmed | Wave A batch 1 | A |
-| Cancel durable + forbid artifact commit | RT-CANCEL-* | cancel marks cancelled; artifact forbid not fully proven | Partial | Need Phase 2 tests | B |
+| Cancel durable + forbid artifact commit | RT-CANCEL-* | `ArtifactCommitForbidden` in `run_journal.register_artifact` + unit test | Confirmed | Wave B | B |
 | graph_hash on resume | RT-RESUME-001 | `orchestrator.py` hash check | Confirmed | | — |
 | Crash reconcile stale running | RT-CRASH / NFR-REL-002 | `run_cleanup.py` reconcile → failed | Confirmed | | — |
 | get_backend sole entry | RT-002 | `runtime_backend.py` | Confirmed | | — |
@@ -213,8 +213,8 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Atomic meta / os.replace+fsync | 16.1–16.2 | run_journal, secrets, schedules, artifact_store, distributed/store | Confirmed | | — |
-| Quarantine corrupt index | PERS-020 | artifact_store, provenance, plugins/store quarantine | Partial | API 503 `store_corrupt` code not universal | B |
-| Readiness false on corrupt | PERS-021 | readiness checks dirs/registry; not full corrupt signal | Partial | | B |
+| Quarantine corrupt index | PERS-020 | quarantine + readiness `store_corrupt` signal | Partial | Signal in readiness; not every API returns 503 store_corrupt yet | B |
+| Readiness false on corrupt | PERS-021 | `ready=false` when store_corrupt/disk_full/unwritable | Confirmed | Wave B | B |
 | PERS-001 pending before run_id ack | 16.1 | `RunManager` writes `pending`; `mark_running` at execute start | Confirmed | Wave A batch 1 | A |
 
 ### 3.8 Plugins — §17
@@ -250,7 +250,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Input/output layout + APIs | DATA-SYS-001 | `data.py`, workspace_paths | Confirmed | | — |
-| Version immutability + merge new version | DATA-VER-001/008 | domain version APIs on projects | Partial | Hash-in-manifest / force-delete 409 not fully proven | B |
+| Version immutability + merge new version | DATA-VER-001/008 | `dataset_versions.py` manifest sha256; DELETE 409 unless force | Confirmed | Wave B | B |
 | Upload sanitize | DATA-SYS-005 | upload route | Partial | Need Phase 2 | C |
 | Ingest URL/HF | DATA-SYS-002 | `ingest.py` | Confirmed | P1 priority in SRS; routes exist | — |
 
@@ -259,7 +259,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Core ~29 tools | 21.3 core | `tool_registry.py` | Confirmed | | — |
-| P0 J1–J6 additions | 21.3 table | `tool_registry.py` + `handlers/journey.py`/`ship_ops.py`/`audit_ops.py` | Confirmed | J1–J3 + ship + audit + readiness registered; dataset versions / workers/jobs still Wave B | A |
+| P0 J1–J6 additions | 21.3 table | + `data_ops.py` / `workers_ops.py` | Confirmed | Wave B: dataset versions + upload + list_workers/list_jobs | A/B |
 | MCP-001 secrets names only | 21.1 | secrets_list handler | Confirmed | | — |
 | MCP-005 structured tool errors | 21.4 | mixed | Partial | | B |
 | accept_proposal gated | MCP-002 | conditional register | Confirmed | | — |
@@ -269,8 +269,8 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Append-only JSONL audit | AUD-001 | `audit.py` events.jsonl | Confirmed | | — |
-| Schema fields request_id/result/actor_kind/timestamp | 22.1 | writes `ts` not `timestamp`; no `result`/`request_id` | Partial | | B |
-| Required audited actions | AUD-005 | cancel, rollback, model, plugin, ship.create/promote | Partial | Ship create/promote audited; schema field rename still Wave B | B |
+| Schema fields request_id/result/actor_kind/timestamp | 22.1 | `audit.record_audit` writes timestamp+ts, result, request_id, actor_kind | Confirmed | Wave B; `ts`/`meta` aliases kept | B |
+| Required audited actions | AUD-005 | cancel, rollback, model, plugin, ship, dataset.version_delete | Confirmed | Schema aligned Wave B | B |
 | ProvenanceRecord fields | 22.2 | `provenance.py` ProvenanceRecord | Confirmed | plugin_versions optional thin | C |
 | GET /trace | OBS-002 | `trace.py` | Confirmed | | — |
 | Prove capture set completeness | 22.2 | Not probed end-to-end | Not probed | Phase 2 | C |
@@ -305,8 +305,8 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Entry `graphyn` | CLI-000 | setup.py console_scripts | Confirmed | | — |
-| Global `--api-url/--token/--actor/--json` | CLI-000 | **not** on root parser | Missing | worker uses ad-hoc HTTP; local cmds dominate | B |
-| Exit codes 0/1/2/3/4/5/130 | CLI-000 | validate→2; most failures→1; auth 3 rare | Partial | | B |
+| Global `--api-url/--token/--actor/--json` | CLI-000 | root parser in `app/cli/main.py` + env fallback | Confirmed | Optional remote `nodes` | B |
+| Exit codes 0/1/2/3/4/5/130 | CLI-000 | `app/cli/exit_codes.py` + main mapping | Confirmed | Wave B | B |
 | validate / run / migrate | 9.4.1 | present | Confirmed | | — |
 | runs pause/resume/cancel | 9.4.1 | present | Confirmed | same SM gaps as API | A |
 | plugin / secrets / artifacts / worker | 9.4.1 | present | Confirmed | | — |
@@ -346,13 +346,14 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 
 ### Wave B — contract depth / concurrency / schema polish
 
-- If-Match / resource_version on pipeline draft, secrets, webhooks, ship status.
-- Audit schema field rename/align (`timestamp`, `result`, `request_id`, `actor_kind`).
-- List `?envelope=1` default migration.
-- CLI global flags + exit code matrix; optional remote mode.
-- Dataset version force-delete 409 + manifest sha256 enforcement.
-- Readiness `ready` boolean + store_corrupt / disk_full signals.
-- Artifact-commit-after-cancel hard forbid tests.
+- ✅ If-Match / resource_version on pipeline draft, secrets, webhooks, ship promote/transition.
+- ✅ Audit schema field rename/align (`timestamp`, `result`, `request_id`, `actor_kind`; `ts`/`meta` aliases).
+- ✅ List `?envelope=1` additive on key list endpoints (P1 default-envelope deferred).
+- ✅ CLI global flags + exit code matrix; optional remote `nodes`.
+- ✅ Dataset version force-delete 409 + manifest sha256 enforcement.
+- ✅ Readiness `ready` boolean + store_corrupt / disk_full signals.
+- ✅ Artifact-commit-after-cancel hard forbid + unit test.
+- ✅ MCP leftovers: list/get dataset versions, upload_dataset_file, list_workers, list_jobs.
 
 ### Wave C — honesty, ops, security polish, needs-API follow-through
 
@@ -387,3 +388,9 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 - Tip: `c3195c58b2dcbd9c6dcde06d3499323d07fff087`
 - Closed: Ship packages REST §9.2.14/§19; MCP P0 J1–J3 + ship + audit + readiness.
 - Residual Wave A→B: dataset version MCP tools, list_workers/list_jobs MCP, checksum UI polish.
+
+### Wave B landing
+
+- Tip: see commit on `cursor/usecase-plugins-workflows` after this docs update (filled in JSON).
+- Closed: API-CONV-005, API-PAGE-001 (`?envelope=1`), audit §22.1 fields, CLI-000 globals+exits, DATA-VER-002/006, readiness ready/signals, API-FORBID-005 cancel-artifact, MCP dataset versions + workers/jobs.
+- Deferred to Wave C: default-envelope migration (P1), universal 503 store_corrupt on all reads, Devices OTA, CSP/token honesty, backup runbook, SIGTERM drain, Perf TBD.

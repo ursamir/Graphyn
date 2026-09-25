@@ -45,6 +45,34 @@ def _ensure_dir() -> Path:
     return root
 
 
+def secret_resource_version(name: str) -> str:
+    """Opaque mtime-based token for If-Match (API-CONV-005)."""
+    path = _secret_path(name)
+    try:
+        return str(path.stat().st_mtime_ns)
+    except OSError:
+        return "0"
+
+
+def secret_meta(name: str) -> dict:
+    """Names-only metadata including resource_version (never value)."""
+    cleaned = validate_secret_name(name)
+    path = _secret_path(cleaned)
+    if not path.is_file():
+        raise FileNotFoundError(f"Secret {cleaned!r} not found")
+    try:
+        updated_at = path.stat().st_mtime
+        from datetime import datetime, timezone
+        updated_iso = datetime.fromtimestamp(updated_at, tz=timezone.utc).isoformat()
+    except OSError:
+        updated_iso = None
+    return {
+        "name": cleaned,
+        "updated_at": updated_iso,
+        "resource_version": secret_resource_version(cleaned),
+    }
+
+
 def list_secret_names() -> list[str]:
     """Return stored secret names only (never values)."""
     root = secrets_dir()

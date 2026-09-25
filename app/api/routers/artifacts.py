@@ -53,17 +53,27 @@ def list_artifacts(
     artifact_type: Optional[str] = Query(None, description="Filter by artifact type"),
     limit: int = Query(100, ge=1, le=1000, description="Max records to return"),
     offset: int = Query(0, ge=0, description="Records to skip after sort"),
+    envelope: Optional[str] = Query(None, description="Set to 1 for list envelope"),
 ):
     """Return all artifacts matching the provided filters, sorted by created_at descending.
 
-    Requirements: req-05 §1.3 (GET /api/v1/artifacts)
+    Requirements: req-05 §1.3 (GET /api/v1/artifacts). ``?envelope=1`` → API-PAGE-001.
     """
+    from app.api.pagination import maybe_envelope, parse_envelope_flag
     from app.core.artifact_store import ArtifactStore
 
     store = ArtifactStore()
     records = store.list(run_id=run_id, node_type=node_type, artifact_type=artifact_type)
+    total = len(records)
     page = records[offset : offset + limit]
-    return [r.model_dump(mode="json") for r in page]
+    items = [r.model_dump(mode="json") for r in page]
+    return maybe_envelope(
+        items,
+        envelope=parse_envelope_flag(envelope),
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # ── GET /artifacts/{artifact_id} ───────────────────────────────────────────────

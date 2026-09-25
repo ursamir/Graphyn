@@ -3,11 +3,13 @@
 Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Thin append-only audit event log for accountability mutations.
 Owns:             record_audit(), list_audit(), audit_path helpers.
-Public Surface:   record_audit(actor, action, resource_type, resource_id, meta),
-                  list_audit(limit).
+Public Surface:   record_audit(...), list_audit(limit), normalize_audit_event.
 Must NOT:         Import from app.api or execution orchestrators.
 Dependencies:     stdlib, app.core.config.project_dir.
 Reason To Change: Audit schema evolves or storage backend changes.
+
+SRS §22.1 fields: event_id, timestamp, actor, actor_kind?, request_id, action,
+resource_type, resource_id, result, metadata?; ``ts`` kept as alias of timestamp.
 """
 from __future__ import annotations
 
@@ -23,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 
+_VALID_RESULTS = frozenset({"success", "failure", "denied"})
+_VALID_ACTOR_KINDS = frozenset({"human", "agent", "system"})
+
 
 def audit_dir(base_dir: str | Path | None = None) -> Path:
     """Return ``{project}/audit`` (or ``{base_dir}/audit``)."""
@@ -37,6 +42,37 @@ def audit_events_path(base_dir: str | Path | None = None) -> Path:
     return audit_dir(base_dir) / "events.jsonl"
 
 
+def _infer_actor_kind(actor: str, actor_kind: str | None) -> str | None:
+    if actor_kind and actor_kind in _VALID_ACTOR_KINDS:
+        return actor_kind
+    a = (actor or "").strip().lower()
+    if a in ("system", "api", "scheduler", "cleanup", "worker"):
+        return "system"
+    if a.startswith("agent:") or a.startswith("mcp") or a == "agent":
+        return "agent"
+    if a and a not in ("unknown", "anonymous"):
+        return "human"
+    return None
+
+
+def normalize_audit_event(obj: dict[str, Any]) -> dict[str, Any]:
+    """Ensure readers see §22.1 field names (timestamp/result/request_id/…)."""
+    out = dict(obj)
+    ts = out.get("timestamp") or out.get("ts")
+    if ts:
+        out["timestamp"] = ts
+        out.setdefault("ts", ts)  # alias retained for legacy readers
+    if "result" not in out or out.get("result") not in _VALID_RESULTS:
+        out["result"] = out.get("result") or "success"
+    if "request_id" not in out or not out.get("request_id"):
+        out["request_id"] = out.get("request_id") or out.get("event_id") or ""
+    if "metadata" not in out and "meta" in out:
+        out["metadata"] = out.get("meta") or {}
+    if "meta" not in out and "metadata" in out:
+        out["meta"] = out.get("metadata") or {}
+    return out
+
+
 def record_audit(
     actor: str,
     action: str,
@@ -45,20 +81,43 @@ def record_audit(
     meta: dict[str, Any] | None = None,
     *,
     base_dir: str | Path | None = None,
+    result: str = "success",
+    request_id: str | None = None,
+    actor_kind: str | None = None,
+    resource_version: Any = None,
+    before: dict[str, Any] | None = None,
+    after: dict[str, Any] | None = None,
+    error_code: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Append one audit event to ``audit/events.jsonl``. Never raises to callers.
 
     Events are JSONL (one JSON object per line). Failures are logged and
     swallowed so mutation endpoints stay available if the audit disk is full.
     """
+    now = datetime.now(timezone.utc).isoformat()
+    res = result if result in _VALID_RESULTS else "success"
+    rid = (request_id or "").strip() or uuid.uuid4().hex
+    meta_obj = dict(metadata) if isinstance(metadata, dict) else {}
+    if isinstance(meta, dict) and meta:
+        meta_obj.update(meta)
     event: dict[str, Any] = {
         "event_id": uuid.uuid4().hex,
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "timestamp": now,
+        "ts": now,  # legacy alias
         "actor": actor or "unknown",
+        "actor_kind": _infer_actor_kind(actor or "", actor_kind),
+        "request_id": rid,
         "action": action,
         "resource_type": resource_type,
         "resource_id": resource_id,
-        "meta": meta or {},
+        "resource_version": resource_version,
+        "before": before,
+        "after": after,
+        "result": res,
+        "error_code": error_code,
+        "metadata": meta_obj,
+        "meta": meta_obj,  # legacy alias
     }
     try:
         path = audit_events_path(base_dir)
@@ -83,7 +142,6 @@ def list_audit(
     if not path.exists():
         return []
     try:
-        # Read whole file for simplicity (thin seed); cap by scanning from end.
         text = path.read_text(encoding="utf-8")
     except Exception as exc:
         logger.warning("list_audit read failed: %s", exc)
@@ -99,6 +157,6 @@ def list_audit(
         except Exception:
             continue
         if isinstance(obj, dict):
-            events.append(obj)
+            events.append(normalize_audit_event(obj))
     events.reverse()
     return events[:limit]

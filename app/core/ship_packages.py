@@ -447,18 +447,31 @@ def create_package(
     }
 
 
+
+def _check_resource_version(man: dict, expected: str | None, *, via_if_match: bool) -> None:
+    if expected is None:
+        return
+    current = str(man.get("resource_version") or 1)
+    if str(expected) != current:
+        from app.core.errors import VersionConflict
+        raise VersionConflict(via_if_match=via_if_match, current=current)
+
+
 def transition_package(
     project_dir: Path,
     package_id: str,
     action: str,
     *,
     actor: str = "api",
+    expected_resource_version: str | None = None,
+    via_if_match: bool = False,
 ) -> dict[str, Any]:
     action_s = (action or "").strip().lower()
     pkg = package_dir(project_dir, package_id)
     if not pkg.is_dir():
         raise FileNotFoundError(f"Package '{package_id}' not found")
     man = _load_manifest(pkg)
+    _check_resource_version(man, expected_resource_version, via_if_match=via_if_match)
     current = normalize_status(str(man.get("status") or ""))
     # Special: publish from built requires unsigned_allowed or already signed
     if action_s == "publish" and current == "built" and not man.get("unsigned_allowed"):
@@ -494,6 +507,8 @@ def promote_package(
     to_env: str,
     approve: bool = False,
     actor: str = "api",
+    expected_resource_version: str | None = None,
+    via_if_match: bool = False,
 ) -> dict[str, Any]:
     to = (to_env or "").strip().lower()
     if to not in ("staging", "prod"):
@@ -505,6 +520,7 @@ def promote_package(
     if not pkg.is_dir():
         raise FileNotFoundError(f"Package '{package_id}' not found")
     man = _load_manifest(pkg)
+    _check_resource_version(man, expected_resource_version, via_if_match=via_if_match)
     current = normalize_status(str(man.get("status") or ""))
     if current in TERMINAL_STATES:
         raise InvalidPackageTransition(current, "promote")

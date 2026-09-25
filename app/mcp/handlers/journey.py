@@ -937,37 +937,7 @@ GET_READINESS_SCHEMA = {
 
 
 def get_readiness_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    import os
-    from datetime import datetime, timezone
+    """Return readiness snapshot (ready + store_corrupt/disk_full)."""
+    from app.core.readiness import readiness_snapshot
 
-    from app.core.config import project_dir, runs_dir
-    from app.core.nodes import is_registry_ready, registry, registry_init_error
-
-    backend_id = (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python"
-    backend_mode = "distributed" if backend_id == "distributed" else "local"
-    worker_count = 0
-    try:
-        from app.core.distributed.registry import get_worker_registry
-
-        worker_count = len(get_worker_registry().list(include_stale=True))
-    except Exception:
-        worker_count = 0
-    reg_ready = is_registry_ready()
-    init_err = registry_init_error()
-    root = project_dir()
-    return {
-        "status": "ready" if reg_ready else ("failed" if init_err else "starting"),
-        "ready": bool(reg_ready),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "backend": backend_id,
-        "backend_mode": backend_mode,
-        "worker_count": worker_count,
-        "registry_ready": reg_ready,
-        "registry_init_error": init_err,
-        "node_type_count": len(registry) if reg_ready else 0,
-        "checks": {
-            "runs_dir_exists": runs_dir().exists(),
-            "project_dir_exists": root.exists(),
-            "registry_ready": reg_ready,
-        },
-    }
+    return readiness_snapshot()
