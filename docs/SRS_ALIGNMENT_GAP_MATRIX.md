@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** | (pending commit) on `cursor/usecase-plugins-workflows` (Wave A batch 2: ship REST + MCP P0)
+| **Tip probed** | `c3195c58b2dcbd9c6dcde06d3499323d07fff087` on `cursor/usecase-plugins-workflows` (Wave A batch 2: ship REST + MCP P0)
 | **Phase** | 2 — Wave A batch 2 implemented (ship packages REST + MCP J1–J3/ship/audit)
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
 | **Generated** | 2026-09-25 21:12 IST; Wave A batch 2 update 2026-09-25 ~21:50 IST
@@ -384,6 +384,6 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 
 ### Wave A batch 2 landing
 
-- Tip: (set after commit)
+- Tip: `c3195c58b2dcbd9c6dcde06d3499323d07fff087`
 - Closed: Ship packages REST §9.2.14/§19; MCP P0 J1–J3 + ship + audit + readiness.
 - Residual Wave A→B: dataset version MCP tools, list_workers/list_jobs MCP, checksum UI polish.
