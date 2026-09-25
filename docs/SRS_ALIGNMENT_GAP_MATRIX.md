@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** | `c3195c58b2dcbd9c6dcde06d3499323d07fff087` on `cursor/usecase-plugins-workflows` (Wave A batch 2: ship REST + MCP P0)
-| **Phase** | 2 — Wave A batch 2 implemented (ship packages REST + MCP J1–J3/ship/audit)
+| **Tip probed** | `e3f3dc4328cae7292040b02713a546d2314ed23a` (docs `ee7db75b`) on `cursor/usecase-plugins-workflows` (Wave B) |
+| **Phase** | 2 — Wave B landed (If-Match, audit, envelope, CLI, datasets, readiness, cancel-artifact, MCP leftovers) |
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
-| **Generated** | 2026-09-25 21:12 IST; Wave A batch 2 update 2026-09-25 ~21:50 IST
+| **Generated** | 2026-09-25 21:12 IST; Wave A batch 2 ~21:50 IST; Wave B 2026-09-25 ~21:40 IST |
 | **Method** | Static code evidence only (grep/read). Live Server-99 verify = Phase 2 (DESKTOP/CloudAgent not used). |
 
 > **Honesty rule:** Status is **Confirmed** only with file:symbol evidence. Thin/partial contracts → **Partial**. Absent symbols/routes → **Missing**. Product TBD / device APIs → **needs-API**. Not inspected this pass → **Not probed**.
@@ -391,6 +391,6 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 
 ### Wave B landing
 
-- Tip: `e3f3dc4328cae7292040b02713a546d2314ed23a`  # was `cursor/usecase-plugins-workflows` after this docs update (filled in JSON).
+- Tip: `e3f3dc4328cae7292040b02713a546d2314ed23a` (matrix stamp `ee7db75b8b0c78fab2bee6fab4e370619aa19681`)
 - Closed: API-CONV-005, API-PAGE-001 (`?envelope=1`), audit §22.1 fields, CLI-000 globals+exits, DATA-VER-002/006, readiness ready/signals, API-FORBID-005 cancel-artifact, MCP dataset versions + workers/jobs.
 - Deferred to Wave C: default-envelope migration (P1), universal 503 store_corrupt on all reads, Devices OTA, CSP/token honesty, backup runbook, SIGTERM drain, Perf TBD.

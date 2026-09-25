@@ -1,6 +1,6 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "e3f3dc4328cae7292040b02713a546d2314ed23a",
+  "tip_sha": "ee7db75b8b0c78fab2bee6fab4e370619aa19681",
   "branch": "cursor/usecase-plugins-workflows",
   "generated_at": "2026-09-25 ~21:40 IST",
   "method": "static-code-evidence",
@@ -241,5 +241,6 @@
     "Readiness ready + store_corrupt/disk_full",
     "API-FORBID-005 artifact commit after cancel",
     "MCP list/get dataset versions + upload + list_workers/list_jobs"
-  ]
+  ],
+  "wave_b_feature_sha": "e3f3dc4328cae7292040b02713a546d2314ed23a"
 }
