@@ -5,7 +5,7 @@
 
 ## 1. Current MCP tool inventory
 
-**Actual register() count:** **69 unique tools** (68 always including `search_templates` + `accept_proposal` when `GRAPHYN_MCP_HUMAN_APPROVAL=1`).
+**Actual register() count:** **73 unique tools** (72 always including `search_templates` + pack-first tools + `accept_proposal` when `GRAPHYN_MCP_HUMAN_APPROVAL=1`).
 
 **Docs drift:** [`MCP_SERVER.md`](./MCP_SERVER.md) still says “28/29 tools”. That narrative is **stale**. Journey waves added pipelines/runs/templates/models/schedules/webhooks/ship/audit/datasets/workers. Prefer this doc + `tool_registry.py` as source of truth until MCP_SERVER is rewritten.
 
@@ -45,10 +45,10 @@ discover packs/nodes
 | Step | Tools today | Notes |
 |---|---|---|
 | Discover nodes | `list_nodes` | Runtime registry only — not full design catalog |
-| Discover packs | `list_plugins` | Installed plugins; **no pack taxonomy tool yet** |
+| Discover packs | `list_plugins`, **`list_packs`**, **`describe_pack`** | Pack taxonomy from design catalog + template counts |
 | Search templates | `list_templates` | Seeded workspace graphs only |
 | Marketplace search | **`search_templates`** (added) | Reads `PIPELINE_TEMPLATE_CATALOG.json` |
-| Materialize chain | **proposed** `materialize_template` / `build_graph_from_chain` | Python helper exists: `app/core/pipeline_template_materializer.py` |
+| Materialize chain | **`materialize_template`** / `build_graph_from_chain` | MCP + Python helper |
 | Validate / save / run | `validate_graph`, `save_pipeline`, `execute_pipeline` | OK |
 | Observe | `inspect_run`, `list_artifacts`, `get_artifact_lineage`, `list_workers` | OK |
 | Ship | ship_* + model prod approve | HITL for prod |
@@ -59,9 +59,9 @@ discover packs/nodes
 | Gap | Proposed tool | Priority | Status |
 |---|---|---|---|
 | Filter marketplace catalog | `search_templates` | P0 | **Implemented** (reads catalog JSON + optional seeded dir) |
-| Pack taxonomy | `list_packs` / `describe_pack` | P0 | Proposed |
-| Node contract from design catalog | `get_node_spec` | P0 | Proposed (ports+config from PLATFORM_CATALOG + refinements) |
-| Expand catalog → IR | `materialize_template` | P0 | Helper in `app/core/`; MCP wire optional |
+| Pack taxonomy | `list_packs` / `describe_pack` | P0 | **Implemented** |
+| Node contract from design catalog | `get_node_spec` | P0 | **Implemented** (ports+config from PLATFORM_CATALOG + refinements) |
+| Expand catalog → IR | `materialize_template` | P0 | **Implemented** (MCP + `app/core/pipeline_template_materializer.py`) |
 | Ad-hoc chain → IR | `build_graph_from_chain` | P1 | Helper exists |
 | Param validation vs template schema | `validate_template_params` | P1 | Proposed |
 | Pack install aligned to PluginPackage roots | extend `install_plugin` | P1 | Document paths: TinyML/Vision/RAG/… |

@@ -1,9 +1,9 @@
 # MCP Server
 
-> **Inventory drift (2026-09-26):** `tool_registry.py` now registers **~69 tools** (68 prior + `search_templates`; +`accept_proposal` when human-approval enabled). The “28/29 tools” counts below are **stale**. See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md) for the verified inventory and pack-first agent journey.
+> **Inventory drift (2026-09-26):** `tool_registry.py` now registers **~73 tools** (69 prior + `materialize_template` + `get_node_spec` + `list_packs` + `describe_pack`; +`accept_proposal` when human-approval enabled). The “28/29 tools” counts below are **stale**. See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md) for the verified inventory and pack-first agent journey.
 
 
-The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes **28 tools by default** (29 when `GRAPHYN_MCP_HUMAN_APPROVAL=1`, which enables `accept_proposal`) over stdio transport.
+The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes **72 tools by default** (73 when `GRAPHYN_MCP_HUMAN_APPROVAL=1`, which enables `accept_proposal`) over stdio transport. Prefer `tool_registry.py` / MCP_AGENT_PACK_COVERAGE.md as source of truth.
 
 **File:** `app/mcp/`  
 **Transport:** stdio (JSON-RPC on stdin/stdout, logs to stderr)  

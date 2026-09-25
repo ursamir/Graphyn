@@ -201,6 +201,18 @@ def register_all_tools(register: Callable) -> None:
         SEARCH_TEMPLATES_DESCRIPTION,
         SEARCH_TEMPLATES_SCHEMA,
         search_templates_handler,
+        MATERIALIZE_TEMPLATE_DESCRIPTION,
+        MATERIALIZE_TEMPLATE_SCHEMA,
+        materialize_template_handler,
+        GET_NODE_SPEC_DESCRIPTION,
+        GET_NODE_SPEC_SCHEMA,
+        get_node_spec_handler,
+        LIST_PACKS_DESCRIPTION,
+        LIST_PACKS_SCHEMA,
+        list_packs_handler,
+        DESCRIBE_PACK_DESCRIPTION,
+        DESCRIBE_PACK_SCHEMA,
+        describe_pack_handler,
         list_models_handler,
         list_pipelines_handler,
         list_runs_handler,
@@ -310,6 +322,10 @@ def register_all_tools(register: Callable) -> None:
     register("get_template", GET_TEMPLATE_DESCRIPTION, GET_TEMPLATE_SCHEMA, get_template_handler)
     register("instantiate_template", INSTANTIATE_TEMPLATE_DESCRIPTION, INSTANTIATE_TEMPLATE_SCHEMA, instantiate_template_handler)
     register("search_templates", SEARCH_TEMPLATES_DESCRIPTION, SEARCH_TEMPLATES_SCHEMA, search_templates_handler)
+    register("materialize_template", MATERIALIZE_TEMPLATE_DESCRIPTION, MATERIALIZE_TEMPLATE_SCHEMA, materialize_template_handler)
+    register("get_node_spec", GET_NODE_SPEC_DESCRIPTION, GET_NODE_SPEC_SCHEMA, get_node_spec_handler)
+    register("list_packs", LIST_PACKS_DESCRIPTION, LIST_PACKS_SCHEMA, list_packs_handler)
+    register("describe_pack", DESCRIBE_PACK_DESCRIPTION, DESCRIBE_PACK_SCHEMA, describe_pack_handler)
     register("register_model", REGISTER_MODEL_DESCRIPTION, REGISTER_MODEL_SCHEMA, register_model_handler)
     register("list_models", LIST_MODELS_DESCRIPTION, LIST_MODELS_SCHEMA, list_models_handler)
     register("get_model", GET_MODEL_DESCRIPTION, GET_MODEL_SCHEMA, get_model_handler)
