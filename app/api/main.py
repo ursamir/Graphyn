@@ -130,6 +130,14 @@ async def _lifespan(_app: FastAPI):
 
     yield
 
+    # OPS-005 / OPS-011: graceful SIGTERM drain — refuse new runs, wait/cancel in-flight.
+    try:
+        from app.core.shutdown import drain_active_runs
+
+        drain_active_runs()
+    except Exception as exc:
+        _logger.warning("shutdown drain failed: %s", exc, exc_info=True)
+
     _ticker_stop.set()
     if _ticker_thread is not None:
         _ticker_thread.join(timeout=2.0)

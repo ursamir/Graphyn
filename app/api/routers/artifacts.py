@@ -61,9 +61,21 @@ def list_artifacts(
     """
     from app.api.pagination import maybe_envelope, parse_envelope_flag
     from app.core.artifact_store import ArtifactStore
+    from app.core.store_integrity import StoreCorrupt, readiness_store_corrupt
 
-    store = ArtifactStore()
-    records = store.list(run_id=run_id, node_type=node_type, artifact_type=artifact_type)
+    if readiness_store_corrupt():
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "store_corrupt", "message": "Critical store index corrupt"},
+        )
+    try:
+        store = ArtifactStore()
+        records = store.list(run_id=run_id, node_type=node_type, artifact_type=artifact_type)
+    except StoreCorrupt as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "store_corrupt", "message": str(exc)},
+        ) from exc
     total = len(records)
     page = records[offset : offset + limit]
     items = [r.model_dump(mode="json") for r in page]

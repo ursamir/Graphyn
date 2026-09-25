@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** | `e3f3dc4328cae7292040b02713a546d2314ed23a` (docs `ee7db75b`) on `cursor/usecase-plugins-workflows` (Wave B) |
-| **Phase** | 2 — Wave B landed (If-Match, audit, envelope, CLI, datasets, readiness, cancel-artifact, MCP leftovers) |
+| **Tip probed** | `WAVE_C_TIP_SHA` on `cursor/usecase-plugins-workflows` (Wave C) |
+| **Phase** | 2 — Waves A/B/C landed (honesty, ops, security polish, prove capture) |
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
-| **Generated** | 2026-09-25 21:12 IST; Wave A batch 2 ~21:50 IST; Wave B 2026-09-25 ~21:40 IST |
+| **Generated** | 2026-09-25 21:12 IST; Wave A batch 2 ~21:50 IST; Wave B ~21:40 IST; Wave C 2026-09-25 ~21:50 IST |
 | **Method** | Static code evidence only (grep/read). Live Server-99 verify = Phase 2 (DESKTOP/CloudAgent not used). |
 
 > **Honesty rule:** Status is **Confirmed** only with file:symbol evidence. Thin/partial contracts → **Partial**. Absent symbols/routes → **Missing**. Product TBD / device APIs → **needs-API**. Not inspected this pass → **Not probed**.
@@ -87,7 +87,7 @@ Auth: `app/api/main.py` HTTPBearer + fail-closed when `GRAPHYN_AUTH_REQUIRED` / 
 - Transport: `server.py`, auth `auth.py`, registry `tool_registry.py`
 - Handlers: discovery, graph, execution, run_control, artifacts, provenance, plugins, secrets, proposals, workspace, optimization, …
 - **Registered tools (~29):** list_nodes, generate_graph, validate_graph, get_graph_schema, get_graph_capability_summary, get_event_schema, execute_pipeline, inspect_run, pause/resume/cancel_run, list_artifacts, get_artifact_lineage, replay_run, optimize_execution, install/list/manage_plugin, secrets_list/set, propose/list/get/reject/(accept)_proposal, list_experiments, get_trace, list_projects, list_data_inputs
-- **§21 P0 additions:** J1–J3 + ship + audit + readiness **Confirmed** (Wave A batch 2). Residual Missing/Partial: dataset versions MCP, workers/jobs MCP
+- **§21 P0 additions:** J1–J3 + ship + audit + readiness + dataset versions/workers MCP **Confirmed** (Waves A/B).
 
 ### 1.6 CLI / SDK
 
@@ -180,7 +180,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Canonical states pending/running/paused/succeeded/failed/cancelled | 13.2 | writers: `pending`→`running`→`succeeded`; reads map `completed`→`succeeded` | Confirmed | Wave A: migrate writes; alias legacy journals on read | A |
-| Current×Action matrix + 409 invalid_transition | RT-SM-001/003 | `app/core/run_status.py` + API gates | Confirmed | SDK silent no-ops still Wave B | A |
+| Current×Action matrix + 409 invalid_transition | RT-SM-001/003 | `app/core/run_status.py` + API + SDK gates | Confirmed | Wave C SDK aligned | A/C |
 | Resume failed/cancelled/succeeded = NO | 13.2 locked | enforced via `next_status` → 409 | Confirmed | Wave A batch 1 | A |
 | Cancel durable + forbid artifact commit | RT-CANCEL-* | `ArtifactCommitForbidden` in `run_journal.register_artifact` + unit test | Confirmed | Wave B | B |
 | graph_hash on resume | RT-RESUME-001 | `orchestrator.py` hash check | Confirmed | | — |
@@ -206,14 +206,14 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | At-least-once + fencing complete | 15.4 | complete checks lease | Confirmed | | — |
 | artifact:// + RestrictedUnpickler | 15.6 | transfer + `isolated_executor.RestrictedUnpickler` | Confirmed | | — |
 | Durable store default Mode B | DIST-035 | disk/redis store present | Confirmed | memory-only for tests — honesty OK | — |
-| DIST-AUTH honesty (shared bearer) | 15.2 | docs/compose comments; SEC-001 | Partial | Product copy in UI/Ops not fully probed | C |
+| DIST-AUTH honesty (shared bearer) | 15.2 | WorkersView + Ops Status honesty; TRUST_MODEL | Confirmed | Wave C product copy | C |
 
 ### 3.7 Persistence — §16
 
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Atomic meta / os.replace+fsync | 16.1–16.2 | run_journal, secrets, schedules, artifact_store, distributed/store | Confirmed | | — |
-| Quarantine corrupt index | PERS-020 | quarantine + readiness `store_corrupt` signal | Partial | Signal in readiness; not every API returns 503 store_corrupt yet | B |
+| Quarantine corrupt index | PERS-020 | quarantine + readiness; artifacts list → 503 store_corrupt | Partial | Helper + critical list path; not universal on all reads | C |
 | Readiness false on corrupt | PERS-021 | `ready=false` when store_corrupt/disk_full/unwritable | Confirmed | Wave B | B |
 | PERS-001 pending before run_id ack | 16.1 | `RunManager` writes `pending`; `mark_running` at execute start | Confirmed | Wave A batch 1 | A |
 
@@ -242,8 +242,8 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Package REST create/list/get/download/promote | 9.2.14 / SHIP-001 | `ship.py` + `ship_packages.py` | Confirmed | Wave A batch 2; archive+manifest sha256 | A |
 | Lifecycle states draft…deployed | 19.2 | `ship_packages.next_status` matrix | Confirmed | aliases creating→draft, ready→built on read/wire | A |
 | Edge wizard template path | EDGE-001 | `features/edge/EdgeWizardView.tsx` | Partial | Wizard still runs packager pipeline; also lists/creates via ship REST | A |
-| Devices honesty stub | SHIP-006 / EDGE-007 | `DevicesView.tsx` honesty copy | needs-API | Correct stub | — |
-| Checksum display in UI | SHIP-002 | EdgeWizard checksum state | Partial | Depends on artifact path not package API | B |
+| Devices honesty stub | SHIP-006 / EDGE-007 | `DevicesView.tsx` needs-API banner (no fake OTA) | needs-API | Honesty stub retained; device API still TBD | C |
+| Checksum display in UI | SHIP-002 | EdgeWizard sha256 + copy + ship package list | Confirmed | Wave C polish; shows pending honesty when absent | C |
 
 ### 3.11 Datasets — §20
 
@@ -271,9 +271,9 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Append-only JSONL audit | AUD-001 | `audit.py` events.jsonl | Confirmed | | — |
 | Schema fields request_id/result/actor_kind/timestamp | 22.1 | `audit.record_audit` writes timestamp+ts, result, request_id, actor_kind | Confirmed | Wave B; `ts`/`meta` aliases kept | B |
 | Required audited actions | AUD-005 | cancel, rollback, model, plugin, ship, dataset.version_delete | Confirmed | Schema aligned Wave B | B |
-| ProvenanceRecord fields | 22.2 | `provenance.py` ProvenanceRecord | Confirmed | plugin_versions optional thin | C |
+| ProvenanceRecord fields | 22.2 | `provenance.py` + optional plugin_versions/worker/actor/dataset_refs | Confirmed | Wave C optional fields | C |
 | GET /trace | OBS-002 | `trace.py` | Confirmed | | — |
-| Prove capture set completeness | 22.2 | Not probed end-to-end | Not probed | Phase 2 | C |
+| Prove capture set completeness | 22.2 | `app/core/prove.py` prove.json on succeeded run + unit test | Confirmed | Unit-tested required fields; live Server-99 still Phase 2 | C |
 
 ### 3.14 Security — §23
 
@@ -285,7 +285,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | SEC-030 path jail | 23.3 | workspace_paths / outputs file jail | Confirmed | | — |
 | SEC-040/041 RestrictedUnpickler | 23.2 | isolated_executor | Confirmed | | — |
 | SEC-042 plugin allowlist | 23.3 | installer | Confirmed | | — |
-| SEC-XSS / CSP / token honesty | THREAT-001/002 | Not fully probed UI CSP meta | Partial / Not probed | | C |
+| SEC-XSS / CSP / token honesty | THREAT-001/002 | Settings honesty + CSP meta on `index.html`; Ops note | Confirmed | Residual XSS risk documented; cookie/BFF still P1 | C |
 | SEC-020 python_code AST | 23.3 | conditions AST; python_code node | Partial | Not deep-probed | C |
 
 ### 3.15 Ops — §24
@@ -295,8 +295,8 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Health vs readiness | OPS-014 | `/health` + `/system/readiness` | Confirmed | | — |
 | Cleanup armed | OPS-009 | `POST /system/cleanup` | Confirmed | | — |
 | Stale RUNNING reconcile | NFR-REL-002 | run_cleanup | Confirmed | | — |
-| Backup/restore docs procedure | OPS-001/002 | Not in code (ops doc) | Partial | Treat Partial until ops runbook in-tree | C |
-| Shutdown drain SIGTERM | OPS-005/011 | lifespan exists; drain not proven | Partial | | C |
+| Backup/restore docs procedure | OPS-001/002 | `docs/OPS_BACKUP_RESTORE.md` | Confirmed | Wave C runbook | C |
+| Shutdown drain SIGTERM | OPS-005/011 | `app/core/shutdown.py` + lifespan drain; 503 draining | Confirmed | Best-effort per worker; grace via GRAPHYN_SHUTDOWN_GRACE_S | C |
 | Disk-full 503 | OPS-007 | Not probed | Not probed | | C |
 | Compose SPA fallback | NFR-REL-001 | nginx try_files | Confirmed | | — |
 
@@ -310,7 +310,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | validate / run / migrate | 9.4.1 | present | Confirmed | | — |
 | runs pause/resume/cancel | 9.4.1 | present | Confirmed | same SM gaps as API | A |
 | plugin / secrets / artifacts / worker | 9.4.1 | present | Confirmed | | — |
-| SDK Pipeline API | 9.4 | `sdk.py` | Confirmed | pause/resume silent no-op vs 409 | B |
+| SDK Pipeline API | 9.4 | `sdk.py` | Confirmed | Wave C: pause/resume raise InvalidTransition | C |
 | Remote CLI via REST for all resources | 9.4 | thin | Partial | Many cmds hit local core, not API | B |
 
 ---
@@ -319,11 +319,11 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 
 | Status | Approx count |
 |---|---|
-| **Confirmed** | ~72 |
-| **Partial** | ~30 |
-| **Missing** | ~14 |
+| **Confirmed** | ~92 |
+| **Partial** | ~14 |
+| **Missing** | ~2 |
 | **needs-API** | ~2 |
-| **Not probed** | ~4 |
+| **Not probed** | ~1 (Perf live measure) |
 
 > Counts are row-clusters (not every atomic FR ID). Treat as directional for Wave planning.
 
@@ -357,12 +357,14 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 
 ### Wave C — honesty, ops, security polish, needs-API follow-through
 
-- Devices API when product ready (keep stub until then).
-- CSP / token-in-localStorage honesty banner.
-- Backup/restore runbook in-tree; SIGTERM drain.
-- DIST-AUTH / SEC-WORKER product copy on Workers/Ops.
-- Prove capture set end-to-end audit (Phase 2 live).
-- Perf TBD-PERF-* measurement (GA gate — not Wave A).
+- ✅ Devices honesty stub retained (needs-API; no fake flash/OTA) — FR-SHIP-006.
+- ✅ CSP meta + Settings/Ops token-in-localStorage honesty (THREAT-001/002).
+- ✅ Backup/restore runbook `docs/OPS_BACKUP_RESTORE.md`; SIGTERM drain (OPS-005/011).
+- ✅ DIST-AUTH / SEC-WORKER product copy on Workers + Ops.
+- ✅ Prove capture set (`app/core/prove.py` + unit test on succeeded run).
+- ⏳ Perf TBD-PERF-* measurement (GA gate — not invented).
+- ⏳ Device registry / OTA APIs (needs-API — product TBD).
+- Deferred P1: default-envelope migration; universal 503 store_corrupt on every read.
 
 ---
 
@@ -394,3 +396,9 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 - Tip: `e3f3dc4328cae7292040b02713a546d2314ed23a` (matrix stamp `ee7db75b8b0c78fab2bee6fab4e370619aa19681`)
 - Closed: API-CONV-005, API-PAGE-001 (`?envelope=1`), audit §22.1 fields, CLI-000 globals+exits, DATA-VER-002/006, readiness ready/signals, API-FORBID-005 cancel-artifact, MCP dataset versions + workers/jobs.
 - Deferred to Wave C: default-envelope migration (P1), universal 503 store_corrupt on all reads, Devices OTA, CSP/token honesty, backup runbook, SIGTERM drain, Perf TBD.
+
+### Wave C landing
+
+- Tip: `WAVE_C_TIP_SHA`
+- Closed: Devices needs-API honesty; CSP + token localStorage honesty; OPS backup runbook; SIGTERM drain; DIST-AUTH/SEC-WORKER UI copy; Prove capture required fields + unit test; SDK pause/resume InvalidTransition; Edge checksum polish; artifacts list 503 store_corrupt helper.
+- Remaining honest TBDs: Perf TBD-PERF-*; device registry/flash/OTA APIs; P1 default-envelope; universal store_corrupt on all reads; Server-99 live verify (Phase 2).

@@ -365,6 +365,13 @@ def run_pipeline_stream(payload: dict = Body(...)):
     Delegates to get_backend().execute(graph) (V1.md §3.1).
     Accepts both IR JSON and YAML formats (Req 4.7).
     """
+    from app.core.shutdown import is_draining
+
+    if is_draining():
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "draining", "message": "Control plane is shutting down; refusing new runs"},
+        )
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
         graph, project_fields = _stamp_graph_project(graph, payload)
@@ -493,6 +500,13 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
     Honors Idempotency-Key (API-CONV-004). Durable status starts as ``pending``
     (PERS-001) before the ack body is returned.
     """
+    from app.core.shutdown import is_draining
+
+    if is_draining():
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "draining", "message": "Control plane is shutting down; refusing new runs"},
+        )
     from app.api.idempotency import begin_idempotent, complete_idempotent
 
     cached = begin_idempotent(

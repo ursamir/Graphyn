@@ -1,16 +1,16 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "ee7db75b8b0c78fab2bee6fab4e370619aa19681",
+  "tip_sha": "WAVE_C_TIP_SHA",
   "branch": "cursor/usecase-plugins-workflows",
-  "generated_at": "2026-09-25 ~21:40 IST",
+  "generated_at": "2026-09-25 ~21:50 IST",
   "method": "static-code-evidence",
   "phase2_live_verify": "blocked_no_desktop",
   "totals": {
-    "confirmed": 85,
-    "partial": 22,
-    "missing": 4,
+    "confirmed": 92,
+    "partial": 14,
+    "missing": 2,
     "needs_api": 2,
-    "not_probed": 4
+    "not_probed": 1
   },
   "wave_a_top10": [
     "API-ERR-001 normative error envelope",
@@ -41,11 +41,9 @@
       "srs": "\u00a79.0\u20139.1/\u00a711.1",
       "status": "Confirmed",
       "p0_confirmed": 3,
-      "p0_partial": 1,
+      "p0_partial": 0,
       "p0_missing": 0,
-      "top_gaps": [
-        "FR-AUTH console honesty (Wave C)"
-      ]
+      "top_gaps": []
     },
     {
       "id": "REST-P0",
@@ -89,22 +87,19 @@
       "srs": "\u00a715",
       "status": "Confirmed",
       "p0_confirmed": 5,
-      "p0_partial": 1,
+      "p0_partial": 0,
       "p0_missing": 0,
-      "top_gaps": [
-        "DIST-AUTH UI honesty copy"
-      ]
+      "top_gaps": []
     },
     {
       "id": "Persistence",
       "srs": "\u00a716",
       "status": "Partial",
       "p0_confirmed": 1,
-      "p0_partial": 3,
+      "p0_partial": 2,
       "p0_missing": 0,
       "top_gaps": [
-        "store_corrupt 503",
-        "pending-before-ack"
+        "universal store_corrupt 503 on all reads"
       ]
     },
     {
@@ -132,13 +127,12 @@
     {
       "id": "Ship",
       "srs": "\u00a719",
-      "status": "Missing",
-      "p0_confirmed": 0,
-      "p0_partial": 2,
-      "p0_missing": 2,
+      "status": "Partial",
+      "p0_confirmed": 3,
+      "p0_partial": 1,
+      "p0_missing": 0,
       "top_gaps": [
-        "ship packages REST+lifecycle",
-        "wizard still run/artifact based"
+        "device registry/OTA needs-API"
       ]
     },
     {
@@ -167,13 +161,12 @@
     {
       "id": "Audit-Provenance",
       "srs": "\u00a722",
-      "status": "Partial",
-      "p0_confirmed": 2,
-      "p0_partial": 2,
+      "status": "Confirmed",
+      "p0_confirmed": 4,
+      "p0_partial": 0,
       "p0_missing": 0,
       "top_gaps": [
-        "audit schema fields",
-        "AUD-005 coverage"
+        "live Server-99 prove verify (Phase 2)"
       ]
     },
     {
@@ -181,24 +174,23 @@
       "srs": "\u00a723",
       "status": "Confirmed",
       "p0_confirmed": 6,
-      "p0_partial": 2,
+      "p0_partial": 1,
       "p0_missing": 0,
       "top_gaps": [
-        "CSP/token honesty",
+        "cookie/BFF token timeline (P1)",
         "python_code deep probe"
       ]
     },
     {
       "id": "Ops",
       "srs": "\u00a724",
-      "status": "Partial",
-      "p0_confirmed": 4,
-      "p0_partial": 2,
+      "status": "Confirmed",
+      "p0_confirmed": 6,
+      "p0_partial": 1,
       "p0_missing": 0,
       "top_gaps": [
-        "backup/restore runbook",
-        "SIGTERM drain",
-        "disk_full"
+        "Perf TBD-PERF-* (GA)",
+        "universal store_corrupt 503"
       ]
     },
     {
@@ -206,10 +198,10 @@
       "srs": "\u00a79.4",
       "status": "Confirmed",
       "p0_confirmed": 4,
-      "p0_partial": 3,
-      "p0_missing": 1,
+      "p0_partial": 2,
+      "p0_missing": 0,
       "top_gaps": [
-        "SDK pause silent no-op; remote CLI breadth"
+        "remote CLI breadth"
       ]
     }
   ],
@@ -225,7 +217,7 @@
     "dataset version MCP tools (list/get/upload) \u2014 deferred Wave B",
     "list_workers / list_jobs MCP \u2014 deferred Wave B"
   ],
-  "phase": "wave_b_landed",
+  "phase": "wave_c_landed",
   "matrix_base_sha": "85ac3e75a56cdd29e526fa6ae21631017bd23782",
   "wave_a_batch2_closed": [
     "SHIP packages REST \u00a79.2.14 + lifecycle \u00a719",
@@ -242,5 +234,28 @@
     "API-FORBID-005 artifact commit after cancel",
     "MCP list/get dataset versions + upload + list_workers/list_jobs"
   ],
-  "wave_b_feature_sha": "e3f3dc4328cae7292040b02713a546d2314ed23a"
+  "wave_b_feature_sha": "e3f3dc4328cae7292040b02713a546d2314ed23a",
+  "wave_c": [
+    "Devices needs-API honesty stub (FR-SHIP-006)",
+    "CSP meta + token localStorage honesty (THREAT-001/002)",
+    "docs/OPS_BACKUP_RESTORE.md",
+    "SIGTERM drain OPS-005/011",
+    "DIST-AUTH / SEC-WORKER Workers+Ops copy",
+    "Prove capture AUD-PROV-010 + unit test",
+    "SDK pause/resume InvalidTransition",
+    "Edge checksum UI polish",
+    "artifacts list 503 store_corrupt helper"
+  ],
+  "wave_c_remaining": [
+    "Perf TBD-PERF-* (do not invent)",
+    "Device registry / flash / OTA APIs (needs-API)",
+    "P1 default-envelope migration",
+    "Universal 503 store_corrupt on all critical reads",
+    "Server-99 live verify (Phase 2)"
+  ],
+  "waves_complete": [
+    "A",
+    "B",
+    "C"
+  ]
 }

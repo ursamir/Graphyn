@@ -1190,8 +1190,19 @@ export default function App() {
                 </div>
               </label>
               <p className="mt-2 text-xs text-ink-500">
-                Paste the same token as GRAPHYN_API_TOKEN on the server. Stored only in this browser.
+                Paste the same token as GRAPHYN_API_TOKEN on the server. Stored only in this browser
+                (localStorage — interim; httpOnly cookie / BFF is P1).
               </p>
+              <div
+                className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950"
+                role="note"
+                data-testid="token-localstorage-honesty"
+              >
+                <strong>Security note (THREAT-001 / THREAT-002):</strong> a Bearer token in{' '}
+                <code className="font-mono text-[11px]">localStorage</code> can be stolen by XSS.
+                Keep the console on trusted networks; prefer a strict CSP; do not paste tokens into
+                shared machines. Residual risk is documented — Settings storage is interim.
+              </div>
               <div className="mt-5 border-t border-ink-100 pt-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>

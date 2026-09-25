@@ -731,37 +731,42 @@ class Pipeline:
     def pause(self) -> None:
         """Pause the currently running pipeline after the current node completes.
 
-        Requires a run to be in progress (started via run() or run_with_manager()).
-        No-op if no run is active (G5-20 fix).
-
-        Note:
-            This method always returns ``None`` and does not indicate whether
-            the pause was applied.  If the run has already completed (or was
-            never started), the call is silently ignored.  Use
-            ``get_last_run_id()`` to check whether a run was ever started.
+        Raises ``InvalidTransition`` (maps to HTTP 409 ``invalid_transition``)
+        when no run was started or the Current×Action matrix forbids pause.
         """
-        if self._last_run_id is None:
-            return
+        from pathlib import Path
+
         from app.core.run_control import get_active_run
+        from app.core.run_status import InvalidTransition, load_durable_status, next_status
+
+        if self._last_run_id is None:
+            raise InvalidTransition("unknown", "pause")
         run = get_active_run(self._last_run_id)
-        if run is not None:
-            run.pause()
+        if run is None:
+            raise InvalidTransition("unknown", "pause")
+        status = load_durable_status(Path(run.base_path)) or "running"
+        next_status(status, "pause")  # raises InvalidTransition if illegal
+        run.pause()
 
     def resume(self) -> None:
-        """Resume a paused pipeline run (G5-20 fix).
+        """Resume a paused pipeline run.
 
-        No-op if no run is active or the run is not paused.
-
-        Note:
-            Returns ``None`` regardless of whether the resume was applied.
-            Silent no-op when the run has already completed or was never started.
+        Raises ``InvalidTransition`` when no run is active or resume is illegal
+        for the current durable status (aligned with API 409 invalid_transition).
         """
-        if self._last_run_id is None:
-            return
+        from pathlib import Path
+
         from app.core.run_control import get_active_run
+        from app.core.run_status import InvalidTransition, load_durable_status, next_status
+
+        if self._last_run_id is None:
+            raise InvalidTransition("unknown", "resume")
         run = get_active_run(self._last_run_id)
-        if run is not None:
-            run.resume()
+        if run is None:
+            raise InvalidTransition("unknown", "resume")
+        status = load_durable_status(Path(run.base_path)) or "paused"
+        next_status(status, "resume")
+        run.resume()
 
     def cancel(self) -> None:
         """Cancel the currently running pipeline after the current node completes.

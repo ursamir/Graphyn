@@ -159,6 +159,22 @@ export default function WorkersView() {
         }
       />
 
+      <div
+        className="rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-950 shadow-sm"
+        role="note"
+        data-testid="workers-dist-auth-honesty"
+      >
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800/80">
+          Trust boundary · DIST-AUTH / SEC-WORKER
+        </div>
+        <p className="mt-1 text-xs leading-relaxed text-amber-950/90">
+          Workers authenticate with the <strong>same shared Bearer</strong> as the control-plane API
+          (DIST-AUTH-001). Anyone holding that token can register as a worker, claim jobs, and read
+          blobs (DIST-AUTH-002 / THREAT-003). Network-segment workers; separate worker credentials /
+          mTLS are not shipped (P2). See <code className="font-mono text-[11px]">docs/TRUST_MODEL.md</code>.
+        </p>
+      </div>
+
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Summary</span>
         <span className="font-medium text-ink-900">

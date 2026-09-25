@@ -343,7 +343,7 @@ export default function SystemView() {
     <div className="h-full min-h-0 overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="Ops"
-        description="Health, schedules, webhooks, cleanup, audit."
+        description="Health, schedules, webhooks, cleanup, audit. Shared-bearer single-tenant — see trust note on Status."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -380,6 +380,29 @@ export default function SystemView() {
 
       {systemTab === 'status' && (
         <div className="space-y-4">
+          <div
+            className="rounded-2xl border border-ink-200 bg-ink-50/80 px-4 py-3 text-xs text-ink-700 shadow-sm"
+            role="note"
+            data-testid="ops-trust-honesty"
+          >
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+              Auth &amp; token honesty
+            </div>
+            <ul className="mt-1.5 list-disc space-y-1 pl-4 leading-relaxed">
+              <li>
+                Single-tenant <strong>shared Bearer</strong> (SEC-001 / DIST-AUTH): API operators and
+                Mode B workers use the same token — no fake RBAC.
+              </li>
+              <li>
+                Console stores the token in <code className="font-mono text-[11px]">localStorage</code>{' '}
+                (interim). XSS can exfiltrate it (THREAT-001/002); CSP is baseline-only.
+              </li>
+              <li>
+                Backup / restore of <code className="font-mono text-[11px]">GRAPHYN_HOME</code> + project
+                dir: see <code className="font-mono text-[11px]">docs/OPS_BACKUP_RESTORE.md</code>.
+              </li>
+            </ul>
+          </div>
           <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Backend</span>
             {backendLabel ? (

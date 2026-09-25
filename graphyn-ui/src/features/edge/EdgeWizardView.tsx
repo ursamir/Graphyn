@@ -1270,12 +1270,50 @@ export default function EdgeWizardView() {
                     />
                   </label>
                   <div className="rounded-xl border border-ink-100 bg-ink-50/70 px-3 py-2 text-xs text-ink-700">
-                    <span className="font-semibold uppercase tracking-wide text-ink-400 text-[10px]">
-                      Checksum
-                    </span>
-                    <div className="mt-0.5 font-mono text-[11px] break-all">
-                      {packageChecksum || 'Checksum when packager emits it'}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold uppercase tracking-wide text-ink-400 text-[10px]">
+                        Package checksum (sha256)
+                      </span>
+                      {packageChecksum ? (
+                        <button
+                          type="button"
+                          className="btn-quiet text-[11px]"
+                          onClick={() => {
+                            void navigator.clipboard?.writeText(packageChecksum)
+                            pushToast('Checksum copied', 'success')
+                          }}
+                        >
+                          Copy
+                        </button>
+                      ) : null}
                     </div>
+                    <div className="mt-0.5 font-mono text-[11px] break-all" data-testid="ship-package-checksum">
+                      {packageChecksum ? (
+                        <>
+                          <span className="text-ink-400">sha256:</span> {packageChecksum}
+                        </>
+                      ) : (
+                        <span className="text-ink-500">
+                          Pending — shown when ship package create or packager artifact emits{' '}
+                          <code className="font-mono text-[10px]">checksums.sha256</code> (SHIP-002).
+                        </span>
+                      )}
+                    </div>
+                    {shipPackages.length > 0 ? (
+                      <ul className="mt-2 space-y-1 border-t border-ink-100 pt-2">
+                        {shipPackages.slice(0, 5).map((p, idx) => (
+                          <li key={p.package_id || p.checksum || `pkg-${idx}`} className="font-mono text-[10px] text-ink-600">
+                            {p.package_id || 'pkg'} · {p.status || '—'}
+                            {p.checksum ? (
+                              <>
+                                {' '}
+                                · <span className="text-ink-800">{p.checksum.slice(0, 16)}…</span>
+                              </>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 </>
               )}

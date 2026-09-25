@@ -152,6 +152,27 @@ class RunManager:
             }
             self._write_meta_unlocked(full, meta_path, tmp)
         try:
+            from app.core.prove import write_prove_capture
+
+            graph_data = None
+            graph_path = os.path.join(self.base_path, "graph.json")
+            if os.path.exists(graph_path):
+                try:
+                    with open(graph_path, encoding="utf-8") as gf:
+                        graph_data = json.load(gf)
+                except Exception:
+                    graph_data = None
+            write_prove_capture(
+                self.base_path,
+                run_id=self.run_id,
+                graph_hash=self._graph_hash or str(full.get("graph_hash") or ""),
+                meta=full,
+                graph=graph_data if isinstance(graph_data, dict) else None,
+                artifacts=list(self.artifacts),
+            )
+        except Exception:
+            log.debug("prove capture write failed for %s", self.run_id, exc_info=True)
+        try:
             from app.core.run_notify import notify_run_terminal
 
             notify_run_terminal(

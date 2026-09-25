@@ -64,6 +64,12 @@ class ProvenanceRecord(BaseModel):
     schema_version: str = "1.0"
     """Schema version for forward compatibility."""
 
+    # Optional SRS §22.2 provenance envelope fields (Wave C)
+    plugin_versions: dict[str, str] | None = None
+    worker_id: str | None = None
+    actor: str | None = None
+    dataset_refs: list[dict] | None = None
+
 
 # ---------------------------------------------------------------------------
 # ProvenanceStore  (req-02 §2–§6)
@@ -116,6 +122,11 @@ class ProvenanceStore:
         node_type: str,
         graph_hash: str,
         input_artifact_ids: list[str],
+        *,
+        plugin_versions: dict[str, str] | None = None,
+        worker_id: str | None = None,
+        actor: str | None = None,
+        dataset_refs: list[dict] | None = None,
     ) -> ProvenanceRecord:
         """Record provenance for an artifact.
 
@@ -135,6 +146,10 @@ class ProvenanceStore:
             graph_hash=graph_hash,
             input_artifact_ids=input_artifact_ids,
             created_at=created_at,
+            plugin_versions=plugin_versions,
+            worker_id=worker_id,
+            actor=actor,
+            dataset_refs=dataset_refs,
         )
 
         with self._lock:
