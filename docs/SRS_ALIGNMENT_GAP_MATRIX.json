@@ -1,0 +1,221 @@
+{
+  "srs_version": "1.2.0",
+  "tip_sha": "e618baa95ada9e5e5153c3731fd89efb83db222a",
+  "branch": "cursor/usecase-plugins-workflows",
+  "generated_at": "2026-09-25 21:12 IST",
+  "method": "static-code-evidence",
+  "phase2_live_verify": "blocked_no_desktop",
+  "totals": {
+    "confirmed": 62,
+    "partial": 38,
+    "missing": 18,
+    "needs_api": 2,
+    "not_probed": 4
+  },
+  "wave_a_top10": [
+    "API-ERR-001 normative error envelope",
+    "API-CONV-004 Idempotency-Key",
+    "RT-SM canonical statuses + 409 invalid_transition",
+    "SHIP packages REST \u00a79.2.14 + lifecycle \u00a719",
+    "MCP P0 J1\u2013J3 tools (pipelines/runs/templates/schedules/models/readiness)",
+    "GET /projects/{name} (+ PUT align)",
+    "VAL-* result schema + codes",
+    "MCP ship + audit tools (after ship REST)",
+    "Run control from durable meta / terminal rules",
+    "PERS-001 durable pending before run_id ack"
+  ],
+  "domains": [
+    {
+      "id": "UX-NAV",
+      "srs": "\u00a710",
+      "status": "Confirmed",
+      "p0_confirmed": 7,
+      "p0_partial": 1,
+      "p0_missing": 0,
+      "top_gaps": [
+        "paths.shipPackage detail builder"
+      ]
+    },
+    {
+      "id": "Auth-ErrorEnvelope",
+      "srs": "\u00a79.0\u20139.1/\u00a711.1",
+      "status": "Partial",
+      "p0_confirmed": 3,
+      "p0_partial": 2,
+      "p0_missing": 3,
+      "top_gaps": [
+        "API-ERR-001 envelope",
+        "Idempotency-Key",
+        "If-Match/resource_version"
+      ]
+    },
+    {
+      "id": "REST-P0",
+      "srs": "\u00a79.2",
+      "status": "Partial",
+      "p0_confirmed": 14,
+      "p0_partial": 3,
+      "p0_missing": 3,
+      "top_gaps": [
+        "Ship packages REST",
+        "GET /projects/{name}",
+        "run control 409 matrix"
+      ]
+    },
+    {
+      "id": "RunStateMachine",
+      "srs": "\u00a713.2",
+      "status": "Partial",
+      "p0_confirmed": 3,
+      "p0_partial": 2,
+      "p0_missing": 2,
+      "top_gaps": [
+        "completed vs succeeded",
+        "invalid_transition 409",
+        "pending ack"
+      ]
+    },
+    {
+      "id": "GraphValidation",
+      "srs": "\u00a714",
+      "status": "Partial",
+      "p0_confirmed": 3,
+      "p0_partial": 2,
+      "p0_missing": 0,
+      "top_gaps": [
+        "VAL-* codes",
+        "warnings/severity schema"
+      ]
+    },
+    {
+      "id": "Distributed",
+      "srs": "\u00a715",
+      "status": "Confirmed",
+      "p0_confirmed": 5,
+      "p0_partial": 1,
+      "p0_missing": 0,
+      "top_gaps": [
+        "DIST-AUTH UI honesty copy"
+      ]
+    },
+    {
+      "id": "Persistence",
+      "srs": "\u00a716",
+      "status": "Partial",
+      "p0_confirmed": 1,
+      "p0_partial": 3,
+      "p0_missing": 0,
+      "top_gaps": [
+        "store_corrupt 503",
+        "pending-before-ack"
+      ]
+    },
+    {
+      "id": "Plugins",
+      "srs": "\u00a717",
+      "status": "Confirmed",
+      "p0_confirmed": 3,
+      "p0_partial": 1,
+      "p0_missing": 0,
+      "top_gaps": [
+        "lifecycle state naming polish"
+      ]
+    },
+    {
+      "id": "Models-PipelineEnvs",
+      "srs": "\u00a718",
+      "status": "Confirmed",
+      "p0_confirmed": 3,
+      "p0_partial": 1,
+      "p0_missing": 0,
+      "top_gaps": [
+        "UX linkage completeness"
+      ]
+    },
+    {
+      "id": "Ship",
+      "srs": "\u00a719",
+      "status": "Missing",
+      "p0_confirmed": 0,
+      "p0_partial": 2,
+      "p0_missing": 2,
+      "top_gaps": [
+        "ship packages REST+lifecycle",
+        "wizard still run/artifact based"
+      ]
+    },
+    {
+      "id": "Datasets",
+      "srs": "\u00a720",
+      "status": "Partial",
+      "p0_confirmed": 2,
+      "p0_partial": 2,
+      "p0_missing": 0,
+      "top_gaps": [
+        "version hash manifest",
+        "force-delete 409"
+      ]
+    },
+    {
+      "id": "MCP-Parity",
+      "srs": "\u00a721",
+      "status": "Partial",
+      "p0_confirmed": 3,
+      "p0_partial": 1,
+      "p0_missing": 1,
+      "top_gaps": [
+        "entire P0 additions table for J1\u2013J6"
+      ]
+    },
+    {
+      "id": "Audit-Provenance",
+      "srs": "\u00a722",
+      "status": "Partial",
+      "p0_confirmed": 2,
+      "p0_partial": 2,
+      "p0_missing": 0,
+      "top_gaps": [
+        "audit schema fields",
+        "AUD-005 coverage"
+      ]
+    },
+    {
+      "id": "Security",
+      "srs": "\u00a723",
+      "status": "Confirmed",
+      "p0_confirmed": 6,
+      "p0_partial": 2,
+      "p0_missing": 0,
+      "top_gaps": [
+        "CSP/token honesty",
+        "python_code deep probe"
+      ]
+    },
+    {
+      "id": "Ops",
+      "srs": "\u00a724",
+      "status": "Partial",
+      "p0_confirmed": 4,
+      "p0_partial": 2,
+      "p0_missing": 0,
+      "top_gaps": [
+        "backup/restore runbook",
+        "SIGTERM drain",
+        "disk_full"
+      ]
+    },
+    {
+      "id": "CLI-SDK",
+      "srs": "\u00a79.4",
+      "status": "Partial",
+      "p0_confirmed": 4,
+      "p0_partial": 3,
+      "p0_missing": 1,
+      "top_gaps": [
+        "global --api-url/--token",
+        "exit code matrix",
+        "remote CLI"
+      ]
+    }
+  ]
+}
