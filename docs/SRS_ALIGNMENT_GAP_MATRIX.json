@@ -1,10 +1,25 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "d624b14d834002c5a27d0a82a7c6c20597056be1",
+  "tip_sha": "477130068570f1f8e9467a94ff05bd564dced86c",
   "branch": "cursor/usecase-plugins-workflows",
   "generated_at": "2026-09-25T23:30:00+05:30",
   "method": "static-code-evidence",
-  "phase2_live_verify": "blocked_no_desktop",
+  "phase2_live_verify": {
+    "status": "verified",
+    "host": "server99",
+    "tip": "477130068570f1f8e9467a94ff05bd564dced86c",
+    "feature_sha": "dda472753a973c3fad2861954fea69dbec3e33dd",
+    "probes": {
+      "health": "200 /api/v1/system/health",
+      "readiness": "200 store_corrupt=false",
+      "projects_default": "envelope with items",
+      "projects_envelope_0": "bare array",
+      "nodes_default": "envelope with items",
+      "ui_5173": "200",
+      "modules": "parse_envelope_flag(None)=True; store_guard import ok"
+    },
+    "verified_at": "2026-09-25 23:35 IST"
+  },
   "totals": {
     "confirmed": 92,
     "partial": 14,
@@ -262,7 +277,7 @@
       "Universal 503 store_corrupt on critical reads (artifacts/runs/projects/models/plugins)",
       "UI unwrapList dual-shape helper"
     ],
-    "server99_verify": "in_progress"
+    "server99_verify": "verified"
   },
   "p1_feature_sha": "dda472753a973c3fad2861954fea69dbec3e33dd"
 }

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** | `d624b14d834002c5a27d0a82a7c6c20597056be1` on `cursor/usecase-plugins-workflows` (P1 defaults) |
+| **Tip probed** |  on  (P1 defaults + Server-99 verified) |
 | **Phase** | 2 — Waves A/B/C + **P1 defaults landed** (envelope default ON; universal store_corrupt) |
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
 | **Generated** | 2026-09-25 21:12 IST; Wave A/B/C; **P1 2026-09-25 ~23:30 IST** |
@@ -403,7 +403,7 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 - Closed: Devices needs-API honesty; CSP + token localStorage honesty; OPS backup runbook; SIGTERM drain; DIST-AUTH/SEC-WORKER UI copy; Prove capture required fields + unit test; SDK pause/resume InvalidTransition; Edge checksum polish; artifacts list 503 store_corrupt helper.
 - P1 closed: default-envelope ON + `envelope=0` escape; universal 503 store_corrupt on critical reads; UI unwrapList.
 - Remaining honest TBDs: Perf TBD-PERF-*; device registry/flash/OTA APIs (needs-API).
-- Server-99 live verify: pending (this turn).
+- Server-99 live verify: **verified** 2026-09-25 23:35 IST (health/readiness 200; projects envelope default + escape; UI 200).
 
 ---
 
@@ -416,5 +416,5 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 | Critical-read 503 store_corrupt | Confirmed | `app/api/store_guard.py` on artifacts/runs/projects/models/plugins |
 | Perf TBD-PERF-* | needs-numbers | Do not invent |
 | Device registry/flash/OTA | needs-API | Honesty stub stays |
-| Server-99 verify | pending | DESKTOP SSH rebuild graphyn-api + graphyn-ui |
+| Server-99 verify | **verified** 2026-09-25 23:35 IST | tip `dda47275`+docs; health/readiness 200; projects default=envelope, envelope=0=bare; UI :5173=200 |
 
