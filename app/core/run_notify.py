@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _EVENT_MAP = {
     "completed": "pipeline_complete",
+    "succeeded": "pipeline_complete",
     "failed": "pipeline_failed",
     "cancelled": "pipeline_failed",
 }

@@ -60,6 +60,15 @@ class RenameProjectBody(BaseModel):
     new_name: str
 
 
+class UpdateProjectBody(BaseModel):
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    linked_input_labels: Optional[list[str]] = None
+    favorite_pipelines: Optional[list[str]] = None
+    resource_version: Optional[str] = None
+
+
 class DeleteProjectBody(BaseModel):
     confirm: str
 
@@ -133,14 +142,59 @@ def list_projects():
 
 
 @router.post("")
-def create_project(body: CreateProjectBody):
-    """POST /projects — create a new project."""
-    return _handle(_pm.create, body.name)
+def create_project(body: CreateProjectBody, request: Request):
+    """POST /projects — create a new project (Idempotency-Key supported)."""
+    from app.api.idempotency import begin_idempotent, complete_idempotent
+
+    cached = begin_idempotent(
+        request, body=body.model_dump(), route="POST /api/v1/projects"
+    )
+    if cached is not None:
+        return cached
+    result = _handle(_pm.create, body.name)
+    complete_idempotent(request, status_code=200, body=result)
+    return result
+
+
+@router.get("/{name}")
+def get_project(name: str):
+    """GET /projects/{name} — single project metadata (SRS §9.2.1)."""
+    return _handle(_pm.get, name)
+
+
+@router.put("/{name}")
+def update_project(name: str, body: UpdateProjectBody, request: Request):
+    """PUT /projects/{name} — update project metadata (SRS §9.2.1).
+
+    Legacy PATCH /{name} remains for rename-only clients.
+    """
+    if_match = request.headers.get("If-Match") or request.headers.get("if-match")
+    try:
+        return _pm.update(
+            name,
+            display_name=body.display_name,
+            description=body.description,
+            tags=body.tags,
+            linked_input_labels=body.linked_input_labels,
+            favorite_pipelines=body.favorite_pipelines,
+            resource_version=body.resource_version,
+            if_match=if_match,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "version_conflict":
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "version_conflict", "message": "resource_version / If-Match mismatch"},
+            ) from exc
+        raise HTTPException(status_code=422, detail=msg) from exc
 
 
 @router.patch("/{name}")
 def rename_project(name: str, body: RenameProjectBody):
-    """PATCH /projects/{name} — rename a project."""
+    """PATCH /projects/{name} — rename a project (legacy; prefer PUT for metadata)."""
     return _handle(_pm.rename, name, body.new_name)
 
 

@@ -223,7 +223,7 @@ class TestPromoteRun:
         assert resp.status_code == 200
         row = resp.json()[0]
         assert row["graph_name"] == "speech_commands_e2e_train_ml"
-        assert row["status"] == "completed"
+        assert row["status"] == "succeeded"  # wire: completed→succeeded
         assert row["created_at"]
         assert row["artifacts_dir"].endswith(f"runs/{run_id}")
         assert row["metrics"]["accuracy"] == 0.91

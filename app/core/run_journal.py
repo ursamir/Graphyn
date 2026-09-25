@@ -68,10 +68,12 @@ class RunManager:
         self._artifacts_lock = threading.Lock()
 
         os.makedirs(self.base_path, exist_ok=True)
+        # PERS-001 / SRS §13.2: durable pending before async run_id ack;
+        # orchestrator calls mark_running() when execution actually starts.
         self._write_meta({
             "run_id": self.run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "status": "running",
+            "status": "pending",
         })
 
     # ── Meta persistence ───────────────────────────────────────────────────────
@@ -140,7 +142,7 @@ class RunManager:
                 "run_id": self.run_id,
                 "created_at": created,
                 "duration_s": round(duration, 3),
-                "status": "completed",
+                "status": "succeeded",
                 **metadata,
             }
             self._write_meta_unlocked(full, meta_path, tmp)
@@ -148,7 +150,7 @@ class RunManager:
             from app.core.run_notify import notify_run_terminal
 
             notify_run_terminal(
-                "completed",
+                "succeeded",
                 self.run_id,
                 graph_name=full.get("graph_name") if isinstance(full.get("graph_name"), str) else None,
                 project=full.get("project") if isinstance(full.get("project"), str) else None,
@@ -234,6 +236,10 @@ class RunManager:
                 "duration_s": round(duration, 3),
             })
             self._write_meta_unlocked(existing, meta_path, tmp)
+
+    def mark_running(self) -> None:
+        """Transition durable meta pending→running when execution starts (SRS §13.2)."""
+        self._write_meta_field("status", "running")
 
     # ── Runtime control ────────────────────────────────────────────────────────
 

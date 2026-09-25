@@ -31,7 +31,7 @@ from queue import Queue
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -283,21 +283,31 @@ def validate_pipeline_config(payload: dict = Body(...)):
                 ir_body = nested
             graph = apply_output_rewire(load_ir(ir_body))
             assert_no_inline_secrets(graph)
-            from app.core.validation import validate_graph_ir
+            from app.core.validation import validate_graph_ir_result
 
-            errors = validate_graph_ir(graph, get_registry())
-            if errors:
-                return JSONResponse(
-                    status_code=422,
-                    content={"valid": False, "error": errors[0], "errors": errors},
-                )
-            return {"valid": True, "node_count": len(graph.nodes)}
+            result = validate_graph_ir_result(graph, get_registry())
+            if not result["valid"]:
+                return JSONResponse(status_code=422, content=result)
+            return result
         except Exception as exc:
             msg = str(exc)
-            return JSONResponse(
-                status_code=422,
-                content={"valid": False, "error": msg, "detail": msg},
-            )
+            code = "VAL-SECRET" if "secret" in msg.lower() else "VAL-MIGRATE"
+            result = {
+                "valid": False,
+                "node_count": 0,
+                "edge_count": 0,
+                "schema_version": None,
+                "errors": [{
+                    "code": code,
+                    "severity": "error",
+                    "message": msg,
+                    "node_ids": [],
+                    "edge_index": None,
+                    "field": None,
+                }],
+                "warnings": [],
+            }
+            return JSONResponse(status_code=422, content=result)
     else:
         # YAML validation — use yaml_config_to_ir (no DeprecationWarning) (Req 4.8.2, 4.8.5)
         yaml_str = payload.get("yaml", "")
@@ -331,7 +341,19 @@ def validate_pipeline_config(payload: dict = Body(...)):
             )
 
         headers = {"X-Deprecation-Warning": "YAML pipeline input is deprecated. Use IR JSON format."}
-        return JSONResponse(content={"valid": True, "node_count": len(config.get("pipeline", {}).get("nodes", []))}, headers=headers)
+        ncount = len(config.get("pipeline", {}).get("nodes", []))
+        ecount = len(config.get("pipeline", {}).get("edges", []) or [])
+        return JSONResponse(
+            content={
+                "valid": True,
+                "node_count": ncount,
+                "edge_count": ecount,
+                "schema_version": None,
+                "errors": [],
+                "warnings": [],
+            },
+            headers=headers,
+        )
 
 
 # ── Run (streaming) ───────────────────────────────────────────────────────────
@@ -346,6 +368,7 @@ def run_pipeline_stream(payload: dict = Body(...)):
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
         graph, project_fields = _stamp_graph_project(graph, payload)
+        _refuse_invalid_graph(graph)
     except HTTPException:
         raise
     except Exception as exc:
@@ -436,16 +459,52 @@ def run_pipeline_stream(payload: dict = Body(...)):
 
 # ── Run async ─────────────────────────────────────────────────────────────────
 
+def _refuse_invalid_graph(graph) -> None:
+    """VAL-003: refuse execute when validation has error-severity findings."""
+    from app.core.ir.secret_policy import assert_no_inline_secrets
+    from app.core.validation import validate_graph_ir_result
+
+    try:
+        assert_no_inline_secrets(graph)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "secret_in_ir", "message": str(exc)},
+        ) from exc
+    result = validate_graph_ir_result(graph, get_registry())
+    if not result["valid"]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "validation_failed",
+                "message": result["errors"][0]["message"] if result["errors"] else "validation failed",
+                "errors": result["errors"],
+                "warnings": result["warnings"],
+            },
+        )
+
+
 @router.post("/run-async", summary="Start a pipeline run asynchronously")
-def run_pipeline_async(payload: dict = Body(...)):
+def run_pipeline_async(request: Request, payload: dict = Body(...)):
     """Start a pipeline run in a background thread and return the run_id immediately.
 
     Delegates to get_backend().execute(graph) (V1.md §3.1).
     Accepts both IR JSON and YAML formats (Req 4.7).
+    Honors Idempotency-Key (API-CONV-004). Durable status starts as ``pending``
+    (PERS-001) before the ack body is returned.
     """
+    from app.api.idempotency import begin_idempotent, complete_idempotent
+
+    cached = begin_idempotent(
+        request, body=payload, route="POST /api/v1/pipelines/run-async"
+    )
+    if cached is not None:
+        return cached
+
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
         graph, project_fields = _stamp_graph_project(graph, payload)
+        _refuse_invalid_graph(graph)
     except HTTPException:
         raise
     except Exception as exc:
@@ -453,7 +512,8 @@ def run_pipeline_async(payload: dict = Body(...)):
 
     from app.core.run_journal import RunManager
 
-    # Create ONE RunManager before the thread starts so run_id is known immediately
+    # Create ONE RunManager before the thread starts so run_id is known immediately.
+    # Constructor writes durable status=pending (PERS-001) before we ack.
     run_mgr = RunManager()
     run_id = run_mgr.run_id
 
@@ -500,7 +560,9 @@ def run_pipeline_async(payload: dict = Body(...)):
     except Exception:
         pass
 
-    return JSONResponse(content={"run_id": run_id}, headers=headers)
+    body = {"run_id": run_id, "status": "pending"}
+    complete_idempotent(request, status_code=200, body=body, headers=headers)
+    return JSONResponse(content=body, headers=headers)
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────

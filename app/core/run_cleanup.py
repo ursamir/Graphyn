@@ -34,8 +34,8 @@ from app.core.workspace_paths import (
 
 logger = logging.getLogger(__name__)
 
-FINISHED_STATUSES = frozenset({"completed", "failed", "cancelled"})
-ACTIVE_STATUSES = frozenset({"running", "paused"})
+FINISHED_STATUSES = frozenset({"completed", "succeeded", "failed", "cancelled"})
+ACTIVE_STATUSES = frozenset({"running", "paused", "pending"})
 # Journals left "running"/"queued" after process death — reconcile these.
 RECONCILE_STATUSES = frozenset({"running", "queued"})
 DEFAULT_STALE_AFTER_HOURS = 1.0

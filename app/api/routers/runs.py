@@ -72,6 +72,7 @@ def _load_meta(run_path: Path) -> dict:
 
 
 def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
+    from app.core.run_status import normalize_status
     from app.core.workspace_paths import (
         artifact_fs_path,
         artifact_layout,
@@ -82,6 +83,8 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
     from app.core.run_project import infer_project_from_graph_file, normalize_project_name, normalize_version_tag
 
     out = dict(meta)
+    if "status" in out:
+        out["status"] = normalize_status(out.get("status"))
     run_id = str(out.get("run_id") or run_path.name)
     need_graph_name = not (
         isinstance(out.get("graph_name"), str) and str(out.get("graph_name")).strip()
@@ -321,7 +324,9 @@ def get_run_status(run_id: str):
     except Exception:
         return {"status": "unknown"}
 
-    status = meta.get("status", "unknown")
+    from app.core.run_status import normalize_status
+
+    status = normalize_status(meta.get("status", "unknown"))
     progress_pct: float | None = None
     current_node: str | None = None
 
@@ -339,7 +344,7 @@ def get_run_status(run_id: str):
         last = node_stats[-1]
         if isinstance(last, dict):
             current_node = last.get("node_type")
-    elif status == "completed":
+    elif status in ("completed", "succeeded"):
         progress_pct = 100.0
 
     return {

@@ -36,13 +36,25 @@ class TestValidatePipeline:
                 "app.core.workspace_paths.apply_output_rewire",
                 return_value=mock_graph,
             ),
-            patch("app.core.validation.validate_graph_ir", return_value=[]),
+            patch("app.core.ir.secret_policy.assert_no_inline_secrets"),
+            patch(
+                "app.core.validation.validate_graph_ir_result",
+                return_value={
+                    "valid": True,
+                    "node_count": 0,
+                    "edge_count": 0,
+                    "schema_version": "1.2",
+                    "errors": [],
+                    "warnings": [],
+                },
+            ),
         ):
             resp = api_client.post("/api/v1/pipelines/validate", json=_VALID_IR)
 
         assert resp.status_code == 200, resp.json()
         body = resp.json()
         assert body["valid"] is True
+        assert "errors" in body and "warnings" in body
 
     def test_invalid_ir_json_returns_422(self, api_client):
         """POST /api/v1/pipelines/validate with invalid IR JSON returns 422."""

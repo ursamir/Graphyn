@@ -30,8 +30,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -227,24 +225,20 @@ def _auth_dep_request(request: Request) -> None:
 app = FastAPI(title="Graphyn API", version="2.0.0", lifespan=_lifespan)
 
 
-@app.exception_handler(RequestValidationError)
-async def _validation_error_handler(request: Request, exc: RequestValidationError):
-    """Redact secret *values* from 422 bodies on /api/v1/secrets.
+# API-ERR-001: normative error envelope for all /api/v1 non-2xx JSON responses.
+from app.api.errors import get_or_set_request_id, register_exception_handlers
 
-    Pydantic/FastAPI includes ``input`` in validation errors by default; that
-    would echo the submitted secret. Other routes keep the stock detail shape.
-    """
-    errors = jsonable_encoder(exc.errors())
-    if request.url.path.startswith("/api/v1/secrets"):
-        cleaned = []
-        for err in errors:
-            item = dict(err)
-            loc = item.get("loc") or []
-            if any(part == "value" for part in loc):
-                item["input"] = "[redacted]"
-            cleaned.append(item)
-        errors = cleaned
-    return JSONResponse(status_code=422, content={"detail": errors})
+register_exception_handlers(app)
+
+
+@app.middleware("http")
+async def _request_id_middleware(request: Request, call_next):
+    """Ensure every response carries X-Request-Id (generated if client omitted)."""
+    rid = get_or_set_request_id(request)
+    response = await call_next(request)
+    response.headers.setdefault("X-Request-Id", rid)
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -258,7 +252,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS", "DELETE", "PUT", "PATCH"],
     # Enumerate specific headers — allow_headers=["*"] is forbidden by the CORS
     # spec when allow_credentials=True and causes browsers to reject responses.
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept", "X-Actor"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Request-Id", "Accept", "X-Actor", "Idempotency-Key"],
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
@@ -312,10 +306,21 @@ async def _auth_static_mounts(request: Request, call_next):
         try:
             _auth_dep_request(request)
         except HTTPException as exc:
+            from app.api.errors import error_body, get_or_set_request_id
+
+            rid = get_or_set_request_id(request)
+            code = "unauthorized" if exc.status_code == 401 else "forbidden"
+            msg = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
             return JSONResponse(
                 status_code=exc.status_code,
-                content={"detail": exc.detail},
-                headers=dict(exc.headers) if exc.headers else None,
+                content=error_body(
+                    code=code,
+                    message=msg,
+                    request_id=rid,
+                    status_code=exc.status_code,
+                    legacy_detail=exc.detail,
+                ),
+                headers={**(dict(exc.headers) if exc.headers else {}), "X-Request-Id": rid},
             )
     return await call_next(request)
 

@@ -274,7 +274,15 @@ def get_schedules():
 
 @router.post("/schedules", summary="Create an interval schedule")
 def post_schedule(body: ScheduleCreateBody, request: Request):
+    """Create schedule. Honors Idempotency-Key (API-CONV-004)."""
+    from app.api.idempotency import begin_idempotent, complete_idempotent
     from app.core.schedules import create_schedule
+
+    cached = begin_idempotent(
+        request, body=body.model_dump(), route="POST /api/v1/system/schedules"
+    )
+    if cached is not None:
+        return cached
 
     try:
         item = create_schedule(
@@ -299,6 +307,7 @@ def post_schedule(body: ScheduleCreateBody, request: Request):
         )
     except Exception:
         pass
+    complete_idempotent(request, status_code=200, body=item)
     return item
 
 

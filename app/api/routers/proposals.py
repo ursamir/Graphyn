@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/proposals", tags=["proposals"])
@@ -80,17 +80,36 @@ def get_proposal_endpoint(proposal_id: str):
 
 
 @router.post("/{proposal_id}/accept", summary="Accept a proposal")
-def accept_proposal_endpoint(proposal_id: str, body: ResolveBody | None = None):
-    """Accept proposal, audit, and return it so the client can load the graph."""
+def accept_proposal_endpoint(
+    proposal_id: str,
+    request: Request,
+    body: ResolveBody | None = None,
+):
+    """Accept proposal, audit, and return it so the client can load the graph.
+
+    Honors Idempotency-Key (API-CONV-004).
+    """
+    from app.api.idempotency import begin_idempotent, complete_idempotent
     from app.core.agentic.proposals import accept_proposal
+
+    body_data = body.model_dump() if body is not None else {}
+    cached = begin_idempotent(
+        request,
+        body={"proposal_id": proposal_id, **body_data},
+        route=f"POST /api/v1/proposals/{{id}}/accept",
+    )
+    if cached is not None:
+        return cached
 
     actor = (body.actor if body else None) or "human"
     try:
-        return accept_proposal(proposal_id, actor=actor)
+        result = accept_proposal(proposal_id, actor=actor)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    complete_idempotent(request, status_code=200, body=result)
+    return result
 
 
 @router.post("/{proposal_id}/reject", summary="Reject a proposal")

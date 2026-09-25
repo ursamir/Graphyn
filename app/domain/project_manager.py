@@ -217,6 +217,82 @@ class ProjectManager:
         self._write_json(dst / "project.json", meta)
         return meta
 
+    def get(self, name: str) -> dict:
+        """Return project.json for a single project (raises FileNotFoundError)."""
+        self._validate_name(name)
+        d = self._require_project(name)
+        meta = self._read_json(d / "project.json", {})
+        if not isinstance(meta, dict) or not meta.get("name"):
+            meta = dict(meta) if isinstance(meta, dict) else {}
+            meta.setdefault("name", name)
+        # Wire fields aligned to SRS §9.2.1 GET /projects/{name}
+        out = dict(meta)
+        out.setdefault("display_name", out.get("display_name") or out.get("name") or name)
+        out.setdefault("description", out.get("description") or "")
+        out.setdefault("tags", out.get("tags") or [])
+        # resource_version: mtime-based opaque token for If-Match (Wave B deepens)
+        try:
+            mtime = (d / "project.json").stat().st_mtime_ns
+            out.setdefault("resource_version", str(mtime))
+        except OSError:
+            out.setdefault("resource_version", "0")
+        try:
+            links = self.get_links(name)
+            out.setdefault("linked_input_labels", list(links.get("inputs") or []))
+        except Exception:
+            out.setdefault("linked_input_labels", [])
+        out.setdefault("favorite_pipelines", list(out.get("favorite_pipelines") or []))
+        return out
+
+    def update(
+        self,
+        name: str,
+        *,
+        display_name: str | None = None,
+        description: str | None = None,
+        tags: list | None = None,
+        linked_input_labels: list | None = None,
+        favorite_pipelines: list | None = None,
+        resource_version: str | None = None,
+        if_match: str | None = None,
+    ) -> dict:
+        """Update project metadata fields (SRS PUT /projects/{name})."""
+        self._validate_name(name)
+        d = self._require_project(name)
+        proj_file = d / "project.json"
+        meta = self._read_json(proj_file, {})
+        if not isinstance(meta, dict):
+            meta = {"name": name}
+        current_rv = None
+        try:
+            current_rv = str(proj_file.stat().st_mtime_ns)
+        except OSError:
+            current_rv = "0"
+        expected = if_match.strip('"') if isinstance(if_match, str) and if_match else resource_version
+        if expected is not None and str(expected) != str(current_rv):
+            raise ValueError("version_conflict")
+        if display_name is not None:
+            meta["display_name"] = display_name
+        if description is not None:
+            meta["description"] = description
+        if tags is not None:
+            meta["tags"] = list(tags)
+        if favorite_pipelines is not None:
+            meta["favorite_pipelines"] = list(favorite_pipelines)
+        meta["updated_at"] = self._now()
+        self._write_json(proj_file, meta)
+        if linked_input_labels is not None:
+            try:
+                links = self.get_links(name)
+            except Exception:
+                links = {"inputs": [], "outputs": []}
+            if not isinstance(links, dict):
+                links = {"inputs": [], "outputs": []}
+            links["inputs"] = list(linked_input_labels)
+            links.setdefault("outputs", [])
+            self._write_json(self._links_path(name), links)
+        return self.get(name)
+
     def list_all(self) -> list[dict]:
         """Return list of all project.json contents."""
         import logging as _logging

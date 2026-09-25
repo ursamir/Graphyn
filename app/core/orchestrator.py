@@ -257,6 +257,11 @@ async def run_pipeline_ir_async(
     except Exception:
         log.warning("Failed to stamp project fields on run %s", run.run_id, exc_info=True)
     register_active_run(run)
+    # SRS §13.2: pending → running when executor starts work
+    try:
+        run.mark_running()
+    except Exception:
+        log.debug("mark_running failed for %s", getattr(run, "run_id", "?"), exc_info=True)
 
     pipeline_cfg = _ir_to_pipeline_config(graph)
     graph_obj = PipelineGraph(pipeline_cfg, observer=observer)

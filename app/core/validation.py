@@ -6,7 +6,8 @@ Responsibility:   Validate pipeline config dicts (YAML-derived or API-supplied)
 Owns:             validate_pipeline(), _validate_dag_edges(),
                   _validate_connections().
 Public Surface:   validate_pipeline(config, registry) -> list[dict],
-                  validate_graph_ir(graph, registry) -> list[str]
+                  validate_graph_ir(graph, registry) -> list[str],
+                  validate_graph_ir_result(graph, registry) -> dict (SRS §14.3)
 Must NOT:         Import from app.domain or app.api. Must not execute nodes.
 Dependencies:     BC2 (nodes.compat, nodes.errors — lazy), BC3 (registry —
                   passed as argument), pydantic.
@@ -271,17 +272,60 @@ def validate_pipeline(config: Any, registry: Any) -> list[dict]:
     return validated_nodes
 
 
-def validate_graph_ir(graph: Any, registry: Any) -> list[str]:
-    """Deep GraphIR validation (CLI validate steps 3–7).
+def _finding(
+    code: str,
+    severity: str,
+    message: str,
+    *,
+    node_ids: list[str] | None = None,
+    edge_index: int | None = None,
+    field: str | None = None,
+) -> dict:
+    return {
+        "code": code,
+        "severity": severity,
+        "message": message,
+        "node_ids": list(node_ids or []),
+        "edge_index": edge_index,
+        "field": field,
+    }
 
-    Returns a list of human-readable error strings; empty means the graph can execute.
+
+def validate_graph_ir_result(graph: Any, registry: Any) -> dict:
+    """Deep GraphIR validation returning SRS §14.3 result schema.
+
+    ``valid`` is true iff ``errors`` is empty (VAL-002). Warnings do not
+    invalidate. Execute paths must refuse when errors is non-empty (VAL-003).
     """
     from app.core.ir.models import _deep_unfreeze
     from app.core.nodes.compat import CompatibilityChecker
     from app.core.nodes.errors import NodeTypeError
 
-    errors: list[str] = []
+    errors: list[dict] = []
+    warnings: list[dict] = []
     node_classes: dict[str, type] = {}
+
+    # VAL-DUP-ID
+    seen_ids: set[str] = set()
+    for node in graph.nodes:
+        if node.id in seen_ids:
+            errors.append(
+                _finding(
+                    "VAL-DUP-ID",
+                    "error",
+                    f"Duplicate node id '{node.id}'",
+                    node_ids=[node.id],
+                )
+            )
+        seen_ids.add(node.id)
+
+    # VAL-EMPTY
+    if len(graph.nodes) == 0:
+        warnings.append(
+            _finding("VAL-EMPTY", "warning", "Graph has zero nodes")
+        )
+
+    node_id_set = {n.id for n in graph.nodes}
 
     for node in graph.nodes:
         try:
@@ -293,8 +337,14 @@ def validate_graph_ir(graph: Any, registry: Any) -> list[str]:
             except Exception:
                 available = ["<registry unavailable>"]
             errors.append(
-                f"[{node.id}] Unknown node type '{node.node_type}'. "
-                f"Available: {', '.join(available)}"
+                _finding(
+                    "VAL-UNK-TYPE",
+                    "error",
+                    f"[{node.id}] Unknown node type '{node.node_type}'. "
+                    f"Available: {', '.join(available)}",
+                    node_ids=[node.id],
+                    field="node_type",
+                )
             )
             continue
 
@@ -307,7 +357,13 @@ def validate_graph_ir(graph: Any, registry: Any) -> list[str]:
             for e in exc.errors():
                 loc = ".".join(str(part) for part in e["loc"])
                 errors.append(
-                    f"[{node.id}] Config error at '{loc}': {e['msg']}"
+                    _finding(
+                        "VAL-CONFIG",
+                        "error",
+                        f"[{node.id}] Config error at '{loc}': {e['msg']}",
+                        node_ids=[node.id],
+                        field=loc or None,
+                    )
                 )
 
     node_instances: dict[str, object] = {}
@@ -324,33 +380,77 @@ def validate_graph_ir(graph: Any, registry: Any) -> list[str]:
             )
             node_instances[node.id] = instance
         except Exception as exc:
-            errors.append(f"[{node.id}] Failed to instantiate node: {exc}")
+            errors.append(
+                _finding(
+                    "VAL-CONFIG",
+                    "error",
+                    f"[{node.id}] Failed to instantiate node: {exc}",
+                    node_ids=[node.id],
+                )
+            )
 
-    for edge in graph.edges:
+    for edge_index, edge in enumerate(graph.edges):
+        if edge.src_id not in node_id_set or edge.dst_id not in node_id_set:
+            missing = []
+            if edge.src_id not in node_id_set:
+                missing.append(edge.src_id)
+            if edge.dst_id not in node_id_set:
+                missing.append(edge.dst_id)
+            errors.append(
+                _finding(
+                    "VAL-MISS-NODE",
+                    "error",
+                    f"Edge references unknown node(s): {missing}",
+                    node_ids=missing,
+                    edge_index=edge_index,
+                )
+            )
+            continue
+
         src_inst = node_instances.get(edge.src_id)
         dst_inst = node_instances.get(edge.dst_id)
         if src_inst is None or dst_inst is None:
             errors.append(
-                f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
-                f"skipped (node instantiation failed)"
+                _finding(
+                    "VAL-MISS-NODE",
+                    "error",
+                    f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                    f"skipped (node instantiation failed)",
+                    node_ids=[edge.src_id, edge.dst_id],
+                    edge_index=edge_index,
+                )
             )
             continue
 
         if edge.src_port not in src_inst.__class__.output_ports:
             available = sorted(src_inst.__class__.output_ports)
             errors.append(
-                f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
-                f"'{edge.src_id}' has no output port '{edge.src_port}'. "
-                f"Available: {available}"
+                _finding(
+                    "VAL-MISS-PORT",
+                    "error",
+                    f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                    f"'{edge.src_id}' has no output port '{edge.src_port}'. "
+                    f"Available: {available}",
+                    node_ids=[edge.src_id],
+                    edge_index=edge_index,
+                    field=edge.src_port,
+                )
             )
             continue
 
         if edge.dst_port not in dst_inst.__class__.input_ports:
             available = sorted(dst_inst.__class__.input_ports)
             errors.append(
-                f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
-                f"'{edge.dst_id}' has no input port '{edge.dst_port}'. "
-                f"Available: {available}"
+                _finding(
+                    "VAL-MISS-PORT",
+                    "error",
+                    f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                    f"'{edge.dst_id}' has no input port '{edge.dst_port}'. "
+                    f"Available: {available}",
+                    node_ids=[edge.dst_id],
+                    edge_index=edge_index,
+                    field=edge.dst_port,
+                )
             )
             continue
 
@@ -360,29 +460,108 @@ def validate_graph_ir(graph: Any, registry: Any) -> list[str]:
             )
         except NodeTypeError as exc:
             errors.append(
-                f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
-                f"Type mismatch — {exc}"
+                _finding(
+                    "VAL-TYPE",
+                    "error",
+                    f"Edge {edge.src_id}.{edge.src_port} → {edge.dst_id}.{edge.dst_port}: "
+                    f"Type mismatch — {exc}",
+                    node_ids=[edge.src_id, edge.dst_id],
+                    edge_index=edge_index,
+                )
             )
 
     in_degree: dict[str, int] = {n.id: 0 for n in graph.nodes}
     adjacency: dict[str, list[str]] = defaultdict(list)
     for edge in graph.edges:
-        adjacency[edge.src_id].append(edge.dst_id)
-        in_degree[edge.dst_id] += 1
+        if edge.src_id in in_degree and edge.dst_id in in_degree:
+            adjacency[edge.src_id].append(edge.dst_id)
+            in_degree[edge.dst_id] += 1
     queue: deque[str] = deque(nid for nid, deg in in_degree.items() if deg == 0)
     visited = 0
+    reachable: set[str] = set()
     while queue:
         nid = queue.popleft()
         visited += 1
+        reachable.add(nid)
         for succ in adjacency[nid]:
             in_degree[succ] -= 1
             if in_degree[succ] == 0:
                 queue.append(succ)
-    if visited != len(graph.nodes):
+    if graph.nodes and visited != len(graph.nodes):
         cycle_nodes = [n.id for n in graph.nodes if in_degree[n.id] > 0]
-        errors.append(f"Cycle detected — nodes involved: {cycle_nodes}")
+        errors.append(
+            _finding(
+                "VAL-CYCLE",
+                "error",
+                f"Cycle detected — nodes involved: {cycle_nodes}",
+                node_ids=cycle_nodes,
+            )
+        )
 
-    return errors
+    # VAL-UNREACH: nodes never reached from zero-indegree sources (warning)
+    if graph.nodes:
+        adj2: dict[str, list[str]] = defaultdict(list)
+        indeg2: dict[str, int] = {n.id: 0 for n in graph.nodes}
+        for edge in graph.edges:
+            if edge.src_id in indeg2 and edge.dst_id in indeg2:
+                adj2[edge.src_id].append(edge.dst_id)
+                indeg2[edge.dst_id] += 1
+        sources = [nid for nid, deg in indeg2.items() if deg == 0]
+        cycle_ids: set[str] = set()
+        for e in errors:
+            if e.get("code") == "VAL-CYCLE":
+                cycle_ids.update(e.get("node_ids") or [])
+        reach: set[str] = set()
+        q2: deque[str] = deque(sources)
+        while q2:
+            nid = q2.popleft()
+            if nid in reach:
+                continue
+            reach.add(nid)
+            for succ in adj2[nid]:
+                q2.append(succ)
+        for n in graph.nodes:
+            if n.id not in reach and n.id not in cycle_ids:
+                warnings.append(
+                    _finding(
+                        "VAL-UNREACH",
+                        "warning",
+                        f"Node {n.id} is unreachable from sources",
+                        node_ids=[n.id],
+                    )
+                )
+
+    schema_version = None
+    try:
+        schema_version = getattr(graph, "schema_version", None) or getattr(
+            getattr(graph, "metadata", None), "schema_version", None
+        )
+    except Exception:
+        schema_version = None
+    if schema_version is None:
+        try:
+            schema_version = str(getattr(graph, "schema_version", "1.2"))
+        except Exception:
+            schema_version = "1.2"
+
+    return {
+        "valid": len(errors) == 0,
+        "node_count": len(graph.nodes),
+        "edge_count": len(graph.edges),
+        "schema_version": str(schema_version),
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def validate_graph_ir(graph: Any, registry: Any) -> list[str]:
+    """Deep GraphIR validation (CLI validate steps 3–7).
+
+    Returns a list of human-readable error strings; empty means the graph can execute.
+    Prefer ``validate_graph_ir_result`` for the normative SRS §14.3 schema.
+    """
+    result = validate_graph_ir_result(graph, registry)
+    return [e["message"] for e in result["errors"]]
 
 
 def validate_node_config(node_type: str, config: dict, schema: dict) -> dict:
