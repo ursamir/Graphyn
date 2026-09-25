@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -110,21 +109,16 @@ class TestShutdownDrain:
 
 class TestStoreCorruptHelper:
     def test_artifacts_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
-        with patch("app.core.store_integrity.readiness_store_corrupt", return_value=True):
-            # Patch where the router imports it at call time — patch module attribute used after import
-            with patch(
-                "app.api.routers.artifacts.readiness_store_corrupt",
-                create=True,
-                return_value=True,
-            ):
-                # Router does local import — patch source module
-                import app.core.store_integrity as si
-
-                monkeypatch.setattr(si, "readiness_store_corrupt", lambda: True)
-                resp = api_client.get("/api/v1/artifacts")
-                assert resp.status_code == 503
-                text = resp.text.lower()
-                assert "store_corrupt" in text
+        # Only monkeypatch — nested unittest.mock.patch + monkeypatch can restore the
+        # mock *after* patch teardown and leak into later tests.
+        monkeypatch.setattr(
+            "app.core.store_integrity.readiness_store_corrupt",
+            lambda: True,
+        )
+        resp = api_client.get("/api/v1/artifacts")
+        assert resp.status_code == 503
+        text = resp.text.lower()
+        assert "store_corrupt" in text
 
 
 class TestSdkPauseResume:
