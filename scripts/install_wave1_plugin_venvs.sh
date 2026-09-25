@@ -61,7 +61,7 @@ fi
 
 # Capability → packages (PEP 508). Torch handled separately for CPU/CUDA index.
 declare -A CAP_PKGS=(
-  [vision]="ultralytics>=8.0 numpy>=1.24 opencv-python-headless>=4.8 pillow>=10.0"
+  [vision]="ultralytics>=8.0 torchvision numpy>=1.24 opencv-python-headless>=4.8 pillow>=10.0"
   [tinyml]="tensorflow>=2.13 numpy>=1.24"
   [rag]="chromadb>=0.4 faiss-cpu>=1.7 sentence-transformers>=2.2 numpy>=1.24"
 )
@@ -87,14 +87,14 @@ pip_install() {
 install_torch() {
   local py="$1"
   if [[ "$TORCH_FLAVOR" == "cuda" ]]; then
-    log "installing torch (CUDA default index)…"
-    pip_install "$py" "torch>=2.0"
+    log "installing torch+torchvision (CUDA default index)…"
+    pip_install "$py" "torch>=2.0" "torchvision"
   else
-    log "installing torch CPU wheels (FaceRecognition-safe)…"
-    # Official CPU wheel index; fails closed to plain torch if unreachable.
-    if ! pip_install "$py" --index-url https://download.pytorch.org/whl/cpu "torch>=2.0"; then
-      log "CPU index failed; falling back to default torch pin (may pull CUDA)"
-      pip_install "$py" "torch>=2.0"
+    log "installing torch+torchvision CPU wheels (FaceRecognition-safe)…"
+    # Official CPU wheel index; keep torch/torchvision matched.
+    if ! pip_install "$py" --index-url https://download.pytorch.org/whl/cpu "torch>=2.0" "torchvision"; then
+      log "CPU index failed; falling back to default torch/torchvision pins (may pull CUDA)"
+      pip_install "$py" "torch>=2.0" "torchvision"
     fi
   fi
 }
