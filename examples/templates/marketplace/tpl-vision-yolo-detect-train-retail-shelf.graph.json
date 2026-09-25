@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-vision-yolo-detect-train-retail-shelf",
+    "seed": 42,
+    "description": "YOLO detect training for retail-shelf, with yaml build + val.",
+    "created_at": null,
+    "tags": [
+      "vision",
+      "yolo",
+      "detect",
+      "train"
+    ],
+    "pack": "Vision",
+    "industry": "retail-shelf",
+    "marketplace_id": "tpl-vision-yolo-detect-train-retail-shelf",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-vision-yolo-detect-train-retail-shelf.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "vision_dataset_ingest",
+      "config": {},
+      "label": "vision_dataset_ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "vision_label_convert",
+      "config": {},
+      "label": "vision_label_convert",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "vision_dataset_health",
+      "config": {},
+      "label": "vision_dataset_health",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "vision_train_val_split",
+      "config": {},
+      "label": "vision_train_val_split",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "yolo_dataset_yaml_build",
+      "config": {},
+      "label": "yolo_dataset_yaml_build",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "vision_augment",
+      "config": {},
+      "label": "vision_augment",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n6",
+      "node_type": "yolo_task_detect",
+      "config": {},
+      "label": "yolo_task_detect",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n7",
+      "node_type": "yolo_train",
+      "config": {},
+      "label": "yolo_train",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n8",
+      "node_type": "yolo_val",
+      "config": {},
+      "label": "yolo_val",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n9",
+      "node_type": "experiment_tracker",
+      "config": {},
+      "label": "experiment_tracker",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n6",
+      "src_port": "output",
+      "dst_id": "n7",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n7",
+      "src_port": "output",
+      "dst_id": "n8",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n8",
+      "src_port": "output",
+      "dst_id": "n9",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "task": "detect",
+    "imgsz": 640,
+    "epochs": 100
+  }
+}

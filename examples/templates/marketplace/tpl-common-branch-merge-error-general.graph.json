@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-branch-merge-error-general",
+    "seed": 42,
+    "description": "If/switch with error_catch and merge for general.",
+    "created_at": null,
+    "tags": [
+      "common",
+      "control-flow"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-branch-merge-error-general",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-common-branch-merge-error-general.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "if_switch",
+      "config": {},
+      "label": "if_switch",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "python_code",
+      "config": {},
+      "label": "python_code",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "error_catch",
+      "config": {},
+      "label": "error_catch",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "merge",
+      "config": {},
+      "label": "merge",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "wait_delay",
+      "config": {},
+      "label": "wait_delay",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "true",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n0",
+      "src_port": "false",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input_a"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input_b"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {}
+}

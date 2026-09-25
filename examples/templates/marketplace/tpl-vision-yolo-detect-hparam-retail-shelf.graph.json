@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-vision-yolo-detect-hparam-retail-shelf",
+    "seed": 42,
+    "description": "YOLO hyperparam search for detect in retail-shelf.",
+    "created_at": null,
+    "tags": [
+      "vision",
+      "hparam",
+      "detect"
+    ],
+    "pack": "Vision",
+    "industry": "retail-shelf",
+    "marketplace_id": "tpl-vision-yolo-detect-hparam-retail-shelf",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-vision-yolo-detect-hparam-retail-shelf.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "vision_dataset_ingest",
+      "config": {},
+      "label": "vision_dataset_ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "yolo_dataset_yaml_build",
+      "config": {},
+      "label": "yolo_dataset_yaml_build",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "yolo_hyperparam_search",
+      "config": {},
+      "label": "yolo_hyperparam_search",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "yolo_train",
+      "config": {},
+      "label": "yolo_train",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "yolo_val",
+      "config": {},
+      "label": "yolo_val",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "experiment_tracker",
+      "config": {},
+      "label": "experiment_tracker",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "n_trials": 20,
+    "task": "detect"
+  }
+}

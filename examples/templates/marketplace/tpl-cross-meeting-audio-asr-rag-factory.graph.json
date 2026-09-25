@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-cross-meeting-audio-asr-rag-factory",
+    "seed": 42,
+    "description": "Meeting audio to ASR to RAG \u2014 adapted for factory.",
+    "created_at": null,
+    "tags": [
+      "cross-pack",
+      "factory"
+    ],
+    "pack": "Audio",
+    "industry": "factory",
+    "marketplace_id": "tpl-cross-meeting-audio-asr-rag-factory",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-cross-meeting-audio-asr-rag-factory.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {},
+      "label": "dataset_ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {},
+      "label": "audio_conditioner",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "asr_transcribe",
+      "config": {},
+      "label": "asr_transcribe",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "chunk_recursive",
+      "config": {},
+      "label": "chunk_recursive",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "text_embed",
+      "config": {},
+      "label": "text_embed",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "vector_store_write",
+      "config": {},
+      "label": "vector_store_write",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n6",
+      "node_type": "vector_store_query",
+      "config": {},
+      "label": "vector_store_query",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n7",
+      "node_type": "rag_generate",
+      "config": {},
+      "label": "rag_generate",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n6",
+      "src_port": "output",
+      "dst_id": "n7",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {}
+}

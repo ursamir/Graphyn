@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-run-pipeline-security",
+    "seed": 42,
+    "description": "Agents scenario run-pipeline for security ops.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "run-pipeline",
+      "security"
+    ],
+    "pack": "Agents",
+    "industry": "security",
+    "marketplace_id": "tpl-agents-run-pipeline-security",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-agents-run-pipeline-security.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {},
+      "label": "prompt_template",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "llm_chat",
+      "config": {},
+      "label": "llm_chat",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "tool_router",
+      "config": {},
+      "label": "tool_router",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "mcp_tool_call",
+      "config": {},
+      "label": "mcp_tool_call",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "output_schema_validate",
+      "config": {},
+      "label": "output_schema_validate",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "approval_required": false
+  }
+}

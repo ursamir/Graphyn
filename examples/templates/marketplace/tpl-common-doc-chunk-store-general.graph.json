@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-common-doc-chunk-store-general",
+    "seed": 42,
+    "description": "doc_parse_chunk bridge for general.",
+    "created_at": null,
+    "tags": [
+      "common",
+      "docs",
+      "alter-existing"
+    ],
+    "pack": "Common",
+    "industry": "general",
+    "marketplace_id": "tpl-common-doc-chunk-store-general",
+    "status": "alter-existing",
+    "source_example": "marketplace/tpl-common-doc-chunk-store-general.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "doc_parse_chunk",
+      "config": {},
+      "label": "doc_parse_chunk",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "eval_gate",
+      "config": {},
+      "label": "eval_gate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "object_store",
+      "config": {},
+      "label": "object_store",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {}
+}

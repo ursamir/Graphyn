@@ -198,6 +198,9 @@ def register_all_tools(register: Callable) -> None:
         get_template_handler,
         get_webhooks_handler,
         instantiate_template_handler,
+        SEARCH_TEMPLATES_DESCRIPTION,
+        SEARCH_TEMPLATES_SCHEMA,
+        search_templates_handler,
         list_models_handler,
         list_pipelines_handler,
         list_runs_handler,
@@ -306,6 +309,7 @@ def register_all_tools(register: Callable) -> None:
     register("list_templates", LIST_TEMPLATES_DESCRIPTION, LIST_TEMPLATES_SCHEMA, list_templates_handler)
     register("get_template", GET_TEMPLATE_DESCRIPTION, GET_TEMPLATE_SCHEMA, get_template_handler)
     register("instantiate_template", INSTANTIATE_TEMPLATE_DESCRIPTION, INSTANTIATE_TEMPLATE_SCHEMA, instantiate_template_handler)
+    register("search_templates", SEARCH_TEMPLATES_DESCRIPTION, SEARCH_TEMPLATES_SCHEMA, search_templates_handler)
     register("register_model", REGISTER_MODEL_DESCRIPTION, REGISTER_MODEL_SCHEMA, register_model_handler)
     register("list_models", LIST_MODELS_DESCRIPTION, LIST_MODELS_SCHEMA, list_models_handler)
     register("get_model", GET_MODEL_DESCRIPTION, GET_MODEL_SCHEMA, get_model_handler)

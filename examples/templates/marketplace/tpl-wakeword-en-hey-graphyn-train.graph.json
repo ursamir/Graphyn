@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-wakeword-en-hey-graphyn-train",
+    "seed": 42,
+    "description": "Wake-word 'hey graphyn' (en) train stage.",
+    "created_at": null,
+    "tags": [
+      "wakeword",
+      "en",
+      "train"
+    ],
+    "pack": "WakeWord",
+    "industry": "consumer-iot",
+    "marketplace_id": "tpl-wakeword-en-hey-graphyn-train",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-wakeword-en-hey-graphyn-train.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "wakeword_feature_extract",
+      "config": {},
+      "label": "wakeword_feature_extract",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "wakeword_train",
+      "config": {},
+      "label": "wakeword_train",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "evaluator",
+      "config": {},
+      "label": "evaluator",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "experiment_tracker",
+      "config": {},
+      "label": "experiment_tracker",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "phrase": "hey graphyn",
+    "language": "en"
+  }
+}

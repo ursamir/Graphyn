@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-mlops-canary-promote-audio",
+    "seed": 42,
+    "description": "Canary gate + ship promote for audio.",
+    "created_at": null,
+    "tags": [
+      "mlops",
+      "canary",
+      "audio"
+    ],
+    "pack": "MLOps",
+    "industry": "mlops",
+    "marketplace_id": "tpl-mlops-canary-promote-audio",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-mlops-canary-promote-audio.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "ab_assign",
+      "config": {},
+      "label": "ab_assign",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "canary_gate",
+      "config": {},
+      "label": "canary_gate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "hitl_approve",
+      "config": {},
+      "label": "hitl_approve",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "ship_package_promote",
+      "config": {},
+      "label": "ship_package_promote",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "http_webhook",
+      "config": {},
+      "label": "http_webhook",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "require_human_approval": true
+  }
+}

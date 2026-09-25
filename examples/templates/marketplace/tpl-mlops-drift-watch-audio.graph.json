@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-mlops-drift-watch-audio",
+    "seed": 42,
+    "description": "Scheduled drift detect + dataset_diff for audio.",
+    "created_at": null,
+    "tags": [
+      "mlops",
+      "drift",
+      "audio"
+    ],
+    "pack": "MLOps",
+    "industry": "mlops",
+    "marketplace_id": "tpl-mlops-drift-watch-audio",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-mlops-drift-watch-audio.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "schedule_trigger",
+      "config": {},
+      "label": "schedule_trigger",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "feature_store_read",
+      "config": {},
+      "label": "feature_store_read",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "drift_detect",
+      "config": {},
+      "label": "drift_detect",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "dataset_diff",
+      "config": {},
+      "label": "dataset_diff",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "eval_gate",
+      "config": {},
+      "label": "eval_gate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "http_webhook",
+      "config": {},
+      "label": "http_webhook",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {}
+}

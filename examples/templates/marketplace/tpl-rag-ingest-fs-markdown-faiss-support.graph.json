@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-rag-ingest-fs-markdown-faiss-support",
+    "seed": 42,
+    "description": "RAG ingest from fs using markdown chunking into faiss for support.",
+    "created_at": null,
+    "tags": [
+      "rag",
+      "ingest",
+      "faiss",
+      "markdown",
+      "fs"
+    ],
+    "pack": "RAG",
+    "industry": "support",
+    "marketplace_id": "tpl-rag-ingest-fs-markdown-faiss-support",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-rag-ingest-fs-markdown-faiss-support.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "rag_fs_connector",
+      "config": {},
+      "label": "rag_fs_connector",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "chunk_markdown",
+      "config": {},
+      "label": "chunk_markdown",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "text_embed",
+      "config": {},
+      "label": "text_embed",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "vector_store_write",
+      "config": {
+        "backend": "faiss"
+      },
+      "label": "vector_store_write",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "eval_gate",
+      "config": {},
+      "label": "eval_gate",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "vector_backend": "faiss",
+    "source": "fs",
+    "chunker": "markdown"
+  }
+}

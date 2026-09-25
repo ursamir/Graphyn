@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-wakeword-en-hey-graphyn-feature",
+    "seed": 42,
+    "description": "Wake-word 'hey graphyn' (en) feature stage.",
+    "created_at": null,
+    "tags": [
+      "wakeword",
+      "en",
+      "feature"
+    ],
+    "pack": "WakeWord",
+    "industry": "consumer-iot",
+    "marketplace_id": "tpl-wakeword-en-hey-graphyn-feature",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-wakeword-en-hey-graphyn-feature.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "wakeword_data_gen",
+      "config": {},
+      "label": "wakeword_data_gen",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "wakeword_feature_extract",
+      "config": {},
+      "label": "wakeword_feature_extract",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "dataset_builder",
+      "config": {},
+      "label": "dataset_builder",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "phrase": "hey graphyn",
+    "language": "en"
+  }
+}

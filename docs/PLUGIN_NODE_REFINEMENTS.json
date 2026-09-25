@@ -1,0 +1,404 @@
+{
+  "title": "Graphyn Plugin Node Refinements",
+  "status": "design-only",
+  "base_catalog": "docs/PLUGIN_NODE_PLATFORM_CATALOG.json",
+  "base_total": 145,
+  "summary": {
+    "added": 10,
+    "aggregated_template_only": 3,
+    "aggregated_runtime": 1,
+    "unchanged": 145,
+    "deprecated": 0,
+    "altered_notes": 2
+  },
+  "added_nodes": [
+    {
+      "id": "N146",
+      "node_type": "yolo_dataset_yaml_build",
+      "pack": "PluginPackage/Vision/yolo_dataset_yaml_build/",
+      "category": "Preprocessing",
+      "purpose": "Build Ultralytics data.yaml + path layout from Vision dataset artifacts",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "config": [
+        "task:str=detect",
+        "names:list[str]",
+        "path:str",
+        "train:str=images/train",
+        "val:str=images/val"
+      ],
+      "notes": "Granularize: split yaml construction out of yolo_train so agents can validate datasets before train.",
+      "refinement": "granularize",
+      "related": [
+        "yolo_train",
+        "annotation_export_yolo"
+      ]
+    },
+    {
+      "id": "N147",
+      "node_type": "yolo_hyperparam_search",
+      "pack": "PluginPackage/Vision/yolo_hyperparam_search/",
+      "category": "ML",
+      "purpose": "Optuna-style hyperparameter search over YOLO train configs",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ExperimentArtifact"
+        }
+      ],
+      "config": [
+        "n_trials:int=20",
+        "search_space:dict",
+        "metric:str=mAP50",
+        "direction:str=maximize"
+      ],
+      "notes": "Granularize: keep yolo_train single-run; search is separate for resume/parallel trials.",
+      "refinement": "granularize",
+      "related": [
+        "yolo_train",
+        "experiment_tracker"
+      ]
+    },
+    {
+      "id": "N148",
+      "node_type": "yolo_resume_train",
+      "pack": "PluginPackage/Vision/yolo_resume_train/",
+      "category": "ML",
+      "purpose": "Resume YOLO training from last.pt / checkpoint",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact|None"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelArtifact"
+        }
+      ],
+      "config": [
+        "resume_checkpoint:str",
+        "extra_epochs:int=0"
+      ],
+      "notes": "Granularize: distinct from cold-start yolo_train.",
+      "refinement": "granularize",
+      "related": [
+        "yolo_train"
+      ]
+    },
+    {
+      "id": "N149",
+      "node_type": "bm25_index_build",
+      "pack": "PluginPackage/RAG/bm25_index_build/",
+      "category": "Index",
+      "purpose": "Build BM25 sparse index for hybrid retrieval",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[Chunk]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "SparseIndexRef"
+        }
+      ],
+      "config": [
+        "backend:str=rank_bm25",
+        "k1:float=1.5",
+        "b:float=0.75"
+      ],
+      "notes": "Granularize: hybrid_retrieve assumes index exists; make build explicit.",
+      "refinement": "granularize",
+      "related": [
+        "hybrid_retrieve"
+      ]
+    },
+    {
+      "id": "N150",
+      "node_type": "parent_doc_retriever",
+      "pack": "PluginPackage/RAG/parent_doc_retriever/",
+      "category": "Retrieve",
+      "purpose": "Retrieve child chunks then expand to parent documents",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "query",
+          "type": "str"
+        },
+        {
+          "name": "store",
+          "type": "VectorStoreRef"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RetrievalHit]"
+        }
+      ],
+      "config": [
+        "child_top_k:int=8",
+        "parent_top_k:int=4"
+      ],
+      "notes": "Granularize: complements chunk_hierarchical.",
+      "refinement": "granularize",
+      "related": [
+        "chunk_hierarchical",
+        "vector_store_query"
+      ]
+    },
+    {
+      "id": "N151",
+      "node_type": "hyde_generate",
+      "pack": "PluginPackage/RAG/hyde_generate/",
+      "category": "Query",
+      "purpose": "HyDE: generate hypothetical document for embedding-based retrieve",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "query",
+          "type": "str"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "str"
+        }
+      ],
+      "config": [
+        "model:str",
+        "api_secret_name:str",
+        "max_tokens:int=256"
+      ],
+      "notes": "Granularize: query_rewrite already mentions HyDE; split for composable graphs.",
+      "refinement": "granularize",
+      "related": [
+        "query_rewrite",
+        "text_embed"
+      ]
+    },
+    {
+      "id": "N152",
+      "node_type": "mcu_window",
+      "pack": "PluginPackage/TinyML/mcu_window/",
+      "category": "Preprocessing",
+      "purpose": "Fixed/sliding windowing for MCU audio/IMU streams",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[McuSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[McuSample]"
+        }
+      ],
+      "config": [
+        "window_ms:int=1000",
+        "hop_ms:int=200"
+      ],
+      "notes": "Granularize: split mcu_feature_pipeline into composable atoms.",
+      "refinement": "granularize",
+      "related": [
+        "mcu_feature_pipeline",
+        "mcu_mfcc",
+        "mcu_spectrogram"
+      ]
+    },
+    {
+      "id": "N153",
+      "node_type": "mcu_mfcc",
+      "pack": "PluginPackage/TinyML/mcu_mfcc/",
+      "category": "Preprocessing",
+      "purpose": "MCU-friendly MFCC feature extract",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[McuSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "FeatureArray"
+        }
+      ],
+      "config": [
+        "n_mfcc:int=13",
+        "n_fft:int=512",
+        "hop_length:int=160"
+      ],
+      "notes": "Granularize atom from mcu_feature_pipeline.",
+      "refinement": "granularize",
+      "related": [
+        "mcu_feature_pipeline"
+      ]
+    },
+    {
+      "id": "N154",
+      "node_type": "mcu_spectrogram",
+      "pack": "PluginPackage/TinyML/mcu_spectrogram/",
+      "category": "Preprocessing",
+      "purpose": "MCU-friendly spectrogram / log-mel features",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[McuSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "FeatureArray"
+        }
+      ],
+      "config": [
+        "n_mels:int=40",
+        "n_fft:int=512",
+        "hop_length:int=160"
+      ],
+      "notes": "Granularize atom from mcu_feature_pipeline.",
+      "refinement": "granularize",
+      "related": [
+        "mcu_feature_pipeline"
+      ]
+    },
+    {
+      "id": "N155",
+      "node_type": "hitl_approve",
+      "pack": "PluginPackage/Agents/hitl_approve/",
+      "category": "Control",
+      "purpose": "Human-in-the-loop approval gate before promote/ship/destructive ops",
+      "status": "Proposed",
+      "kind": "atomic_node",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "approved",
+          "type": "Any"
+        },
+        {
+          "name": "rejected",
+          "type": "Any"
+        }
+      ],
+      "config": [
+        "timeout_s:int=3600",
+        "approver_roles:list[str]",
+        "reason_required:bool=True"
+      ],
+      "notes": "Granularize: split from agent_loop so canvas/agents can require HITL explicitly.",
+      "refinement": "granularize",
+      "related": [
+        "agent_loop",
+        "ship_package_promote",
+        "canary_gate"
+      ]
+    }
+  ],
+  "aggregate_nodes": [
+    {
+      "node_type": "micro_speech_pipeline",
+      "kind": "aggregate_node",
+      "status": "Proposed",
+      "already_in_base_catalog": true,
+      "id": "N068",
+      "notes": "Keep as single-card UX for KWS->int8 tflite. Prefer atoms (mcu_window/mfcc/train/quantize) for flexible graphs.",
+      "expands_to": [
+        "mcu_dataset_ingest",
+        "mcu_window",
+        "mcu_mfcc",
+        "mcu_train",
+        "tflm_quantize",
+        "tflm_convert"
+      ]
+    }
+  ],
+  "template_only_macros": [
+    {
+      "id": "macro-rag-ingest-e2e",
+      "kind": "template_only",
+      "name": "rag_ingest_e2e",
+      "expands_to_template_family": "rag/ingest-*",
+      "notes": "Prefer template_only over aggregate runtime node to avoid exploding canvas surface."
+    },
+    {
+      "id": "macro-yolo-train-export-e2e",
+      "kind": "template_only",
+      "name": "yolo_train_export_e2e",
+      "expands_to_template_family": "vision/yolo-*-train-* + export",
+      "notes": "Marketplace templates compose train+val+export; no new runtime card."
+    },
+    {
+      "id": "macro-tinyml-kws-to-tflm-e2e",
+      "kind": "template_only",
+      "name": "tinyml_kws_to_tflm_e2e",
+      "expands_to_template_family": "tinyml/kws-*-tflm",
+      "notes": "Use templates; micro_speech_pipeline remains the only TinyML aggregate node."
+    }
+  ],
+  "altered_existing": [
+    {
+      "node_type": "mcu_feature_pipeline",
+      "change": "Keep as convenience aggregate; prefer mcu_window + mcu_mfcc/mcu_spectrogram atoms in new templates. No deletion.",
+      "migration": "Existing graphs using mcu_feature_pipeline remain valid."
+    },
+    {
+      "node_type": "query_rewrite",
+      "change": "HyDE mode remains for backward compatibility; new graphs should prefer hyde_generate atom when HyDE-only.",
+      "migration": "None required."
+    }
+  ],
+  "deprecated_nodes": [],
+  "resulting_total_node_types": 155,
+  "honesty": {
+    "needs_api_nodes": [
+      "mcu_flash_ota",
+      "mcu_ondevice_metrics"
+    ],
+    "banner": "MCU flash/OTA and on-device metrics require Devices APIs \u2014 mark status needs-api; never fake device control."
+  }
+}

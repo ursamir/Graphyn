@@ -1,0 +1,207 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-tinyml-kws-wearable-cortex-m4-ptq-tflm",
+    "seed": 42,
+    "description": "TinyML kws for wearable on cortex-m4, PTQ then tflm export.",
+    "created_at": null,
+    "tags": [
+      "tinyml",
+      "kws",
+      "cortex-m4",
+      "ptq",
+      "tflm"
+    ],
+    "pack": "TinyML",
+    "industry": "wearable",
+    "marketplace_id": "tpl-tinyml-kws-wearable-cortex-m4-ptq-tflm",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-tinyml-kws-wearable-cortex-m4-ptq-tflm.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "mcu_dataset_ingest",
+      "config": {},
+      "label": "mcu_dataset_ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "mcu_label_taxonomy",
+      "config": {},
+      "label": "mcu_label_taxonomy",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "mcu_dataset_health",
+      "config": {},
+      "label": "mcu_dataset_health",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "mcu_window",
+      "config": {},
+      "label": "mcu_window",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "mcu_mfcc",
+      "config": {},
+      "label": "mcu_mfcc",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "mcu_train",
+      "config": {},
+      "label": "mcu_train",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n6",
+      "node_type": "tinyml_ptq_calib_builder",
+      "config": {},
+      "label": "tinyml_ptq_calib_builder",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n7",
+      "node_type": "tflm_quantize",
+      "config": {},
+      "label": "tflm_quantize",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n8",
+      "node_type": "tflm_convert",
+      "config": {},
+      "label": "tflm_convert",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n9",
+      "node_type": "tflm_op_support_check",
+      "config": {},
+      "label": "tflm_op_support_check",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n10",
+      "node_type": "mcu_arena_estimator",
+      "config": {},
+      "label": "mcu_arena_estimator",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n11",
+      "node_type": "cmsis_pack_exporter",
+      "config": {},
+      "label": "cmsis_pack_exporter",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n12",
+      "node_type": "tflm_host_sim",
+      "config": {},
+      "label": "tflm_host_sim",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n6",
+      "src_port": "output",
+      "dst_id": "n7",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n7",
+      "src_port": "output",
+      "dst_id": "n8",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n8",
+      "src_port": "output",
+      "dst_id": "n9",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n9",
+      "src_port": "output",
+      "dst_id": "n10",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n10",
+      "src_port": "output",
+      "dst_id": "n11",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n11",
+      "src_port": "output",
+      "dst_id": "n12",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "target_mcu": "cortex-m4",
+    "quant_mode": "ptq",
+    "export_format": "tflm",
+    "arena_bytes_budget": 256000
+  }
+}

@@ -1,5 +1,8 @@
 # MCP Server
 
+> **Inventory drift (2026-09-26):** `tool_registry.py` now registers **~69 tools** (68 prior + `search_templates`; +`accept_proposal` when human-approval enabled). The “28/29 tools” counts below are **stale**. See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md) for the verified inventory and pack-first agent journey.
+
+
 The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes **28 tools by default** (29 when `GRAPHYN_MCP_HUMAN_APPROVAL=1`, which enables `accept_proposal`) over stdio transport.
 
 **File:** `app/mcp/`  

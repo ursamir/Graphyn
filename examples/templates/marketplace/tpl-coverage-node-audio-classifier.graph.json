@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-coverage-node-audio-classifier",
+    "seed": 42,
+    "description": "Coverage template ensuring node_type `audio_classifier` appears in >=1 marketplace recipe.",
+    "created_at": null,
+    "tags": [
+      "coverage",
+      "audio_classifier"
+    ],
+    "pack": "Common",
+    "industry": "platform",
+    "marketplace_id": "tpl-coverage-node-audio-classifier",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-coverage-node-audio-classifier.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "audio_classifier",
+      "config": {},
+      "label": "audio_classifier",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [],
+  "parameters": {}
+}

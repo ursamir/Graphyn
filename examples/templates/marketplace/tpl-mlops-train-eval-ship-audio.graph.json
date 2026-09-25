@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-mlops-train-eval-ship-audio",
+    "seed": 42,
+    "description": "Train to eval_gate to model_card to ship for audio.",
+    "created_at": null,
+    "tags": [
+      "mlops",
+      "ship",
+      "audio"
+    ],
+    "pack": "MLOps",
+    "industry": "mlops",
+    "marketplace_id": "tpl-mlops-train-eval-ship-audio",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-mlops-train-eval-ship-audio.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "run_metadata_stamp",
+      "config": {},
+      "label": "run_metadata_stamp",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "evaluator",
+      "config": {},
+      "label": "evaluator",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "eval_gate",
+      "config": {},
+      "label": "eval_gate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "model_card",
+      "config": {},
+      "label": "model_card",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "artifact_checksum",
+      "config": {},
+      "label": "artifact_checksum",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "ship_package_create",
+      "config": {},
+      "label": "ship_package_create",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n6",
+      "node_type": "ship_package_transition",
+      "config": {},
+      "label": "ship_package_transition",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {}
+}

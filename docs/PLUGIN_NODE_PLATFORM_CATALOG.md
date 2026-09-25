@@ -9,6 +9,8 @@
 
 Machine-readable twin: [`PLUGIN_NODE_PLATFORM_CATALOG.json`](./PLUGIN_NODE_PLATFORM_CATALOG.json).
 
+**Refinements (additive):** see [`PLUGIN_NODE_REFINEMENTS.md`](./PLUGIN_NODE_REFINEMENTS.md) (+10 granularize atoms → **155** distinct node_types). Marketplace templates: [`PIPELINE_TEMPLATE_MARKETPLACE.md`](./PIPELINE_TEMPLATE_MARKETPLACE.md).
+
 ---
 
 ## 1. Purpose & status

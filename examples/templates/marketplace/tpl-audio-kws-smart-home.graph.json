@@ -1,0 +1,147 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-audio-kws-smart-home",
+    "seed": 42,
+    "description": "Audio kws pipeline for smart-home industry use case.",
+    "created_at": null,
+    "tags": [
+      "audio",
+      "kws",
+      "smart-home"
+    ],
+    "pack": "Audio",
+    "industry": "smart-home",
+    "marketplace_id": "tpl-audio-kws-smart-home",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-audio-kws-smart-home.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "dataset_ingest",
+      "config": {},
+      "label": "dataset_ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "audio_conditioner",
+      "config": {},
+      "label": "audio_conditioner",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "segmenter",
+      "config": {},
+      "label": "segmenter",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "augmentation_pipeline",
+      "config": {},
+      "label": "augmentation_pipeline",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "feature_frontend",
+      "config": {},
+      "label": "feature_frontend",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "dataset_builder",
+      "config": {},
+      "label": "dataset_builder",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n6",
+      "node_type": "model_builder",
+      "config": {},
+      "label": "model_builder",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n7",
+      "node_type": "trainer",
+      "config": {},
+      "label": "trainer",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n8",
+      "node_type": "evaluator",
+      "config": {},
+      "label": "evaluator",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n6",
+      "src_port": "output",
+      "dst_id": "n7",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n7",
+      "src_port": "output",
+      "dst_id": "n8",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "dataset_path": "workspace/datasets/input/smart-home-kws",
+    "sample_rate": 16000
+  }
+}

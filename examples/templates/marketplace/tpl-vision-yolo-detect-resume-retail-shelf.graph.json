@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-vision-yolo-detect-resume-retail-shelf",
+    "seed": 42,
+    "description": "Resume YOLO detect training for retail-shelf.",
+    "created_at": null,
+    "tags": [
+      "vision",
+      "resume",
+      "detect"
+    ],
+    "pack": "Vision",
+    "industry": "retail-shelf",
+    "marketplace_id": "tpl-vision-yolo-detect-resume-retail-shelf",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-vision-yolo-detect-resume-retail-shelf.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "yolo_resume_train",
+      "config": {},
+      "label": "yolo_resume_train",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "yolo_val",
+      "config": {},
+      "label": "yolo_val",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "experiment_tracker",
+      "config": {},
+      "label": "experiment_tracker",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {
+    "resume_checkpoint": "workspace/artifacts/yolo/last.pt"
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-video-ingest-scene-caption-security",
+    "seed": 42,
+    "description": "Video pipeline ingest-scene-caption-security.",
+    "created_at": null,
+    "tags": [
+      "video",
+      "security"
+    ],
+    "pack": "Video",
+    "industry": "security",
+    "marketplace_id": "tpl-video-ingest-scene-caption-security",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-video-ingest-scene-caption-security.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "video_ingest",
+      "config": {},
+      "label": "video_ingest",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "video_quality_gate",
+      "config": {},
+      "label": "video_quality_gate",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "scene_detect",
+      "config": {},
+      "label": "scene_detect",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n3",
+      "node_type": "clip_segment",
+      "config": {},
+      "label": "clip_segment",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n4",
+      "node_type": "frame_sample",
+      "config": {},
+      "label": "frame_sample",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n5",
+      "node_type": "video_caption",
+      "config": {},
+      "label": "video_caption",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n6",
+      "node_type": "video_exporter",
+      "config": {},
+      "label": "video_exporter",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n2",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "input"
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "input"
+    }
+  ],
+  "parameters": {}
+}
