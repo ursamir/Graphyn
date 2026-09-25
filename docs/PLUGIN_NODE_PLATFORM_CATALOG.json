@@ -1,0 +1,4179 @@
+{
+  "title": "Graphyn Plugin/Node Platform Catalog",
+  "status": "design-only",
+  "total_node_types": 145,
+  "counts_by_status": {
+    "Existing": 42,
+    "Alter": 7,
+    "Proposed": 96
+  },
+  "counts_by_pack": {
+    "Audio": 19,
+    "Common": 30,
+    "TinyML": 20,
+    "Vision": 20,
+    "RAG": 21,
+    "Video": 10,
+    "Agents": 8,
+    "MLOps": 12,
+    "WakeWord": 5
+  },
+  "nodes": [
+    {
+      "id": "N001",
+      "node_type": "dataset_ingest",
+      "pack": "PluginPackage/Audio/dataset_ingest/",
+      "category": "Input",
+      "purpose": "Universal audio ingest (fs/HF/S3/zip/manifest)",
+      "status": "Existing",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "source_type:str=filesystem",
+        "path:str",
+        "recursive:bool=True",
+        "limit:int=0",
+        "manifest_path:str",
+        "deduplicate:bool=False"
+      ],
+      "optional_dependencies_runtime": "deps:librosa,soundfile; opt:datasets,boto3",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N002",
+      "node_type": "stream_ingest",
+      "pack": "PluginPackage/Audio/stream_ingest/",
+      "category": "Input",
+      "purpose": "Live mic/websocket/file stream",
+      "status": "Existing",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "source:str=microphone",
+        "chunk_ms:int=100",
+        "sample_rate:int=16000"
+      ],
+      "optional_dependencies_runtime": "opt:sounddevice,websockets",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N003",
+      "node_type": "audio_conditioner",
+      "pack": "PluginPackage/Audio/audio_conditioner/",
+      "category": "Preprocessing",
+      "purpose": "Resample/mono/normalize/compress",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "sample_rate:int=16000",
+        "normalize_method:str=peak",
+        "target_lufs:float=-23"
+      ],
+      "optional_dependencies_runtime": "deps:librosa,scipy; opt:pyloudnorm",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N004",
+      "node_type": "audio_quality_gate",
+      "pack": "PluginPackage/Audio/audio_quality_gate/",
+      "category": "Preprocessing",
+      "purpose": "SNR/clipping/duration gate",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        },
+        {
+          "name": "rejected",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "min_snr_db:float=10",
+        "rejection_policy:str=skip"
+      ],
+      "optional_dependencies_runtime": "deps:librosa,scipy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N005",
+      "node_type": "audio_annotator",
+      "pack": "PluginPackage/Audio/audio_annotator/",
+      "category": "Preprocessing",
+      "purpose": "Taxonomy/weak annotation",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "annotation_mode:str=passthrough",
+        "taxonomy:dict={}"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N006",
+      "node_type": "alignment_node",
+      "pack": "PluginPackage/Audio/alignment_node/",
+      "category": "Preprocessing",
+      "purpose": "Forced alignment CTC/MFA",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "list[AudioSample]"
+        },
+        {
+          "name": "transcripts",
+          "type": "list[dict]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "level:str=word"
+      ],
+      "optional_dependencies_runtime": "opt:ctc-forced-aligner,mfa",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N007",
+      "node_type": "segmenter",
+      "pack": "PluginPackage/Audio/segmenter/",
+      "category": "Processing",
+      "purpose": "Fixed/VAD/silence segments",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "mode:str=fixed",
+        "window_ms:int=1000",
+        "overlap:float=0"
+      ],
+      "optional_dependencies_runtime": "deps:librosa; opt:webrtcvad",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N008",
+      "node_type": "augmentation_pipeline",
+      "pack": "PluginPackage/Audio/augmentation_pipeline/",
+      "category": "Augmentation",
+      "purpose": "Probabilistic audio augments",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "copies_per_sample:int=1",
+        "augmentations:list"
+      ],
+      "optional_dependencies_runtime": "opt:audiomentations",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N009",
+      "node_type": "speech_enhancer",
+      "pack": "PluginPackage/Audio/speech_enhancer/",
+      "category": "Enhancement",
+      "purpose": "Denoise/dereverb",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "denoise:bool=True"
+      ],
+      "optional_dependencies_runtime": "deps:noisereduce; opt:deepfilternet",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N010",
+      "node_type": "speaker_separator",
+      "pack": "PluginPackage/Audio/speaker_separator/",
+      "category": "Enhancement",
+      "purpose": "Diarization/separation",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "auth_token:str  # resolve_secret HUGGINGFACE_TOKEN"
+      ],
+      "optional_dependencies_runtime": "opt:pyannote.audio,speechbrain",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N011",
+      "node_type": "environment_simulator",
+      "pack": "PluginPackage/Audio/environment_simulator/",
+      "category": "Enhancement",
+      "purpose": "Room RIR simulation",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "preset:str=room",
+        "rt60:float=0.4"
+      ],
+      "optional_dependencies_runtime": "deps:pyroomacoustics",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N012",
+      "node_type": "feature_frontend",
+      "pack": "PluginPackage/Audio/feature_frontend/",
+      "category": "Features",
+      "purpose": "MFCC/log-mel/raw features",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[FeatureArray]"
+        }
+      ],
+      "config": [
+        "feature_type:str=mfcc",
+        "n_mfcc:int=40",
+        "n_mels:int=128"
+      ],
+      "optional_dependencies_runtime": "deps:librosa,numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N013",
+      "node_type": "stream_processor",
+      "pack": "PluginPackage/Audio/stream_processor/",
+      "category": "Streaming",
+      "purpose": "Sliding window buffer",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "window_ms:int=1000",
+        "hop_ms:int=500"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N014",
+      "node_type": "audio_event_detector",
+      "pack": "PluginPackage/Audio/audio_event_detector/",
+      "category": "Detection",
+      "purpose": "Temporal event detection",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        },
+        {
+          "name": "events",
+          "type": "list[dict]"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "threshold:float=0.5"
+      ],
+      "optional_dependencies_runtime": "opt:tensorflow,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N015",
+      "node_type": "audio_classifier",
+      "pack": "PluginPackage/Audio/audio_classifier/",
+      "category": "Inference",
+      "purpose": "Clip classification",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]|list[FeatureArray]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[PredictionResult]"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "top_k:int=1"
+      ],
+      "optional_dependencies_runtime": "opt:tensorflow,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N016",
+      "node_type": "speech_synthesizer",
+      "pack": "PluginPackage/Audio/speech_synthesizer/",
+      "category": "Generation",
+      "purpose": "TTS Coqui/espeak",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[str]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "language:str=en"
+      ],
+      "optional_dependencies_runtime": "opt:TTS",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N017",
+      "node_type": "voice_converter",
+      "pack": "PluginPackage/Audio/voice_converter/",
+      "category": "Generation",
+      "purpose": "Speaker conversion",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "conversion_type:str=timbre"
+      ],
+      "optional_dependencies_runtime": "opt:speechbrain,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N018",
+      "node_type": "audio_generator",
+      "pack": "PluginPackage/Audio/audio_generator/",
+      "category": "Generation",
+      "purpose": "MusicGen/AudioGen",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[str] optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "duration_s:float=5"
+      ],
+      "optional_dependencies_runtime": "opt:audiocraft,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N019",
+      "node_type": "audio_exporter",
+      "pack": "PluginPackage/Audio/audio_exporter/",
+      "category": "Output",
+      "purpose": "WAV export splits",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "output_dir:str=workspace/datasets/output/audio_export",
+        "split_ratios:dict"
+      ],
+      "optional_dependencies_runtime": "deps:soundfile",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N020",
+      "node_type": "dataset_builder",
+      "pack": "PluginPackage/Common/dataset_builder/",
+      "category": "ML",
+      "purpose": "FeatureArray\u2192DatasetArtifact",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[FeatureArray]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "config": [
+        "split_ratios:dict",
+        "output_format:str=numpy"
+      ],
+      "optional_dependencies_runtime": "deps:numpy,scikit-learn",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N021",
+      "node_type": "model_builder",
+      "pack": "PluginPackage/Common/trainer/",
+      "category": "ML",
+      "purpose": "DS-CNN/MobileNet/SimpleCNN builder",
+      "status": "Alter",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "object"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "object"
+        }
+      ],
+      "config": [
+        "architecture:str=ds_cnn",
+        "filters:int=64",
+        "backend:str=auto",
+        "output_path:str=workspace/artifacts/models"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow,keras,torch",
+      "notes": "ALTER: keep audio DS-CNN; YOLO/TinyML via new packs",
+      "capabilities": {}
+    },
+    {
+      "id": "N022",
+      "node_type": "trainer",
+      "pack": "PluginPackage/Common/trainer/",
+      "category": "ML",
+      "purpose": "Train Keras/PyTorch\u2192ModelArtifact",
+      "status": "Alter",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "object"
+        },
+        {
+          "name": "dataset",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelArtifact"
+        }
+      ],
+      "config": [
+        "backend:str=auto",
+        "epochs:int=30",
+        "batch_size:int=32",
+        "output_path:str=workspace/artifacts/models",
+        "device:str=auto"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow,keras,torch",
+      "notes": "ALTER: adapter hooks only; yolo_train/mcu_train own primary paths",
+      "capabilities": {}
+    },
+    {
+      "id": "N023",
+      "node_type": "evaluator",
+      "pack": "PluginPackage/Common/evaluator/",
+      "category": "ML",
+      "purpose": "Metrics/plots on ModelArtifact",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "model_artifact",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "dataset",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelArtifact"
+        }
+      ],
+      "config": [
+        "output_path:str=workspace/artifacts/evaluation",
+        "plot_confusion_matrix:bool=True"
+      ],
+      "optional_dependencies_runtime": "deps:scikit-learn",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N024",
+      "node_type": "edge_optimizer",
+      "pack": "PluginPackage/Common/edge_optimizer/",
+      "category": "ML",
+      "purpose": "TFLite/ONNX quantize\u2192DeploymentArtifact",
+      "status": "Alter",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "backend:str=tflite",
+        "quantization:str=int8",
+        "output_path:str=workspace/artifacts/optimized",
+        "representative_samples:int=100"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow,onnx,onnxruntime,tf2onnx",
+      "notes": "ALTER:+tflm|executorch|ultralytics_export backends",
+      "capabilities": {}
+    },
+    {
+      "id": "N025",
+      "node_type": "realtime_inference",
+      "pack": "PluginPackage/Common/realtime_inference/",
+      "category": "Inference",
+      "purpose": "Low-latency TFLite/PyTorch/ONNX",
+      "status": "Alter",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[FeatureArray]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[PredictionResult]"
+        }
+      ],
+      "config": [
+        "model_path:str",
+        "backend:str=auto",
+        "mode:str=classification",
+        "wake_word_threshold:float=0.8"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow,torch,onnxruntime",
+      "notes": "ALTER:+ultralytics|tflm_host; modes detect|segment",
+      "capabilities": {}
+    },
+    {
+      "id": "N026",
+      "node_type": "dataset_balancer",
+      "pack": "PluginPackage/Common/dataset_balancer/",
+      "category": "ML",
+      "purpose": "Class balancing",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "config": [
+        "strategy:str=oversample"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N027",
+      "node_type": "dataset_versioner",
+      "pack": "PluginPackage/Common/dataset_versioner/",
+      "category": "ML",
+      "purpose": "Hash/version datasets",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "config": [
+        "output_dir:str=workspace/datasets/versioned"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N028",
+      "node_type": "experiment_tracker",
+      "pack": "PluginPackage/Common/experiment_tracker/",
+      "category": "ML",
+      "purpose": "JSON/MLflow logging",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact|DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ExperimentArtifact"
+        }
+      ],
+      "config": [
+        "backend:str=json",
+        "experiment_name:str=default"
+      ],
+      "optional_dependencies_runtime": "opt:mlflow",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N029",
+      "node_type": "deployment_packager",
+      "pack": "PluginPackage/Common/deployment_packager/",
+      "category": "ML",
+      "purpose": "mobile/mcu/docker/edge packages",
+      "status": "Alter",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "target:str=mobile",
+        "output_path:str=workspace/artifacts/packages"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "ALTER:+cmsis_pack|arduino|zephyr|pte_bundle",
+      "capabilities": {}
+    },
+    {
+      "id": "N030",
+      "node_type": "embedding_generator",
+      "pack": "PluginPackage/Common/embedding_generator/",
+      "category": "Features",
+      "purpose": "Audio SSL embeddings",
+      "status": "Alter",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]|list[FeatureArray]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[EmbeddingVector]"
+        }
+      ],
+      "config": [
+        "model:str=wav2vec2",
+        "pooling:str=mean",
+        "normalize:bool=True"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:transformers,torch",
+      "notes": "ALTER: keep audio; RAG uses text_embed",
+      "capabilities": {}
+    },
+    {
+      "id": "N031",
+      "node_type": "multimodal_fusion",
+      "pack": "PluginPackage/Common/multimodal_fusion/",
+      "category": "Features",
+      "purpose": "Cross-modal fusion",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "list[EmbeddingVector]"
+        },
+        {
+          "name": "text",
+          "type": "list[EmbeddingVector] optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[EmbeddingVector]"
+        }
+      ],
+      "config": [
+        "fusion_type:str=concat"
+      ],
+      "optional_dependencies_runtime": "opt:torch,transformers",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N032",
+      "node_type": "asr_transcribe",
+      "pack": "PluginPackage/Common/asr_transcribe/",
+      "category": "Processing",
+      "purpose": "Cloud ASR\u2192Transcript",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Transcript"
+        }
+      ],
+      "config": [
+        "provider:str=openai_compat",
+        "language:str=en"
+      ],
+      "optional_dependencies_runtime": "opt:httpx; secrets:OPENAI_API_KEY|\u2026",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N033",
+      "node_type": "pii_redact",
+      "pack": "PluginPackage/Common/pii_redact/",
+      "category": "Processing",
+      "purpose": "PII redaction",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "transcript",
+          "type": "Transcript"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "transcript",
+          "type": "Transcript"
+        },
+        {
+          "name": "audit",
+          "type": "RedactionAudit"
+        }
+      ],
+      "config": [
+        "engine:str=auto"
+      ],
+      "optional_dependencies_runtime": "opt:presidio",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N034",
+      "node_type": "structured_llm",
+      "pack": "PluginPackage/Common/structured_llm/",
+      "category": "Processing",
+      "purpose": "JSON-schema LLM extract",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Transcript|str"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "StructuredDocument"
+        }
+      ],
+      "config": [
+        "provider:str=openai_compat",
+        "model:str=gpt-4o-mini",
+        "json_schema:dict={}"
+      ],
+      "optional_dependencies_runtime": "opt:httpx; resolve_secret(OPENAI_API_KEY)",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N035",
+      "node_type": "eval_gate",
+      "pack": "PluginPackage/Common/eval_gate/",
+      "category": "Quality",
+      "purpose": "Hard-fail quality gate",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        },
+        {
+          "name": "report",
+          "type": "EvalReport"
+        }
+      ],
+      "config": [
+        "check_empty_transcript:bool=True"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N036",
+      "node_type": "http_webhook",
+      "pack": "PluginPackage/Common/http_webhook/",
+      "category": "Output",
+      "purpose": "HMAC webhook",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "WebhookReceipt"
+        }
+      ],
+      "config": [
+        "url:str",
+        "hmac_secret:str"
+      ],
+      "optional_dependencies_runtime": "opt:httpx",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N037",
+      "node_type": "doc_parse_chunk",
+      "pack": "PluginPackage/Common/doc_parse_chunk/",
+      "category": "Input",
+      "purpose": "Parse docs\u2192list[Chunk]",
+      "status": "Alter",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "str optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[Chunk]"
+        }
+      ],
+      "config": [
+        "path:str",
+        "max_chars:int=1200",
+        "use_unstructured:bool=False"
+      ],
+      "optional_dependencies_runtime": "opt:unstructured",
+      "notes": "ALTER:+chunk_strategy|overlap|metadata_keys",
+      "capabilities": {}
+    },
+    {
+      "id": "N038",
+      "node_type": "caption_export",
+      "pack": "PluginPackage/Common/caption_export/",
+      "category": "Output",
+      "purpose": "SRT/VTT/JSON captions",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Transcript"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "CaptionExportResult"
+        }
+      ],
+      "config": [
+        "formats:list=[srt,vtt,json]"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N039",
+      "node_type": "object_store",
+      "pack": "PluginPackage/Common/object_store/",
+      "category": "Output",
+      "purpose": "Local/S3 get/put/list",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ObjectRef|list|ObjectList"
+        }
+      ],
+      "config": [
+        "backend:str=local",
+        "operation:str=put"
+      ],
+      "optional_dependencies_runtime": "opt:boto3",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N040",
+      "node_type": "http_request",
+      "pack": "PluginPackage/Common/http_request/",
+      "category": "Output",
+      "purpose": "Generic HTTP",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "HttpResponse"
+        }
+      ],
+      "config": [
+        "method:str=GET",
+        "url:str",
+        "auth_env:str"
+      ],
+      "optional_dependencies_runtime": "opt:httpx",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N041",
+      "node_type": "if_switch",
+      "pack": "PluginPackage/Common/if_switch/",
+      "category": "Logic",
+      "purpose": "Branch expression",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "true",
+          "type": "Any"
+        },
+        {
+          "name": "false",
+          "type": "Any"
+        },
+        {
+          "name": "output",
+          "type": "BranchResult"
+        }
+      ],
+      "config": [
+        "expression:str"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N042",
+      "node_type": "set_map",
+      "pack": "PluginPackage/Common/set_map/",
+      "category": "Transform",
+      "purpose": "Copy/rename/drop",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        }
+      ],
+      "config": [
+        "mappings:list=[]"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N043",
+      "node_type": "json_transform",
+      "pack": "PluginPackage/Common/json_transform/",
+      "category": "Transform",
+      "purpose": "JSONPath transform",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        }
+      ],
+      "config": [
+        "operations:list=[]"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N044",
+      "node_type": "schedule_trigger",
+      "pack": "PluginPackage/Common/schedule_trigger/",
+      "category": "Input",
+      "purpose": "Cron/interval trigger",
+      "status": "Existing",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "TriggerEvent"
+        }
+      ],
+      "config": [
+        "cron:str",
+        "interval_s:int=0"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N045",
+      "node_type": "python_code",
+      "pack": "PluginPackage/Common/python_code/",
+      "category": "Transform",
+      "purpose": "Trusted Python exec",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        }
+      ],
+      "config": [
+        "code:str"
+      ],
+      "optional_dependencies_runtime": "stdlib; not a sandbox",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N046",
+      "node_type": "error_catch",
+      "pack": "PluginPackage/Common/error_catch/",
+      "category": "Logic",
+      "purpose": "Catch errors",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        },
+        {
+          "name": "error",
+          "type": "ErrorEnvelope"
+        }
+      ],
+      "config": [
+        "continue_on_error:bool=True"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N047",
+      "node_type": "merge",
+      "pack": "PluginPackage/Common/merge/",
+      "category": "Transform",
+      "purpose": "Merge multi inputs",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any multi"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        }
+      ],
+      "config": [
+        "strategy:str=concat"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N048",
+      "node_type": "wait_delay",
+      "pack": "PluginPackage/Common/wait_delay/",
+      "category": "Logic",
+      "purpose": "Sleep/wait",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        }
+      ],
+      "config": [
+        "delay_s:float=1"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N049",
+      "node_type": "csv_table",
+      "pack": "PluginPackage/Common/csv_table/",
+      "category": "Output",
+      "purpose": "CSV read/write",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "CsvTableResult"
+        }
+      ],
+      "config": [
+        "path:str",
+        "mode:str=write"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N050",
+      "node_type": "mcu_dataset_ingest",
+      "pack": "PluginPackage/TinyML/mcu_dataset_ingest/",
+      "category": "Input",
+      "purpose": "IMU/audio/image MCU dataset ingest",
+      "status": "Proposed",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[McuSample] NEW"
+        }
+      ],
+      "config": [
+        "source_type:str=filesystem",
+        "modalities:list=[audio]",
+        "window_ms:int=1000",
+        "sample_rate:int=16000",
+        "path:str"
+      ],
+      "optional_dependencies_runtime": "deps:numpy,pandas",
+      "notes": "Edge Impulse-style collector",
+      "capabilities": {}
+    },
+    {
+      "id": "N051",
+      "node_type": "mcu_label_taxonomy",
+      "pack": "PluginPackage/TinyML/mcu_label_taxonomy/",
+      "category": "Preprocessing",
+      "purpose": "MCU class taxonomy remap",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[McuSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[McuSample] NEW"
+        }
+      ],
+      "config": [
+        "taxonomy:dict={}",
+        "drop_unknown:bool=True"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N052",
+      "node_type": "mcu_feature_pipeline",
+      "pack": "PluginPackage/TinyML/mcu_feature_pipeline/",
+      "category": "Features",
+      "purpose": "MCU-RAM MFCC/spectrogram/IMU features",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[McuSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[FeatureArray]"
+        }
+      ],
+      "config": [
+        "feature_type:str=mfcc",
+        "n_mfcc:int=10",
+        "n_mels:int=40",
+        "fixed_length:int=49",
+        "max_ram_kb:int=256"
+      ],
+      "optional_dependencies_runtime": "deps:numpy,librosa",
+      "notes": "Cortex-M RAM sized",
+      "capabilities": {}
+    },
+    {
+      "id": "N053",
+      "node_type": "mcu_model_zoo",
+      "pack": "PluginPackage/TinyML/mcu_model_zoo/",
+      "category": "ML",
+      "purpose": "DS-CNN/MobileNetTiny/MCUNet/KWS zoo",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DatasetArtifact|object"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "object"
+        }
+      ],
+      "config": [
+        "architecture:str=ds_cnn",
+        "num_classes:int=12",
+        "input_shape:list=[49,10,1]",
+        "width_multiplier:float=0.25"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow,keras,torch",
+      "notes": "Aligns with model_builder DS-CNN",
+      "capabilities": {}
+    },
+    {
+      "id": "N054",
+      "node_type": "mcu_train",
+      "pack": "PluginPackage/TinyML/mcu_train/",
+      "category": "ML",
+      "purpose": "MCU train + PTQ calib + optional QAT",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "object"
+        },
+        {
+          "name": "dataset",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelArtifact"
+        }
+      ],
+      "config": [
+        "epochs:int=30",
+        "qat:bool=False",
+        "qat_epochs:int=5",
+        "calib_fraction:float=0.1",
+        "output_path:str=workspace/artifacts/models/mcu"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow,keras",
+      "notes": "PTQ/QAT for TFLM",
+      "capabilities": {}
+    },
+    {
+      "id": "N055",
+      "node_type": "tflm_quantize",
+      "pack": "PluginPackage/TinyML/tflm_quantize/",
+      "category": "ML",
+      "purpose": "Int8/int16 TFLM-compatible quantize",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "calib",
+          "type": "DatasetArtifact optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "TFLiteArtifact"
+        }
+      ],
+      "config": [
+        "quantization:str=int8",
+        "full_integer:bool=True",
+        "representative_samples:int=100",
+        "ensure_tflm_ops:bool=True",
+        "output_path:str=workspace/artifacts/optimized/tflm"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow",
+      "notes": "TFLM quant specs; int16 activations",
+      "capabilities": {}
+    },
+    {
+      "id": "N056",
+      "node_type": "tflm_convert",
+      "pack": "PluginPackage/TinyML/tflm_convert/",
+      "category": "ML",
+      "purpose": "Convert\u2192.tflite micro + CMSIS-NN metadata",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact|TFLiteArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "cmsis_nn:bool=True",
+        "optimize_for:str=cortex_m55",
+        "output_path:str=workspace/artifacts/optimized/tflite_micro"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow",
+      "notes": "CMSIS-NN optimize flag metadata",
+      "capabilities": {}
+    },
+    {
+      "id": "N057",
+      "node_type": "tflm_op_support_check",
+      "pack": "PluginPackage/TinyML/tflm_op_support_check/",
+      "category": "Quality",
+      "purpose": "Check ops vs TFLM kernel allowlist",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "TFLiteArtifact|DeploymentArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "TflmSupportReport NEW"
+        },
+        {
+          "name": "artifact",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "tflm_version:str=latest",
+        "fail_on_unsupported:bool=True"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "Fail-fast missing kernels",
+      "capabilities": {}
+    },
+    {
+      "id": "N058",
+      "node_type": "mcu_arena_estimator",
+      "pack": "PluginPackage/TinyML/mcu_arena_estimator/",
+      "category": "Quality",
+      "purpose": "Tensor arena / peak RAM estimate",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "TFLiteArtifact|DeploymentArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ArenaEstimate NEW"
+        }
+      ],
+      "config": [
+        "target_ram_kb:int=256",
+        "headroom_pct:float=15"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N059",
+      "node_type": "ethos_u_vela_compile",
+      "pack": "PluginPackage/TinyML/ethos_u_vela_compile/",
+      "category": "ML",
+      "purpose": "Arm Vela compile for Ethos-U (needs-tool)",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "TFLiteArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "accelerator:str=ethos-u55-128",
+        "system_config:str=Ethos_U55_High_End_Embedded",
+        "vela_bin:str=vela",
+        "output_path:str=workspace/artifacts/optimized/vela"
+      ],
+      "optional_dependencies_runtime": "needs-tool: Vela CLI; fail-fast if missing",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N060",
+      "node_type": "executorch_export",
+      "pack": "PluginPackage/TinyML/executorch_export/",
+      "category": "ML",
+      "purpose": "ExecuTorch .pte + Arm TOSA path",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "backend:str=xnnpack",
+        "quantization:str=int8",
+        "output_path:str=workspace/artifacts/optimized/pte",
+        "pte_filename:str=model.pte"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:torch,executorch",
+      "notes": "ExecuTorch MCU / TOSA",
+      "capabilities": {}
+    },
+    {
+      "id": "N061",
+      "node_type": "cmsis_pack_exporter",
+      "pack": "PluginPackage/TinyML/cmsis_pack_exporter/",
+      "category": "Output",
+      "purpose": "CMSIS-Pack / static lib exporter",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "pack_vendor:str=Graphyn",
+        "target_rtos:str=none",
+        "include_cmsis_nn:bool=True",
+        "output_path:str=workspace/artifacts/packages/cmsis"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N062",
+      "node_type": "mcu_glue_stubs",
+      "pack": "PluginPackage/TinyML/mcu_glue_stubs/",
+      "category": "Output",
+      "purpose": "Arduino/Zephyr/FreeRTOS glue stubs",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "framework:str=arduino",
+        "board:str",
+        "output_path:str=workspace/artifacts/packages/glue"
+      ],
+      "optional_dependencies_runtime": "stdlib templates; no flash",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N063",
+      "node_type": "tflm_host_sim",
+      "pack": "PluginPackage/TinyML/tflm_host_sim/",
+      "category": "Inference",
+      "purpose": "Host TFLM/TFLite interpreter eval",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "TFLiteArtifact|DeploymentArtifact"
+        },
+        {
+          "name": "dataset",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "predictions",
+          "type": "list[PredictionResult]"
+        }
+      ],
+      "config": [
+        "interpreter:str=tflite_runtime",
+        "batch_limit:int=0"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tflite-runtime,tensorflow",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N064",
+      "node_type": "mcu_ondevice_metrics",
+      "pack": "PluginPackage/TinyML/mcu_ondevice_metrics/",
+      "category": "Quality",
+      "purpose": "On-device metrics placeholder (needs-API)",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "OnDeviceMetrics NEW"
+        }
+      ],
+      "config": [
+        "device_id:str",
+        "dry_run:bool=True"
+      ],
+      "optional_dependencies_runtime": "needs-API: no Devices metrics API",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N065",
+      "node_type": "mcu_flash_ota",
+      "pack": "PluginPackage/TinyML/mcu_flash_ota/",
+      "category": "Output",
+      "purpose": "Flash/OTA to MCU (needs-API honesty)",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "FlashReceipt NEW"
+        }
+      ],
+      "config": [
+        "transport:str=swd",
+        "device_id:str",
+        "dry_run:bool=True"
+      ],
+      "optional_dependencies_runtime": "needs-API: do NOT fake device APIs; dry_run default",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N066",
+      "node_type": "mcu_dataset_health",
+      "pack": "PluginPackage/TinyML/mcu_dataset_health/",
+      "category": "Quality",
+      "purpose": "MCU dataset class balance health",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[McuSample] NEW|DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DatasetHealthReport NEW"
+        }
+      ],
+      "config": [
+        "min_per_class:int=50",
+        "max_imbalance_ratio:float=5"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N067",
+      "node_type": "tinyml_ptq_calib_builder",
+      "pack": "PluginPackage/TinyML/tinyml_ptq_calib_builder/",
+      "category": "ML",
+      "purpose": "Build PTQ representative set",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "config": [
+        "max_samples:int=100",
+        "stratify:bool=True",
+        "seed:int=42"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N068",
+      "node_type": "micro_speech_pipeline",
+      "pack": "PluginPackage/TinyML/micro_speech_pipeline/",
+      "category": "ML",
+      "purpose": "Opinionated KWS\u2192int8 tflite helper",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]|list[McuSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "labels:list=[yes,no,up,down]",
+        "architecture:str=ds_cnn",
+        "quantize:str=int8"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow,keras",
+      "notes": "May expand to subgraph Wave 2",
+      "capabilities": {}
+    },
+    {
+      "id": "N069",
+      "node_type": "cmsis_nn_optimize_flag",
+      "pack": "PluginPackage/TinyML/cmsis_nn_optimize_flag/",
+      "category": "ML",
+      "purpose": "Stamp CMSIS-NN optimize metadata",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "enable:bool=True",
+        "kernel_variant:str=auto"
+      ],
+      "optional_dependencies_runtime": "metadata only",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N070",
+      "node_type": "vision_dataset_ingest",
+      "pack": "PluginPackage/Vision/vision_dataset_ingest/",
+      "category": "Input",
+      "purpose": "COCO/YOLO/folder image ingest",
+      "status": "Proposed",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "config": [
+        "source_type:str=folder",
+        "path:str",
+        "split:str=train"
+      ],
+      "optional_dependencies_runtime": "deps:pillow; opt:datasets",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N071",
+      "node_type": "vision_label_convert",
+      "pack": "PluginPackage/Vision/vision_label_convert/",
+      "category": "Preprocessing",
+      "purpose": "COCO\u2194YOLO\u2194VOC label convert",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "config": [
+        "from_format:str=coco",
+        "to_format:str=yolo",
+        "class_map:dict={}"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N072",
+      "node_type": "vision_train_val_split",
+      "pack": "PluginPackage/Vision/vision_train_val_split/",
+      "category": "ML",
+      "purpose": "Vision stratified splits",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "VisionDatasetArtifact NEW"
+        }
+      ],
+      "config": [
+        "split_ratios:dict={train:0.8,val:0.1,test:0.1}",
+        "seed:int=42"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N073",
+      "node_type": "vision_augment",
+      "pack": "PluginPackage/Vision/vision_augment/",
+      "category": "Augmentation",
+      "purpose": "Mosaic/HSV/flip YOLO-style aug",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "config": [
+        "mosaic:bool=True",
+        "hsv_h:float=0.015",
+        "fliplr:float=0.5",
+        "degrees:float=0"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics,albumentations",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N074",
+      "node_type": "yolo_train",
+      "pack": "PluginPackage/Vision/yolo_train/",
+      "category": "ML",
+      "purpose": "Ultralytics YOLO train",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "dataset",
+          "type": "VisionDatasetArtifact NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelArtifact"
+        }
+      ],
+      "config": [
+        "task:str=detect",
+        "model:str=yolov8n.pt",
+        "epochs:int=100",
+        "imgsz:int=640",
+        "batch:int=16",
+        "device:str=auto",
+        "project:str=workspace/artifacts/models/yolo"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics,torch",
+      "notes": "Ultralytics train; tasks detect|segment|pose|obb|classify",
+      "capabilities": {}
+    },
+    {
+      "id": "N075",
+      "node_type": "yolo_val",
+      "pack": "PluginPackage/Vision/yolo_val/",
+      "category": "ML",
+      "purpose": "Ultralytics YOLO validation",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "dataset",
+          "type": "VisionDatasetArtifact NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelArtifact"
+        }
+      ],
+      "config": [
+        "task:str=detect",
+        "imgsz:int=640",
+        "conf:float=0.001",
+        "iou:float=0.6"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N076",
+      "node_type": "yolo_predict",
+      "pack": "PluginPackage/Vision/yolo_predict/",
+      "category": "Inference",
+      "purpose": "YOLO predict images/video",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "images",
+          "type": "list[ImageSample] NEW|list[str]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[DetectionResult] NEW"
+        }
+      ],
+      "config": [
+        "task:str=detect",
+        "imgsz:int=640",
+        "conf:float=0.25",
+        "iou:float=0.7",
+        "max_det:int=300"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N077",
+      "node_type": "yolo_export",
+      "pack": "PluginPackage/Vision/yolo_export/",
+      "category": "ML",
+      "purpose": "Export onnx/engine/coreml/openvino/tflite/ncnn/rknn",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "format:str=onnx",
+        "imgsz:int=640",
+        "half:bool=False",
+        "int8:bool=False",
+        "nms:bool=True",
+        "output_path:str=workspace/artifacts/optimized/yolo"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics,onnx",
+      "notes": "Ultralytics export; nms=True",
+      "capabilities": {}
+    },
+    {
+      "id": "N078",
+      "node_type": "yolo_nms_postprocess",
+      "pack": "PluginPackage/Vision/yolo_nms_postprocess/",
+      "category": "Processing",
+      "purpose": "Standalone NMS postprocess",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[DetectionResult] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[DetectionResult] NEW"
+        }
+      ],
+      "config": [
+        "iou:float=0.45",
+        "conf:float=0.25",
+        "max_det:int=300"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N079",
+      "node_type": "yolo_track",
+      "pack": "PluginPackage/Vision/yolo_track/",
+      "category": "Inference",
+      "purpose": "ByteTrack-style multi-object track",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "detections",
+          "type": "list[DetectionResult] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[TrackResult] NEW"
+        }
+      ],
+      "config": [
+        "tracker:str=bytetrack",
+        "track_high_thresh:float=0.5"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N080",
+      "node_type": "vision_dataset_health",
+      "pack": "PluginPackage/Vision/vision_dataset_health/",
+      "category": "Quality",
+      "purpose": "Class balance / box size health",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[ImageSample] NEW|VisionDatasetArtifact NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DatasetHealthReport NEW"
+        }
+      ],
+      "config": [
+        "min_per_class:int=20",
+        "flag_empty_images:bool=True"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N081",
+      "node_type": "vision_hard_negative_mine",
+      "pack": "PluginPackage/Vision/vision_hard_negative_mine/",
+      "category": "ML",
+      "purpose": "Hard-negative mining from preds",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "predictions",
+          "type": "list[DetectionResult] NEW"
+        },
+        {
+          "name": "dataset",
+          "type": "VisionDatasetArtifact NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "config": [
+        "iou_thresh:float=0.5",
+        "max_negatives:int=500"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N082",
+      "node_type": "onnx_runtime_infer",
+      "pack": "PluginPackage/Vision/onnx_runtime_infer/",
+      "category": "Inference",
+      "purpose": "ONNX Runtime vision infer",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "DeploymentArtifact"
+        },
+        {
+          "name": "images",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[DetectionResult] NEW|list[PredictionResult]"
+        }
+      ],
+      "config": [
+        "providers:list=[CPUExecutionProvider]",
+        "imgsz:int=640",
+        "task:str=detect"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:onnxruntime",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N083",
+      "node_type": "tensorrt_infer",
+      "pack": "PluginPackage/Vision/tensorrt_infer/",
+      "category": "Inference",
+      "purpose": "TensorRT engine infer",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "DeploymentArtifact"
+        },
+        {
+          "name": "images",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[DetectionResult] NEW"
+        }
+      ],
+      "config": [
+        "device:int=0",
+        "fp16:bool=True",
+        "imgsz:int=640"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorrt; requires_gpu",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N084",
+      "node_type": "annotation_export_coco",
+      "pack": "PluginPackage/Vision/annotation_export_coco/",
+      "category": "Output",
+      "purpose": "Export COCO JSON",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[ImageSample] NEW|VisionDatasetArtifact NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "AnnotationExport NEW"
+        }
+      ],
+      "config": [
+        "output_path:str=workspace/datasets/vision/coco.json"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N085",
+      "node_type": "annotation_export_yolo",
+      "pack": "PluginPackage/Vision/annotation_export_yolo/",
+      "category": "Output",
+      "purpose": "Export YOLO labels + data.yaml",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[ImageSample] NEW|VisionDatasetArtifact NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "AnnotationExport NEW"
+        }
+      ],
+      "config": [
+        "output_dir:str=workspace/datasets/vision/yolo",
+        "create_data_yaml:bool=True"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N086",
+      "node_type": "yolo_task_detect",
+      "pack": "PluginPackage/Vision/yolo_task_detect/",
+      "category": "Inference",
+      "purpose": "Detect-task wrapper",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "images",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[DetectionResult] NEW"
+        }
+      ],
+      "config": [
+        "imgsz:int=640",
+        "conf:float=0.25"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics",
+      "notes": "task=detect fixed",
+      "capabilities": {}
+    },
+    {
+      "id": "N087",
+      "node_type": "yolo_task_segment",
+      "pack": "PluginPackage/Vision/yolo_task_segment/",
+      "category": "Inference",
+      "purpose": "Segment-task wrapper",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "images",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[DetectionResult] NEW"
+        }
+      ],
+      "config": [
+        "imgsz:int=640",
+        "retina_masks:bool=False"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N088",
+      "node_type": "yolo_task_pose",
+      "pack": "PluginPackage/Vision/yolo_task_pose/",
+      "category": "Inference",
+      "purpose": "Pose-task wrapper",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "images",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[DetectionResult] NEW"
+        }
+      ],
+      "config": [
+        "imgsz:int=640",
+        "kpt_shape:list=[17,3]"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N089",
+      "node_type": "yolo_task_obb_classify",
+      "pack": "PluginPackage/Vision/yolo_task_obb_classify/",
+      "category": "Inference",
+      "purpose": "OBB or classify task wrapper",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "images",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[DetectionResult] NEW|list[PredictionResult]"
+        }
+      ],
+      "config": [
+        "task:str=obb",
+        "imgsz:int=640"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:ultralytics",
+      "notes": "task enum obb|classify",
+      "capabilities": {}
+    },
+    {
+      "id": "N090",
+      "node_type": "rag_fs_connector",
+      "pack": "PluginPackage/RAG/rag_fs_connector/",
+      "category": "Input",
+      "purpose": "Filesystem docs connector",
+      "status": "Proposed",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RawDocument] NEW"
+        }
+      ],
+      "config": [
+        "path:str",
+        "recursive:bool=True",
+        "extensions:list=[pdf,html,md,txt,docx]"
+      ],
+      "optional_dependencies_runtime": "opt:pypdf,unstructured",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N091",
+      "node_type": "rag_url_crawl",
+      "pack": "PluginPackage/RAG/rag_url_crawl/",
+      "category": "Input",
+      "purpose": "URL crawl for RAG ingest",
+      "status": "Proposed",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RawDocument] NEW"
+        }
+      ],
+      "config": [
+        "urls:list=[]",
+        "max_pages:int=20",
+        "same_host_only:bool=True"
+      ],
+      "optional_dependencies_runtime": "opt:httpx,beautifulsoup4; egress policy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N092",
+      "node_type": "rag_notion_connector",
+      "pack": "PluginPackage/RAG/rag_notion_connector/",
+      "category": "Input",
+      "purpose": "Notion connector (secret)",
+      "status": "Proposed",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RawDocument] NEW"
+        }
+      ],
+      "config": [
+        "secret_name:str=NOTION_API_TOKEN",
+        "database_id:str"
+      ],
+      "optional_dependencies_runtime": "opt:httpx; resolve_secret",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N093",
+      "node_type": "rag_slack_connector",
+      "pack": "PluginPackage/RAG/rag_slack_connector/",
+      "category": "Input",
+      "purpose": "Slack history connector (secret)",
+      "status": "Proposed",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RawDocument] NEW"
+        }
+      ],
+      "config": [
+        "secret_name:str=SLACK_BOT_TOKEN",
+        "channel_ids:list=[]"
+      ],
+      "optional_dependencies_runtime": "opt:httpx; resolve_secret",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N094",
+      "node_type": "chunk_recursive",
+      "pack": "PluginPackage/RAG/chunk_recursive/",
+      "category": "Processing",
+      "purpose": "Recursive char/token chunker",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[RawDocument] NEW|list[Chunk]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[Chunk]"
+        }
+      ],
+      "config": [
+        "chunk_size:int=1000",
+        "chunk_overlap:int=200",
+        "length_fn:str=chars"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "LlamaIndex/LangChain recursive",
+      "capabilities": {}
+    },
+    {
+      "id": "N095",
+      "node_type": "chunk_semantic",
+      "pack": "PluginPackage/RAG/chunk_semantic/",
+      "category": "Processing",
+      "purpose": "Semantic breakpoint chunker",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[RawDocument] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[Chunk]"
+        }
+      ],
+      "config": [
+        "embedding_model:str=sentence-transformers/all-MiniLM-L6-v2",
+        "breakpoint_percentile:float=95"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:sentence-transformers,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N096",
+      "node_type": "chunk_markdown",
+      "pack": "PluginPackage/RAG/chunk_markdown/",
+      "category": "Processing",
+      "purpose": "Markdown header-aware chunker",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[RawDocument] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[Chunk]"
+        }
+      ],
+      "config": [
+        "headers_to_split_on:list=[#,##,###]",
+        "chunk_size:int=1200"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N097",
+      "node_type": "chunk_hierarchical",
+      "pack": "PluginPackage/RAG/chunk_hierarchical/",
+      "category": "Processing",
+      "purpose": "Parent/child hierarchical chunks",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[RawDocument] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[Chunk]"
+        },
+        {
+          "name": "parents",
+          "type": "list[Chunk]"
+        }
+      ],
+      "config": [
+        "parent_size:int=2000",
+        "child_size:int=400"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N098",
+      "node_type": "text_embed",
+      "pack": "PluginPackage/RAG/text_embed/",
+      "category": "Features",
+      "purpose": "Text embeddings for chunks",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[Chunk]|list[str]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[EmbeddingVector]"
+        }
+      ],
+      "config": [
+        "backend:str=sentence_transformers",
+        "model_name_or_path:str=sentence-transformers/all-MiniLM-L6-v2",
+        "normalize:bool=True",
+        "api_secret_name:str=OPENAI_API_KEY"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:sentence-transformers,torch,httpx",
+      "notes": "Complements embedding_generator",
+      "capabilities": {}
+    },
+    {
+      "id": "N099",
+      "node_type": "multimodal_caption_embed",
+      "pack": "PluginPackage/RAG/multimodal_caption_embed/",
+      "category": "Features",
+      "purpose": "Caption then embed images/pages",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[ImageSample] NEW|list[RawDocument] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[EmbeddingVector]"
+        },
+        {
+          "name": "captions",
+          "type": "list[str]"
+        }
+      ],
+      "config": [
+        "caption_model:str=blip",
+        "embed_model:str=sentence-transformers/all-MiniLM-L6-v2"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:transformers,torch,pillow",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N100",
+      "node_type": "vector_store_write",
+      "pack": "PluginPackage/RAG/vector_store_write/",
+      "category": "Output",
+      "purpose": "Write to faiss/chroma/pgvector",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "embeddings",
+          "type": "list[EmbeddingVector]"
+        },
+        {
+          "name": "chunks",
+          "type": "list[Chunk] optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "VectorStoreRef NEW"
+        }
+      ],
+      "config": [
+        "backend:str=faiss",
+        "persist_path:str=workspace/artifacts/vectorstores/default",
+        "collection:str=default",
+        "pg_dsn_secret:str=PGVECTOR_DSN"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:faiss-cpu,chromadb,psycopg",
+      "notes": "Local-first",
+      "capabilities": {}
+    },
+    {
+      "id": "N101",
+      "node_type": "vector_store_query",
+      "pack": "PluginPackage/RAG/vector_store_query/",
+      "category": "Processing",
+      "purpose": "Dense vector similarity query",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "store",
+          "type": "VectorStoreRef NEW"
+        },
+        {
+          "name": "query",
+          "type": "str|EmbeddingVector"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RetrievalHit] NEW"
+        }
+      ],
+      "config": [
+        "top_k:int=5",
+        "backend:str=faiss",
+        "persist_path:str=workspace/artifacts/vectorstores/default"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:faiss-cpu,chromadb",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N102",
+      "node_type": "hybrid_retrieve",
+      "pack": "PluginPackage/RAG/hybrid_retrieve/",
+      "category": "Processing",
+      "purpose": "BM25+dense hybrid with RRF",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "store",
+          "type": "VectorStoreRef NEW"
+        },
+        {
+          "name": "corpus",
+          "type": "list[Chunk]"
+        },
+        {
+          "name": "query",
+          "type": "str"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RetrievalHit] NEW"
+        }
+      ],
+      "config": [
+        "top_k:int=10",
+        "dense_weight:float=0.5",
+        "bm25_weight:float=0.5",
+        "rrf_k:int=60"
+      ],
+      "optional_dependencies_runtime": "deps:numpy; opt:rank-bm25",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N103",
+      "node_type": "rag_rerank",
+      "pack": "PluginPackage/RAG/rag_rerank/",
+      "category": "Processing",
+      "purpose": "Cross-encoder/LLM rerank",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "hits",
+          "type": "list[RetrievalHit] NEW"
+        },
+        {
+          "name": "query",
+          "type": "str"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RetrievalHit] NEW"
+        }
+      ],
+      "config": [
+        "backend:str=cross_encoder",
+        "model_name_or_path:str=cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "top_n:int=5"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:sentence-transformers,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N104",
+      "node_type": "query_rewrite",
+      "pack": "PluginPackage/RAG/query_rewrite/",
+      "category": "Processing",
+      "purpose": "Rewrite/HyDE/multi-query",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "query",
+          "type": "str"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[str]"
+        }
+      ],
+      "config": [
+        "strategy:str=rewrite",
+        "n_queries:int=3",
+        "model:str=gpt-4o-mini",
+        "api_secret_name:str=OPENAI_API_KEY"
+      ],
+      "optional_dependencies_runtime": "opt:httpx; resolve_secret",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N105",
+      "node_type": "contextual_compress",
+      "pack": "PluginPackage/RAG/contextual_compress/",
+      "category": "Processing",
+      "purpose": "Compress context to query-relevant spans",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "hits",
+          "type": "list[RetrievalHit] NEW"
+        },
+        {
+          "name": "query",
+          "type": "str"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[RetrievalHit] NEW"
+        }
+      ],
+      "config": [
+        "backend:str=extractive",
+        "max_chars:int=2000"
+      ],
+      "optional_dependencies_runtime": "opt:httpx",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N106",
+      "node_type": "prompt_assemble",
+      "pack": "PluginPackage/RAG/prompt_assemble/",
+      "category": "Processing",
+      "purpose": "Assemble RAG prompt slots",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "query",
+          "type": "str"
+        },
+        {
+          "name": "hits",
+          "type": "list[RetrievalHit] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "AssembledPrompt NEW"
+        }
+      ],
+      "config": [
+        "system_template:str",
+        "context_template:str",
+        "max_context_chars:int=8000"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N107",
+      "node_type": "rag_generate",
+      "pack": "PluginPackage/RAG/rag_generate/",
+      "category": "Processing",
+      "purpose": "Generate answer (wrap structured_llm pattern)",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "prompt",
+          "type": "AssembledPrompt NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "RagAnswer NEW"
+        }
+      ],
+      "config": [
+        "provider:str=openai_compat",
+        "model:str=gpt-4o-mini",
+        "temperature:float=0",
+        "api_secret_name:str=OPENAI_API_KEY"
+      ],
+      "optional_dependencies_runtime": "opt:httpx; resolve_secret like structured_llm",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N108",
+      "node_type": "citation_attach",
+      "pack": "PluginPackage/RAG/citation_attach/",
+      "category": "Processing",
+      "purpose": "Attach citations to RagAnswer",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "answer",
+          "type": "RagAnswer NEW"
+        },
+        {
+          "name": "hits",
+          "type": "list[RetrievalHit] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "RagAnswer NEW"
+        }
+      ],
+      "config": [
+        "style:str=numeric",
+        "min_overlap:float=0.2"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N109",
+      "node_type": "rag_eval",
+      "pack": "PluginPackage/RAG/rag_eval/",
+      "category": "Quality",
+      "purpose": "Ragas-style faithfulness/relevancy/precision",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "answer",
+          "type": "RagAnswer NEW"
+        },
+        {
+          "name": "hits",
+          "type": "list[RetrievalHit] NEW"
+        },
+        {
+          "name": "ground_truth",
+          "type": "str optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "RagEvalReport NEW"
+        }
+      ],
+      "config": [
+        "metrics:list=[faithfulness,answer_relevancy,context_precision,context_recall]",
+        "judge_model:str=gpt-4o-mini",
+        "fail_below:dict={}"
+      ],
+      "optional_dependencies_runtime": "opt:httpx,ragas",
+      "notes": "Ragas-style metrics as config",
+      "capabilities": {}
+    },
+    {
+      "id": "N110",
+      "node_type": "kg_light_extract",
+      "pack": "PluginPackage/RAG/kg_light_extract/",
+      "category": "Processing",
+      "purpose": "Light entity/relation extract",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[Chunk]|RagAnswer NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "KnowledgeGraphFragment NEW"
+        }
+      ],
+      "config": [
+        "backend:str=llm",
+        "schema:dict={}",
+        "api_secret_name:str=OPENAI_API_KEY"
+      ],
+      "optional_dependencies_runtime": "opt:httpx,spacy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N111",
+      "node_type": "video_ingest",
+      "pack": "PluginPackage/Video/video_ingest/",
+      "category": "Input",
+      "purpose": "Ingest video files/folders",
+      "status": "Proposed",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "config": [
+        "path:str",
+        "recursive:bool=True",
+        "extensions:list=[mp4,mov,mkv,webm]"
+      ],
+      "optional_dependencies_runtime": "deps:opencv-python-headless; runtime=isolated",
+      "notes": "Fills empty Video pack",
+      "capabilities": {}
+    },
+    {
+      "id": "N112",
+      "node_type": "frame_sample",
+      "pack": "PluginPackage/Video/frame_sample/",
+      "category": "Processing",
+      "purpose": "Sample frames fps/every-N/keyframe",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[ImageSample] NEW"
+        }
+      ],
+      "config": [
+        "mode:str=fps",
+        "fps:float=1",
+        "every_n:int=30",
+        "output_dir:str=workspace/datasets/video/frames"
+      ],
+      "optional_dependencies_runtime": "deps:opencv-python-headless",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N113",
+      "node_type": "scene_detect",
+      "pack": "PluginPackage/Video/scene_detect/",
+      "category": "Processing",
+      "purpose": "Scene boundary detection",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[SceneBoundary] NEW"
+        }
+      ],
+      "config": [
+        "threshold:float=27",
+        "min_scene_len_s:float=1",
+        "backend:str=content"
+      ],
+      "optional_dependencies_runtime": "opt:scenedetect,opencv-python-headless",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N114",
+      "node_type": "clip_segment",
+      "pack": "PluginPackage/Video/clip_segment/",
+      "category": "Processing",
+      "purpose": "Cut clips from scenes/fixed windows",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "video",
+          "type": "list[VideoSample] NEW"
+        },
+        {
+          "name": "scenes",
+          "type": "list[SceneBoundary] NEW optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "config": [
+        "mode:str=scenes",
+        "window_s:float=10",
+        "output_dir:str=workspace/datasets/video/clips"
+      ],
+      "optional_dependencies_runtime": "deps:opencv; opt:ffmpeg-python",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N115",
+      "node_type": "video_caption",
+      "pack": "PluginPackage/Video/video_caption/",
+      "category": "Generation",
+      "purpose": "VL caption for clips/frames",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[VideoSample] NEW|list[ImageSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[str]"
+        },
+        {
+          "name": "captions",
+          "type": "list[CaptionRecord] NEW"
+        }
+      ],
+      "config": [
+        "backend:str=blip",
+        "api_secret_name:str=OPENAI_API_KEY",
+        "max_frames:int=8"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:transformers,torch,httpx",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N116",
+      "node_type": "action_classify",
+      "pack": "PluginPackage/Video/action_classify/",
+      "category": "Inference",
+      "purpose": "Action/activity classify",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[PredictionResult]"
+        }
+      ],
+      "config": [
+        "model_path:str",
+        "backend:str=auto",
+        "num_frames:int=16"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:torch,onnxruntime",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N117",
+      "node_type": "av_align",
+      "pack": "PluginPackage/Video/av_align/",
+      "category": "Processing",
+      "purpose": "Align video with AudioSample streams",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "video",
+          "type": "list[VideoSample] NEW"
+        },
+        {
+          "name": "audio",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AvAlignedSample] NEW"
+        }
+      ],
+      "config": [
+        "method:str=timestamp",
+        "max_offset_ms:int=500"
+      ],
+      "optional_dependencies_runtime": "deps:numpy",
+      "notes": "Bridge Video\u2194Audio",
+      "capabilities": {}
+    },
+    {
+      "id": "N118",
+      "node_type": "video_embed",
+      "pack": "PluginPackage/Video/video_embed/",
+      "category": "Features",
+      "purpose": "Clip-level video embeddings",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[EmbeddingVector]"
+        }
+      ],
+      "config": [
+        "model:str=xclip",
+        "num_frames:int=8"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:transformers,torch",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N119",
+      "node_type": "video_quality_gate",
+      "pack": "PluginPackage/Video/video_quality_gate/",
+      "category": "Quality",
+      "purpose": "Reject corrupt/short videos",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[VideoSample] NEW"
+        },
+        {
+          "name": "rejected",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "config": [
+        "min_duration_s:float=0.5",
+        "max_duration_s:float=600",
+        "rejection_policy:str=skip"
+      ],
+      "optional_dependencies_runtime": "deps:opencv-python-headless",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N120",
+      "node_type": "video_exporter",
+      "pack": "PluginPackage/Video/video_exporter/",
+      "category": "Output",
+      "purpose": "Export clips/annotated video",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[VideoSample] NEW"
+        },
+        {
+          "name": "overlays",
+          "type": "list[DetectionResult] NEW optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[VideoSample] NEW"
+        }
+      ],
+      "config": [
+        "output_dir:str=workspace/datasets/output/video",
+        "draw_boxes:bool=False"
+      ],
+      "optional_dependencies_runtime": "deps:opencv-python-headless",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N121",
+      "node_type": "tool_router",
+      "pack": "PluginPackage/Agents/tool_router/",
+      "category": "Agents",
+      "purpose": "Route tool-calls to registered tools",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ToolCallRequest NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ToolCallResult NEW"
+        },
+        {
+          "name": "unmatched",
+          "type": "ToolCallRequest NEW"
+        }
+      ],
+      "config": [
+        "tools:list=[]",
+        "strict:bool=True"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "Aligns with Graphyn MCP",
+      "capabilities": {}
+    },
+    {
+      "id": "N122",
+      "node_type": "agent_loop",
+      "pack": "PluginPackage/Agents/agent_loop/",
+      "category": "Agents",
+      "purpose": "Multi-step plan\u2192tool\u2192observe loop",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "goal",
+          "type": "str"
+        },
+        {
+          "name": "context",
+          "type": "Any optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "AgentResult NEW"
+        }
+      ],
+      "config": [
+        "max_steps:int=8",
+        "model:str=gpt-4o-mini",
+        "api_secret_name:str=OPENAI_API_KEY",
+        "tool_allowlist:list=[]"
+      ],
+      "optional_dependencies_runtime": "opt:httpx; resolve_secret",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N123",
+      "node_type": "mcp_tool_call",
+      "pack": "PluginPackage/Agents/mcp_tool_call/",
+      "category": "Agents",
+      "purpose": "Invoke Graphyn MCP tool by name",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "tool_name",
+          "type": "str"
+        },
+        {
+          "name": "arguments",
+          "type": "dict"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ToolCallResult NEW"
+        }
+      ],
+      "config": [
+        "timeout_s:float=60",
+        "server:str=graphyn"
+      ],
+      "optional_dependencies_runtime": "inprocess MCP registry",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N124",
+      "node_type": "memory_store",
+      "pack": "PluginPackage/Agents/memory_store/",
+      "category": "Agents",
+      "purpose": "Short/long-term agent memory",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "MemoryOp NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "MemoryRecord NEW"
+        }
+      ],
+      "config": [
+        "backend:str=json",
+        "persist_path:str=workspace/artifacts/agent_memory",
+        "namespace:str=default"
+      ],
+      "optional_dependencies_runtime": "stdlib; opt:faiss-cpu",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N125",
+      "node_type": "guardrail_filter",
+      "pack": "PluginPackage/Agents/guardrail_filter/",
+      "category": "Quality",
+      "purpose": "PII/jailbreak/toxicity guardrails",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        },
+        {
+          "name": "violations",
+          "type": "list[GuardrailHit] NEW"
+        }
+      ],
+      "config": [
+        "policies:list=[pii,prompt_injection,toxicity]",
+        "action:str=block"
+      ],
+      "optional_dependencies_runtime": "opt:presidio",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N126",
+      "node_type": "llm_chat",
+      "pack": "PluginPackage/Agents/llm_chat/",
+      "category": "Processing",
+      "purpose": "Multi-turn chat completion",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "messages",
+          "type": "list[dict]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ChatMessage NEW"
+        }
+      ],
+      "config": [
+        "model:str=gpt-4o-mini",
+        "temperature:float=0.2",
+        "api_secret_name:str=OPENAI_API_KEY"
+      ],
+      "optional_dependencies_runtime": "opt:httpx; resolve_secret",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N127",
+      "node_type": "prompt_template",
+      "pack": "PluginPackage/Agents/prompt_template/",
+      "category": "Transform",
+      "purpose": "Jinja/f-string prompt render",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "variables",
+          "type": "dict"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "str"
+        }
+      ],
+      "config": [
+        "template:str",
+        "engine:str=fstring"
+      ],
+      "optional_dependencies_runtime": "opt:jinja2",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N128",
+      "node_type": "output_schema_validate",
+      "pack": "PluginPackage/Agents/output_schema_validate/",
+      "category": "Quality",
+      "purpose": "Validate LLM JSON vs schema",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        },
+        {
+          "name": "errors",
+          "type": "list[str]"
+        }
+      ],
+      "config": [
+        "json_schema:dict={}",
+        "strict:bool=True"
+      ],
+      "optional_dependencies_runtime": "deps:jsonschema|pydantic",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N129",
+      "node_type": "dataset_diff",
+      "pack": "PluginPackage/MLOps/dataset_diff/",
+      "category": "MLOps",
+      "purpose": "Diff two DatasetArtifacts",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "left",
+          "type": "DatasetArtifact"
+        },
+        {
+          "name": "right",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DatasetDiffReport NEW"
+        }
+      ],
+      "config": [
+        "hash_fields:list=[path,label]",
+        "fail_on_drift:bool=False"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N130",
+      "node_type": "drift_detect",
+      "pack": "PluginPackage/MLOps/drift_detect/",
+      "category": "MLOps",
+      "purpose": "Feature/prediction drift",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "reference",
+          "type": "DatasetArtifact|list[FeatureArray]"
+        },
+        {
+          "name": "current",
+          "type": "DatasetArtifact|list[FeatureArray]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DriftReport NEW"
+        }
+      ],
+      "config": [
+        "method:str=psi",
+        "threshold:float=0.2"
+      ],
+      "optional_dependencies_runtime": "deps:numpy,scipy",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N131",
+      "node_type": "model_card",
+      "pack": "PluginPackage/MLOps/model_card/",
+      "category": "MLOps",
+      "purpose": "Generate model card md/json",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "model",
+          "type": "ModelArtifact"
+        },
+        {
+          "name": "eval",
+          "type": "ModelArtifact optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelCardArtifact NEW"
+        }
+      ],
+      "config": [
+        "output_path:str=workspace/artifacts/model_cards",
+        "include_confusion:bool=True"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N132",
+      "node_type": "ab_assign",
+      "pack": "PluginPackage/MLOps/ab_assign/",
+      "category": "MLOps",
+      "purpose": "Deterministic A/B assignment",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "AbAssignment NEW"
+        }
+      ],
+      "config": [
+        "experiment_key:str=default",
+        "variants:list=[control,treatment]",
+        "weights:list=[0.9,0.1]"
+      ],
+      "optional_dependencies_runtime": "stdlib hashlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N133",
+      "node_type": "canary_gate",
+      "pack": "PluginPackage/MLOps/canary_gate/",
+      "category": "Quality",
+      "purpose": "Canary promote/hold gate",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "metrics",
+          "type": "dict|ModelArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "CanaryDecision NEW"
+        }
+      ],
+      "config": [
+        "metric_key:str=test_accuracy",
+        "min_value:float=0",
+        "max_regression:float=0.02"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N134",
+      "node_type": "ship_package_create",
+      "pack": "PluginPackage/MLOps/ship_package_create/",
+      "category": "Ship",
+      "purpose": "Create ship package (REST semantics)",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "deployment",
+          "type": "DeploymentArtifact optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ShipPackageRef NEW"
+        }
+      ],
+      "config": [
+        "project:str",
+        "model_name:str",
+        "model_stage_or_version:str=latest",
+        "target:dict={runtime:tflite,arch:cortex-m55}",
+        "env:str=draft",
+        "unsigned_allowed:bool=True"
+      ],
+      "optional_dependencies_runtime": "inprocess\u2192ship_packages; UI Workspace / API projects",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N135",
+      "node_type": "ship_package_transition",
+      "pack": "PluginPackage/MLOps/ship_package_transition/",
+      "category": "Ship",
+      "purpose": "Transition ship status",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "package",
+          "type": "ShipPackageRef NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ShipPackageRef NEW"
+        }
+      ],
+      "config": [
+        "action:str=validate",
+        "resource_version:str"
+      ],
+      "optional_dependencies_runtime": "validate|build|sign|publish|deploy|fail|supersede",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N136",
+      "node_type": "ship_package_promote",
+      "pack": "PluginPackage/MLOps/ship_package_promote/",
+      "category": "Ship",
+      "purpose": "Promote draft\u2192staging\u2192prod",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "package",
+          "type": "ShipPackageRef NEW"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ShipPackageRef NEW"
+        }
+      ],
+      "config": [
+        "to_env:str=staging",
+        "approve:bool=False"
+      ],
+      "optional_dependencies_runtime": "inprocess ship promote",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N137",
+      "node_type": "feature_store_write",
+      "pack": "PluginPackage/MLOps/feature_store_write/",
+      "category": "MLOps",
+      "purpose": "Light feature store write",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "features",
+          "type": "list[FeatureArray]|list[EmbeddingVector]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "FeatureStoreRef NEW"
+        }
+      ],
+      "config": [
+        "persist_path:str=workspace/artifacts/feature_store",
+        "entity_keys:list=[id]"
+      ],
+      "optional_dependencies_runtime": "deps:numpy; opt:pyarrow",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N138",
+      "node_type": "feature_store_read",
+      "pack": "PluginPackage/MLOps/feature_store_read/",
+      "category": "MLOps",
+      "purpose": "Light feature store read",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "store",
+          "type": "FeatureStoreRef NEW"
+        },
+        {
+          "name": "keys",
+          "type": "list[str]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[FeatureArray]"
+        }
+      ],
+      "config": [
+        "persist_path:str=workspace/artifacts/feature_store",
+        "as_of:str"
+      ],
+      "optional_dependencies_runtime": "deps:numpy; opt:pyarrow",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N139",
+      "node_type": "artifact_checksum",
+      "pack": "PluginPackage/MLOps/artifact_checksum/",
+      "category": "MLOps",
+      "purpose": "SHA256 checksum + sidecar",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact|DeploymentArtifact|TFLiteArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ChecksumRecord NEW"
+        }
+      ],
+      "config": [
+        "algo:str=sha256",
+        "write_sidecar:bool=True"
+      ],
+      "optional_dependencies_runtime": "stdlib hashlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N140",
+      "node_type": "run_metadata_stamp",
+      "pack": "PluginPackage/MLOps/run_metadata_stamp/",
+      "category": "MLOps",
+      "purpose": "Stamp git/versions/seed metadata",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "Any"
+        }
+      ],
+      "config": [
+        "include_git:bool=True",
+        "seed:int=0"
+      ],
+      "optional_dependencies_runtime": "stdlib",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N141",
+      "node_type": "wakeword_data_gen",
+      "pack": "PluginPackage/WakeWord/wakeword_data_gen/",
+      "category": "Input",
+      "purpose": "Promote data_generator\u2192plugin",
+      "status": "Proposed",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "config": [
+        "phrases:list=[]",
+        "sample_rate:int=16000",
+        "output_dir:str=workspace/datasets/wakeword"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated",
+      "notes": "Gap: add plugin.toml; currently experimental",
+      "capabilities": {}
+    },
+    {
+      "id": "N142",
+      "node_type": "wakeword_feature_extract",
+      "pack": "PluginPackage/WakeWord/wakeword_feature_extract/",
+      "category": "Features",
+      "purpose": "WakeWord feature_extractor node",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[FeatureArray]"
+        }
+      ],
+      "config": [
+        "n_mfcc:int=40",
+        "n_fft:int=512",
+        "hop_length:int=160"
+      ],
+      "optional_dependencies_runtime": "wire existing subtree",
+      "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N143",
+      "node_type": "wakeword_train",
+      "pack": "PluginPackage/WakeWord/wakeword_train/",
+      "category": "ML",
+      "purpose": "WakeWord training as plugin",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "dataset",
+          "type": "DatasetArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ModelArtifact"
+        }
+      ],
+      "config": [
+        "epochs:int=30",
+        "output_path:str=workspace/artifacts/models/wakeword"
+      ],
+      "optional_dependencies_runtime": "runtime=isolated; opt:tensorflow,torch",
+      "notes": "Promote WakeWord/training",
+      "capabilities": {}
+    },
+    {
+      "id": "N144",
+      "node_type": "wakeword_export_onnx",
+      "pack": "PluginPackage/WakeWord/wakeword_export_onnx/",
+      "category": "ML",
+      "purpose": "WakeWord ONNX exporter node",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "ModelArtifact"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "DeploymentArtifact"
+        }
+      ],
+      "config": [
+        "opset:int=13",
+        "output_path:str=workspace/artifacts/optimized/wakeword"
+      ],
+      "optional_dependencies_runtime": "opt:onnx,torch",
+      "notes": "Promote WakeWord/exporter",
+      "capabilities": {}
+    },
+    {
+      "id": "N145",
+      "node_type": "wakeword_infer",
+      "pack": "PluginPackage/WakeWord/wakeword_infer/",
+      "category": "Inference",
+      "purpose": "WakeWord realtime infer node",
+      "status": "Proposed",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "list[FeatureArray]|list[AudioSample]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "list[PredictionResult]"
+        }
+      ],
+      "config": [
+        "model_path:str",
+        "threshold:float=0.8",
+        "backend:str=auto"
+      ],
+      "optional_dependencies_runtime": "opt:onnxruntime,tflite-runtime",
+      "notes": "May share realtime_inference wake_word mode",
+      "capabilities": {}
+    }
+  ]
+}

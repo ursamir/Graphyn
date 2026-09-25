@@ -2,6 +2,9 @@
 
 All **49** production node types live in `PluginPackage/` (see `PluginPackage/NODES.md` — `model_builder` ships inside the `trainer` plugin). There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
 
+
+> **Platform design catalog (100+ node_types, alterations, TinyML/YOLO/RAG):** [`docs/PLUGIN_NODE_PLATFORM_CATALOG.md`](./PLUGIN_NODE_PLATFORM_CATALOG.md) (+ [`PLUGIN_NODE_PLATFORM_CATALOG.json`](./PLUGIN_NODE_PLATFORM_CATALOG.json)).
+
 For full config fields, port specs, and capability details → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
 
