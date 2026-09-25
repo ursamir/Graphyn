@@ -1,0 +1,16 @@
+# Wave-1 capability venvs overlay (Server-99 / local heavy runtimes).
+# Host install: ./scripts/install_wave1_plugin_venvs.sh
+# Prefer installing venvs *inside* the API container (container Python) into
+# GRAPHYN_HOME/plugins/venvs — host-created venvs have host python shebangs.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.wave1.yml up -d graphyn-api
+#
+# Does NOT request GPUs (FaceRecognition-safe). CPU torch via GRAPHYN_WAVE1_FORCE_CPU=1.
+services:
+  graphyn-api:
+    environment:
+      GRAPHYN_WAVE1_FORCE_CPU: ${GRAPHYN_WAVE1_FORCE_CPU:-1}
+      GRAPHYN_WAVE1_VENVS_ROOT: ${GRAPHYN_WAVE1_VENVS_ROOT:-/data/graphyn-home/plugins/venvs}
+      GRAPHYN_WAVE1_VENV_VISION: ${GRAPHYN_WAVE1_VENV_VISION:-/data/graphyn-home/plugins/venvs/wave1-vision}
+      GRAPHYN_WAVE1_VENV_TINYML: ${GRAPHYN_WAVE1_VENV_TINYML:-/data/graphyn-home/plugins/venvs/wave1-tinyml}
+      GRAPHYN_WAVE1_VENV_RAG: ${GRAPHYN_WAVE1_VENV_RAG:-/data/graphyn-home/plugins/venvs/wave1-rag}
