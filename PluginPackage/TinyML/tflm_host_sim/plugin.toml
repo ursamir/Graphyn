@@ -1,6 +1,6 @@
 [plugin]
 name             = "tflm-host-sim"
-version          = "0.1.0"
+version = "0.2.0"
 description      = "Host TFLM/TFLite interpreter eval"
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"

@@ -1,6 +1,6 @@
 [plugin]
 name             = "vector-store-query"
-version          = "0.1.0"
+version = "0.2.0"
 description      = "Dense vector similarity query"
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"

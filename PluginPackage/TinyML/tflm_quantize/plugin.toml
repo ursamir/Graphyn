@@ -1,6 +1,6 @@
 [plugin]
 name             = "tflm-quantize"
-version          = "0.1.0"
+version = "0.2.0"
 description      = "Int8/int16 TFLM-compatible quantize"
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"

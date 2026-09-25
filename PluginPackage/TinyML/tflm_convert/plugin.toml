@@ -1,6 +1,6 @@
 [plugin]
 name             = "tflm-convert"
-version          = "0.1.0"
+version = "0.2.0"
 description      = "Convert→.tflite micro + CMSIS-NN metadata"
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"

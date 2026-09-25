@@ -1,6 +1,6 @@
 [plugin]
 name             = "yolo-export"
-version          = "0.1.0"
+version = "0.2.0"
 description      = "Export onnx/engine/coreml/openvino/tflite/ncnn/rknn"
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
