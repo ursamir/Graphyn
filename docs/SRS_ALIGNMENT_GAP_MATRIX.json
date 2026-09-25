@@ -1,6 +1,6 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "adfd92f7d7aa90d353eb6126f16417d0fab54e58",
+  "tip_sha": "dda472753a973c3fad2861954fea69dbec3e33dd",
   "branch": "cursor/usecase-plugins-workflows",
   "generated_at": "2026-09-25T23:30:00+05:30",
   "method": "static-code-evidence",
@@ -262,7 +262,7 @@
       "Universal 503 store_corrupt on critical reads (artifacts/runs/projects/models/plugins)",
       "UI unwrapList dual-shape helper"
     ],
-    "server99_verify": "pending_push"
+    "server99_verify": "in_progress"
   },
-  "p1_feature_sha": "adfd92f7d7aa90d353eb6126f16417d0fab54e58"
+  "p1_feature_sha": "dda472753a973c3fad2861954fea69dbec3e33dd"
 }
