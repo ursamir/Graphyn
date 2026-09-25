@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **SRS** | GRAPHYN-SRS-001 **v1.2.0** (`docs/REQUIREMENTS_SPEC.md`, 4953 lines) |
-| **Tip probed** | `WAVE_C_TIP_SHA` on `cursor/usecase-plugins-workflows` (Wave C) |
+| **Tip probed** | `017bcf17e6d6deb6de5b80bd9835569a581e69b4` (docs `b9f2ab07`) on `cursor/usecase-plugins-workflows` (Wave C) |
 | **Phase** | 2 — Waves A/B/C landed (honesty, ops, security polish, prove capture) |
 | **Author** | Samir Kumar Mishra <samir.nmiet@gmail.com> |
 | **Generated** | 2026-09-25 21:12 IST; Wave A batch 2 ~21:50 IST; Wave B ~21:40 IST; Wave C 2026-09-25 ~21:50 IST |
@@ -399,6 +399,6 @@ See `docs/SRS_ALIGNMENT_GAP_MATRIX.json`.
 
 ### Wave C landing
 
-- Tip: `WAVE_C_TIP_SHA`
+- Tip: `017bcf17e6d6deb6de5b80bd9835569a581e69b4` (matrix stamp `b9f2ab07077ea36ecc3e406468f0aac971cc85b7`)
 - Closed: Devices needs-API honesty; CSP + token localStorage honesty; OPS backup runbook; SIGTERM drain; DIST-AUTH/SEC-WORKER UI copy; Prove capture required fields + unit test; SDK pause/resume InvalidTransition; Edge checksum polish; artifacts list 503 store_corrupt helper.
 - Remaining honest TBDs: Perf TBD-PERF-*; device registry/flash/OTA APIs; P1 default-envelope; universal store_corrupt on all reads; Server-99 live verify (Phase 2).

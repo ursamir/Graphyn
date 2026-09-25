@@ -1,6 +1,6 @@
 {
   "srs_version": "1.2.0",
-  "tip_sha": "WAVE_C_TIP_SHA",
+  "tip_sha": "b9f2ab07077ea36ecc3e406468f0aac971cc85b7",
   "branch": "cursor/usecase-plugins-workflows",
   "generated_at": "2026-09-25 ~21:50 IST",
   "method": "static-code-evidence",
@@ -257,5 +257,6 @@
     "A",
     "B",
     "C"
-  ]
+  ],
+  "wave_c_feature_sha": "017bcf17e6d6deb6de5b80bd9835569a581e69b4"
 }
