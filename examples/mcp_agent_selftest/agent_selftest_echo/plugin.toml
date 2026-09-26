@@ -1,0 +1,15 @@
+[plugin]
+name             = "agent-selftest-echo"
+version          = "0.1.0"
+description      = "Tiny MCP agentic self-test echo plugin (no heavy deps)."
+author           = "Graphyn MCP Selftest"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+tags             = ["selftest", "echo", "mcp", "utility"]
+dependencies     = []
+runtime          = "inprocess"
+node_types       = ["agent_selftest_echo"]
+
+[config_schema.agent_selftest_echo]
+message = { type = "string", title = "Message", default = "agent-selftest-echo", description = "Stamp prefixed onto echoed payload." }

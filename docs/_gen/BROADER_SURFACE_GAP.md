@@ -33,7 +33,7 @@
 | Run-complete webhook hook | DONE | `app/core/run_notify.notify_run_terminal` → `pipeline_complete` / `pipeline_failed` |
 | Node-level HTTP webhook | DONE | `PluginPackage/Common/http_webhook` |
 | Slack as **notification** sink | PARTIAL / needs-credentials | `rag_slack_connector` is **ingest**, not notify; Slack incoming webhook URL works via `http_webhook` / ops webhook |
-| In-app notification center / bell | MISSING | No product UI for in-app alerts beyond Runs/Trace |
+| In-app notification store + REST/MCP | DONE (store) / PARTIAL (UI) | JSONL store + `/system/notifications*` + MCP list/mark-read; **bell UI still MISSING** |
 | Email alert on run complete | PARTIAL → closing | SMTP sink on `run_notify` this wave |
 | Slack OAuth bot product | needs-api / needs-credentials | Out of scope without Slack app |
 
@@ -48,9 +48,9 @@
 | `rag_generate` real completion | PARTIAL → closing | Stub default; Wave: openai_compat + ollama when `stub=False` |
 | OpenAI / Groq / any OpenAI-compatible | DONE (pattern) | Secret/env `OPENAI_API_KEY` / `GROQ_API_KEY` + `OPENAI_BASE_URL` |
 | Ollama / local OpenAI-compatible | PARTIAL → closing | `provider=ollama` (default `http://127.0.0.1:11434/v1`, no key required) |
-| Anthropic Messages API native | PARTIAL / needs-credentials | Via openai_compat gateway/`base_url` only; no native SDK |
+| Anthropic Messages API native | DONE (fail-closed) | `llm_client` provider=`anthropic` (needs `ANTHROPIC_API_KEY`) |
 | Azure OpenAI | PARTIAL / needs-credentials | Via openai_compat `base_url` + key; no Azure AD flow |
-| Gemini native | MISSING / needs-credentials | No plugin |
+| Gemini native | DONE (fail-closed) | `llm_client` provider=`gemini` (needs `GEMINI_API_KEY` / `GOOGLE_API_KEY`) |
 | Secrets fail-closed | DONE | `resolve_secret` + clear RuntimeError / needs-credentials |
 | MCP LLM chat product | MISSING (by design) | MCP is control-plane (pipelines/runs), not a chat product |
 
@@ -96,7 +96,8 @@
 
 - Gmail OAuth / IMAP inbox product
 - Production mail delivery without `GRAPHYN_SMTP_*`
-- Native Anthropic / Gemini / Azure AD SDKs
+- Azure AD auth flow for Azure OpenAI (openai_compat `base_url`+key only)
+- In-app notification **bell UI** (store/REST/MCP exist)
 - Devices flash / FaceRecognition / Cursor cloud deploy
 
 ---
@@ -121,7 +122,7 @@
 - Gmail OAuth / IMAP inbox (explicitly not built)
 - Slack OAuth bot notify product (use incoming webhook URL)
 - In-app notification center UI
-- Native Gemini / Azure AD SDKs
+- Azure AD auth flow for Azure OpenAI
 - Devices MCU flash hardware APIs
 
 

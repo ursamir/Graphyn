@@ -1,0 +1,4014 @@
+[
+  {
+    "ts": "2026-09-26T09:07:24.771369+05:30",
+    "tool": "list_tools",
+    "args": {},
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "count": 74,
+      "names": [
+        "approve_model_prod",
+        "cancel_run",
+        "compare_runs",
+        "create_ship_package",
+        "delete_schedule",
+        "describe_pack",
+        "download_ship_package",
+        "enable_schedule",
+        "execute_pipeline",
+        "export_audit",
+        "generate_graph",
+        "get_artifact_lineage",
+        "get_audit_events",
+        "get_dataset_version",
+        "get_event_schema",
+        "get_graph_capability_summary",
+        "get_graph_schema",
+        "get_model",
+        "get_node_spec",
+        "get_pipeline",
+        "get_proposal",
+        "get_readiness",
+        "get_run",
+        "get_run_outputs",
+        "get_ship_package",
+        "get_template",
+        "get_trace",
+        "get_webhooks",
+        "inspect_run",
+        "install_plugin",
+        "instantiate_template",
+        "list_artifacts",
+        "list_data_inputs",
+        "list_dataset_versions",
+        "list_experiments",
+        "list_jobs",
+        "list_models",
+        "list_nodes",
+        "list_notifications",
+        "list_packs",
+        "list_pipelines",
+        "list_plugins",
+        "list_projects",
+        "list_proposals",
+        "list_runs",
+        "list_schedules",
+        "list_ship_packages",
+        "list_templates",
+        "list_workers",
+        "manage_plugin",
+        "mark_notifications_read",
+        "materialize_template",
+        "optimize_execution",
+        "pause_run",
+        "promote_pipeline",
+        "promote_ship_package",
+        "propose_graph",
+        "publish_pipeline",
+        "put_webhooks",
+        "register_model",
+        "reject_proposal",
+        "replay_run",
+        "request_model_prod",
+        "resume_run",
+        "rollback_pipeline",
+        "run_schedule_now",
+        "save_pipeline",
+        "search_templates",
+        "secrets_list",
+        "secrets_set",
+        "test_webhook",
+        "upload_dataset_file",
+        "upsert_schedule",
+        "validate_graph"
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.810164+05:30",
+    "tool": "list_packs",
+    "args": {
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "ok": true,
+      "packs": [
+        {
+          "pack": "Audio",
+          "node_count": 19,
+          "template_count": 182,
+          "plugin_root": "PluginPackage/Audio/"
+        },
+        {
+          "pack": "Common",
+          "node_count": 30,
+          "template_count": 26,
+          "plugin_root": "PluginPackage/Common/"
+        },
+        {
+          "pack": "TinyML",
+          "node_count": 20,
+          "template_count": 926,
+          "plugin_root": "PluginPackage/TinyML/"
+        },
+        {
+          "pack": "Vision",
+          "node_count": 20,
+          "template_count": 695,
+          "plugin_root": "PluginPackage/Vision/"
+        },
+        {
+          "pack": "RAG",
+          "node_count": 21,
+          "template_count": 960,
+          "plugin_root": "PluginPackage/RAG/"
+        },
+        {
+          "pack": "Video",
+          "node_count": 10,
+          "template_count": 49,
+          "plugin_root": "PluginPackage/Video/"
+        },
+        {
+          "pack": "Agents",
+          "node_count": 8,
+          "template_count": 66,
+          "plugin_root": "PluginPackage/Agents/"
+        },
+        {
+          "pack": "MLOps",
+          "node_count": 12,
+          "template_count": 30,
+          "plugin_root": "PluginPackage/MLOps/"
+        },
+        {
+          "pack": "WakeWord",
+          "node_count": 5,
+          "template_count": 98,
+          "plugin_root": "PluginPackage/WakeWord/"
+        }
+      ],
+      "count": 9
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.861084+05:30",
+    "tool": "describe_pack",
+    "args": {
+      "pack": "Common",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "ok": true,
+      "pack": "Common",
+      "node_types": [
+        {
+          "node_type": "dataset_builder",
+          "status": "Existing",
+          "category": "ML",
+          "purpose": "FeatureArray\u2192DatasetArtifact"
+        },
+        {
+          "node_type": "model_builder",
+          "status": "Alter",
+          "category": "ML",
+          "purpose": "DS-CNN/MobileNet/SimpleCNN builder"
+        },
+        {
+          "node_type": "trainer",
+          "status": "Alter",
+          "category": "ML",
+          "purpose": "Train Keras/PyTorch\u2192ModelArtifact"
+        },
+        {
+          "node_type": "evaluator",
+          "status": "Existing",
+          "category": "ML",
+          "purpose": "Metrics/plots on ModelArtifact"
+        },
+        {
+          "node_type": "edge_optimizer",
+          "status": "Alter",
+          "category": "ML",
+          "purpose": "TFLite/ONNX quantize\u2192DeploymentArtifact"
+        },
+        {
+          "node_type": "realtime_inference",
+          "status": "Alter",
+          "category": "Inference",
+          "purpose": "Low-latency TFLite/PyTorch/ONNX"
+        },
+        {
+          "node_type": "dataset_balancer",
+          "status": "Existing",
+          "category": "ML",
+          "purpose": "Class balancing"
+        },
+        {
+          "node_type": "dataset_versioner",
+          "status": "Existing",
+          "category": "ML",
+          "purpose": "Hash/version datasets"
+        },
+        {
+          "node_type": "experiment_tracker",
+          "status": "Existing",
+          "category": "ML",
+          "purpose": "JSON/MLflow logging"
+        },
+        {
+          "node_type": "deployment_packager",
+          "status": "Alter",
+          "category": "ML",
+          "purpose": "mobile/mcu/docker/edge packages"
+        },
+        {
+          "node_type": "embedding_generator",
+          "status": "Alter",
+          "category": "Features",
+          "purpose": "Audio SSL embeddings"
+        },
+        {
+          "node_type": "multimodal_fusion",
+          "status": "Existing",
+          "category": "Features",
+          "purpose": "Cross-modal fusion"
+        },
+        {
+          "node_type": "asr_transcribe",
+          "status": "Existing",
+          "category": "Processing",
+          "purpose": "Cloud ASR\u2192Transcript"
+        },
+        {
+          "node_type": "pii_redact",
+          "status": "Existing",
+          "category": "Processing",
+          "purpose": "PII redaction"
+        },
+        {
+          "node_type": "structured_llm",
+          "status": "Existing",
+          "category": "Processing",
+          "purpose": "JSON-schema LLM extract"
+        },
+        {
+          "node_type": "eval_gate",
+          "status": "Existing",
+          "category": "Quality",
+          "purpose": "Hard-fail quality gate"
+        },
+        {
+          "node_type": "http_webhook",
+          "status": "Existing",
+          "category": "Output",
+          "purpose": "HMAC webhook"
+        },
+        {
+          "node_type": "doc_parse_chunk",
+          "status": "Alter",
+          "category": "Input",
+          "purpose": "Parse docs\u2192list[Chunk]"
+        },
+        {
+          "node_type": "caption_export",
+          "status": "Existing",
+          "category": "Output",
+          "purpose": "SRT/VTT/JSON captions"
+        },
+        {
+          "node_type": "object_store",
+          "status": "Existing",
+          "category": "Output",
+          "purpose": "Local/S3 get/put/list"
+        },
+        {
+          "node_type": "http_request",
+          "status": "Existing",
+          "category": "Output",
+          "purpose": "Generic HTTP"
+        },
+        {
+          "node_type": "if_switch",
+          "status": "Existing",
+          "category": "Logic",
+          "purpose": "Branch expression"
+        },
+        {
+          "node_type": "set_map",
+          "status": "Existing",
+          "category": "Transform",
+          "purpose": "Copy/rename/drop"
+        },
+        {
+          "node_type": "json_transform",
+          "status": "Existing",
+          "category": "Transform",
+          "purpose": "JSONPath transform"
+        },
+        {
+          "node_type": "schedule_trigger",
+          "status": "Existing",
+          "category": "Input",
+          "purpose": "Cron/interval trigger"
+        },
+        {
+          "node_type": "python_code",
+          "status": "Existing",
+          "category": "Transform",
+          "purpose": "Trusted Python exec"
+        },
+        {
+          "node_type": "error_catch",
+          "status": "Existing",
+          "category": "Logic",
+          "purpose": "Catch errors"
+        },
+        {
+          "node_type": "merge",
+          "status": "Existing",
+          "category": "Transform",
+          "purpose": "Merge multi inputs"
+        },
+        {
+          "node_type": "wait_delay",
+          "status": "Existing",
+          "category": "Logic",
+          "purpose": "Sleep/wait"
+        },
+        {
+          "node_type": "csv_table",
+          "status": "Existing",
+          "category": "Output",
+          "purpose": "CSV read/write"
+        }
+      ],
+      "node_count": 30,
+      "templates_sample": [
+        {
+          "id": "tpl-audio-kws-smart-home",
+          "name": "Kws Smart Home",
+          "family": "audio",
+          "status": "seeded",
+          "industry": "smart-home"
+        },
+        {
+          "id": "tpl-audio-kws-smart-home-edge-tflite",
+          "name": "Kws Smart Home Edge Tflite",
+          "family": "audio",
+          "status": "alter-existing",
+          "industry": "smart-home"
+        },
+        {
+          "id": "tpl-audio-kws-automotive",
+          "name": "Kws Automotive",
+          "family": "audio",
+          "status": "proposed",
+          "industry": "automotive"
+        },
+        {
+          "id": "tpl-audio-kws-automotive-edge-tflite",
+          "name": "Kws Automotive Edge Tflite",
+          "family": "audio",
+          "status": "alter-existing",
+          "industry": "automotive"
+        },
+        {
+          "id": "tpl-audio-kws-industrial",
+          "name": "Kws Industrial",
+          "family": "audio",
+          "status": "proposed",
+          "industry": "industrial"
+        },
+        {
+          "id": "tpl-audio-kws-industrial-edge-tflite",
+          "name": "Kws Industrial Edge Tflite",
+          "family": "audio",
+          "status": "alter-existing",
+          "industry": "industrial"
+        },
+        {
+          "id": "tpl-audio-kws-healthcare",
+          "name": "Kws Healthcare",
+          "family": "audio",
+          "status": "proposed",
+          "industry": "healthcare"
+        },
+        {
+          "id": "tpl-audio-kws-healthcare-edge-tflite",
+          "name": "Kws Healthcare Edge Tflite",
+          "family": "audio",
+          "status": "alter-existing",
+          "industry": "healthcare"
+        },
+        {
+          "id": "tpl-audio-kws-callcenter",
+          "name": "Kws Callcenter",
+          "family": "audio",
+          "status": "proposed",
+          "industry": "callcenter"
+        },
+        {
+          "id": "tpl-audio-kws-callcenter-edge-tflite",
+          "name": "Kws Callcenter Edge Tflite",
+          "family": "audio",
+          "status": "alter-existing",
+          "industry": "callcenter"
+        }
+      ],
+      "template_sample_count": 10,
+      "plugin_root": "PluginPackage/Common/"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.892316+05:30",
+    "tool": "search_templates",
+    "args": {
+      "pack": "Agents",
+      "limit": 5,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "templates": [
+        {
+          "id": "tpl-rag-query-fs-faiss-support",
+          "name": "Query Fs Faiss Support",
+          "pack": "RAG",
+          "industry": "support",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "observe",
+            "agent"
+          ],
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "status": "proposed",
+          "family": "rag",
+          "value_prop": "Proves RAG pack in support rag pipeline.",
+          "node_types": [
+            "query_rewrite",
+            "vector_store_query",
+            "rag_rerank",
+            "contextual_compress",
+            "prompt_assemble",
+            "rag_generate",
+            "citation_attach"
+          ]
+        },
+        {
+          "id": "tpl-rag-query-fs-faiss-legal",
+          "name": "Query Fs Faiss Legal",
+          "pack": "RAG",
+          "industry": "legal",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "observe",
+            "agent"
+          ],
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "status": "proposed",
+          "family": "rag",
+          "value_prop": "Proves RAG pack in legal rag pipeline.",
+          "node_types": [
+            "query_rewrite",
+            "vector_store_query",
+            "rag_rerank",
+            "contextual_compress",
+            "prompt_assemble",
+            "rag_generate",
+            "citation_attach"
+          ]
+        },
+        {
+          "id": "tpl-rag-query-fs-faiss-eng-docs",
+          "name": "Query Fs Faiss Eng Docs",
+          "pack": "RAG",
+          "industry": "eng-docs",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "observe",
+            "agent"
+          ],
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "status": "proposed",
+          "family": "rag",
+          "value_prop": "Proves RAG pack in eng-docs rag pipeline.",
+          "node_types": [
+            "query_rewrite",
+            "vector_store_query",
+            "rag_rerank",
+            "contextual_compress",
+            "prompt_assemble",
+            "rag_generate",
+            "citation_attach"
+          ]
+        },
+        {
+          "id": "tpl-rag-query-fs-faiss-ehr-lite",
+          "name": "Query Fs Faiss Ehr Lite",
+          "pack": "RAG",
+          "industry": "ehr-lite",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "observe",
+            "agent"
+          ],
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "status": "proposed",
+          "family": "rag",
+          "value_prop": "Proves RAG pack in ehr-lite rag pipeline.",
+          "node_types": [
+            "query_rewrite",
+            "vector_store_query",
+            "rag_rerank",
+            "contextual_compress",
+            "prompt_assemble",
+            "rag_generate",
+            "citation_attach"
+          ]
+        },
+        {
+          "id": "tpl-rag-query-fs-faiss-code",
+          "name": "Query Fs Faiss Code",
+          "pack": "RAG",
+          "industry": "code",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "observe",
+            "agent"
+          ],
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "status": "proposed",
+          "family": "rag",
+          "value_prop": "Proves RAG pack in code rag pipeline.",
+          "node_types": [
+            "query_rewrite",
+            "vector_store_query",
+            "rag_rerank",
+            "contextual_compress",
+            "prompt_assemble",
+            "rag_generate",
+            "citation_attach"
+          ]
+        }
+      ],
+      "count": 5,
+      "matched": 192,
+      "limit": 5,
+      "catalog": "/home/meritech/Desktop/newAudio3/docs/PIPELINE_TEMPLATE_CATALOG.json",
+      "seeded_workspace": []
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.923642+05:30",
+    "tool": "search_templates",
+    "args": {
+      "q": "email-alert",
+      "limit": 5,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "templates": [
+        {
+          "id": "tpl-agents-email-alert-mlops",
+          "name": "Email Alert Mlops",
+          "pack": "Agents",
+          "industry": "mlops",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "agent",
+            "observe"
+          ],
+          "tags": [
+            "agents",
+            "email-alert",
+            "mlops"
+          ],
+          "status": "proposed",
+          "family": "agents",
+          "value_prop": "Proves Agents pack in mlops agents pipeline.",
+          "node_types": [
+            "guardrail_filter",
+            "llm_chat",
+            "send_email"
+          ]
+        },
+        {
+          "id": "tpl-agents-email-alert-support",
+          "name": "Email Alert Support",
+          "pack": "Agents",
+          "industry": "support",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "agent",
+            "observe"
+          ],
+          "tags": [
+            "agents",
+            "email-alert",
+            "support"
+          ],
+          "status": "proposed",
+          "family": "agents",
+          "value_prop": "Proves Agents pack in support agents pipeline.",
+          "node_types": [
+            "guardrail_filter",
+            "llm_chat",
+            "send_email"
+          ]
+        },
+        {
+          "id": "tpl-agents-email-alert-security",
+          "name": "Email Alert Security",
+          "pack": "Agents",
+          "industry": "security",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "agent",
+            "observe"
+          ],
+          "tags": [
+            "agents",
+            "email-alert",
+            "security"
+          ],
+          "status": "proposed",
+          "family": "agents",
+          "value_prop": "Proves Agents pack in security agents pipeline.",
+          "node_types": [
+            "guardrail_filter",
+            "llm_chat",
+            "send_email"
+          ]
+        },
+        {
+          "id": "tpl-agents-email-alert-compliance",
+          "name": "Email Alert Compliance",
+          "pack": "Agents",
+          "industry": "compliance",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "agent",
+            "observe"
+          ],
+          "tags": [
+            "agents",
+            "email-alert",
+            "compliance"
+          ],
+          "status": "proposed",
+          "family": "agents",
+          "value_prop": "Proves Agents pack in compliance agents pipeline.",
+          "node_types": [
+            "guardrail_filter",
+            "llm_chat",
+            "send_email"
+          ]
+        },
+        {
+          "id": "tpl-agents-email-alert-retail",
+          "name": "Email Alert Retail",
+          "pack": "Agents",
+          "industry": "retail",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "agent",
+            "observe"
+          ],
+          "tags": [
+            "agents",
+            "email-alert",
+            "retail"
+          ],
+          "status": "proposed",
+          "family": "agents",
+          "value_prop": "Proves Agents pack in retail agents pipeline.",
+          "node_types": [
+            "guardrail_filter",
+            "llm_chat",
+            "send_email"
+          ]
+        }
+      ],
+      "count": 5,
+      "matched": 6,
+      "limit": 5,
+      "catalog": "/home/meritech/Desktop/newAudio3/docs/PIPELINE_TEMPLATE_CATALOG.json",
+      "seeded_workspace": []
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.926759+05:30",
+    "tool": "get_node_spec",
+    "args": {
+      "node_type": "llm_chat",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "ok": true,
+      "node_type": "llm_chat",
+      "pack": "PluginPackage/Agents/llm_chat/",
+      "category": "Processing",
+      "purpose": "Multi-turn chat completion",
+      "status": "Proposed",
+      "kind": null,
+      "inputs": [
+        {
+          "name": "messages",
+          "type": "list[dict]"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "ChatMessage NEW"
+        }
+      ],
+      "config": [
+        "model:str=gpt-4o-mini",
+        "temperature:float=0.2",
+        "api_secret_name:str=OPENAI_API_KEY"
+      ],
+      "notes": "",
+      "optional_dependencies_runtime": "opt:httpx; resolve_secret",
+      "honesty": {},
+      "related": null,
+      "refinement": null
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.929475+05:30",
+    "tool": "get_node_spec",
+    "args": {
+      "node_type": "send_email",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": false,
+    "error": "not_found",
+    "outcome": {
+      "error": true,
+      "error_type": "not_found",
+      "message": "Unknown node_type in design catalog: send_email"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.931702+05:30",
+    "tool": "list_plugins",
+    "args": {
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "plugins": [
+        {
+          "name": "llm-chat",
+          "version": "0.3.0",
+          "enabled": true,
+          "node_types": [
+            "llm_chat"
+          ]
+        },
+        {
+          "name": "send-email",
+          "version": "0.1.0",
+          "enabled": true,
+          "node_types": [
+            "send_email"
+          ]
+        },
+        {
+          "name": "set-map",
+          "version": "1.0.0",
+          "enabled": true,
+          "node_types": [
+            "set_map"
+          ]
+        },
+        {
+          "name": "python-code",
+          "version": "1.0.0",
+          "enabled": true,
+          "node_types": [
+            "python_code"
+          ]
+        },
+        {
+          "name": "json-transform",
+          "version": "1.0.0",
+          "enabled": true,
+          "node_types": [
+            "json_transform"
+          ]
+        },
+        {
+          "name": "agent-selftest-echo",
+          "version": "0.1.0",
+          "enabled": true,
+          "node_types": [
+            "agent_selftest_echo"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.936037+05:30",
+    "tool": "install_plugin",
+    "args": {
+      "source": "/home/meritech/Desktop/newAudio3/plugins/_agent_selftest_echo",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": false,
+    "error": "PluginAlreadyInstalledError",
+    "outcome": {
+      "error": true,
+      "error_type": "PluginAlreadyInstalledError",
+      "message": "('agent-selftest-echo', '0.1.0')"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.947281+05:30",
+    "tool": "manage_plugin",
+    "args": {
+      "name": "agent-selftest-echo",
+      "action": "enable",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "ok": true,
+      "action": "enable",
+      "name": "agent-selftest-echo",
+      "enabled": true,
+      "node_types": [
+        "agent_selftest_echo"
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.951981+05:30",
+    "tool": "list_plugins",
+    "args": {
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "plugins": [
+        {
+          "name": "llm-chat",
+          "version": "0.3.0",
+          "enabled": true,
+          "node_types": [
+            "llm_chat"
+          ]
+        },
+        {
+          "name": "send-email",
+          "version": "0.1.0",
+          "enabled": true,
+          "node_types": [
+            "send_email"
+          ]
+        },
+        {
+          "name": "set-map",
+          "version": "1.0.0",
+          "enabled": true,
+          "node_types": [
+            "set_map"
+          ]
+        },
+        {
+          "name": "python-code",
+          "version": "1.0.0",
+          "enabled": true,
+          "node_types": [
+            "python_code"
+          ]
+        },
+        {
+          "name": "json-transform",
+          "version": "1.0.0",
+          "enabled": true,
+          "node_types": [
+            "json_transform"
+          ]
+        },
+        {
+          "name": "agent-selftest-echo",
+          "version": "0.1.0",
+          "enabled": true,
+          "node_types": [
+            "agent_selftest_echo"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.970834+05:30",
+    "tool": "generate_graph",
+    "args": {
+      "name": "mcp-selftest-llm-notify",
+      "description": "LLM stub then send_email dry-run notify",
+      "nodes": [
+        {
+          "id": "chat",
+          "node_type": "llm_chat",
+          "config": {
+            "stub": true,
+            "provider": "stub",
+            "model": "stub-model",
+            "system_prompt": "Say hello from MCP selftest"
+          }
+        },
+        {
+          "id": "mail",
+          "node_type": "send_email",
+          "config": {
+            "to": "selftest@example.com",
+            "subject": "MCP selftest llm-notify",
+            "body_template": "LLM notify from MCP selftest",
+            "dry_run": true
+          }
+        }
+      ],
+      "edges": [
+        {
+          "src_id": "chat",
+          "src_port": "output",
+          "dst_id": "mail",
+          "dst_port": "input"
+        }
+      ],
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "schema_version": "1.2",
+      "metadata": {
+        "name": "mcp-selftest-llm-notify",
+        "seed": 42,
+        "description": "LLM stub then send_email dry-run notify",
+        "created_at": null,
+        "tags": [],
+        "project": null,
+        "version_tag": null
+      },
+      "nodes": [
+        {
+          "id": "chat",
+          "node_type": "llm_chat",
+          "config": {
+            "stub": true,
+            "provider": "stub",
+            "model": "stub-model",
+            "system_prompt": "Say hello from MCP selftest"
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "mail",
+          "node_type": "send_email",
+          "config": {
+            "to": "selftest@example.com",
+            "subject": "MCP selftest llm-notify",
+            "body_template": "LLM notify from MCP selftest",
+            "dry_run": true
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        }
+      ],
+      "edges": [
+        {
+          "src_id": "chat",
+          "src_port": "output",
+          "dst_id": "mail",
+          "dst_port": "input",
+          "condition": null
+        }
+      ],
+      "parameters": {},
+      "ui": null
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:24.996530+05:30",
+    "tool": "materialize_template",
+    "args": {
+      "template_id": "tpl-rag-query-faiss-support",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": false,
+    "error": "not_found",
+    "outcome": {
+      "error": true,
+      "error_type": "not_found",
+      "message": "Template not found: tpl-rag-query-faiss-support"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.024265+05:30",
+    "tool": "search_templates",
+    "args": {
+      "pack": "RAG",
+      "q": "query",
+      "limit": 3,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "templates": [
+        {
+          "id": "tpl-rag-query-fs-faiss-support",
+          "name": "Query Fs Faiss Support",
+          "pack": "RAG",
+          "industry": "support",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "observe",
+            "agent"
+          ],
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "status": "proposed",
+          "family": "rag",
+          "value_prop": "Proves RAG pack in support rag pipeline.",
+          "node_types": [
+            "query_rewrite",
+            "vector_store_query",
+            "rag_rerank",
+            "contextual_compress",
+            "prompt_assemble",
+            "rag_generate",
+            "citation_attach"
+          ]
+        },
+        {
+          "id": "tpl-rag-query-fs-faiss-legal",
+          "name": "Query Fs Faiss Legal",
+          "pack": "RAG",
+          "industry": "legal",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "observe",
+            "agent"
+          ],
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "status": "proposed",
+          "family": "rag",
+          "value_prop": "Proves RAG pack in legal rag pipeline.",
+          "node_types": [
+            "query_rewrite",
+            "vector_store_query",
+            "rag_rerank",
+            "contextual_compress",
+            "prompt_assemble",
+            "rag_generate",
+            "citation_attach"
+          ]
+        },
+        {
+          "id": "tpl-rag-query-fs-faiss-eng-docs",
+          "name": "Query Fs Faiss Eng Docs",
+          "pack": "RAG",
+          "industry": "eng-docs",
+          "modality": [
+            "text"
+          ],
+          "lifecycle": [
+            "observe",
+            "agent"
+          ],
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "status": "proposed",
+          "family": "rag",
+          "value_prop": "Proves RAG pack in eng-docs rag pipeline.",
+          "node_types": [
+            "query_rewrite",
+            "vector_store_query",
+            "rag_rerank",
+            "contextual_compress",
+            "prompt_assemble",
+            "rag_generate",
+            "citation_attach"
+          ]
+        }
+      ],
+      "count": 3,
+      "matched": 105,
+      "limit": 3,
+      "catalog": "/home/meritech/Desktop/newAudio3/docs/PIPELINE_TEMPLATE_CATALOG.json",
+      "seeded_workspace": []
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.053478+05:30",
+    "tool": "materialize_template",
+    "args": {
+      "template_id": "tpl-rag-query-fs-faiss-support",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "ok": true,
+      "template_id": "tpl-rag-query-fs-faiss-support",
+      "graph": {
+        "schema_version": "1.1",
+        "metadata": {
+          "name": "tpl-rag-query-fs-faiss-support",
+          "seed": 42,
+          "description": "Dense RAG query over faiss for support.",
+          "created_at": null,
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "pack": "RAG",
+          "industry": "support",
+          "marketplace_id": "tpl-rag-query-fs-faiss-support",
+          "status": "proposed",
+          "source_example": "marketplace/tpl-rag-query-fs-faiss-support.graph.json"
+        },
+        "nodes": [
+          {
+            "id": "n0",
+            "node_type": "query_rewrite",
+            "config": {},
+            "label": "query_rewrite",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n1",
+            "node_type": "vector_store_query",
+            "config": {
+              "backend": "faiss"
+            },
+            "label": "vector_store_query",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n2",
+            "node_type": "rag_rerank",
+            "config": {},
+            "label": "rag_rerank",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n3",
+            "node_type": "contextual_compress",
+            "config": {},
+            "label": "contextual_compress",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n4",
+            "node_type": "prompt_assemble",
+            "config": {},
+            "label": "prompt_assemble",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n5",
+            "node_type": "rag_generate",
+            "config": {},
+            "label": "rag_generate",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n6",
+            "node_type": "citation_attach",
+            "config": {},
+            "label": "citation_attach",
+            "capability_metadata": null,
+            "event_trigger": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n1",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n1",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n2",
+            "src_port": "output",
+            "dst_id": "n3",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n3",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n4",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n3",
+            "src_port": "output",
+            "dst_id": "n4",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n4",
+            "src_port": "output",
+            "dst_id": "n5",
+            "dst_port": "prompt",
+            "condition": null
+          },
+          {
+            "src_id": "n5",
+            "src_port": "output",
+            "dst_id": "n6",
+            "dst_port": "answer",
+            "condition": null
+          },
+          {
+            "src_id": "n3",
+            "src_port": "output",
+            "dst_id": "n6",
+            "dst_port": "hits",
+            "condition": null
+          }
+        ],
+        "parameters": {}
+      }
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.059354+05:30",
+    "tool": "generate_graph",
+    "args": {
+      "name": "mcp-selftest-common-pipeline",
+      "description": "set_map \u2192 python_code \u2192 json_transform",
+      "nodes": [
+        {
+          "id": "map1",
+          "node_type": "set_map",
+          "config": {
+            "set": {
+              "hello": "world",
+              "n": 1
+            }
+          }
+        },
+        {
+          "id": "py1",
+          "node_type": "python_code",
+          "config": {
+            "source": "output = {'payload': dict((inputs.get('input') or {}) if isinstance(inputs, dict) else {}), 'ok': True}"
+          }
+        },
+        {
+          "id": "jt1",
+          "node_type": "json_transform",
+          "config": {
+            "path": "$"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "src_id": "map1",
+          "src_port": "output",
+          "dst_id": "py1",
+          "dst_port": "input"
+        },
+        {
+          "src_id": "py1",
+          "src_port": "output",
+          "dst_id": "jt1",
+          "dst_port": "input"
+        }
+      ],
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "schema_version": "1.2",
+      "metadata": {
+        "name": "mcp-selftest-common-pipeline",
+        "seed": 42,
+        "description": "set_map \u2192 python_code \u2192 json_transform",
+        "created_at": null,
+        "tags": [],
+        "project": null,
+        "version_tag": null
+      },
+      "nodes": [
+        {
+          "id": "map1",
+          "node_type": "set_map",
+          "config": {
+            "set": {
+              "hello": "world",
+              "n": 1
+            }
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "py1",
+          "node_type": "python_code",
+          "config": {
+            "source": "output = {'payload': dict((inputs.get('input') or {}) if isinstance(inputs, dict) else {}), 'ok': True}"
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "jt1",
+          "node_type": "json_transform",
+          "config": {
+            "path": "$"
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        }
+      ],
+      "edges": [
+        {
+          "src_id": "map1",
+          "src_port": "output",
+          "dst_id": "py1",
+          "dst_port": "input",
+          "condition": null
+        },
+        {
+          "src_id": "py1",
+          "src_port": "output",
+          "dst_id": "jt1",
+          "dst_port": "input",
+          "condition": null
+        }
+      ],
+      "parameters": {},
+      "ui": null
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.064511+05:30",
+    "tool": "generate_graph",
+    "args": {
+      "name": "mcp-selftest-echo-plugin",
+      "description": "Newly registered agent_selftest_echo plugin",
+      "nodes": [
+        {
+          "id": "echo1",
+          "node_type": "agent_selftest_echo",
+          "config": {
+            "message": "mcp-e2e"
+          }
+        }
+      ],
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "schema_version": "1.2",
+      "metadata": {
+        "name": "mcp-selftest-echo-plugin",
+        "seed": 42,
+        "description": "Newly registered agent_selftest_echo plugin",
+        "created_at": null,
+        "tags": [],
+        "project": null,
+        "version_tag": null
+      },
+      "nodes": [
+        {
+          "id": "echo1",
+          "node_type": "agent_selftest_echo",
+          "config": {
+            "message": "mcp-e2e"
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        }
+      ],
+      "edges": [],
+      "parameters": {},
+      "ui": null
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.087236+05:30",
+    "tool": "materialize_template",
+    "args": {
+      "template_id": "tpl-agents-email-alert-support",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "ok": true,
+      "template_id": "tpl-agents-email-alert-support",
+      "graph": {
+        "schema_version": "1.1",
+        "metadata": {
+          "name": "tpl-agents-email-alert-support",
+          "seed": 42,
+          "description": "Agents scenario email-alert for support ops.",
+          "created_at": null,
+          "tags": [
+            "agents",
+            "email-alert",
+            "support"
+          ],
+          "pack": "Agents",
+          "industry": "support",
+          "marketplace_id": "tpl-agents-email-alert-support",
+          "status": "proposed",
+          "source_example": "marketplace/tpl-agents-email-alert-support.graph.json"
+        },
+        "nodes": [
+          {
+            "id": "n0",
+            "node_type": "guardrail_filter",
+            "config": {},
+            "label": "guardrail_filter",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n1",
+            "node_type": "llm_chat",
+            "config": {},
+            "label": "llm_chat",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n2",
+            "node_type": "send_email",
+            "config": {},
+            "label": "send_email",
+            "capability_metadata": null,
+            "event_trigger": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n1",
+            "dst_port": "messages",
+            "condition": null
+          },
+          {
+            "src_id": "n1",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "input",
+            "condition": null
+          }
+        ],
+        "parameters": {
+          "approval_required": {
+            "type": "boolean",
+            "default": false,
+            "description": ""
+          }
+        }
+      }
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.112053+05:30",
+    "tool": "materialize_template",
+    "args": {
+      "template_id": "tpl-agents-notify-on-run-mlops",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "ok": true,
+      "template_id": "tpl-agents-notify-on-run-mlops",
+      "graph": {
+        "schema_version": "1.1",
+        "metadata": {
+          "name": "tpl-agents-notify-on-run-mlops",
+          "seed": 42,
+          "description": "Agents scenario notify-on-run for mlops ops.",
+          "created_at": null,
+          "tags": [
+            "agents",
+            "notify-on-run",
+            "mlops"
+          ],
+          "pack": "Agents",
+          "industry": "mlops",
+          "marketplace_id": "tpl-agents-notify-on-run-mlops",
+          "status": "proposed",
+          "source_example": "marketplace/tpl-agents-notify-on-run-mlops.graph.json"
+        },
+        "nodes": [
+          {
+            "id": "n0",
+            "node_type": "schedule_trigger",
+            "config": {},
+            "label": "schedule_trigger",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n1",
+            "node_type": "http_webhook",
+            "config": {},
+            "label": "http_webhook",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n2",
+            "node_type": "send_email",
+            "config": {},
+            "label": "send_email",
+            "capability_metadata": null,
+            "event_trigger": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n1",
+            "dst_port": "input",
+            "condition": null
+          },
+          {
+            "src_id": "n1",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "input",
+            "condition": null
+          }
+        ],
+        "parameters": {
+          "approval_required": {
+            "type": "boolean",
+            "default": false,
+            "description": ""
+          }
+        }
+      }
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.135602+05:30",
+    "tool": "materialize_template",
+    "args": {
+      "template_id": "tpl-agents-llm-local-chat-support",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "ok": true,
+      "template_id": "tpl-agents-llm-local-chat-support",
+      "graph": {
+        "schema_version": "1.1",
+        "metadata": {
+          "name": "tpl-agents-llm-local-chat-support",
+          "seed": 42,
+          "description": "Agents scenario llm-local-chat for support ops.",
+          "created_at": null,
+          "tags": [
+            "agents",
+            "llm-local-chat",
+            "support"
+          ],
+          "pack": "Agents",
+          "industry": "support",
+          "marketplace_id": "tpl-agents-llm-local-chat-support",
+          "status": "proposed",
+          "source_example": "marketplace/tpl-agents-llm-local-chat-support.graph.json"
+        },
+        "nodes": [
+          {
+            "id": "n0",
+            "node_type": "prompt_template",
+            "config": {},
+            "label": "prompt_template",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n1",
+            "node_type": "llm_chat",
+            "config": {},
+            "label": "llm_chat",
+            "capability_metadata": null,
+            "event_trigger": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n1",
+            "dst_port": "messages",
+            "condition": null
+          }
+        ],
+        "parameters": {
+          "approval_required": {
+            "type": "boolean",
+            "default": false,
+            "description": ""
+          }
+        }
+      }
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.138013+05:30",
+    "tool": "list_projects",
+    "args": {
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "projects": [
+        {
+          "name": "mcp-agentic-selftest",
+          "status": "draft"
+        }
+      ],
+      "count": 1
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.141230+05:30",
+    "tool": "validate_graph",
+    "args": {
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-llm-notify",
+          "seed": 42,
+          "description": "LLM stub then send_email dry-run notify",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "chat",
+            "node_type": "llm_chat",
+            "config": {
+              "stub": true,
+              "provider": "stub",
+              "model": "stub-model",
+              "system_prompt": "Say hello from MCP selftest"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "mail",
+            "node_type": "send_email",
+            "config": {
+              "to": "selftest@example.com",
+              "subject": "MCP selftest llm-notify",
+              "body_template": "LLM notify from MCP selftest",
+              "dry_run": true
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "chat",
+            "src_port": "output",
+            "dst_id": "mail",
+            "dst_port": "input",
+            "condition": null
+          }
+        ],
+        "parameters": {},
+        "ui": null
+      },
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "valid": true,
+      "node_count": 2,
+      "errors": []
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.145596+05:30",
+    "tool": "save_pipeline",
+    "args": {
+      "project": "mcp-agentic-selftest",
+      "pipeline": "uc-llm_notify",
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-llm-notify",
+          "seed": 42,
+          "description": "LLM stub then send_email dry-run notify",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "chat",
+            "node_type": "llm_chat",
+            "config": {
+              "stub": true,
+              "provider": "stub",
+              "model": "stub-model",
+              "system_prompt": "Say hello from MCP selftest"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "mail",
+            "node_type": "send_email",
+            "config": {
+              "to": "selftest@example.com",
+              "subject": "MCP selftest llm-notify",
+              "body_template": "LLM notify from MCP selftest",
+              "dry_run": true
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "chat",
+            "src_port": "output",
+            "dst_id": "mail",
+            "dst_port": "input",
+            "condition": null
+          }
+        ],
+        "parameters": {},
+        "ui": null
+      },
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "schema_version": "1.2",
+      "metadata": {
+        "name": "mcp-selftest-llm-notify",
+        "seed": 42,
+        "description": "LLM stub then send_email dry-run notify",
+        "created_at": null,
+        "tags": [],
+        "project": "mcp-agentic-selftest",
+        "version_tag": null
+      },
+      "nodes": [
+        {
+          "id": "chat",
+          "node_type": "llm_chat",
+          "config": {
+            "stub": true,
+            "provider": "stub",
+            "model": "stub-model",
+            "system_prompt": "Say hello from MCP selftest"
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "mail",
+          "node_type": "send_email",
+          "config": {
+            "to": "selftest@example.com",
+            "subject": "MCP selftest llm-notify",
+            "body_template": "LLM notify from MCP selftest",
+            "dry_run": true
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        }
+      ],
+      "edges": [
+        {
+          "src_id": "chat",
+          "src_port": "output",
+          "dst_id": "mail",
+          "dst_port": "input",
+          "condition": null
+        }
+      ],
+      "parameters": {},
+      "ui": null,
+      "resource_version": "1790393845144874821"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.149235+05:30",
+    "tool": "execute_pipeline",
+    "args": {
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-llm-notify",
+          "seed": 42,
+          "description": "LLM stub then send_email dry-run notify",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "chat",
+            "node_type": "llm_chat",
+            "config": {
+              "stub": true,
+              "provider": "stub",
+              "model": "stub-model",
+              "system_prompt": "Say hello from MCP selftest"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "mail",
+            "node_type": "send_email",
+            "config": {
+              "to": "selftest@example.com",
+              "subject": "MCP selftest llm-notify",
+              "body_template": "LLM notify from MCP selftest",
+              "dry_run": true
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "chat",
+            "src_port": "output",
+            "dst_id": "mail",
+            "dst_port": "input",
+            "condition": null
+          }
+        ],
+        "parameters": {},
+        "ui": null
+      },
+      "use_cache": false,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "dc0013183b3d4f7190cd8c3185002012",
+      "status": "started"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.154976+05:30",
+    "tool": "validate_graph",
+    "args": {
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-common-pipeline",
+          "seed": 42,
+          "description": "set_map \u2192 python_code \u2192 json_transform",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "map1",
+            "node_type": "set_map",
+            "config": {
+              "set": {
+                "hello": "world",
+                "n": 1
+              }
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "py1",
+            "node_type": "python_code",
+            "config": {
+              "source": "output = {'payload': dict((inputs.get('input') or {}) if isinstance(inputs, dict) else {}), 'ok': True}"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "jt1",
+            "node_type": "json_transform",
+            "config": {
+              "path": "$"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "map1",
+            "src_port": "output",
+            "dst_id": "py1",
+            "dst_port": "input",
+            "condition": null
+          },
+          {
+            "src_id": "py1",
+            "src_port": "output",
+            "dst_id": "jt1",
+            "dst_port": "input",
+            "condition": null
+          }
+        ],
+        "parameters": {},
+        "ui": null
+      },
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "valid": true,
+      "node_count": 3,
+      "errors": []
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.161539+05:30",
+    "tool": "save_pipeline",
+    "args": {
+      "project": "mcp-agentic-selftest",
+      "pipeline": "uc-common",
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-common-pipeline",
+          "seed": 42,
+          "description": "set_map \u2192 python_code \u2192 json_transform",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "map1",
+            "node_type": "set_map",
+            "config": {
+              "set": {
+                "hello": "world",
+                "n": 1
+              }
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "py1",
+            "node_type": "python_code",
+            "config": {
+              "source": "output = {'payload': dict((inputs.get('input') or {}) if isinstance(inputs, dict) else {}), 'ok': True}"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "jt1",
+            "node_type": "json_transform",
+            "config": {
+              "path": "$"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "map1",
+            "src_port": "output",
+            "dst_id": "py1",
+            "dst_port": "input",
+            "condition": null
+          },
+          {
+            "src_id": "py1",
+            "src_port": "output",
+            "dst_id": "jt1",
+            "dst_port": "input",
+            "condition": null
+          }
+        ],
+        "parameters": {},
+        "ui": null
+      },
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "schema_version": "1.2",
+      "metadata": {
+        "name": "mcp-selftest-common-pipeline",
+        "seed": 42,
+        "description": "set_map \u2192 python_code \u2192 json_transform",
+        "created_at": null,
+        "tags": [],
+        "project": "mcp-agentic-selftest",
+        "version_tag": null
+      },
+      "nodes": [
+        {
+          "id": "map1",
+          "node_type": "set_map",
+          "config": {
+            "set": {
+              "hello": "world",
+              "n": 1
+            }
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "py1",
+          "node_type": "python_code",
+          "config": {
+            "source": "output = {'payload': dict((inputs.get('input') or {}) if isinstance(inputs, dict) else {}), 'ok': True}"
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "jt1",
+          "node_type": "json_transform",
+          "config": {
+            "path": "$"
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        }
+      ],
+      "edges": [
+        {
+          "src_id": "map1",
+          "src_port": "output",
+          "dst_id": "py1",
+          "dst_port": "input",
+          "condition": null
+        },
+        {
+          "src_id": "py1",
+          "src_port": "output",
+          "dst_id": "jt1",
+          "dst_port": "input",
+          "condition": null
+        }
+      ],
+      "parameters": {},
+      "ui": null,
+      "resource_version": "1790393845158893907"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.167883+05:30",
+    "tool": "execute_pipeline",
+    "args": {
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-common-pipeline",
+          "seed": 42,
+          "description": "set_map \u2192 python_code \u2192 json_transform",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "map1",
+            "node_type": "set_map",
+            "config": {
+              "set": {
+                "hello": "world",
+                "n": 1
+              }
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "py1",
+            "node_type": "python_code",
+            "config": {
+              "source": "output = {'payload': dict((inputs.get('input') or {}) if isinstance(inputs, dict) else {}), 'ok': True}"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          },
+          {
+            "id": "jt1",
+            "node_type": "json_transform",
+            "config": {
+              "path": "$"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "map1",
+            "src_port": "output",
+            "dst_id": "py1",
+            "dst_port": "input",
+            "condition": null
+          },
+          {
+            "src_id": "py1",
+            "src_port": "output",
+            "dst_id": "jt1",
+            "dst_port": "input",
+            "condition": null
+          }
+        ],
+        "parameters": {},
+        "ui": null
+      },
+      "use_cache": false,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "0f543da86e2c4836a34126dcddb7c906",
+      "status": "started"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.172273+05:30",
+    "tool": "validate_graph",
+    "args": {
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-echo-plugin",
+          "seed": 42,
+          "description": "Newly registered agent_selftest_echo plugin",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "echo1",
+            "node_type": "agent_selftest_echo",
+            "config": {
+              "message": "mcp-e2e"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [],
+        "parameters": {},
+        "ui": null
+      },
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "valid": true,
+      "node_count": 1,
+      "errors": []
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.180406+05:30",
+    "tool": "save_pipeline",
+    "args": {
+      "project": "mcp-agentic-selftest",
+      "pipeline": "uc-echo_plugin",
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-echo-plugin",
+          "seed": 42,
+          "description": "Newly registered agent_selftest_echo plugin",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "echo1",
+            "node_type": "agent_selftest_echo",
+            "config": {
+              "message": "mcp-e2e"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [],
+        "parameters": {},
+        "ui": null
+      },
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "schema_version": "1.2",
+      "metadata": {
+        "name": "mcp-selftest-echo-plugin",
+        "seed": 42,
+        "description": "Newly registered agent_selftest_echo plugin",
+        "created_at": null,
+        "tags": [],
+        "project": "mcp-agentic-selftest",
+        "version_tag": null
+      },
+      "nodes": [
+        {
+          "id": "echo1",
+          "node_type": "agent_selftest_echo",
+          "config": {
+            "message": "mcp-e2e"
+          },
+          "label": null,
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        }
+      ],
+      "edges": [],
+      "parameters": {},
+      "ui": null,
+      "resource_version": "1790393845178127819"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.189257+05:30",
+    "tool": "execute_pipeline",
+    "args": {
+      "graph": {
+        "schema_version": "1.2",
+        "metadata": {
+          "name": "mcp-selftest-echo-plugin",
+          "seed": 42,
+          "description": "Newly registered agent_selftest_echo plugin",
+          "created_at": null,
+          "tags": [],
+          "project": null,
+          "version_tag": null
+        },
+        "nodes": [
+          {
+            "id": "echo1",
+            "node_type": "agent_selftest_echo",
+            "config": {
+              "message": "mcp-e2e"
+            },
+            "label": null,
+            "capability_metadata": null,
+            "event_trigger": null,
+            "placement": null
+          }
+        ],
+        "edges": [],
+        "parameters": {},
+        "ui": null
+      },
+      "use_cache": false,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "8b79e4918457474e8097d69e8515ea6a",
+      "status": "started"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.207321+05:30",
+    "tool": "validate_graph",
+    "args": {
+      "graph": {
+        "schema_version": "1.1",
+        "metadata": {
+          "name": "tpl-rag-query-fs-faiss-support",
+          "seed": 42,
+          "description": "Dense RAG query over faiss for support.",
+          "created_at": null,
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "pack": "RAG",
+          "industry": "support",
+          "marketplace_id": "tpl-rag-query-fs-faiss-support",
+          "status": "proposed",
+          "source_example": "marketplace/tpl-rag-query-fs-faiss-support.graph.json"
+        },
+        "nodes": [
+          {
+            "id": "n0",
+            "node_type": "query_rewrite",
+            "config": {},
+            "label": "query_rewrite",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n1",
+            "node_type": "vector_store_query",
+            "config": {
+              "backend": "faiss"
+            },
+            "label": "vector_store_query",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n2",
+            "node_type": "rag_rerank",
+            "config": {},
+            "label": "rag_rerank",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n3",
+            "node_type": "contextual_compress",
+            "config": {},
+            "label": "contextual_compress",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n4",
+            "node_type": "prompt_assemble",
+            "config": {},
+            "label": "prompt_assemble",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n5",
+            "node_type": "rag_generate",
+            "config": {},
+            "label": "rag_generate",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n6",
+            "node_type": "citation_attach",
+            "config": {},
+            "label": "citation_attach",
+            "capability_metadata": null,
+            "event_trigger": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n1",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n1",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n2",
+            "src_port": "output",
+            "dst_id": "n3",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n3",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n4",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n3",
+            "src_port": "output",
+            "dst_id": "n4",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n4",
+            "src_port": "output",
+            "dst_id": "n5",
+            "dst_port": "prompt",
+            "condition": null
+          },
+          {
+            "src_id": "n5",
+            "src_port": "output",
+            "dst_id": "n6",
+            "dst_port": "answer",
+            "condition": null
+          },
+          {
+            "src_id": "n3",
+            "src_port": "output",
+            "dst_id": "n6",
+            "dst_port": "hits",
+            "condition": null
+          }
+        ],
+        "parameters": {}
+      },
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "valid": false,
+      "node_count": 7,
+      "errors": [
+        "[n0] Unknown node type 'query_rewrite'. Available: agent_selftest_echo, json_transform, llm_chat, python_code, send_email, set_map",
+        "[n1] Unknown node type 'vector_store_query'. Available: agent_selftest_echo, json_transform, llm_chat, python_code, send_email, set_map",
+        "[n2] Unknown node type 'rag_rerank'. Available: agent_selftest_echo, json_transform, llm_chat, python_code, send_email, set_map",
+        "[n3] Unknown node type 'contextual_compress'. Available: agent_selftest_echo, json_transform, llm_chat, python_code, send_email, set_map",
+        "[n4] Unknown node type 'prompt_assemble'. Available: agent_selftest_echo, json_transform, llm_chat, python_code, send_email, set_map",
+        "[n5] Unknown node type 'rag_generate'. Available: agent_selftest_echo, json_transform, llm_chat, python_code, send_email, set_map",
+        "[n6] Unknown node type 'citation_attach'. Available: agent_selftest_echo, json_transform, llm_chat, python_code, send_email, set_map",
+        "Edge n0.output \u2192 n1.query: skipped (node instantiation failed)",
+        "Edge n1.output \u2192 n2.hits: skipped (node instantiation failed)",
+        "Edge n0.output \u2192 n2.query: skipped (node instantiation failed)",
+        "Edge n2.output \u2192 n3.hits: skipped (node instantiation failed)",
+        "Edge n0.output \u2192 n3.query: skipped (node instantiation failed)",
+        "Edge n0.output \u2192 n4.query: skipped (node instantiation failed)",
+        "Edge n3.output \u2192 n4.hits: skipped (node instantiation failed)",
+        "Edge n4.output \u2192 n5.prompt: skipped (node instantiation failed)",
+        "Edge n5.output \u2192 n6.answer: skipped (node instantiation failed)",
+        "Edge n3.output \u2192 n6.hits: skipped (node instantiation failed)"
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.224777+05:30",
+    "tool": "save_pipeline",
+    "args": {
+      "project": "mcp-agentic-selftest",
+      "pipeline": "uc-rag",
+      "graph": {
+        "schema_version": "1.1",
+        "metadata": {
+          "name": "tpl-rag-query-fs-faiss-support",
+          "seed": 42,
+          "description": "Dense RAG query over faiss for support.",
+          "created_at": null,
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "pack": "RAG",
+          "industry": "support",
+          "marketplace_id": "tpl-rag-query-fs-faiss-support",
+          "status": "proposed",
+          "source_example": "marketplace/tpl-rag-query-fs-faiss-support.graph.json"
+        },
+        "nodes": [
+          {
+            "id": "n0",
+            "node_type": "query_rewrite",
+            "config": {},
+            "label": "query_rewrite",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n1",
+            "node_type": "vector_store_query",
+            "config": {
+              "backend": "faiss"
+            },
+            "label": "vector_store_query",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n2",
+            "node_type": "rag_rerank",
+            "config": {},
+            "label": "rag_rerank",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n3",
+            "node_type": "contextual_compress",
+            "config": {},
+            "label": "contextual_compress",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n4",
+            "node_type": "prompt_assemble",
+            "config": {},
+            "label": "prompt_assemble",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n5",
+            "node_type": "rag_generate",
+            "config": {},
+            "label": "rag_generate",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n6",
+            "node_type": "citation_attach",
+            "config": {},
+            "label": "citation_attach",
+            "capability_metadata": null,
+            "event_trigger": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n1",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n1",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n2",
+            "src_port": "output",
+            "dst_id": "n3",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n3",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n4",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n3",
+            "src_port": "output",
+            "dst_id": "n4",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n4",
+            "src_port": "output",
+            "dst_id": "n5",
+            "dst_port": "prompt",
+            "condition": null
+          },
+          {
+            "src_id": "n5",
+            "src_port": "output",
+            "dst_id": "n6",
+            "dst_port": "answer",
+            "condition": null
+          },
+          {
+            "src_id": "n3",
+            "src_port": "output",
+            "dst_id": "n6",
+            "dst_port": "hits",
+            "condition": null
+          }
+        ],
+        "parameters": {}
+      },
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "schema_version": "1.1",
+      "metadata": {
+        "name": "tpl-rag-query-fs-faiss-support",
+        "seed": 42,
+        "description": "Dense RAG query over faiss for support.",
+        "created_at": null,
+        "tags": [
+          "rag",
+          "query",
+          "faiss"
+        ],
+        "project": "mcp-agentic-selftest",
+        "version_tag": null
+      },
+      "nodes": [
+        {
+          "id": "n0",
+          "node_type": "query_rewrite",
+          "config": {},
+          "label": "query_rewrite",
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "n1",
+          "node_type": "vector_store_query",
+          "config": {
+            "backend": "faiss"
+          },
+          "label": "vector_store_query",
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "n2",
+          "node_type": "rag_rerank",
+          "config": {},
+          "label": "rag_rerank",
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "n3",
+          "node_type": "contextual_compress",
+          "config": {},
+          "label": "contextual_compress",
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "n4",
+          "node_type": "prompt_assemble",
+          "config": {},
+          "label": "prompt_assemble",
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "n5",
+          "node_type": "rag_generate",
+          "config": {},
+          "label": "rag_generate",
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        },
+        {
+          "id": "n6",
+          "node_type": "citation_attach",
+          "config": {},
+          "label": "citation_attach",
+          "capability_metadata": null,
+          "event_trigger": null,
+          "placement": null
+        }
+      ],
+      "edges": [
+        {
+          "src_id": "n0",
+          "src_port": "output",
+          "dst_id": "n1",
+          "dst_port": "query",
+          "condition": null
+        },
+        {
+          "src_id": "n1",
+          "src_port": "output",
+          "dst_id": "n2",
+          "dst_port": "hits",
+          "condition": null
+        },
+        {
+          "src_id": "n0",
+          "src_port": "output",
+          "dst_id": "n2",
+          "dst_port": "query",
+          "condition": null
+        },
+        {
+          "src_id": "n2",
+          "src_port": "output",
+          "dst_id": "n3",
+          "dst_port": "hits",
+          "condition": null
+        },
+        {
+          "src_id": "n0",
+          "src_port": "output",
+          "dst_id": "n3",
+          "dst_port": "query",
+          "condition": null
+        },
+        {
+          "src_id": "n0",
+          "src_port": "output",
+          "dst_id": "n4",
+          "dst_port": "query",
+          "condition": null
+        },
+        {
+          "src_id": "n3",
+          "src_port": "output",
+          "dst_id": "n4",
+          "dst_port": "hits",
+          "condition": null
+        },
+        {
+          "src_id": "n4",
+          "src_port": "output",
+          "dst_id": "n5",
+          "dst_port": "prompt",
+          "condition": null
+        },
+        {
+          "src_id": "n5",
+          "src_port": "output",
+          "dst_id": "n6",
+          "dst_port": "answer",
+          "condition": null
+        },
+        {
+          "src_id": "n3",
+          "src_port": "output",
+          "dst_id": "n6",
+          "dst_port": "hits",
+          "condition": null
+        }
+      ],
+      "parameters": {},
+      "ui": null,
+      "resource_version": "1790393845220905553"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.238838+05:30",
+    "tool": "execute_pipeline",
+    "args": {
+      "graph": {
+        "schema_version": "1.1",
+        "metadata": {
+          "name": "tpl-rag-query-fs-faiss-support",
+          "seed": 42,
+          "description": "Dense RAG query over faiss for support.",
+          "created_at": null,
+          "tags": [
+            "rag",
+            "query",
+            "faiss"
+          ],
+          "pack": "RAG",
+          "industry": "support",
+          "marketplace_id": "tpl-rag-query-fs-faiss-support",
+          "status": "proposed",
+          "source_example": "marketplace/tpl-rag-query-fs-faiss-support.graph.json"
+        },
+        "nodes": [
+          {
+            "id": "n0",
+            "node_type": "query_rewrite",
+            "config": {},
+            "label": "query_rewrite",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n1",
+            "node_type": "vector_store_query",
+            "config": {
+              "backend": "faiss"
+            },
+            "label": "vector_store_query",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n2",
+            "node_type": "rag_rerank",
+            "config": {},
+            "label": "rag_rerank",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n3",
+            "node_type": "contextual_compress",
+            "config": {},
+            "label": "contextual_compress",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n4",
+            "node_type": "prompt_assemble",
+            "config": {},
+            "label": "prompt_assemble",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n5",
+            "node_type": "rag_generate",
+            "config": {},
+            "label": "rag_generate",
+            "capability_metadata": null,
+            "event_trigger": null
+          },
+          {
+            "id": "n6",
+            "node_type": "citation_attach",
+            "config": {},
+            "label": "citation_attach",
+            "capability_metadata": null,
+            "event_trigger": null
+          }
+        ],
+        "edges": [
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n1",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n1",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n2",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n2",
+            "src_port": "output",
+            "dst_id": "n3",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n3",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n0",
+            "src_port": "output",
+            "dst_id": "n4",
+            "dst_port": "query",
+            "condition": null
+          },
+          {
+            "src_id": "n3",
+            "src_port": "output",
+            "dst_id": "n4",
+            "dst_port": "hits",
+            "condition": null
+          },
+          {
+            "src_id": "n4",
+            "src_port": "output",
+            "dst_id": "n5",
+            "dst_port": "prompt",
+            "condition": null
+          },
+          {
+            "src_id": "n5",
+            "src_port": "output",
+            "dst_id": "n6",
+            "dst_port": "answer",
+            "condition": null
+          },
+          {
+            "src_id": "n3",
+            "src_port": "output",
+            "dst_id": "n6",
+            "dst_port": "hits",
+            "condition": null
+          }
+        ],
+        "parameters": {}
+      },
+      "use_cache": false,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "f87f54500135484ab1d75f36127e45b6",
+      "status": "started"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:25.249152+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "dc0013183b3d4f7190cd8c3185002012",
+      "status_only": true,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "status": "running"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.259920+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "dc0013183b3d4f7190cd8c3185002012",
+      "status_only": true,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "status": "succeeded"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.268276+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "dc0013183b3d4f7190cd8c3185002012",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "dc0013183b3d4f7190cd8c3185002012",
+      "created_at": "2026-09-26T03:37:25.148123+00:00",
+      "status": "succeeded",
+      "artifacts_dir": "workspace/artifacts/mcp-selftest-llm-notify/runs/dc0013183b3d4f7190cd8c3185002012",
+      "graph_hash": "96315e2d3165a5b51420228f86a4f0927f2b833817a615b982fb99ab4eed77a4",
+      "graph_name": "mcp-selftest-llm-notify",
+      "num_nodes": 2,
+      "node_stats": [
+        {
+          "node_id": "chat",
+          "node_type": "llm_chat",
+          "node_index": 0,
+          "duration_s": 0.0337,
+          "duration_ms": 33.7,
+          "status": "completed",
+          "cache_hit": false
+        },
+        {
+          "node_id": "mail",
+          "node_type": "send_email",
+          "node_index": 1,
+          "duration_s": 0.0298,
+          "duration_ms": 29.83,
+          "status": "completed",
+          "cache_hit": false
+        }
+      ],
+      "duration_s": 0.0741
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.274131+05:30",
+    "tool": "list_artifacts",
+    "args": {
+      "run_id": "dc0013183b3d4f7190cd8c3185002012",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "artifacts": [
+        {
+          "artifact_id": "94d4c5b2e8a64eb49ed46e9e600d38c3",
+          "content_hash": "a1f1b797e161682606e0d20ef89fecff0257de88aedc2a9ba3026f02ac4d415b",
+          "artifact_type": "generic",
+          "node_id": "mail",
+          "node_type": "send_email",
+          "run_id": "dc0013183b3d4f7190cd8c3185002012",
+          "name": null,
+          "metadata": {
+            "port": "output"
+          },
+          "created_at": "2026-09-26T03:37:25.224486+00:00",
+          "schema_version": "1.0",
+          "data_path": "artifacts/94d4c5b2e8a64eb49ed46e9e600d38c3/data"
+        },
+        {
+          "artifact_id": "3a20fc3abe8540a3aec7068cf9402e38",
+          "content_hash": "e2fa19a5853d0359afb984553b8fcbeb0c6459b652ae45f9a74dab62ab71afed",
+          "artifact_type": "generic",
+          "node_id": "chat",
+          "node_type": "llm_chat",
+          "run_id": "dc0013183b3d4f7190cd8c3185002012",
+          "name": null,
+          "metadata": {
+            "port": "output"
+          },
+          "created_at": "2026-09-26T03:37:25.180890+00:00",
+          "schema_version": "1.0",
+          "data_path": "artifacts/3a20fc3abe8540a3aec7068cf9402e38/data"
+        }
+      ],
+      "count": 2
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.294626+05:30",
+    "tool": "get_run_outputs",
+    "args": {
+      "run_id": "dc0013183b3d4f7190cd8c3185002012",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "dc0013183b3d4f7190cd8c3185002012",
+      "outputs": [
+        {
+          "name": "graph.json",
+          "path": "runs/dc0013183b3d4f7190cd8c3185002012/graph.json",
+          "size": 1164,
+          "kind": "file"
+        },
+        {
+          "name": "logs.json",
+          "path": "runs/dc0013183b3d4f7190cd8c3185002012/logs.json",
+          "size": 1261,
+          "kind": "file"
+        },
+        {
+          "name": "meta.json",
+          "path": "runs/dc0013183b3d4f7190cd8c3185002012/meta.json",
+          "size": 827,
+          "kind": "file"
+        },
+        {
+          "name": "prove.json",
+          "path": "runs/dc0013183b3d4f7190cd8c3185002012/prove.json",
+          "size": 906,
+          "kind": "file"
+        },
+        {
+          "name": "data.json",
+          "path": "artifacts/3a20fc3abe8540a3aec7068cf9402e38/data/data.json",
+          "size": 147,
+          "kind": "file",
+          "node_id": "chat"
+        },
+        {
+          "name": "data.json",
+          "path": "artifacts/94d4c5b2e8a64eb49ed46e9e600d38c3/data/data.json",
+          "size": 237,
+          "kind": "file",
+          "node_id": "mail"
+        }
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.302663+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "0f543da86e2c4836a34126dcddb7c906",
+      "status_only": true,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "status": "succeeded"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.307919+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "0f543da86e2c4836a34126dcddb7c906",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "0f543da86e2c4836a34126dcddb7c906",
+      "created_at": "2026-09-26T03:37:25.165605+00:00",
+      "status": "succeeded",
+      "artifacts_dir": "workspace/artifacts/mcp-selftest-common-pipeline/runs/0f543da86e2c4836a34126dcddb7c906",
+      "graph_hash": "8758bc5dcb208e80d8f2d6407318533c21f80a732655b5121e2f8763b2379e52",
+      "graph_name": "mcp-selftest-common-pipeline",
+      "num_nodes": 3,
+      "node_stats": [
+        {
+          "node_id": "map1",
+          "node_type": "set_map",
+          "node_index": 0,
+          "duration_s": 0.0265,
+          "duration_ms": 26.53,
+          "status": "completed",
+          "cache_hit": false
+        },
+        {
+          "node_id": "py1",
+          "node_type": "python_code",
+          "node_index": 1,
+          "duration_s": 0.0271,
+          "duration_ms": 27.11,
+          "status": "completed",
+          "cache_hit": false
+        },
+        {
+          "node_id": "jt1",
+          "node_type": "json_transform",
+          "node_index": 2,
+          "duration_s": 0.0104,
+          "duration_ms": 10.38,
+          "status": "completed",
+          "cache_hit": false
+        }
+      ],
+      "duration_s": 0.0791
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.312279+05:30",
+    "tool": "list_artifacts",
+    "args": {
+      "run_id": "0f543da86e2c4836a34126dcddb7c906",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "artifacts": [
+        {
+          "artifact_id": "4c84ef0943c04ca79024c0166de192d8",
+          "content_hash": "801bcf9960d9318279119d154b9071bb21a91788b9454a2f87c8b45566f5a4c8",
+          "artifact_type": "generic",
+          "node_id": "jt1",
+          "node_type": "json_transform",
+          "run_id": "0f543da86e2c4836a34126dcddb7c906",
+          "name": null,
+          "metadata": {
+            "port": "output"
+          },
+          "created_at": "2026-09-26T03:37:25.253177+00:00",
+          "schema_version": "1.0",
+          "data_path": "artifacts/4c84ef0943c04ca79024c0166de192d8/data"
+        },
+        {
+          "artifact_id": "9d7595a11f374f1aac4a45ca7216223b",
+          "content_hash": "2e78bccbedb90bfaa2e3e48d6f75a375867f8a85adb611b29c810dfd93c3cff0",
+          "artifact_type": "generic",
+          "node_id": "py1",
+          "node_type": "python_code",
+          "run_id": "0f543da86e2c4836a34126dcddb7c906",
+          "name": null,
+          "metadata": {
+            "port": "output"
+          },
+          "created_at": "2026-09-26T03:37:25.219647+00:00",
+          "schema_version": "1.0",
+          "data_path": "artifacts/9d7595a11f374f1aac4a45ca7216223b/data"
+        },
+        {
+          "artifact_id": "cb1af3b799584e2eb04c3f23a2bbe0d5",
+          "content_hash": "168eaebaa39d9d2a355a46b96922a44e54ccbe6f3ab7bea8174e79330131eab4",
+          "artifact_type": "generic",
+          "node_id": "map1",
+          "node_type": "set_map",
+          "run_id": "0f543da86e2c4836a34126dcddb7c906",
+          "name": null,
+          "metadata": {
+            "port": "output"
+          },
+          "created_at": "2026-09-26T03:37:25.188978+00:00",
+          "schema_version": "1.0",
+          "data_path": "artifacts/cb1af3b799584e2eb04c3f23a2bbe0d5/data"
+        }
+      ],
+      "count": 3
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.324769+05:30",
+    "tool": "get_run_outputs",
+    "args": {
+      "run_id": "0f543da86e2c4836a34126dcddb7c906",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "0f543da86e2c4836a34126dcddb7c906",
+      "outputs": [
+        {
+          "name": "graph.json",
+          "path": "runs/0f543da86e2c4836a34126dcddb7c906/graph.json",
+          "size": 1428,
+          "kind": "file"
+        },
+        {
+          "name": "logs.json",
+          "path": "runs/0f543da86e2c4836a34126dcddb7c906/logs.json",
+          "size": 1672,
+          "kind": "file"
+        },
+        {
+          "name": "meta.json",
+          "path": "runs/0f543da86e2c4836a34126dcddb7c906/meta.json",
+          "size": 1044,
+          "kind": "file"
+        },
+        {
+          "name": "prove.json",
+          "path": "runs/0f543da86e2c4836a34126dcddb7c906/prove.json",
+          "size": 1023,
+          "kind": "file"
+        },
+        {
+          "name": "data.json",
+          "path": "artifacts/4c84ef0943c04ca79024c0166de192d8/data/data.json",
+          "size": 296,
+          "kind": "file",
+          "node_id": "jt1"
+        },
+        {
+          "name": "data.json",
+          "path": "artifacts/cb1af3b799584e2eb04c3f23a2bbe0d5/data/data.json",
+          "size": 110,
+          "kind": "file",
+          "node_id": "map1"
+        },
+        {
+          "name": "data.json",
+          "path": "artifacts/9d7595a11f374f1aac4a45ca7216223b/data/data.json",
+          "size": 215,
+          "kind": "file",
+          "node_id": "py1"
+        }
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.328242+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "8b79e4918457474e8097d69e8515ea6a",
+      "status_only": true,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "status": "succeeded"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.331720+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "8b79e4918457474e8097d69e8515ea6a",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "8b79e4918457474e8097d69e8515ea6a",
+      "created_at": "2026-09-26T03:37:25.186219+00:00",
+      "status": "succeeded",
+      "artifacts_dir": "workspace/artifacts/mcp-selftest-echo-plugin/runs/8b79e4918457474e8097d69e8515ea6a",
+      "graph_hash": "2497012df279f164a6cd911f853e8f25503019cb1965f95544f8a0990cedc0dc",
+      "graph_name": "mcp-selftest-echo-plugin",
+      "num_nodes": 1,
+      "node_stats": [
+        {
+          "node_id": "echo1",
+          "node_type": "agent_selftest_echo",
+          "node_index": 0,
+          "duration_s": 0.0318,
+          "duration_ms": 31.79,
+          "status": "completed",
+          "cache_hit": false
+        }
+      ],
+      "duration_s": 0.0407
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.335333+05:30",
+    "tool": "list_artifacts",
+    "args": {
+      "run_id": "8b79e4918457474e8097d69e8515ea6a",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "artifacts": [
+        {
+          "artifact_id": "bac83f101308480e92035a9d73c4c6df",
+          "content_hash": "602c7d3884e5ff4428ac5426f04e4a3f704f1d0daae9fed1a5a18adf6d06f9c8",
+          "artifact_type": "generic",
+          "node_id": "echo1",
+          "node_type": "agent_selftest_echo",
+          "run_id": "8b79e4918457474e8097d69e8515ea6a",
+          "name": null,
+          "metadata": {
+            "port": "receipt"
+          },
+          "created_at": "2026-09-26T03:37:25.252816+00:00",
+          "schema_version": "1.0",
+          "data_path": "artifacts/bac83f101308480e92035a9d73c4c6df/data"
+        },
+        {
+          "artifact_id": "4feff091fe9044f5abff04763295afd7",
+          "content_hash": "af821324efb51df8604356a246b3a60492cb13eae4775b8285596e70ce7c46d8",
+          "artifact_type": "generic",
+          "node_id": "echo1",
+          "node_type": "agent_selftest_echo",
+          "run_id": "8b79e4918457474e8097d69e8515ea6a",
+          "name": null,
+          "metadata": {
+            "port": "output"
+          },
+          "created_at": "2026-09-26T03:37:25.234672+00:00",
+          "schema_version": "1.0",
+          "data_path": "artifacts/4feff091fe9044f5abff04763295afd7/data"
+        }
+      ],
+      "count": 2
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.345426+05:30",
+    "tool": "get_run_outputs",
+    "args": {
+      "run_id": "8b79e4918457474e8097d69e8515ea6a",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "8b79e4918457474e8097d69e8515ea6a",
+      "outputs": [
+        {
+          "name": "graph.json",
+          "path": "runs/8b79e4918457474e8097d69e8515ea6a/graph.json",
+          "size": 565,
+          "kind": "file"
+        },
+        {
+          "name": "logs.json",
+          "path": "runs/8b79e4918457474e8097d69e8515ea6a/logs.json",
+          "size": 879,
+          "kind": "file"
+        },
+        {
+          "name": "meta.json",
+          "path": "runs/8b79e4918457474e8097d69e8515ea6a/meta.json",
+          "size": 638,
+          "kind": "file"
+        },
+        {
+          "name": "prove.json",
+          "path": "runs/8b79e4918457474e8097d69e8515ea6a/prove.json",
+          "size": 875,
+          "kind": "file"
+        },
+        {
+          "name": "data.json",
+          "path": "artifacts/bac83f101308480e92035a9d73c4c6df/data/data.json",
+          "size": 103,
+          "kind": "file",
+          "node_id": "echo1"
+        },
+        {
+          "name": "data.json",
+          "path": "artifacts/4feff091fe9044f5abff04763295afd7/data/data.json",
+          "size": 43,
+          "kind": "file",
+          "node_id": "echo1"
+        }
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.348609+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "f87f54500135484ab1d75f36127e45b6",
+      "status_only": true,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "status": "failed"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.352397+05:30",
+    "tool": "inspect_run",
+    "args": {
+      "run_id": "f87f54500135484ab1d75f36127e45b6",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": false,
+    "error": "error",
+    "outcome": {
+      "run_id": "f87f54500135484ab1d75f36127e45b6",
+      "created_at": "2026-09-26T03:37:25.232690+00:00",
+      "status": "failed",
+      "artifacts_dir": "workspace/artifacts/tpl-rag-query-fs-faiss-support/runs/f87f54500135484ab1d75f36127e45b6",
+      "graph_hash": "4c3b4e81cc085a9ef0fac44ba65433160ed052b40d1b86af3aef431e61d766dc",
+      "graph_name": "tpl-rag-query-fs-faiss-support",
+      "duration_s": 0.026,
+      "error": "Node type 'query_rewrite' is not registered. Registered types: ['agent_selftest_echo', 'json_transform', 'llm_chat', 'python_code', 'send_email', 'set_map']"
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.357030+05:30",
+    "tool": "list_artifacts",
+    "args": {
+      "run_id": "f87f54500135484ab1d75f36127e45b6",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "artifacts": [],
+      "count": 0
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.362643+05:30",
+    "tool": "get_run_outputs",
+    "args": {
+      "run_id": "f87f54500135484ab1d75f36127e45b6",
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "run_id": "f87f54500135484ab1d75f36127e45b6",
+      "outputs": [
+        {
+          "name": "graph.json",
+          "path": "runs/f87f54500135484ab1d75f36127e45b6/graph.json",
+          "size": 3238,
+          "kind": "file"
+        },
+        {
+          "name": "meta.json",
+          "path": "runs/f87f54500135484ab1d75f36127e45b6/meta.json",
+          "size": 563,
+          "kind": "file"
+        }
+      ]
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.366890+05:30",
+    "tool": "list_notifications",
+    "args": {
+      "limit": 20,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "notifications": [
+        {
+          "id": "4dcfafac-3c5f-49f2-8998-c697fc0d0d48",
+          "created_at": "2026-09-26T03:37:25.261022+00:00",
+          "title": "pipeline_complete: run 8b79e4918457474e8097d69e8515ea6a",
+          "body": "status=succeeded\ngraph=mcp-selftest-echo-plugin",
+          "level": "info",
+          "read": false,
+          "event": "pipeline_complete",
+          "run_id": "8b79e4918457474e8097d69e8515ea6a",
+          "project": null,
+          "meta": {
+            "graph_name": "mcp-selftest-echo-plugin",
+            "status": "succeeded"
+          }
+        },
+        {
+          "id": "77ba103e-5d3f-41f6-b053-2c9b3d555fea",
+          "created_at": "2026-09-26T03:37:25.260955+00:00",
+          "title": "pipeline_complete: run 0f543da86e2c4836a34126dcddb7c906",
+          "body": "status=succeeded\ngraph=mcp-selftest-common-pipeline",
+          "level": "info",
+          "read": false,
+          "event": "pipeline_complete",
+          "run_id": "0f543da86e2c4836a34126dcddb7c906",
+          "project": null,
+          "meta": {
+            "graph_name": "mcp-selftest-common-pipeline",
+            "status": "succeeded"
+          }
+        },
+        {
+          "id": "3f3025c6-5baa-4caf-a091-955dcc2fa9e2",
+          "created_at": "2026-09-26T03:37:25.259586+00:00",
+          "title": "pipeline_failed: run f87f54500135484ab1d75f36127e45b6",
+          "body": "status=failed\ngraph=tpl-rag-query-fs-faiss-support\nerror=Node type 'query_rewrite' is not registered. Registered types: ['agent_selftest_echo', 'json_transform', 'llm_chat', 'python_code', 'send_email', 'set_map']",
+          "level": "error",
+          "read": false,
+          "event": "pipeline_failed",
+          "run_id": "f87f54500135484ab1d75f36127e45b6",
+          "project": null,
+          "meta": {
+            "graph_name": "tpl-rag-query-fs-faiss-support",
+            "status": "failed"
+          }
+        },
+        {
+          "id": "2c690606-d283-4539-9206-4e237ef089bf",
+          "created_at": "2026-09-26T03:37:25.254797+00:00",
+          "title": "pipeline_complete: run dc0013183b3d4f7190cd8c3185002012",
+          "body": "status=succeeded\ngraph=mcp-selftest-llm-notify",
+          "level": "info",
+          "read": false,
+          "event": "pipeline_complete",
+          "run_id": "dc0013183b3d4f7190cd8c3185002012",
+          "project": null,
+          "meta": {
+            "graph_name": "mcp-selftest-llm-notify",
+            "status": "succeeded"
+          }
+        }
+      ],
+      "count": 4,
+      "total": 4,
+      "unread_count": 4,
+      "offset": 0,
+      "limit": 20
+    }
+  },
+  {
+    "ts": "2026-09-26T09:07:26.376999+05:30",
+    "tool": "list_runs",
+    "args": {
+      "limit": 10,
+      "_meta": {
+        "auth_token": "***REDACTED***"
+      }
+    },
+    "ok": true,
+    "error": null,
+    "outcome": {
+      "runs": [
+        {
+          "run_id": "0f543da86e2c4836a34126dcddb7c906",
+          "created_at": "2026-09-26T03:37:25.165605+00:00",
+          "status": "succeeded",
+          "artifacts_dir": "workspace/artifacts/mcp-selftest-common-pipeline/runs/0f543da86e2c4836a34126dcddb7c906",
+          "graph_hash": "8758bc5dcb208e80d8f2d6407318533c21f80a732655b5121e2f8763b2379e52",
+          "graph_name": "mcp-selftest-common-pipeline",
+          "num_nodes": 3,
+          "node_stats": [
+            {
+              "node_id": "map1",
+              "node_type": "set_map",
+              "node_index": 0,
+              "duration_s": 0.0265,
+              "duration_ms": 26.53,
+              "status": "completed",
+              "cache_hit": false
+            },
+            {
+              "node_id": "py1",
+              "node_type": "python_code",
+              "node_index": 1,
+              "duration_s": 0.0271,
+              "duration_ms": 27.11,
+              "status": "completed",
+              "cache_hit": false
+            },
+            {
+              "node_id": "jt1",
+              "node_type": "json_transform",
+              "node_index": 2,
+              "duration_s": 0.0104,
+              "duration_ms": 10.38,
+              "status": "completed",
+              "cache_hit": false
+            }
+          ],
+          "duration_s": 0.0791
+        },
+        {
+          "run_id": "8b79e4918457474e8097d69e8515ea6a",
+          "created_at": "2026-09-26T03:37:25.186219+00:00",
+          "status": "succeeded",
+          "artifacts_dir": "workspace/artifacts/mcp-selftest-echo-plugin/runs/8b79e4918457474e8097d69e8515ea6a",
+          "graph_hash": "2497012df279f164a6cd911f853e8f25503019cb1965f95544f8a0990cedc0dc",
+          "graph_name": "mcp-selftest-echo-plugin",
+          "num_nodes": 1,
+          "node_stats": [
+            {
+              "node_id": "echo1",
+              "node_type": "agent_selftest_echo",
+              "node_index": 0,
+              "duration_s": 0.0318,
+              "duration_ms": 31.79,
+              "status": "completed",
+              "cache_hit": false
+            }
+          ],
+          "duration_s": 0.0407
+        },
+        {
+          "run_id": "f87f54500135484ab1d75f36127e45b6",
+          "created_at": "2026-09-26T03:37:25.232690+00:00",
+          "status": "failed",
+          "artifacts_dir": "workspace/artifacts/tpl-rag-query-fs-faiss-support/runs/f87f54500135484ab1d75f36127e45b6",
+          "graph_hash": "4c3b4e81cc085a9ef0fac44ba65433160ed052b40d1b86af3aef431e61d766dc",
+          "graph_name": "tpl-rag-query-fs-faiss-support",
+          "duration_s": 0.026,
+          "error": "Node type 'query_rewrite' is not registered. Registered types: ['agent_selftest_echo', 'json_transform', 'llm_chat', 'python_code', 'send_email', 'set_map']"
+        },
+        {
+          "run_id": "dc0013183b3d4f7190cd8c3185002012",
+          "created_at": "2026-09-26T03:37:25.148123+00:00",
+          "status": "succeeded",
+          "artifacts_dir": "workspace/artifacts/mcp-selftest-llm-notify/runs/dc0013183b3d4f7190cd8c3185002012",
+          "graph_hash": "96315e2d3165a5b51420228f86a4f0927f2b833817a615b982fb99ab4eed77a4",
+          "graph_name": "mcp-selftest-llm-notify",
+          "num_nodes": 2,
+          "node_stats": [
+            {
+              "node_id": "chat",
+              "node_type": "llm_chat",
+              "node_index": 0,
+              "duration_s": 0.0337,
+              "duration_ms": 33.7,
+              "status": "completed",
+              "cache_hit": false
+            },
+            {
+              "node_id": "mail",
+              "node_type": "send_email",
+              "node_index": 1,
+              "duration_s": 0.0298,
+              "duration_ms": 29.83,
+              "status": "completed",
+              "cache_hit": false
+            }
+          ],
+          "duration_s": 0.0741
+        }
+      ],
+      "count": 4,
+      "total_matched": 4
+    }
+  }
+]
