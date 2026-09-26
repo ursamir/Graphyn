@@ -452,6 +452,11 @@ def secrets_dir() -> Path:
     return graphyn_home() / "secrets"
 
 
+def credentials_dir() -> Path:
+    """Return the credential-store directory: {graphyn_home}/credentials/ (mode 0700)."""
+    return graphyn_home() / "credentials"
+
+
 def graphyn_env() -> str:
     """Return GRAPHYN_ENV (default development)."""
     return _env("GRAPHYN_ENV", default="development").lower()

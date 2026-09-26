@@ -111,6 +111,7 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
   }
   if (a === 'admin') {
     if (b === 'secrets') return { view: 'secrets' }
+    if (b === 'credentials') return { view: 'credentials' }
     if (b === 'ops') return { view: 'system' }
     if (b === 'access') return { view: 'access' as AppView }
   }

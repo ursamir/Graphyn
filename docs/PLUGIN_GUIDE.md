@@ -49,6 +49,16 @@ optional_dependencies = ["torch>=2.0"]             # heavy deps — node must de
 runtime = "inprocess"                              # or "isolated" for conflicting stacks
 ```
 
+**Credentials:** declare kinds the plugin consumes; graphs bind by connection id only.
+
+```toml
+credential_kinds = ["openai_compat", "smtp"]   # optional; see docs/ops/CREDENTIAL_STORE.md
+```
+
+Node config should expose `connection_id` (string). Runtime precedence:
+explicit connection id → workspace default for kind → env bootstrap. Never
+embed raw secrets in Graph IR.
+
 **Dependency rules:**
 - Core deps (numpy, librosa, scipy) → `dependencies`
 - Heavy deps (torch, tensorflow, transformers) → `optional_dependencies` only

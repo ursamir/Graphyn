@@ -17,6 +17,7 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["rag_generate"]
+credential_kinds = ["openai_compat", "ollama"]
 
 [config_schema.rag_generate]
 stub = { type = "boolean", title = "Stub mode", default = true, description = "When true, return stub answer (no network)." }
@@ -26,3 +27,4 @@ temperature = { type = "number", title = "Temperature", default = 0.0, descripti
 api_secret_name = { type = "string", title = "API secret name", default = "OPENAI_API_KEY", description = "Secret/env for openai_compat." }
 base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL override." }
 timeout_s = { type = "number", title = "Timeout (s)", default = 60.0, description = "HTTP timeout seconds." }
+connection_id = { type = "string", title = "Credential connection id", default = "", description = "Platform credential connection id." }

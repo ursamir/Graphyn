@@ -60,6 +60,8 @@ export function pathForView(view: AppView, ctx: ViewPathContext = {}): string | 
 
     case 'secrets':
       return paths.adminSecrets()
+    case 'credentials':
+      return paths.adminCredentials()
 
     case 'system':
       return paths.adminOps()
@@ -92,6 +94,7 @@ export const VIEW_PATH_HINT: Record<AppView, string> = {
   data: '/workspaces/:id/datasets',
   system: '/admin/ops',
   secrets: '/admin/secrets',
+  credentials: '/admin/credentials',
   workers: '/deploy/workers',
   edge: '/workspaces/:id/ship',
   experiments: '/workspaces/:id/runs/compare',

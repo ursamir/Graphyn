@@ -17,6 +17,7 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["llm_chat"]
+credential_kinds = ["openai_compat", "anthropic", "gemini", "ollama"]
 
 [config_schema.llm_chat]
 stub = { type = "boolean", title = "Stub mode", default = true, description = "When true, return deterministic stub output (no network)." }
@@ -27,3 +28,4 @@ api_secret_name = { type = "string", title = "API secret name", default = "OPENA
 base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL. Ollama: http://127.0.0.1:11434/v1" }
 system_prompt = { type = "string", title = "System prompt", default = "", description = "Optional system message." }
 timeout_s = { type = "number", title = "Timeout (s)", default = 60.0, description = "HTTP timeout seconds." }
+connection_id = { type = "string", title = "Credential connection id", default = "", description = "Platform credential connection id for this provider. Empty → workspace default → env." }

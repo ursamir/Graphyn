@@ -100,6 +100,24 @@ def register_all_tools(register: Callable) -> None:
         secrets_set_handler,
     )
 
+    from app.mcp.handlers.credentials import (
+        LIST_CREDENTIALS_DESCRIPTION,
+        LIST_CREDENTIALS_SCHEMA,
+        CREATE_CREDENTIAL_DESCRIPTION,
+        CREATE_CREDENTIAL_SCHEMA,
+        GET_CREDENTIAL_DESCRIPTION,
+        GET_CREDENTIAL_SCHEMA,
+        UPDATE_CREDENTIAL_DESCRIPTION,
+        UPDATE_CREDENTIAL_SCHEMA,
+        REVOKE_CREDENTIAL_DESCRIPTION,
+        REVOKE_CREDENTIAL_SCHEMA,
+        list_credentials_handler,
+        create_credential_handler,
+        get_credential_handler,
+        update_credential_handler,
+        revoke_credential_handler,
+    )
+
     from app.mcp.handlers.proposals import (
         ACCEPT_PROPOSAL_DESCRIPTION,
         ACCEPT_PROPOSAL_SCHEMA,
@@ -301,6 +319,11 @@ def register_all_tools(register: Callable) -> None:
     register("manage_plugin", MANAGE_PLUGIN_DESCRIPTION, MANAGE_PLUGIN_SCHEMA, manage_plugin_handler)
     register("secrets_list", SECRETS_LIST_DESCRIPTION, SECRETS_LIST_SCHEMA, secrets_list_handler)
     register("secrets_set", SECRETS_SET_DESCRIPTION, SECRETS_SET_SCHEMA, secrets_set_handler)
+    register("list_credentials", LIST_CREDENTIALS_DESCRIPTION, LIST_CREDENTIALS_SCHEMA, list_credentials_handler)
+    register("create_credential", CREATE_CREDENTIAL_DESCRIPTION, CREATE_CREDENTIAL_SCHEMA, create_credential_handler)
+    register("get_credential", GET_CREDENTIAL_DESCRIPTION, GET_CREDENTIAL_SCHEMA, get_credential_handler)
+    register("update_credential", UPDATE_CREDENTIAL_DESCRIPTION, UPDATE_CREDENTIAL_SCHEMA, update_credential_handler)
+    register("revoke_credential", REVOKE_CREDENTIAL_DESCRIPTION, REVOKE_CREDENTIAL_SCHEMA, revoke_credential_handler)
     register("propose_graph", PROPOSE_GRAPH_DESCRIPTION, PROPOSE_GRAPH_SCHEMA, propose_graph_handler)
     register("list_proposals", LIST_PROPOSALS_DESCRIPTION, LIST_PROPOSALS_SCHEMA, list_proposals_handler)
     register("get_proposal", GET_PROPOSAL_DESCRIPTION, GET_PROPOSAL_SCHEMA, get_proposal_handler)

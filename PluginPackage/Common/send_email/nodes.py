@@ -83,6 +83,11 @@ class SendEmailNode(Node):
         body_template: str = Field(default="", title="Body template", description="Optional body override.")
         from_addr: str = Field(default="", title="From", description="Override From address.")
         dry_run: bool = Field(default=False, title="Dry run", description="Skip SMTP dial; return receipt.")
+        connection_id: str = Field(
+            default="",
+            title="Credential connection id",
+            description="SMTP credential connection id. Empty → workspace default → GRAPHYN_SMTP_* env.",
+        )
 
     def process(self, inputs=None, **kwargs):
         if inputs is None:
@@ -118,6 +123,7 @@ class SendEmailNode(Node):
             body=body,
             from_addr=from_addr or None,
             dry_run=dry_run if dry_run else None,
+            connection_id=(getattr(self.config, "connection_id", "") or "") or None,
         )
         return {
             "output": EmailReceipt(

@@ -42,6 +42,7 @@ import DataView from './features/data/DataView'
 import ProjectsView from './features/projects/ProjectsView'
 import SystemView from './features/system/SystemView'
 import SecretsView from './features/secrets/SecretsView'
+import CredentialsView from './features/credentials/CredentialsView'
 import WorkersView from './features/workers/WorkersView'
 import EdgeWizardView from './features/edge/EdgeWizardView'
 import ExperimentsView from './features/experiments/ExperimentsView'
@@ -101,6 +102,7 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'Admin',
     items: [
       { id: 'secrets', label: 'Secrets', icon: KeyRound },
+      { id: 'credentials', label: 'Credentials', icon: Shield },
       { id: 'system', label: 'Ops', icon: Activity },
       { id: 'access', label: 'Access', icon: Shield },
     ],
@@ -119,6 +121,7 @@ const VIEW_LABEL: Record<AppView, string> = {
   proposals: 'Agent inbox',
   projects: 'Home',
   secrets: 'Secrets',
+  credentials: 'Credentials',
   system: 'Ops',
   workers: 'Worker fleet',
   models: 'Models',
@@ -139,6 +142,7 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   workers: 'Worker fleet — distributed workers (Mode B only)',
   projects: 'Home — workspace status, pipelines, linked data, runs',
   secrets: 'Secrets — named credentials for graphs',
+  credentials: 'Credentials — platform connections by kind',
   system: 'Ops — health, schedules, webhooks, cleanup, audit',
   models: 'Models — registry stages and prod approve',
   access: 'Access — actor identity and future RBAC',
@@ -732,6 +736,7 @@ export default function App() {
           {view === 'experiments' && <ExperimentsView />}
           {view === 'proposals' && <ProposalsView />}
           {view === 'secrets' && <SecretsView />}
+          {view === 'credentials' && <CredentialsView />}
           {view === 'models' && <ModelsView />}
           {view === 'access' && <AccessView />}
           {view === 'devices' && <DevicesView workspaceId={activeProject} />}

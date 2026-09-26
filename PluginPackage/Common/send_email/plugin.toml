@@ -15,6 +15,7 @@ optional_dependencies = []
 
 runtime = "inprocess"
 node_types = ["send_email"]
+credential_kinds = ["smtp"]
 
 [config_schema.send_email]
 to = { type = "string", title = "To", default = "", description = "Recipient email(s), comma-separated. Falls back to input.to." }
@@ -22,3 +23,4 @@ subject = { type = "string", title = "Subject", default = "Graphyn notification"
 body_template = { type = "string", title = "Body template", default = "", description = "Optional body override; else input body/text/content." }
 from_addr = { type = "string", title = "From", default = "", description = "Override From. Default GRAPHYN_SMTP_FROM." }
 dry_run = { type = "boolean", title = "Dry run", default = false, description = "Skip SMTP dial. Also honors GRAPHYN_SMTP_DRY_RUN=1." }
+connection_id = { type = "string", title = "Credential connection id", default = "", description = "SMTP connection id from Graphyn credential store." }

@@ -66,6 +66,7 @@ export const JUMP_KEYS: Record<string, AppView> = {
   w: 'workers',
   l: 'plugins',
   k: 'secrets',
+  // credentials shares Admin group; no dedicated single-letter jump
   s: 'system',
   m: 'models',
   c: 'access',
@@ -85,6 +86,7 @@ export const NAV_SHORTCUT_LABEL: Partial<Record<AppView, string>> = {
   edge: 'Ship',
   workers: 'Worker fleet',
   secrets: 'Secrets',
+  credentials: 'Credentials',
   system: 'Ops',
   models: 'Models',
   access: 'Access',

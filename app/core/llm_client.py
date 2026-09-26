@@ -31,8 +31,9 @@ _CLOUD_PROVIDERS = frozenset({"openai_compat", "anthropic", "gemini"})
 _ALL_PROVIDERS = frozenset({"openai_compat", "ollama", "anthropic", "gemini", "stub", "local_stub"})
 
 
-class NeedsCredentialsError(RuntimeError):
-    """Raised when a provider requires a secret/env that is not configured."""
+# Canonical definition lives in app.core.credentials; re-exported here for
+# existing plugin imports (`from app.core.llm_client import NeedsCredentialsError`).
+from app.core.credentials.errors import NeedsCredentialsError  # noqa: F401
 
 
 def resolve_api_key(secret_name: str | None, *, base_url: str = "") -> str:
@@ -255,10 +256,16 @@ def chat_completion(
     temperature: float = 0.2,
     base_url: str | None = None,
     api_secret_name: str = "OPENAI_API_KEY",
+    connection_id: str | None = None,
+    credentials: dict[str, Any] | None = None,
     timeout_s: float = 60.0,
     stub_content: str | None = None,
 ) -> dict[str, Any]:
-    """Return {content, provider, model, base_url, usage?, raw?}."""
+    """Return {content, provider, model, base_url, usage?, raw?}.
+
+    Credential precedence (see docs/ops/CREDENTIAL_STORE.md):
+      explicit connection_id / credentials dict > workspace default for kind > env/secret.
+    """
     provider = (provider or "openai_compat").strip().lower()
     if provider in {"stub", "local_stub"}:
         text = stub_content if stub_content is not None else "[stub] llm_client offline reply"
@@ -277,14 +284,48 @@ def chat_completion(
             "Use openai_compat, ollama, anthropic, gemini, or stub."
         )
 
-    base = resolve_base_url(provider, base_url)
+    # Optional pre-resolved credentials dict (from caller) short-circuits store.
+    cred: dict[str, Any]
+    if isinstance(credentials, dict) and (
+        credentials.get("api_key") is not None or credentials.get("base_url") is not None
+        or credentials.get("payload") is not None
+    ):
+        payload = credentials.get("payload") if isinstance(credentials.get("payload"), dict) else credentials
+        cred = {
+            "api_key": str(payload.get("api_key") or ""),
+            "base_url": str(payload.get("base_url") or ""),
+            "default_model": str(payload.get("default_model") or ""),
+            "source": credentials.get("source") or "inline",
+            "connection_id": credentials.get("connection_id") or connection_id,
+        }
+    else:
+        from app.core.credentials.resolve import resolve_llm_credentials
+        secret = api_secret_name
+        if provider == "anthropic" and (not secret or secret == "OPENAI_API_KEY"):
+            secret = "ANTHROPIC_API_KEY"
+        if provider == "gemini" and (not secret or secret == "OPENAI_API_KEY"):
+            secret = "GEMINI_API_KEY"
+        cred = resolve_llm_credentials(
+            provider=provider,
+            connection_id=connection_id,
+            api_secret_name=secret if provider != "ollama" else (api_secret_name or None),
+        )
+
+    explicit_base = (base_url or "").strip()
+    resolved_base = explicit_base or str(cred.get("base_url") or "")
+    base = resolve_base_url(provider, resolved_base or None)
+    api_key = str(cred.get("api_key") or "")
+    if cred.get("default_model") and (not model or str(model).startswith("gpt-")):
+        model = str(cred["default_model"])
 
     if provider == "openai_compat":
-        api_key = resolve_api_key(api_secret_name, base_url=base)
+        if not api_key:
+            # Legacy path still tries resolve_api_key when connection path missed.
+            api_key = resolve_api_key(api_secret_name, base_url=base)
         if not api_key:
             raise NeedsCredentialsError(
-                f"llm_client: provider='openai_compat' needs-credentials — set secret/env "
-                f"{(api_secret_name or 'OPENAI_API_KEY')!r} (or GROQ_API_KEY for Groq base_url). "
+                f"llm_client: provider='openai_compat' needs-credentials — set connection "
+                f"(kind=openai_compat) or secret/env {(api_secret_name or 'OPENAI_API_KEY')!r}. "
                 "For local/no-key use provider='ollama' or provider='stub'."
             )
         return _chat_openai_compat(
@@ -298,9 +339,6 @@ def chat_completion(
         )
 
     if provider == "ollama":
-        api_key = ""
-        if api_secret_name:
-            api_key = resolve_api_key(api_secret_name, base_url=base)
         if not model or str(model).startswith("gpt-"):
             model = os.environ.get("OLLAMA_MODEL", "tinyllama").strip() or "tinyllama"
         return _chat_openai_compat(
@@ -314,14 +352,10 @@ def chat_completion(
         )
 
     if provider == "anthropic":
-        secret = (api_secret_name or "").strip()
-        if not secret or secret == "OPENAI_API_KEY":
-            secret = "ANTHROPIC_API_KEY"
-        api_key = resolve_api_key(secret, base_url=base)
         if not api_key:
             raise NeedsCredentialsError(
-                "llm_client: provider='anthropic' needs-credentials — set secret/env "
-                "ANTHROPIC_API_KEY. For local/no-key use provider='ollama' or provider='stub'."
+                "llm_client: provider='anthropic' needs-credentials — set connection "
+                "(kind=anthropic) or secret/env ANTHROPIC_API_KEY."
             )
         if not model or str(model).startswith("gpt-"):
             model = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-haiku-latest").strip() or (
@@ -337,18 +371,10 @@ def chat_completion(
         )
 
     # gemini
-    secret = (api_secret_name or "").strip()
-    if not secret or secret == "OPENAI_API_KEY":
-        secret = "GEMINI_API_KEY"
-    api_key = resolve_api_key(secret, base_url=base)
-    if not api_key:
-        # Google often uses GOOGLE_API_KEY
-        api_key = resolve_api_key("GOOGLE_API_KEY", base_url=base)
     if not api_key:
         raise NeedsCredentialsError(
-            "llm_client: provider='gemini' needs-credentials — set secret/env "
-            "GEMINI_API_KEY or GOOGLE_API_KEY. For local/no-key use provider='ollama' "
-            "or provider='stub'."
+            "llm_client: provider='gemini' needs-credentials — set connection "
+            "(kind=gemini) or secret/env GEMINI_API_KEY / GOOGLE_API_KEY."
         )
     if not model or str(model).startswith("gpt-"):
         model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"

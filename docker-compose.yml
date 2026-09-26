@@ -68,6 +68,8 @@ services:
       GRAPHYN_SMTP_TLS: ${GRAPHYN_SMTP_TLS:-1}
       GRAPHYN_SMTP_DRY_RUN: ${GRAPHYN_SMTP_DRY_RUN:-1}
       GRAPHYN_NOTIFY_EMAIL_TO: ${GRAPHYN_NOTIFY_EMAIL_TO:-}
+      GRAPHYN_CREDENTIALS_KEY: ${GRAPHYN_CREDENTIALS_KEY:-}
+      GRAPHYN_SMTP_CONNECTION_ID: ${GRAPHYN_SMTP_CONNECTION_ID:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

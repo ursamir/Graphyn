@@ -47,6 +47,7 @@ from app.api.routers.artifacts import router as artifacts_router
 from app.api.routers.outputs import router as outputs_router
 from app.api.routers.plugins import router as plugins_router
 from app.api.routers.secrets import router as secrets_router
+from app.api.routers.credentials import router as credentials_router
 from app.api.routers.workers import router as workers_router
 from app.api.routers.trace import router as trace_router
 from app.api.routers.experiments import router as experiments_router
@@ -281,6 +282,7 @@ app.include_router(artifacts_router,   prefix="/api/v1", dependencies=_deps)
 app.include_router(outputs_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(plugins_router,     prefix="/api/v1", dependencies=_deps)
 app.include_router(secrets_router,     prefix="/api/v1", dependencies=_deps)
+app.include_router(credentials_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(trace_router,       prefix="/api/v1", dependencies=_deps)
 app.include_router(experiments_router, prefix="/api/v1", dependencies=_deps)
 app.include_router(proposals_router,   prefix="/api/v1", dependencies=_deps)

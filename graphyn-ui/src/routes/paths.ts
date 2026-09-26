@@ -87,6 +87,7 @@ export const paths = {
   deployQueue: () => '/deploy/workers/queue',
 
   adminSecrets: () => '/admin/secrets',
+  adminCredentials: () => '/admin/credentials',
 
   adminOps: () => '/admin/ops',
 

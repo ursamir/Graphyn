@@ -96,6 +96,11 @@ class PluginManifest(BaseModel):
         Builder renders this (overlaid on Pydantic Config). Isolated stubs
         also use it when AST Config extraction is empty.
         Keys are node_type strings. Default ``{}``.
+    credential_kinds
+        Declared credential kind ids this plugin can consume from the
+        platform credential store (e.g. ``openai_compat``, ``smtp``).
+        Graphs bind by connection id; kinds are registered/extensible.
+        Default ``[]``.
     """
 
     # ------------------------------------------------------------------
@@ -120,6 +125,7 @@ class PluginManifest(BaseModel):
     min_python: str | None = None
     node_types: list[str] = []
     config_schema: dict[str, Any] = {}
+    credential_kinds: list[str] = []
 
     # ------------------------------------------------------------------
     # Field validators

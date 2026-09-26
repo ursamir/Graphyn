@@ -85,4 +85,10 @@ def _maybe_email_notify(event: str, payload: dict[str, Any]) -> None:
         lines.append(f"error: {payload['error']}")
     from app.core.smtp_notify import send_email
 
-    send_email(to=to, subject=subject, body="\n".join(lines))
+    connection_id = (os.environ.get("GRAPHYN_SMTP_CONNECTION_ID") or "").strip() or None
+    send_email(
+        to=to,
+        subject=subject,
+        body="\n".join(lines),
+        connection_id=connection_id,
+    )

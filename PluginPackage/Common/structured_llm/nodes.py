@@ -234,6 +234,11 @@ class StructuredLlmNode(Node):
             title="System prompt",
             description="System instruction for extraction; keep output JSON-only.",
         )
+        connection_id: str = Field(
+            default="",
+            title="Credential connection id",
+            description="Platform credential connection id. Empty → workspace default → env.",
+        )
 
     def process(self, value):
         schema = self.config.json_schema or {"type": "object", "properties": {}}
@@ -270,6 +275,7 @@ class StructuredLlmNode(Node):
                 temperature=0.0,
                 base_url=(self.config.base_url or "") or None,
                 api_secret_name="",
+                connection_id=(getattr(self.config, "connection_id", "") or "") or None,
                 timeout_s=float(self.config.timeout_s or 30.0),
             )
             content = result.get("content") or "{}"
@@ -292,13 +298,28 @@ class StructuredLlmNode(Node):
                 f"StructuredLlmNode: unknown provider {provider!r}. "
                 "Use openai_compat, ollama, or local_heuristic."
             )
-        api_key = _resolve_openai_compat_key(self.config.base_url or "")
+        from app.core.credentials.resolve import resolve_llm_credentials
+        from app.core.credentials.errors import NeedsCredentialsError
+        try:
+            cred = resolve_llm_credentials(
+                provider="openai_compat",
+                connection_id=(getattr(self.config, "connection_id", "") or "") or None,
+                api_secret_name="OPENAI_API_KEY",
+            )
+        except NeedsCredentialsError as exc:
+            raise RuntimeError(str(exc)) from exc
+        api_key = cred.get("api_key") or _resolve_openai_compat_key(
+            (self.config.base_url or cred.get("base_url") or "")
+        )
         if not api_key:
             raise RuntimeError(
-                "StructuredLlmNode: provider='openai_compat' requires secret/env "
-                "OPENAI_API_KEY (or GROQ_API_KEY when base_url is Groq). "
+                "StructuredLlmNode: provider='openai_compat' requires a connection "
+                "(kind=openai_compat) or secret/env OPENAI_API_KEY (or GROQ_API_KEY). "
                 "For a free local path use provider='local_heuristic'."
             )
+        # Prefer connection base_url when node config base_url empty
+        if not (self.config.base_url or "").strip() and cred.get("base_url"):
+            self.config.base_url = str(cred["base_url"])
         data = self._openai_extract(api_key, text, schema)
         return StructuredDocument(
             data=data,

@@ -17,6 +17,7 @@ optional_dependencies = [
 
 runtime = "inprocess"
 node_types = ["structured_llm"]
+credential_kinds = ["openai_compat", "ollama"]
 
 [config_schema.structured_llm]
 provider = { type = "string", title = "Provider", default = "openai_compat", description = "openai_compat (OPENAI/Groq), ollama (local), or local_heuristic (free).", enum = ["openai_compat", "ollama", "local_heuristic"], ui = { group = "Basic" } }
@@ -26,3 +27,4 @@ model = { type = "string", title = "Model", default = "gpt-4o-mini", description
 base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL override. Groq: https://api.groq.com/openai/v1", ui = { group = "Advanced" } }
 timeout_s = { type = "number", title = "Timeout (s)", default = 30.0, description = "Request/operation timeout in seconds.", ui = { group = "Advanced" } }
 system_prompt = { type = "string", title = "System prompt", default = "Extract JSON matching the provided schema. Reply with JSON only.", description = "System instruction for extraction; keep output JSON-only.", ui = { group = "Basic" } }
+connection_id = { type = "string", title = "Credential connection id", default = "", description = "Platform credential connection id." }

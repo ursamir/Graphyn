@@ -107,6 +107,11 @@ class RagGenerateNode(Node):
         model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id.")
         temperature: float = Field(default=0.0, title="Temperature", description="Sampling temperature.")
         api_secret_name: str = Field(default="OPENAI_API_KEY", title="API secret name", description="Secret/env for openai_compat.")
+        connection_id: str = Field(
+            default="",
+            title="Credential connection id",
+            description="Platform credential connection id. Empty → workspace default → env.",
+        )
         base_url: str = Field(default="", title="Base URL", description="OpenAI-compatible base URL override.")
         timeout_s: float = Field(default=60.0, title="Timeout (s)", description="HTTP timeout.")
 
@@ -138,6 +143,7 @@ class RagGenerateNode(Node):
                 temperature=float(getattr(self.config, "temperature", 0.0) or 0.0),
                 base_url=(getattr(self.config, "base_url", "") or "") or None,
                 api_secret_name=getattr(self.config, "api_secret_name", None) or "OPENAI_API_KEY",
+                connection_id=(getattr(self.config, "connection_id", "") or "") or None,
                 timeout_s=float(getattr(self.config, "timeout_s", 60.0) or 60.0),
             )
         except NeedsCredentialsError:

@@ -132,6 +132,11 @@ class LlmChatNode(Node):
             description="Optional system message prepended when not already present.",
         )
         timeout_s: float = Field(default=60.0, title="Timeout (s)", description="HTTP timeout.")
+        connection_id: str = Field(
+            default="",
+            title="Credential connection id",
+            description="Graphyn credential store connection id (kind matches provider). Empty → workspace default → env.",
+        )
 
     def process(self, inputs=None, **kwargs):
         if inputs is None:
@@ -169,6 +174,7 @@ class LlmChatNode(Node):
                 temperature=float(getattr(self.config, "temperature", 0.2) or 0.0),
                 base_url=(getattr(self.config, "base_url", "") or "") or None,
                 api_secret_name=getattr(self.config, "api_secret_name", None) or "OPENAI_API_KEY",
+                connection_id=(getattr(self.config, "connection_id", "") or "") or None,
                 timeout_s=float(getattr(self.config, "timeout_s", 60.0) or 60.0),
             )
         except NeedsCredentialsError:

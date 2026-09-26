@@ -1,13 +1,12 @@
 # app/core/smtp_notify.py
 """Outbound SMTP helper for run notifications and the send_email plugin.
 
-Credentials via env only (never IR):
-  GRAPHYN_SMTP_HOST, GRAPHYN_SMTP_PORT (default 587),
-  GRAPHYN_SMTP_USER, GRAPHYN_SMTP_PASSWORD,
-  GRAPHYN_SMTP_FROM, GRAPHYN_SMTP_TLS (default 1),
-  GRAPHYN_SMTP_DRY_RUN (1 = log + return receipt, no network).
+Credential precedence:
+  1. Explicit connection_id / credentials dict (kind=smtp)
+  2. Workspace default smtp connection
+  3. Env bootstrap (GRAPHYN_SMTP_*)
 
-Does not implement IMAP/inbox. Fail-closed when host/from missing unless dry-run.
+Never embed raw secrets in IR. Fail-closed when host/from missing unless dry-run.
 """
 from __future__ import annotations
 
@@ -29,7 +28,6 @@ def smtp_config_from_env() -> dict[str, Any]:
         port = 587
     user = (os.environ.get("GRAPHYN_SMTP_USER") or "").strip()
     password = (os.environ.get("GRAPHYN_SMTP_PASSWORD") or "").strip()
-    # Allow password via secret store name in GRAPHYN_SMTP_PASSWORD_SECRET
     secret_name = (os.environ.get("GRAPHYN_SMTP_PASSWORD_SECRET") or "").strip()
     if secret_name and not password:
         try:
@@ -51,6 +49,73 @@ def smtp_config_from_env() -> dict[str, Any]:
     }
 
 
+def smtp_config_from_credentials(
+    *,
+    connection_id: str | None = None,
+    credentials: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve SMTP config via credential store with env fallback."""
+    if isinstance(credentials, dict) and (
+        credentials.get("host") is not None or credentials.get("payload") is not None
+    ):
+        payload = credentials.get("payload") if isinstance(credentials.get("payload"), dict) else credentials
+        env = smtp_config_from_env()
+        port = payload.get("port", env["port"])
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            port = 587
+        return {
+            "host": str(payload.get("host") or ""),
+            "port": port,
+            "user": str(payload.get("user") or ""),
+            "password": str(payload.get("password") or ""),
+            "from_addr": str(payload.get("from_addr") or ""),
+            "tls": bool(payload["tls"]) if "tls" in payload else True,
+            "dry_run": bool(payload["dry_run"]) if "dry_run" in payload else False,
+            "connection_id": credentials.get("connection_id") or connection_id,
+            "source": credentials.get("source") or "inline",
+        }
+
+    try:
+        from app.core.credentials.resolve import resolve_connection
+        from app.core.credentials.errors import NeedsCredentialsError
+
+        resolved = resolve_connection(kind="smtp", connection_id=connection_id, required=False)
+    except Exception:
+        resolved = {"source": "none", "payload": {}, "connection_id": None}
+
+    payload = dict(resolved.get("payload") or {})
+    source = resolved.get("source") or "none"
+    if source in {"connection", "workspace_default"} and payload:
+        port = payload.get("port", 587)
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            port = 587
+        return {
+            "host": str(payload.get("host") or ""),
+            "port": port,
+            "user": str(payload.get("user") or ""),
+            "password": str(payload.get("password") or ""),
+            "from_addr": str(payload.get("from_addr") or ""),
+            "tls": bool(payload["tls"]) if "tls" in payload else True,
+            "dry_run": bool(payload["dry_run"]) if "dry_run" in payload else False,
+            "connection_id": resolved.get("connection_id"),
+            "source": source,
+        }
+
+    # Env bootstrap
+    cfg = smtp_config_from_env()
+    cfg["connection_id"] = None
+    cfg["source"] = "env" if cfg.get("host") or cfg.get("dry_run") else "none"
+    # Merge any partial env payload from resolve
+    for k, v in payload.items():
+        if v not in (None, "") and not cfg.get(k):
+            cfg[k] = v
+    return cfg
+
+
 def send_email(
     *,
     to: str | list[str],
@@ -58,14 +123,16 @@ def send_email(
     body: str,
     from_addr: str | None = None,
     dry_run: bool | None = None,
+    connection_id: str | None = None,
+    credentials: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Send a plain-text email via SMTP env config. Returns a receipt dict."""
-    cfg = smtp_config_from_env()
+    """Send a plain-text email via SMTP credentials. Returns a receipt dict."""
+    cfg = smtp_config_from_credentials(connection_id=connection_id, credentials=credentials)
     if dry_run is None:
-        dry_run = bool(cfg["dry_run"])
+        dry_run = bool(cfg.get("dry_run"))
     recipients = [to] if isinstance(to, str) else list(to or [])
     recipients = [r.strip() for r in recipients if r and str(r).strip()]
-    sender = (from_addr or cfg["from_addr"] or "").strip()
+    sender = (from_addr or cfg.get("from_addr") or "").strip()
     subject = (subject or "").strip() or "(no subject)"
     body = body if body is not None else ""
 
@@ -73,26 +140,32 @@ def send_email(
         raise RuntimeError("send_email: recipient 'to' is required.")
     if dry_run:
         logger.info(
-            "smtp dry-run: to=%s subject=%r from=%r host=%r",
-            recipients, subject, sender or cfg["from_addr"], cfg["host"] or "(unset)",
+            "smtp dry-run: to=%s subject=%r from=%r host=%r source=%s",
+            recipients, subject, sender or cfg.get("from_addr"),
+            cfg.get("host") or "(unset)", cfg.get("source"),
         )
         return {
             "ok": True,
             "dry_run": True,
             "to": recipients,
-            "from_addr": sender or cfg["from_addr"] or "dry-run@localhost",
+            "from_addr": sender or cfg.get("from_addr") or "dry-run@localhost",
             "subject": subject,
             "message": "dry-run: email not sent",
+            "connection_id": cfg.get("connection_id"),
+            "source": cfg.get("source"),
         }
 
-    if not cfg["host"]:
-        raise RuntimeError(
-            "send_email: needs-credentials — set GRAPHYN_SMTP_HOST "
-            "(and GRAPHYN_SMTP_FROM). Or set GRAPHYN_SMTP_DRY_RUN=1."
+    if not cfg.get("host"):
+        from app.core.credentials.errors import NeedsCredentialsError
+        raise NeedsCredentialsError(
+            "send_email: needs-credentials — set smtp connection "
+            "(or GRAPHYN_SMTP_HOST / GRAPHYN_SMTP_FROM). Or set dry_run / GRAPHYN_SMTP_DRY_RUN=1."
         )
     if not sender:
-        raise RuntimeError(
-            "send_email: needs-credentials — set GRAPHYN_SMTP_FROM or pass from_addr."
+        from app.core.credentials.errors import NeedsCredentialsError
+        raise NeedsCredentialsError(
+            "send_email: needs-credentials — set from_addr on smtp connection "
+            "or GRAPHYN_SMTP_FROM / pass from_addr."
         )
 
     msg = EmailMessage()
@@ -102,11 +175,11 @@ def send_email(
     msg.set_content(str(body))
 
     try:
-        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as smtp:
-            if cfg["tls"]:
+        with smtplib.SMTP(cfg["host"], int(cfg["port"]), timeout=30) as smtp:
+            if cfg.get("tls"):
                 smtp.starttls()
-            if cfg["user"]:
-                smtp.login(cfg["user"], cfg["password"] or "")
+            if cfg.get("user"):
+                smtp.login(cfg["user"], cfg.get("password") or "")
             smtp.send_message(msg)
     except Exception as exc:
         logger.warning("smtp send failed: %s", exc)
@@ -119,4 +192,6 @@ def send_email(
         "from_addr": sender,
         "subject": subject,
         "message": "sent",
+        "connection_id": cfg.get("connection_id"),
+        "source": cfg.get("source"),
     }
