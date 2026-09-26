@@ -196,7 +196,7 @@ async def run() -> int:
             mat = await call_tool(
                 session,
                 "materialize_template",
-                {"template_id": "tpl-rag-query-faiss-support"},
+                {"template_id": "tpl-rag-query-fs-faiss-support"},
             )
             if isinstance(mat, dict) and mat.get("error"):
                 # fallback search + first materializable
@@ -278,7 +278,7 @@ async def run() -> int:
             await call_tool(session, "list_projects", {})
 
             run_ids: list[str] = []
-            # Execute lean usecases first; RAG may need RAG pack nodes not in lean home.
+            # Execute lean + RAG query-chain (bootstrap installs RAG stubs into lean home).
             exec_keys = ["llm_notify", "common", "echo_plugin", "rag"]
             for key in exec_keys:
                 g = graphs.get(key)

@@ -1216,8 +1216,60 @@ def get_node_spec_handler(arguments: dict[str, Any] | None = None) -> dict[str, 
         if isinstance(n, dict) and n.get("node_type") == nt:
             match = n
             break
+    runtime_fallback = False
     if match is None:
-        return _err("not_found", f"Unknown node_type in design catalog: {nt}")
+        # Catalog drift safety: synthesize a minimal spec from the live node registry
+        # so runtime-complete plugins (e.g. send_email) stay discoverable.
+        try:
+            from app.core.nodes import registry as _node_registry
+            from app.core.nodes.errors import NodeNotFoundError
+
+            cls = _node_registry.get_class(nt)
+        except NodeNotFoundError:
+            cls = None
+        except Exception:
+            cls = None
+        if cls is None:
+            return _err("not_found", f"Unknown node_type in design catalog: {nt}")
+        runtime_fallback = True
+        meta = getattr(cls, "metadata", None)
+        inputs = []
+        for name, port in (getattr(cls, "input_ports", None) or {}).items():
+            inputs.append(
+                {
+                    "name": name,
+                    "type": str(getattr(port, "data_type", "Any")),
+                    "required": bool(getattr(port, "required", True)),
+                }
+            )
+        outputs = []
+        for name, port in (getattr(cls, "output_ports", None) or {}).items():
+            outputs.append(
+                {
+                    "name": name,
+                    "type": str(getattr(port, "data_type", "Any")),
+                }
+            )
+        config = []
+        cfg_cls = getattr(cls, "Config", None)
+        if cfg_cls is not None:
+            fields = getattr(cfg_cls, "model_fields", None) or {}
+            for fname, finfo in fields.items():
+                default = getattr(finfo, "default", None)
+                config.append(f"{fname}:{type(default).__name__ if default is not None else 'Any'}={default!r}")
+        match = {
+            "node_type": nt,
+            "pack": f"(runtime) {getattr(meta, 'category', '')}".strip(),
+            "category": getattr(meta, "category", None) if meta else None,
+            "purpose": ((getattr(meta, "description", None) or getattr(meta, "label", None)) if meta else None),
+            "status": "Existing",
+            "inputs": inputs,
+            "outputs": outputs,
+            "config": config,
+            "notes": "Synthesized from runtime registry (design catalog miss).",
+            "optional_dependencies_runtime": None,
+            "kind": "runtime_fallback",
+        }
 
     honesty = {}
     needs_api = {"mcu_flash_ota", "mcu_ondevice_metrics"}
@@ -1256,6 +1308,7 @@ def get_node_spec_handler(arguments: dict[str, Any] | None = None) -> dict[str, 
         "honesty": honesty,
         "related": match.get("related"),
         "refinement": match.get("refinement"),
+        "source": "runtime_registry" if runtime_fallback else "design_catalog",
     }
 
 

@@ -329,3 +329,16 @@ All handlers return structured JSON — never raw exceptions.
 | `registry_error` | `registry.list_nodes()` failed in discovery handler |
 | `invalid_action` | `manage_plugin` action not enable/disable/uninstall |
 | `PluginInstallError` / `PluginNotFoundError` | plugin lifecycle failures |
+
+
+## Dependency pin (API image)
+
+Install the MCP client/server SDK via the package extra only:
+
+```bash
+pip install -e ".[mcp]"   # pins mcp==1.27.0
+```
+
+Do **not** run unconstrained `pip install mcp` inside the `graphyn-api` image:
+newer SDK releases may pull incompatible `fastapi`/`starlette` and break the API.
+Prefer a host venv for MCP agentic selftests (`examples/mcp_agent_selftest/`).

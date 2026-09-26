@@ -34,3 +34,6 @@ tomli==2.2.1; python_version < "3.11"
 
 # Optional extras are NOT listed here — install via setup.py extras:
 #   pip install -e ".[mcp,redis,events,vad,hf,tf,asr,dev]"
+
+# MCP SDK is an optional extra (setup.py extras_require["mcp"] → mcp==1.27.0).
+# Do not pip-install unconstrained `mcp` into the API image (fastapi/starlette drift).

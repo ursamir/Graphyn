@@ -3,9 +3,9 @@
 > **Design-only.** Implementation waves later. Authoritative inventory + contract + ≥100 node_types.
 > UI term: **Workspace**; API still **projects**. Do not break FaceRecognition / unrelated services.
 
-**Total node_types enumerated:** 145  
-**By status:** Existing=42, Alter=7, Proposed=96  
-**By pack root:** Agents=8, Audio=19, Common=30, MLOps=12, RAG=21, TinyML=20, Video=10, Vision=20, WakeWord=5
+**Total node_types enumerated:** 146  
+**By status:** Existing=43, Alter=7, Proposed=96  
+**By pack root:** Agents=8, Audio=19, Common=31, MLOps=12, RAG=21, TinyML=20, Video=10, Vision=20, WakeWord=5
 
 Machine-readable twin: [`PLUGIN_NODE_PLATFORM_CATALOG.json`](./PLUGIN_NODE_PLATFORM_CATALOG.json).
 
@@ -20,7 +20,7 @@ This document is the implementable design for Graphyn’s plugin/node platform e
 1. Inventories **all 49 production** node types (Audio + Common) plus experimental gaps (WakeWord, Video).
 2. Records the **canonical interface contract** aligned with real code (`plugin.toml`, `Node`, ports, artifacts, secrets).
 3. Lists **actionable alterations** to existing plugins (trainer/model_builder, edge_optimizer, RAG-facing Common nodes, WakeWord promotion, Video fill, realtime multi-runtime).
-4. Catalogues **145 distinct `node_type`s** (existing + alter + proposed) with ports, config, deps, and notes.
+4. Catalogues **146 distinct `node_type`s** (existing + alter + proposed) with ports, config, deps, and notes.
 
 **Out of scope for this commit:** implementing the proposed nodes. **Honesty:** MCU flash/OTA and on-device metrics are **needs-API** — do not fake Devices APIs.
 
@@ -183,6 +183,7 @@ Production: **49** node types (19 Audio plugins + 29 Common packages; `model_bui
 | N047 | `merge` | `PluginPackage/Common/merge/` | Transform | Existing |
 | N048 | `wait_delay` | `PluginPackage/Common/wait_delay/` | Logic | Existing |
 | N049 | `csv_table` | `PluginPackage/Common/csv_table/` | Output | Existing |
+| N146 | `send_email` | `PluginPackage/Common/send_email/` | Output | Existing |
 
 **Experimental (not in 49):**
 
@@ -845,6 +846,18 @@ Each entry: ID, `node_type`, pack path, category, purpose, status, ports, config
 - **Deps / runtime:** stdlib
 
 ### Pack: `TinyML`
+
+#### N146 — `send_email` (Existing)
+
+- **Path:** `PluginPackage/Common/send_email/`
+- **Category:** Output
+- **Purpose:** Outbound SMTP email via `GRAPHYN_SMTP_*` (dry-run capable). Not IMAP/inbox.
+- **Inputs:** `input: Any optional` (dict with to/subject/body or coerced body)
+- **Outputs:** `output: EmailReceipt`
+- **Config:** `to:str=`, `subject:str=Graphyn notification`, `body_template:str=`, `from_addr:str=`, `dry_run:bool=false`
+- **Runtime deps:** stdlib; `GRAPHYN_SMTP_*` env (`GRAPHYN_SMTP_DRY_RUN=1` skips dial)
+- **Notes:** Uses `app.core.smtp_notify.send_email`. Live send needs `GRAPHYN_SMTP_HOST` + From.
+
 
 #### N050 — `mcu_dataset_ingest` (Proposed)
 

@@ -14,6 +14,10 @@
 # Docker Compose only — this repo does not ship a Helm chart.
 # Prove IDE loop: scripts/docker_ide_loop_smoke.sh
 
+# MCP SDK pin: do NOT `pip install mcp` unconstrained inside the API image —
+# it can upgrade fastapi/starlette and break graphyn-api. Prefer host venv
+# (`pip install -e ".[mcp]"` → mcp==1.27.0) or bake the pinned extra only.
+
 services:
   graphyn-api:
     build:

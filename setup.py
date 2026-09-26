@@ -50,8 +50,12 @@ _EXTRAS = {
         "mypy>=1.13.0",
     ],
     "mcp": [
-        # Official MCP Python SDK (app.mcp.server hard-imports `mcp`)
-        "mcp>=1.2.0,<3",
+        # Official MCP Python SDK (app.mcp.server hard-imports `mcp`).
+        # Pin carefully: unconstrained `pip install mcp` inside the API image
+        # can pull a fastapi/starlette major that breaks graphyn-api. Prefer
+        # host venv MCP (`pip install -e ".[mcp]"`) or this pin when baking
+        # the SDK into the image.
+        "mcp==1.27.0",
     ],
     "redis": [
         "redis>=5.0.0,<9",

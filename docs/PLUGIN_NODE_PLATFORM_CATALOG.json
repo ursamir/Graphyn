@@ -1,15 +1,15 @@
 {
   "title": "Graphyn Plugin/Node Platform Catalog",
   "status": "design-only",
-  "total_node_types": 145,
+  "total_node_types": 146,
   "counts_by_status": {
-    "Existing": 42,
+    "Existing": 43,
     "Alter": 7,
     "Proposed": 96
   },
   "counts_by_pack": {
     "Audio": 19,
-    "Common": 30,
+    "Common": 31,
     "TinyML": 20,
     "Vision": 20,
     "RAG": 21,
@@ -1377,6 +1377,36 @@
       ],
       "optional_dependencies_runtime": "stdlib",
       "notes": "",
+      "capabilities": {}
+    },
+    {
+      "id": "N146",
+      "node_type": "send_email",
+      "pack": "PluginPackage/Common/send_email/",
+      "category": "Output",
+      "purpose": "Outbound SMTP email via GRAPHYN_SMTP_* (dry-run capable). Not IMAP/inbox.",
+      "status": "Existing",
+      "inputs": [
+        {
+          "name": "input",
+          "type": "Any optional"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "EmailReceipt"
+        }
+      ],
+      "config": [
+        "to:str=",
+        "subject:str=Graphyn notification",
+        "body_template:str=",
+        "from_addr:str=",
+        "dry_run:bool=false"
+      ],
+      "optional_dependencies_runtime": "stdlib; GRAPHYN_SMTP_* env",
+      "notes": "Uses app.core.smtp_notify.send_email. Dry-run via config.dry_run or GRAPHYN_SMTP_DRY_RUN=1. Needs GRAPHYN_SMTP_HOST/FROM for live send.",
       "capabilities": {}
     },
     {
@@ -4511,5 +4541,5 @@
       ]
     }
   ],
-  "total_node_types_with_refinements": 155
+  "total_node_types_with_refinements": 156
 }
