@@ -1,13 +1,13 @@
 [plugin]
 name             = "llm-chat"
-version          = "0.2.0"
-description      = "Multi-turn chat via stub, OpenAI-compatible HTTP, or Ollama local."
+version          = "0.3.0"
+description      = "Multi-turn chat via stub, OpenAI-compatible, Ollama, Anthropic, or Gemini."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["agents", "llm", "openai", "ollama"]
+tags = ["agents", "llm", "openai", "ollama", "anthropic", "gemini"]
 
 dependencies = []
 
@@ -20,7 +20,7 @@ node_types = ["llm_chat"]
 
 [config_schema.llm_chat]
 stub = { type = "boolean", title = "Stub mode", default = true, description = "When true, return deterministic stub output (no network)." }
-provider = { type = "string", title = "Provider", default = "stub", description = "stub | openai_compat | ollama", enum = ["stub", "openai_compat", "ollama"] }
+provider = { type = "string", title = "Provider", default = "stub", description = "stub | openai_compat | ollama | anthropic | gemini", enum = ["stub", "openai_compat", "ollama", "anthropic", "gemini"] }
 model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Chat model id. For ollama, defaults to llama3.2 when left as gpt-*." }
 temperature = { type = "number", title = "Temperature", default = 0.2, description = "Sampling temperature." }
 api_secret_name = { type = "string", title = "API secret name", default = "OPENAI_API_KEY", description = "Secret/env for openai_compat. Unused for stub/ollama." }

@@ -1,12 +1,14 @@
 # app/core/run_notify.py
 """
 Bounded Context:  BC6 — Observability & Storage
-Responsibility:   Fire ops webhooks (and optional SMTP) on terminal run statuses (best-effort).
+Responsibility:   Fire ops webhooks, optional SMTP, and in-app notifications
+                  on terminal run statuses (best-effort).
 Owns:             notify_run_terminal().
 Public Surface:   notify_run_terminal(status, run_id, **meta).
 Must NOT:         Raise to callers; import app.api.
-Dependencies:     app.core.webhook.WebhookService (lazy); app.core.smtp_notify (lazy).
-Reason To Change: New webhook event types, email sink, or payload schema.
+Dependencies:     app.core.webhook.WebhookService (lazy); app.core.smtp_notify (lazy);
+                  app.core.in_app_notify (lazy).
+Reason To Change: New webhook event types, email/in-app sink, or payload schema.
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ def notify_run_terminal(
     error: str | None = None,
     project: str | None = None,
 ) -> None:
-    """Notify configured webhooks (and optional email) for a terminal run status (never raises)."""
+    """Notify webhooks / email / in-app for a terminal run status (never raises)."""
     event = _EVENT_MAP.get((status or "").strip().lower())
     if not event:
         return
@@ -56,6 +58,12 @@ def notify_run_terminal(
         _maybe_email_notify(event, payload)
     except Exception as exc:
         logger.debug("run email notify skipped: %s", exc)
+    try:
+        from app.core.in_app_notify import notify_from_run_event
+
+        notify_from_run_event(event, payload)
+    except Exception as exc:
+        logger.debug("run in-app notify skipped: %s", exc)
 
 
 def _maybe_email_notify(event: str, payload: dict[str, Any]) -> None:

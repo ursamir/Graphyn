@@ -154,6 +154,10 @@ def register_all_tools(register: Callable) -> None:
         GET_TEMPLATE_SCHEMA,
         GET_WEBHOOKS_DESCRIPTION,
         GET_WEBHOOKS_SCHEMA,
+        LIST_NOTIFICATIONS_DESCRIPTION,
+        LIST_NOTIFICATIONS_SCHEMA,
+        MARK_NOTIFICATIONS_READ_DESCRIPTION,
+        MARK_NOTIFICATIONS_READ_SCHEMA,
         INSTANTIATE_TEMPLATE_DESCRIPTION,
         INSTANTIATE_TEMPLATE_SCHEMA,
         LIST_MODELS_DESCRIPTION,
@@ -197,6 +201,8 @@ def register_all_tools(register: Callable) -> None:
         get_run_outputs_handler,
         get_template_handler,
         get_webhooks_handler,
+        list_notifications_handler,
+        mark_notifications_read_handler,
         instantiate_template_handler,
         SEARCH_TEMPLATES_DESCRIPTION,
         SEARCH_TEMPLATES_SCHEMA,
@@ -340,6 +346,8 @@ def register_all_tools(register: Callable) -> None:
     register("get_webhooks", GET_WEBHOOKS_DESCRIPTION, GET_WEBHOOKS_SCHEMA, get_webhooks_handler)
     register("put_webhooks", PUT_WEBHOOKS_DESCRIPTION, PUT_WEBHOOKS_SCHEMA, put_webhooks_handler)
     register("test_webhook", TEST_WEBHOOK_DESCRIPTION, TEST_WEBHOOK_SCHEMA, test_webhook_handler)
+    register("list_notifications", LIST_NOTIFICATIONS_DESCRIPTION, LIST_NOTIFICATIONS_SCHEMA, list_notifications_handler)
+    register("mark_notifications_read", MARK_NOTIFICATIONS_READ_DESCRIPTION, MARK_NOTIFICATIONS_READ_SCHEMA, mark_notifications_read_handler)
     register("get_readiness", GET_READINESS_DESCRIPTION, GET_READINESS_SCHEMA, get_readiness_handler)
 
     # Wave A — ship + audit (after ship REST)

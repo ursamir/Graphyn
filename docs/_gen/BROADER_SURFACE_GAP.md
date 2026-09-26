@@ -123,3 +123,17 @@
 - In-app notification center UI
 - Native Gemini / Azure AD SDKs
 - Devices MCU flash hardware APIs
+
+
+## Wave continuation (2026-09-26 IST)
+
+### Closed
+- Native Anthropic + Gemini clients in `llm_client` (fail-closed NeedsCredentialsError; mocks in unit tests)
+- In-app notifications store + REST `GET/POST /api/v1/system/notifications*` + MCP `list_notifications` / `mark_notifications_read` + `run_notify` sink
+- Ollama wiring via `OLLAMA_BASE_URL=http://172.17.0.1:11434/v1`, model `tinyllama:1.1b`, `OLLAMA_NUM_GPU=0`
+
+### Still needs-credentials
+- Production SMTP without dry-run
+- OpenAI / Groq / Anthropic / Gemini API keys
+- Slack OAuth bot (use incoming webhook)
+- Gmail OAuth / IMAP (not built)

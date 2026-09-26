@@ -399,3 +399,39 @@ def run_schedule(schedule_id: str, request: Request):
     except Exception:
         pass
     return item
+
+class NotificationsMarkBody(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    all: bool = False
+
+
+@router.get("/notifications", summary="List in-app notifications")
+def get_notifications(
+    unread_only: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """Return newest-first in-app notifications (run/ops events)."""
+    from app.core.in_app_notify import list_notifications
+
+    return list_notifications(unread_only=unread_only, limit=limit, offset=offset)
+
+
+@router.post("/notifications/mark-read", summary="Mark in-app notifications read")
+def post_notifications_mark_read(body: NotificationsMarkBody, request: Request):
+    """Mark selected notification ids as read, or all when ``all`` is true."""
+    from app.core.audit import record_audit
+    from app.core.in_app_notify import mark_read
+
+    result = mark_read(body.ids, all_read=bool(body.all))
+    try:
+        record_audit(
+            actor=resolve_actor(request),
+            action="notifications.mark_read",
+            resource_type="notification",
+            resource_id="all" if body.all else ",".join((body.ids or [])[:8]) or "none",
+            meta={"marked": result.get("marked"), "all": bool(body.all)},
+        )
+    except Exception:
+        pass
+    return result

@@ -71,8 +71,8 @@ class LlmChatNode(Node):
         node_type="llm_chat",
         label="LLM Chat",
         description=(
-            "Multi-turn chat. Providers: stub (offline), openai_compat "
-            "(OPENAI_API_KEY / Groq), ollama (local, no key)."
+            "Multi-turn chat. Providers: stub, openai_compat, ollama, "
+            "anthropic (ANTHROPIC_API_KEY), gemini (GEMINI_API_KEY)."
         ),
         category="Processing",
         version="0.2.0",
@@ -109,10 +109,10 @@ class LlmChatNode(Node):
             title="Stub mode",
             description="When true, return a deterministic stub ChatMessage (no network).",
         )
-        provider: Literal["stub", "openai_compat", "ollama"] = Field(
+        provider: Literal["stub", "openai_compat", "ollama", "anthropic", "gemini"] = Field(
             default="stub",
             title="Provider",
-            description="stub | openai_compat | ollama",
+            description="stub | openai_compat | ollama | anthropic | gemini",
         )
         model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id.")
         temperature: float = Field(default=0.2, title="Temperature", description="Sampling temperature.")
@@ -145,7 +145,7 @@ class LlmChatNode(Node):
             return {
                 "output": ChatMessage(
                     role="assistant",
-                    content="[stub] llm_chat — set stub=False and provider=openai_compat|ollama to call a model.",
+                    content="[stub] llm_chat — set stub=False and provider=openai_compat|ollama|anthropic|gemini to call a model.",
                 )
             }
 
