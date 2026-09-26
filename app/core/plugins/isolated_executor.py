@@ -190,6 +190,15 @@ def recast_plugin_types(obj: Any) -> Any:
         return obj
     target = _platform_type_for_name(cls.__name__)
     if target is None or target is cls:
+        # Cross-host Mode B: no shared dynamic module — emit plain dict/list.
+        try:
+            if hasattr(obj, "model_dump"):
+                return recast_plugin_types(obj.model_dump(mode="python"))
+        except Exception:
+            pass
+        if hasattr(obj, "__dict__"):
+            payload = {k: v for k, v in vars(obj).items() if not k.startswith("_")}
+            return recast_plugin_types(payload)
         return obj
     try:
         if hasattr(obj, "model_dump") and hasattr(target, "model_validate"):
@@ -205,6 +214,11 @@ def recast_plugin_types(obj: Any) -> Any:
             getattr(target, "__module__", "?"),
             exc,
         )
+        try:
+            if hasattr(obj, "model_dump"):
+                return recast_plugin_types(obj.model_dump(mode="python"))
+        except Exception:
+            pass
     return obj
 
 

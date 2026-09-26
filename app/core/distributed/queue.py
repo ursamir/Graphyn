@@ -23,6 +23,22 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from types import MappingProxyType
+
+
+def _plain_jsonable(value: Any) -> Any:
+    """Normalize mappingproxy/tuples for durable JSON job snapshots."""
+    if isinstance(value, MappingProxyType):
+        return {k: _plain_jsonable(v) for k, v in value.items()}
+    if isinstance(value, dict):
+        return {k: _plain_jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_plain_jsonable(v) for v in value]
+    return value
+
+
 from app.core.distributed.models import JobResult, JobStatus, NodeJob, WorkerInfo
 from app.core.distributed.placement import (
     widen_placement_after_reclaim,
@@ -193,7 +209,7 @@ class JobQueue:
                     jobs = dict(snap.get("jobs") or {})
                     order = list(snap.get("order") or [])
                     events = dict(snap.get("events") or {})
-                    jobs[job_id] = stored.model_dump(mode="json")
+                    jobs[job_id] = _plain_jsonable(stored.model_dump(mode="python"))
                     if job_id not in order:
                         order.append(job_id)
                     events.setdefault(job_id, [])
@@ -341,10 +357,10 @@ class JobQueue:
 
     def _queue_snapshot_unlocked(self) -> dict[str, Any]:
         return {
-            "jobs": {jid: j.model_dump(mode="json") for jid, j in self._jobs.items()},
+            "jobs": {jid: _plain_jsonable(j.model_dump(mode="python")) for jid, j in self._jobs.items()},
             "order": list(self._order),
             "results": {
-                jid: r.model_dump(mode="json") for jid, r in self._results.items()
+                jid: _plain_jsonable(r.model_dump(mode="python")) for jid, r in self._results.items()
             },
             "events": {jid: list(evs) for jid, evs in self._events.items()},
         }
@@ -440,17 +456,17 @@ class JobQueue:
                         "attempts": next_attempts,
                     }
                 )
-                jobs_raw[jid] = failed.model_dump(mode="json")
+                jobs_raw[jid] = _plain_jsonable(failed.model_dump(mode="python"))
                 if jid in order:
                     order = [j for j in order if j != jid]
-                results_raw[jid] = JobResult(
+                results_raw[jid] = _plain_jsonable(JobResult(
                     job_id=jid,
                     status="failed",
                     error=(
                         f"exceeded max_attempts ({max_attempts}) after lease reclaim"
                     ),
                     worker_id=job.claimed_by,
-                ).model_dump(mode="json")
+                ).model_dump(mode="python"))
                 changed = True
                 log.warning(
                     "JobQueue: job %s failed — max_attempts %s exceeded",
@@ -476,7 +492,7 @@ class JobQueue:
             if widened is not job.placement:
                 update["placement"] = widened
             updated = job.model_copy(update=update)
-            jobs_raw[jid] = updated.model_dump(mode="json")
+            jobs_raw[jid] = _plain_jsonable(updated.model_dump(mode="python"))
             if jid not in order:
                 order.append(jid)
             changed = True
@@ -514,8 +530,8 @@ class JobQueue:
             )
             if widened is job.placement:
                 continue
-            jobs_raw[jid] = job.model_copy(update={"placement": widened}).model_dump(
-                mode="json"
+            jobs_raw[jid] = _plain_jsonable(
+                job.model_copy(update={"placement": widened}).model_dump(mode="python")
             )
             changed = True
             log.info(
@@ -571,7 +587,7 @@ class JobQueue:
                     + timedelta(seconds=self._lease_ttl_s),
                 }
             )
-            jobs_raw[job_id] = claimed.model_dump(mode="json")
+            jobs_raw[job_id] = _plain_jsonable(claimed.model_dump(mode="python"))
             order = [jid for jid in order if jid != job_id]
             new_snap = {
                 "jobs": jobs_raw,
@@ -665,7 +681,7 @@ class JobQueue:
                         }
                     )
                     jobs = dict(snap.get("jobs") or {})
-                    jobs[job_id] = updated.model_dump(mode="json")
+                    jobs[job_id] = _plain_jsonable(updated.model_dump(mode="python"))
                     return {**snap, "jobs": jobs}, updated
 
                 return self._durable_mutate(mut)
@@ -710,9 +726,9 @@ class JobQueue:
                             continue
                         if job.status not in ("claimed", "running"):
                             continue
-                        jobs[jid] = job.model_copy(
+                        jobs[jid] = _plain_jsonable(job.model_copy(
                             update={"lease_expires_at": expiry}
-                        ).model_dump(mode="json")
+                        ).model_dump(mode="python"))
                         count += 1
                     if not count:
                         return snap, 0
@@ -852,7 +868,7 @@ class JobQueue:
                             + timedelta(seconds=self._lease_ttl_s),
                         }
                     )
-                    jobs[job_id] = updated.model_dump(mode="json")
+                    jobs[job_id] = _plain_jsonable(updated.model_dump(mode="python"))
                     return {**snap, "jobs": jobs}, updated
 
                 return self._durable_mutate(mut)
@@ -919,9 +935,9 @@ class JobQueue:
                     updated = job.model_copy(
                         update={"status": status, "lease_expires_at": None}
                     )
-                    jobs[result.job_id] = updated.model_dump(mode="json")
+                    jobs[result.job_id] = _plain_jsonable(updated.model_dump(mode="python"))
                     results = dict(snap.get("results") or {})
-                    results[result.job_id] = result.model_dump(mode="json")
+                    results[result.job_id] = _plain_jsonable(result.model_dump(mode="python"))
                     evmap = {
                         k: list(v) if isinstance(v, list) else []
                         for k, v in (snap.get("events") or {}).items()
@@ -1002,15 +1018,15 @@ class JobQueue:
                     updated = job.model_copy(
                         update={"status": "cancelled", "lease_expires_at": None}
                     )
-                    jobs[job_id] = updated.model_dump(mode="json")
+                    jobs[job_id] = _plain_jsonable(updated.model_dump(mode="python"))
                     order = [j for j in (snap.get("order") or []) if j != job_id]
                     results = dict(snap.get("results") or {})
-                    results[job_id] = JobResult(
+                    results[job_id] = _plain_jsonable(JobResult(
                         job_id=job_id,
                         status="cancelled",
                         error="cancelled by control plane",
                         worker_id=job.claimed_by,
-                    ).model_dump(mode="json")
+                    ).model_dump(mode="python"))
                     new_snap = {
                         "jobs": jobs,
                         "order": order,
@@ -1071,12 +1087,12 @@ class JobQueue:
                         )
                         job = None
                     if job is not None and job.status in ("claimed", "running"):
-                        jobs[job_id] = job.model_copy(
+                        jobs[job_id] = _plain_jsonable(job.model_copy(
                             update={
                                 "lease_expires_at": _utcnow()
                                 + timedelta(seconds=self._lease_ttl_s),
                             }
-                        ).model_dump(mode="json")
+                        ).model_dump(mode="python"))
                     new_snap = {
                         "jobs": jobs,
                         "order": list(snap.get("order") or []),

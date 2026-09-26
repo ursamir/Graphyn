@@ -1410,9 +1410,15 @@ def cmd_worker_start(args):
                 # Embed outputs only when tiny (debug); control hydrates via refs.
                 events = []
                 try:
-                    import sys as _sys
+                    from app.core.plugins.isolated_executor import recast_plugin_types
+
                     if sum(len(repr(v)) for v in (outputs or {}).values()) < 2048:
-                        events = [{"type": "outputs", "data": outputs}]
+                        events = [
+                            {
+                                "type": "outputs",
+                                "data": recast_plugin_types(outputs),
+                            }
+                        ]
                 except Exception:
                     events = []
                 get_job_queue().complete(
@@ -1609,8 +1615,15 @@ def cmd_worker_start(args):
                         raise RuntimeError("cancelled by control plane")
                     events = []
                     try:
+                        from app.core.plugins.isolated_executor import recast_plugin_types
+
                         if sum(len(repr(v)) for v in (outputs or {}).values()) < 2048:
-                            events = [{"type": "outputs", "data": outputs}]
+                            events = [
+                                {
+                                    "type": "outputs",
+                                    "data": recast_plugin_types(outputs),
+                                }
+                            ]
                     except Exception:
                         events = []
                     result = {
