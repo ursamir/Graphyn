@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-notify-on-run-mlops",
+    "seed": 42,
+    "description": "Agents scenario notify-on-run for mlops ops.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "notify-on-run",
+      "mlops"
+    ],
+    "pack": "Agents",
+    "industry": "mlops",
+    "marketplace_id": "tpl-agents-notify-on-run-mlops",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-agents-notify-on-run-mlops.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "schedule_trigger",
+      "config": {},
+      "label": "schedule_trigger",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "http_webhook",
+      "config": {},
+      "label": "http_webhook",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "send_email",
+      "config": {},
+      "label": "send_email",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "input",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {
+    "approval_required": {
+      "type": "boolean",
+      "default": false,
+      "description": ""
+    }
+  }
+}

@@ -124,6 +124,9 @@ ASCEN = {
   "tool-router-mcp": ["tool_router","mcp_tool_call","memory_store","llm_chat"],
   "memory-chat": ["prompt_template","memory_store","llm_chat","guardrail_filter"],
   "schema-extract": ["prompt_template","llm_chat","output_schema_validate","structured_llm"],
+  "email-alert": ["guardrail_filter","llm_chat","send_email"],
+  "notify-on-run": ["schedule_trigger","http_webhook","send_email"],
+  "llm-local-chat": ["prompt_template","llm_chat"],
 }
 MLOPS_PACKS = ["audio","vision","tinyml","rag","wakeword","video"]
 

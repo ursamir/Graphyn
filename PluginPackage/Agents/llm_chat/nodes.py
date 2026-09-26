@@ -1,14 +1,10 @@
-"""LlmChatNode — Multi-turn chat completion
-
-Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
-"""
+"""LlmChatNode — multi-turn chat via stub / openai_compat / ollama."""
 from __future__ import annotations
 
 import importlib
 import logging
-from pathlib import Path
-from typing import ClassVar, Any
+from typing import Any, ClassVar, Literal
+
 from pydantic import Field
 
 from app.core.nodes.base import Node
@@ -30,18 +26,57 @@ ChatMessage = _types.ChatMessage
 log = logging.getLogger(__name__)
 
 
+def _normalize_messages(raw: Any) -> list[dict[str, str]]:
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        if "messages" in raw:
+            raw = raw["messages"]
+        elif "content" in raw or "role" in raw:
+            raw = [raw]
+        elif "text" in raw or "input" in raw or "prompt" in raw:
+            text = raw.get("text") or raw.get("input") or raw.get("prompt") or ""
+            return [{"role": "user", "content": str(text)}]
+        else:
+            return [{"role": "user", "content": str(raw)}]
+    if isinstance(raw, str):
+        return [{"role": "user", "content": raw}]
+    if hasattr(raw, "content") and hasattr(raw, "role"):
+        return [{"role": str(getattr(raw, "role", "user")), "content": str(getattr(raw, "content", ""))}]
+    if not isinstance(raw, (list, tuple)):
+        return [{"role": "user", "content": str(raw)}]
+    out: list[dict[str, str]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            out.append({
+                "role": str(item.get("role") or "user"),
+                "content": str(item.get("content") or item.get("text") or ""),
+            })
+        elif hasattr(item, "content"):
+            out.append({
+                "role": str(getattr(item, "role", "user")),
+                "content": str(getattr(item, "content", "")),
+            })
+        else:
+            out.append({"role": "user", "content": str(item)})
+    return out
+
+
 class LlmChatNode(Node):
-    """Multi-turn chat completion"""
+    """Multi-turn chat completion (stub | openai_compat | ollama)."""
 
     node_type: ClassVar[str] = "llm_chat"
 
     metadata: ClassVar[NodeMetadata] = NodeMetadata(
         node_type="llm_chat",
-        label="Llm Chat",
-        description="Multi-turn chat completion",
+        label="LLM Chat",
+        description=(
+            "Multi-turn chat. Providers: stub (offline), openai_compat "
+            "(OPENAI_API_KEY / Groq), ollama (local, no key)."
+        ),
         category="Processing",
-        version="0.1.0",
-        tags=["agents", "stub"],
+        version="0.2.0",
+        tags=["agents", "llm", "openai", "ollama"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -50,56 +85,100 @@ class LlmChatNode(Node):
     )
 
     input_ports: ClassVar[dict[str, InputPort]] = {
-        "messages": InputPort(name="messages", data_type=object, required=True, description="list[dict]"),
+        "messages": InputPort(
+            name="messages",
+            data_type=object | None,
+            required=False,
+            description="list[dict] chat messages, or string/prompt object",
+        ),
+        "input": InputPort(
+            name="input",
+            data_type=object | None,
+            required=False,
+            description="Alternate input (linear chains); coerced to user message",
+        ),
     }
 
     output_ports: ClassVar[dict[str, OutputPort]] = {
-        "output": OutputPort(name="output", data_type=object, description="ChatMessage NEW"),
+        "output": OutputPort(name="output", data_type=object, description="ChatMessage"),
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
-        model: str = Field(default='gpt-4o-mini', title="Model", description="Model.")
-        temperature: float = Field(default=0.2, title="Temperature", description="Temperature.")
-        api_secret_name: str = Field(default='OPENAI_API_KEY', title="Api secret name", description="Api secret name.")
+        stub: bool = Field(
+            default=True,
+            title="Stub mode",
+            description="When true, return a deterministic stub ChatMessage (no network).",
+        )
+        provider: Literal["stub", "openai_compat", "ollama"] = Field(
+            default="stub",
+            title="Provider",
+            description="stub | openai_compat | ollama",
+        )
+        model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id.")
+        temperature: float = Field(default=0.2, title="Temperature", description="Sampling temperature.")
+        api_secret_name: str = Field(
+            default="OPENAI_API_KEY",
+            title="API secret name",
+            description="Secret/env name for openai_compat. Unused for stub/ollama.",
+        )
+        base_url: str = Field(
+            default="",
+            title="Base URL",
+            description="OpenAI-compatible base URL override. Ollama default: http://127.0.0.1:11434/v1",
+        )
+        system_prompt: str = Field(
+            default="",
+            title="System prompt",
+            description="Optional system message prepended when not already present.",
+        )
+        timeout_s: float = Field(default=60.0, title="Timeout (s)", description="HTTP timeout.")
 
     def process(self, inputs=None, **kwargs):
-        """Stub-capable process — real backends optional."""
         if inputs is None:
             inputs = kwargs
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
-        out_dir = Path('workspace/artifacts') / 'agents' / 'llm_chat'
-        if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            result = ChatMessage()
-            return {"output": result}
-        # Non-stub: attempt real backend; fall back with install hint
-        try:
-            return self._process_real(inputs)
-        except ImportError as exc:
-            raise ImportError(f"llm_chat: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
+        stub = bool(getattr(self.config, "stub", True))
+        provider = (getattr(self.config, "provider", None) or "stub").strip().lower()
+        if stub or provider == "stub":
+            return {
+                "output": ChatMessage(
+                    role="assistant",
+                    content="[stub] llm_chat — set stub=False and provider=openai_compat|ollama to call a model.",
+                )
+            }
 
-    def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
+        raw = inputs.get("messages")
+        if raw is None:
+            raw = inputs.get("input")
+        messages = _normalize_messages(raw)
+        system = (getattr(self.config, "system_prompt", "") or "").strip()
+        if system and not any(m.get("role") == "system" for m in messages):
+            messages = [{"role": "system", "content": system}, *messages]
+        if not messages:
+            messages = [{"role": "user", "content": ""}]
+
+        from app.core.llm_client import NeedsCredentialsError, chat_completion
+
         try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'agents' / 'llm_chat'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": ChatMessage()}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+            result = chat_completion(
+                messages=messages,
+                provider=provider,
+                model=getattr(self.config, "model", None) or "gpt-4o-mini",
+                temperature=float(getattr(self.config, "temperature", 0.2) or 0.0),
+                base_url=(getattr(self.config, "base_url", "") or "") or None,
+                api_secret_name=getattr(self.config, "api_secret_name", None) or "OPENAI_API_KEY",
+                timeout_s=float(getattr(self.config, "timeout_s", 60.0) or 60.0),
+            )
+        except NeedsCredentialsError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"llm_chat: provider={provider!r} failed: {exc}") from exc
+
+        return {
+            "output": ChatMessage(
+                role="assistant",
+                content=str(result.get("content") or ""),
+            )
+        }

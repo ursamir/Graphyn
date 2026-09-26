@@ -19,7 +19,7 @@ runtime = "inprocess"
 node_types = ["structured_llm"]
 
 [config_schema.structured_llm]
-provider = { type = "string", title = "Provider", default = "openai_compat", description = "openai_compat (OPENAI/Groq) or local_heuristic (free).", enum = ["openai_compat", "local_heuristic"], ui = { group = "Basic" } }
+provider = { type = "string", title = "Provider", default = "openai_compat", description = "openai_compat (OPENAI/Groq), ollama (local), or local_heuristic (free).", enum = ["openai_compat", "ollama", "local_heuristic"], ui = { group = "Basic" } }
 json_schema = { type = "object", title = "JSON Schema", default = { }, description = "JSON Schema object the model must satisfy.", widget = "json", ui = { group = "Basic" } }
 schema_name = { type = "string", title = "Schema name", default = "extracted", description = "Name attached to the structured-output schema for the provider.", ui = { group = "Basic" } }
 model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Chat model id. Requires OPENAI_API_KEY or Groq when using openai_compat.", ui = { group = "Basic" } }

@@ -1,11 +1,11 @@
 {
   "title": "Graphyn Pipeline Template Marketplace Catalog",
   "schema_version": "1.0",
-  "generated_at": "2026-09-25T22:27:25.272138+00:00",
+  "generated_at": "2026-09-26T01:14:41.480225+00:00",
   "generator": "scripts/generate_pipeline_template_catalog.py",
-  "total_templates": 3014,
+  "total_templates": 3032,
   "counts_by_pack": {
-    "Agents": 48,
+    "Agents": 66,
     "Audio": 182,
     "Common": 26,
     "MLOps": 30,
@@ -18,11 +18,11 @@
   "counts_by_status": {
     "alter-existing": 37,
     "needs-api": 127,
-    "proposed": 2822,
-    "seeded": 28
+    "proposed": 2862,
+    "seeded": 6
   },
   "counts_by_family": {
-    "agents": 48,
+    "agents": 66,
     "audio": 168,
     "common": 25,
     "coverage": 1,
@@ -39,7 +39,9 @@
     "node_types_used_in_templates": 155,
     "coverage_pct": 100.0,
     "orphans": [],
-    "extra_nodes_in_templates_not_in_catalog": []
+    "extra_nodes_in_templates_not_in_catalog": [
+      "send_email"
+    ]
   },
   "seed_graphs": [
     "examples/templates/marketplace/tpl-audio-kws-smart-home.graph.json",
@@ -47,31 +49,7 @@
     "examples/templates/marketplace/tpl-tinyml-kws-wearable-cortex-m4-ptq-tflm.graph.json",
     "examples/templates/marketplace/tpl-vision-yolo-detect-train-retail-shelf.graph.json",
     "examples/templates/marketplace/tpl-rag-ingest-fs-recursive-faiss-support.graph.json",
-    "examples/templates/marketplace/tpl-video-ingest-scene-caption-security.graph.json",
-    "examples/templates/marketplace/tpl-agents-run-pipeline-mlops.graph.json",
-    "examples/templates/marketplace/tpl-mlops-train-eval-ship-audio.graph.json",
-    "examples/templates/marketplace/tpl-common-http-poll-transform-general.graph.json",
-    "examples/templates/marketplace/tpl-cross-meeting-audio-asr-rag.graph.json",
-    "examples/templates/marketplace/tpl-coverage-node-audio-classifier.graph.json",
-    "examples/templates/marketplace/tpl-audio-kws-smart-home-edge-tflite.graph.json",
-    "examples/templates/marketplace/tpl-wakeword-en-hey-graphyn-feature.graph.json",
-    "examples/templates/marketplace/tpl-tinyml-kws-wearable-cortex-m4-ptq-executorch.graph.json",
-    "examples/templates/marketplace/tpl-vision-yolo-detect-hparam-retail-shelf.graph.json",
-    "examples/templates/marketplace/tpl-rag-ingest-fs-semantic-faiss-support.graph.json",
-    "examples/templates/marketplace/tpl-video-action-classify-security.graph.json",
-    "examples/templates/marketplace/tpl-agents-run-pipeline-support.graph.json",
-    "examples/templates/marketplace/tpl-mlops-canary-promote-audio.graph.json",
-    "examples/templates/marketplace/tpl-common-branch-merge-error-general.graph.json",
-    "examples/templates/marketplace/tpl-cross-meeting-audio-asr-rag-retail.graph.json",
-    "examples/templates/marketplace/tpl-audio-kws-automotive.graph.json",
-    "examples/templates/marketplace/tpl-wakeword-en-hey-graphyn-train.graph.json",
-    "examples/templates/marketplace/tpl-tinyml-kws-wearable-cortex-m4-ptq-cmsis-pack.graph.json",
-    "examples/templates/marketplace/tpl-vision-yolo-detect-resume-retail-shelf.graph.json",
-    "examples/templates/marketplace/tpl-rag-ingest-fs-markdown-faiss-support.graph.json",
-    "examples/templates/marketplace/tpl-video-safety-monitor-security.graph.json",
-    "examples/templates/marketplace/tpl-agents-run-pipeline-security.graph.json",
-    "examples/templates/marketplace/tpl-mlops-drift-watch-audio.graph.json",
-    "examples/templates/marketplace/tpl-common-doc-chunk-store-general.graph.json"
+    "examples/templates/marketplace/tpl-video-ingest-scene-caption-security.graph.json"
   ],
   "templates": [
     {
@@ -298,7 +276,7 @@
         ],
         "agent_brief": "Instantiate tpl-audio-kws-automotive, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Audio pack in automotive audio pipeline.",
       "metadata_extra": {}
     },
@@ -11065,7 +11043,7 @@
         ],
         "agent_brief": "Instantiate tpl-wakeword-en-hey-graphyn-feature, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves WakeWord pack in consumer-iot wakeword pipeline.",
       "metadata_extra": {}
     },
@@ -11124,7 +11102,7 @@
         ],
         "agent_brief": "Instantiate tpl-wakeword-en-hey-graphyn-train, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves WakeWord pack in consumer-iot wakeword pipeline.",
       "metadata_extra": {}
     },
@@ -16418,7 +16396,7 @@
         ],
         "agent_brief": "Instantiate tpl-tinyml-kws-wearable-cortex-m4-ptq-executorch, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves TinyML pack in wearable tinyml pipeline.",
       "metadata_extra": {}
     },
@@ -16500,7 +16478,7 @@
         ],
         "agent_brief": "Instantiate tpl-tinyml-kws-wearable-cortex-m4-ptq-cmsis-pack, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves TinyML pack in wearable tinyml pipeline.",
       "metadata_extra": {}
     },
@@ -87941,7 +87919,7 @@
         ],
         "agent_brief": "Instantiate tpl-vision-yolo-detect-hparam-retail-shelf, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Vision pack in retail-shelf vision pipeline.",
       "metadata_extra": {}
     },
@@ -87993,7 +87971,7 @@
         ],
         "agent_brief": "Instantiate tpl-vision-yolo-detect-resume-retail-shelf, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Vision pack in retail-shelf vision pipeline.",
       "metadata_extra": {}
     },
@@ -129880,7 +129858,7 @@
         ],
         "agent_brief": "Instantiate tpl-rag-ingest-fs-semantic-faiss-support, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves RAG pack in support rag pipeline.",
       "metadata_extra": {}
     },
@@ -129947,7 +129925,7 @@
         ],
         "agent_brief": "Instantiate tpl-rag-ingest-fs-markdown-faiss-support, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves RAG pack in support rag pipeline.",
       "metadata_extra": {}
     },
@@ -191204,7 +191182,7 @@
         ],
         "agent_brief": "Instantiate tpl-video-action-classify-security, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Video pack in security video pipeline.",
       "metadata_extra": {}
     },
@@ -191265,7 +191243,7 @@
         ],
         "agent_brief": "Instantiate tpl-video-safety-monitor-security, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Video pack in security video pipeline.",
       "metadata_extra": {}
     },
@@ -193832,7 +193810,7 @@
         ],
         "agent_brief": "Use Agents pack for run-pipeline; never embed raw secrets; HITL for promote."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Agents pack in mlops agents pipeline.",
       "metadata_extra": {}
     },
@@ -193891,7 +193869,7 @@
         ],
         "agent_brief": "Use Agents pack for run-pipeline; never embed raw secrets; HITL for promote."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Agents pack in support agents pipeline.",
       "metadata_extra": {}
     },
@@ -193950,7 +193928,7 @@
         ],
         "agent_brief": "Use Agents pack for run-pipeline; never embed raw secrets; HITL for promote."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Agents pack in security agents pipeline.",
       "metadata_extra": {}
     },
@@ -196502,6 +196480,942 @@
       "metadata_extra": {}
     },
     {
+      "id": "tpl-agents-email-alert-mlops",
+      "name": "Email Alert Mlops",
+      "description": "Agents scenario email-alert for mlops ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "mlops",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "email-alert",
+        "mlops"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "guardrail_filter"
+        },
+        {
+          "node_type": "llm_chat"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for email-alert; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in mlops agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-email-alert-support",
+      "name": "Email Alert Support",
+      "description": "Agents scenario email-alert for support ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "support",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "email-alert",
+        "support"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "guardrail_filter"
+        },
+        {
+          "node_type": "llm_chat"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for email-alert; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in support agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-email-alert-security",
+      "name": "Email Alert Security",
+      "description": "Agents scenario email-alert for security ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "security",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "email-alert",
+        "security"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "guardrail_filter"
+        },
+        {
+          "node_type": "llm_chat"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for email-alert; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in security agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-email-alert-compliance",
+      "name": "Email Alert Compliance",
+      "description": "Agents scenario email-alert for compliance ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "compliance",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "email-alert",
+        "compliance"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "guardrail_filter"
+        },
+        {
+          "node_type": "llm_chat"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for email-alert; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in compliance agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-email-alert-retail",
+      "name": "Email Alert Retail",
+      "description": "Agents scenario email-alert for retail ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "retail",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "email-alert",
+        "retail"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "guardrail_filter"
+        },
+        {
+          "node_type": "llm_chat"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for email-alert; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in retail agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-email-alert-callcenter",
+      "name": "Email Alert Callcenter",
+      "description": "Agents scenario email-alert for callcenter ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "callcenter",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "email-alert",
+        "callcenter"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "guardrail_filter"
+        },
+        {
+          "node_type": "llm_chat"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for email-alert; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in callcenter agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-notify-on-run-mlops",
+      "name": "Notify On Run Mlops",
+      "description": "Agents scenario notify-on-run for mlops ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "mlops",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "notify-on-run",
+        "mlops"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "schedule_trigger"
+        },
+        {
+          "node_type": "http_webhook"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for notify-on-run; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in mlops agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-notify-on-run-support",
+      "name": "Notify On Run Support",
+      "description": "Agents scenario notify-on-run for support ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "support",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "notify-on-run",
+        "support"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "schedule_trigger"
+        },
+        {
+          "node_type": "http_webhook"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for notify-on-run; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in support agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-notify-on-run-security",
+      "name": "Notify On Run Security",
+      "description": "Agents scenario notify-on-run for security ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "security",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "notify-on-run",
+        "security"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "schedule_trigger"
+        },
+        {
+          "node_type": "http_webhook"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for notify-on-run; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in security agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-notify-on-run-compliance",
+      "name": "Notify On Run Compliance",
+      "description": "Agents scenario notify-on-run for compliance ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "compliance",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "notify-on-run",
+        "compliance"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "schedule_trigger"
+        },
+        {
+          "node_type": "http_webhook"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for notify-on-run; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in compliance agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-notify-on-run-retail",
+      "name": "Notify On Run Retail",
+      "description": "Agents scenario notify-on-run for retail ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "retail",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "notify-on-run",
+        "retail"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "schedule_trigger"
+        },
+        {
+          "node_type": "http_webhook"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for notify-on-run; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in retail agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-notify-on-run-callcenter",
+      "name": "Notify On Run Callcenter",
+      "description": "Agents scenario notify-on-run for callcenter ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "callcenter",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "notify-on-run",
+        "callcenter"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "schedule_trigger"
+        },
+        {
+          "node_type": "http_webhook"
+        },
+        {
+          "node_type": "send_email"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for notify-on-run; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in callcenter agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-llm-local-chat-mlops",
+      "name": "Llm Local Chat Mlops",
+      "description": "Agents scenario llm-local-chat for mlops ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "mlops",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "llm-local-chat",
+        "mlops"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "prompt_template"
+        },
+        {
+          "node_type": "llm_chat"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for llm-local-chat; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in mlops agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-llm-local-chat-support",
+      "name": "Llm Local Chat Support",
+      "description": "Agents scenario llm-local-chat for support ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "support",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "llm-local-chat",
+        "support"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "prompt_template"
+        },
+        {
+          "node_type": "llm_chat"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for llm-local-chat; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in support agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-llm-local-chat-security",
+      "name": "Llm Local Chat Security",
+      "description": "Agents scenario llm-local-chat for security ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "security",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "llm-local-chat",
+        "security"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "prompt_template"
+        },
+        {
+          "node_type": "llm_chat"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for llm-local-chat; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in security agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-llm-local-chat-compliance",
+      "name": "Llm Local Chat Compliance",
+      "description": "Agents scenario llm-local-chat for compliance ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "compliance",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "llm-local-chat",
+        "compliance"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "prompt_template"
+        },
+        {
+          "node_type": "llm_chat"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for llm-local-chat; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in compliance agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-llm-local-chat-retail",
+      "name": "Llm Local Chat Retail",
+      "description": "Agents scenario llm-local-chat for retail ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "retail",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "llm-local-chat",
+        "retail"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "prompt_template"
+        },
+        {
+          "node_type": "llm_chat"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for llm-local-chat; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in retail agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
+      "id": "tpl-agents-llm-local-chat-callcenter",
+      "name": "Llm Local Chat Callcenter",
+      "description": "Agents scenario llm-local-chat for callcenter ops.",
+      "pack": "Agents",
+      "packs_used": [
+        "Agents",
+        "Common",
+        "MLOps"
+      ],
+      "industry": "callcenter",
+      "modality": [
+        "text"
+      ],
+      "lifecycle": [
+        "agent",
+        "observe"
+      ],
+      "tags": [
+        "agents",
+        "llm-local-chat",
+        "callcenter"
+      ],
+      "family": "agents",
+      "node_chain": [
+        {
+          "node_type": "prompt_template"
+        },
+        {
+          "node_type": "llm_chat"
+        }
+      ],
+      "edges_hint": [],
+      "parameters": {
+        "approval_required": false
+      },
+      "mcp": {
+        "instantiate": true,
+        "required_tools": [
+          "list_pipelines",
+          "execute_pipeline",
+          "secrets_list",
+          "propose_graph"
+        ],
+        "agent_brief": "Use Agents pack for llm-local-chat; never embed raw secrets; HITL for promote."
+      },
+      "status": "proposed",
+      "value_prop": "Proves Agents pack in callcenter agents pipeline.",
+      "metadata_extra": {}
+    },
+    {
       "id": "tpl-mlops-train-eval-ship-audio",
       "name": "Train Eval Ship Audio",
       "description": "Train to eval_gate to model_card to ship for audio.",
@@ -196561,7 +197475,7 @@
         ],
         "agent_brief": "Instantiate tpl-mlops-train-eval-ship-audio, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves MLOps pack in mlops mlops pipeline.",
       "metadata_extra": {}
     },
@@ -196621,7 +197535,7 @@
         ],
         "agent_brief": "Instantiate tpl-mlops-canary-promote-audio, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves MLOps pack in mlops mlops pipeline.",
       "metadata_extra": {}
     },
@@ -196680,7 +197594,7 @@
         ],
         "agent_brief": "Instantiate tpl-mlops-drift-watch-audio, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves MLOps pack in mlops mlops pipeline.",
       "metadata_extra": {}
     },
@@ -198304,7 +199218,7 @@
         ],
         "agent_brief": "Instantiate tpl-common-http-poll-transform-general, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Common pack in general common pipeline.",
       "metadata_extra": {}
     },
@@ -198390,7 +199304,7 @@
         ],
         "agent_brief": "Instantiate tpl-common-branch-merge-error-general, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Common pack in general common pipeline.",
       "metadata_extra": {}
     },
@@ -199808,7 +200722,7 @@
         ],
         "agent_brief": "Instantiate tpl-cross-meeting-audio-asr-rag, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Cross-pack composite proving packs compose as product surfaces.",
       "metadata_extra": {}
     },
@@ -199876,7 +200790,7 @@
         ],
         "agent_brief": "Instantiate tpl-cross-meeting-audio-asr-rag-retail, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Proves Audio pack in retail cross pipeline.",
       "metadata_extra": {}
     },
@@ -204326,7 +205240,7 @@
         ],
         "agent_brief": "Instantiate tpl-coverage-node-audio-classifier, validate, save, execute, inspect."
       },
-      "status": "seeded",
+      "status": "proposed",
       "value_prop": "Coverage guarantee for audio_classifier.",
       "metadata_extra": {}
     }

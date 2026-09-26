@@ -1,0 +1,68 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-email-alert-support",
+    "seed": 42,
+    "description": "Agents scenario email-alert for support ops.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "email-alert",
+      "support"
+    ],
+    "pack": "Agents",
+    "industry": "support",
+    "marketplace_id": "tpl-agents-email-alert-support",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-agents-email-alert-support.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "guardrail_filter",
+      "config": {},
+      "label": "guardrail_filter",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "llm_chat",
+      "config": {},
+      "label": "llm_chat",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n2",
+      "node_type": "send_email",
+      "config": {},
+      "label": "send_email",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "messages",
+      "condition": null
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n2",
+      "dst_port": "input",
+      "condition": null
+    }
+  ],
+  "parameters": {
+    "approval_required": {
+      "type": "boolean",
+      "default": false,
+      "description": ""
+    }
+  }
+}

@@ -1,17 +1,15 @@
 [plugin]
 name             = "llm-chat"
-version          = "0.1.0"
-description      = "Multi-turn chat completion"
+version          = "0.2.0"
+description      = "Multi-turn chat via stub, OpenAI-compatible HTTP, or Ollama local."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["agents", "llm", "stub"]
+tags = ["agents", "llm", "openai", "ollama"]
 
-dependencies = [
-    "numpy>=1.24",
-]
+dependencies = []
 
 optional_dependencies = [
     "httpx>=0.24",
@@ -21,7 +19,11 @@ runtime = "inprocess"
 node_types = ["llm_chat"]
 
 [config_schema.llm_chat]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
-model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Model." }
-temperature = { type = "number", title = "Temperature", default = 0.2, description = "Temperature." }
-api_secret_name = { type = "string", title = "Api secret name", default = "OPENAI_API_KEY", description = "Api secret name." }
+stub = { type = "boolean", title = "Stub mode", default = true, description = "When true, return deterministic stub output (no network)." }
+provider = { type = "string", title = "Provider", default = "stub", description = "stub | openai_compat | ollama", enum = ["stub", "openai_compat", "ollama"] }
+model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Chat model id. For ollama, defaults to llama3.2 when left as gpt-*." }
+temperature = { type = "number", title = "Temperature", default = 0.2, description = "Sampling temperature." }
+api_secret_name = { type = "string", title = "API secret name", default = "OPENAI_API_KEY", description = "Secret/env for openai_compat. Unused for stub/ollama." }
+base_url = { type = "string", title = "Base URL", default = "", description = "OpenAI-compatible base URL. Ollama: http://127.0.0.1:11434/v1" }
+system_prompt = { type = "string", title = "System prompt", default = "", description = "Optional system message." }
+timeout_s = { type = "number", title = "Timeout (s)", default = 60.0, description = "HTTP timeout seconds." }

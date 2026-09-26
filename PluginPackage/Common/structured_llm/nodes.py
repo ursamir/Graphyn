@@ -219,7 +219,7 @@ class StructuredLlmNode(Node):
     }
 
     class Config(NodeConfig):
-        provider: Literal["openai_compat", "local_heuristic"] = Field(
+        provider: Literal["openai_compat", "ollama", "local_heuristic"] = Field(
             default="openai_compat",
             title="Provider",
             description="LLM backend: openai_compat (HTTP) or local_heuristic (deterministic, free).",
@@ -248,10 +248,49 @@ class StructuredLlmNode(Node):
                 raw_text=text,
                 metadata={"mode": "heuristic"},
             )
+        
+        if provider == "ollama":
+            from app.core.llm_client import chat_completion
+            import json as _json
+            model = self.config.model or "llama3.2"
+            if str(model).startswith("gpt-"):
+                model = "llama3.2"
+            schema = self.config.json_schema or {"type": "object", "properties": {}}
+            sys_prompt = (
+                (self.config.system_prompt or "Extract JSON matching the schema. Reply with JSON only.")
+                + " Schema: " + _json.dumps(schema)
+            )
+            result = chat_completion(
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": text or ""},
+                ],
+                provider="ollama",
+                model=model,
+                temperature=0.0,
+                base_url=(self.config.base_url or "") or None,
+                api_secret_name="",
+                timeout_s=float(self.config.timeout_s or 30.0),
+            )
+            content = result.get("content") or "{}"
+            try:
+                data = _json.loads(content) if isinstance(content, str) else content
+            except Exception:
+                data = {"raw": content}
+            if not isinstance(data, dict):
+                data = {"value": data}
+            return StructuredDocument(
+                data=data,
+                schema_name=self.config.schema_name,
+                provider="ollama",
+                raw_text=text,
+                metadata={"mode": "ollama"},
+            )
         if provider != "openai_compat":
+
             raise RuntimeError(
                 f"StructuredLlmNode: unknown provider {provider!r}. "
-                "Use openai_compat or local_heuristic."
+                "Use openai_compat, ollama, or local_heuristic."
             )
         api_key = _resolve_openai_compat_key(self.config.base_url or "")
         if not api_key:

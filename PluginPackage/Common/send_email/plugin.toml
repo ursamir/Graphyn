@@ -1,0 +1,24 @@
+[plugin]
+name             = "send-email"
+version          = "0.1.0"
+description      = "Outbound SMTP email via GRAPHYN_SMTP_* env. Supports dry-run. Not IMAP/inbox."
+author           = "Graphyn Plugins"
+platform_version = ">=0.0"
+entry_points     = ["types.py", "nodes.py"]
+license          = "MIT"
+
+tags = ["email", "smtp", "notify", "common"]
+
+dependencies = []
+
+optional_dependencies = []
+
+runtime = "inprocess"
+node_types = ["send_email"]
+
+[config_schema.send_email]
+to = { type = "string", title = "To", default = "", description = "Recipient email(s), comma-separated. Falls back to input.to." }
+subject = { type = "string", title = "Subject", default = "Graphyn notification", description = "Email subject." }
+body_template = { type = "string", title = "Body template", default = "", description = "Optional body override; else input body/text/content." }
+from_addr = { type = "string", title = "From", default = "", description = "Override From. Default GRAPHYN_SMTP_FROM." }
+dry_run = { type = "boolean", title = "Dry run", default = false, description = "Skip SMTP dial. Also honors GRAPHYN_SMTP_DRY_RUN=1." }

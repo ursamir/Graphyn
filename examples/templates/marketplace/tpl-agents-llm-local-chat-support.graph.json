@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.1",
+  "metadata": {
+    "name": "tpl-agents-llm-local-chat-support",
+    "seed": 42,
+    "description": "Agents scenario llm-local-chat for support ops.",
+    "created_at": null,
+    "tags": [
+      "agents",
+      "llm-local-chat",
+      "support"
+    ],
+    "pack": "Agents",
+    "industry": "support",
+    "marketplace_id": "tpl-agents-llm-local-chat-support",
+    "status": "proposed",
+    "source_example": "marketplace/tpl-agents-llm-local-chat-support.graph.json"
+  },
+  "nodes": [
+    {
+      "id": "n0",
+      "node_type": "prompt_template",
+      "config": {},
+      "label": "prompt_template",
+      "capability_metadata": null,
+      "event_trigger": null
+    },
+    {
+      "id": "n1",
+      "node_type": "llm_chat",
+      "config": {},
+      "label": "llm_chat",
+      "capability_metadata": null,
+      "event_trigger": null
+    }
+  ],
+  "edges": [
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "messages",
+      "condition": null
+    }
+  ],
+  "parameters": {
+    "approval_required": {
+      "type": "boolean",
+      "default": false,
+      "description": ""
+    }
+  }
+}
