@@ -366,9 +366,13 @@ class DiskStateStore(DistributedStateStore):
     ) -> T:
         def _mutate() -> T:
             _, jobs_path, _, _ = self._paths()
+            # Missing jobs.json is empty queue (first write). fail_closed only
+            # when the file exists but is unreadable/corrupt.
             snap = self._normalize_queue(
                 self._read_json(
-                    jobs_path, self._empty_queue(), fail_closed=True
+                    jobs_path,
+                    self._empty_queue(),
+                    fail_closed=jobs_path.is_file(),
                 )
             )
             new_snap, result = mutator(snap)
