@@ -269,3 +269,132 @@ print("TFLM_OK", dep.metadata["file_size_bytes"], dep.metadata["tflite_path"])
     if proc.returncode != 0:
         pytest.fail(f"tflm real backend failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
     assert "TFLM_OK" in proc.stdout
+
+
+def test_yolo_dataset_yaml_build_real(tmp_path):
+    from unit_test.plugins._helpers import materialize_isolated_class
+    from app.core.nodes.registry import NodeRegistry
+    from app.core.plugins.manager import PluginManager
+    from app.models.dataset_artifact import DatasetArtifact
+
+    reg = NodeRegistry()
+    mgr = PluginManager(registry=reg, base_dir=str(tmp_path / "plugins"))
+    mgr._plugins_dir = str(tmp_path / "plugins")
+    mgr.install("PluginPackage/Vision/yolo_dataset_yaml_build/")
+    cls = materialize_isolated_class(reg.get_class("yolo_dataset_yaml_build"))
+    root = tmp_path / "ds"
+    node = cls(
+        config=cls.Config(
+            stub=False,
+            path=str(root),
+            names=["cat", "dog"],
+            train="images/train",
+            val="images/val",
+        )
+    )
+    out = node.process({"input": DatasetArtifact(labels=["cat", "dog"], n_classes=2, metadata={})})
+    meta = out["output"].metadata
+    assert meta.get("stub") is False
+    yaml_path = Path(meta["yaml_path"])
+    assert yaml_path.is_file()
+    body = yaml_path.read_text(encoding="utf-8")
+    assert "names:" in body and "cat" in body
+
+
+def test_bm25_index_build_real(tmp_path):
+    from unit_test.plugins._helpers import materialize_isolated_class
+    from app.core.nodes.registry import NodeRegistry
+    from app.core.plugins.manager import PluginManager
+
+    reg = NodeRegistry()
+    mgr = PluginManager(registry=reg, base_dir=str(tmp_path / "plugins"))
+    mgr._plugins_dir = str(tmp_path / "plugins")
+    mgr.install("PluginPackage/RAG/bm25_index_build/")
+    cls = materialize_isolated_class(reg.get_class("bm25_index_build"))
+
+    class Chunk:
+        def __init__(self, text, chunk_id):
+            self.text = text
+            self.chunk_id = chunk_id
+            self.source = ""
+            self.page = None
+            self.metadata = {}
+
+    node = cls(config=cls.Config(stub=False, persist_path=str(tmp_path / "bm25")))
+    out = node.process({"input": [Chunk("alpha beta", "c1"), Chunk("beta gamma", "c2")]})
+    ref = out["output"]
+    assert ref.metadata.get("stub") is False
+    assert ref.metadata.get("n_docs") == 2
+    assert (Path(ref.path) / "bm25_index.json").is_file()
+
+
+def test_pgvector_needs_api_without_dsn(tmp_path, monkeypatch):
+    from unit_test.plugins._helpers import materialize_isolated_class
+    from app.core.nodes.registry import NodeRegistry
+    from app.core.plugins.manager import PluginManager
+
+    monkeypatch.delenv("PGVECTOR_DSN", raising=False)
+    reg = NodeRegistry()
+    mgr = PluginManager(registry=reg, base_dir=str(tmp_path / "plugins"))
+    mgr._plugins_dir = str(tmp_path / "plugins")
+    mgr.install("PluginPackage/RAG/vector_store_write/")
+    cls = materialize_isolated_class(reg.get_class("vector_store_write"))
+    node = cls(
+        config=cls.Config(
+            stub=False,
+            backend="pgvector",
+            persist_path=str(tmp_path / "vs"),
+            collection="wave1",
+        )
+    )
+
+    class EV:
+        def __init__(self):
+            self.embedding = [0.1, 0.2]
+            self.source_path = ""
+            self.label = ""
+            self.metadata = {"chunk_id": "c1"}
+
+    try:
+        node.process({"embeddings": [EV()], "chunks": []})
+        raise AssertionError("expected needs-api RuntimeError")
+    except RuntimeError as exc:
+        msg = str(exc)
+        assert "needs-api" in msg
+        assert "chromadb" in msg or "faiss" in msg
+
+
+@pytest.mark.backend
+def test_real_yolo_train_coco8_cpu():
+    """Tiny ultralytics train (coco8, 1 epoch, CPU) — proves stub=False path."""
+    code = (
+        "import os, tempfile\n"
+        "from pathlib import Path\n"
+        "os.environ['CUDA_VISIBLE_DEVICES'] = ''\n"
+        "os.environ['GRAPHYN_WAVE1_FORCE_CPU'] = '1'\n"
+        "os.environ.setdefault('YOLO_CONFIG_DIR', '/tmp/Ultralytics')\n"
+        "from app.core.nodes.registry import NodeRegistry\n"
+        "from app.core.plugins.manager import PluginManager\n"
+        "from unit_test.plugins._helpers import materialize_isolated_class\n"
+        "td = Path(tempfile.mkdtemp())\n"
+        "reg = NodeRegistry()\n"
+        "mgr = PluginManager(registry=reg, base_dir=str(td / 'plugins'))\n"
+        "mgr._plugins_dir = str(td / 'plugins')\n"
+        "mgr.install('PluginPackage/Vision/yolo_train/')\n"
+        "Train = materialize_isolated_class(reg.get_class('yolo_train'))\n"
+        "class DS:\n"
+        "    yaml_path = 'coco8.yaml'\n"
+        "    root = ''\n"
+        "    task = 'detect'\n"
+        "    names = []\n"
+        "    metadata = {}\n"
+        "node = Train(config=Train.Config(stub=False, model='yolov8n.pt', epochs=1, imgsz=64, batch=2, device='cpu', project=str(td / 'runs')))\n"
+        "out = node.process({'dataset': DS()})\n"
+        "art = out['output']\n"
+        "assert art.history.get('stub') is not True\n"
+        "print('YOLO_TRAIN_OK', art.model_path, art.history)\n"
+    )
+    proc = _run_in_venv("vision", code, timeout=600)
+    if proc.returncode != 0:
+        pytest.fail(f"yolo train real backend failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+    assert "YOLO_TRAIN_OK" in proc.stdout

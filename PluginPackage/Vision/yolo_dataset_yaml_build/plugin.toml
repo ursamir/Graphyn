@@ -1,13 +1,13 @@
 [plugin]
 name             = "yolo-dataset-yaml-build"
-version          = "0.1.0"
+version = "0.2.0"
 description      = "Build Ultralytics data.yaml + path layout from Vision dataset artifacts"
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["vision", "yolo", "stub"]
+tags = ["vision", "yolo", "wave1"]
 
 dependencies = [
     "numpy>=1.24",

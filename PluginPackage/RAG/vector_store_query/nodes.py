@@ -109,6 +109,8 @@ class VectorStoreQueryNode(Node):
             hits = self._query_chromadb(persist, collection, qvec, k)
         elif backend == "faiss":
             hits = self._query_faiss(persist, qvec, k)
+        elif backend in ("pgvector", "pg"):
+            hits = self._query_pgvector(store, collection, qvec, k)
         else:
             raise RuntimeError(f"vector_store_query: unsupported backend {backend!r}")
         return {"output": hits}
@@ -172,4 +174,69 @@ class VectorStoreQueryNode(Node):
                     metadata={"backend": "faiss", "i": idx},
                 )
             )
+        return hits
+
+    def _query_pgvector(self, store, collection: str, qvec: list[float], k: int):
+        """Opt-in pgvector query. Fail-closed with needs-api when DSN/deps missing."""
+        import os
+        from app.core.plugins.wave1_runtime import install_hint
+
+        hint = install_hint("rag", ["psycopg[binary]>=3.1"])
+        secret_name = "PGVECTOR_DSN"
+        meta = getattr(store, "metadata", None) or {}
+        if isinstance(meta, dict) and meta.get("dsn_secret"):
+            secret_name = str(meta["dsn_secret"])
+        try:
+            from app.core.secrets import resolve_secret
+
+            dsn = (resolve_secret(secret_name) or "").strip()
+        except Exception:
+            dsn = ""
+        if not dsn:
+            dsn = (os.environ.get(secret_name) or os.environ.get("PGVECTOR_DSN") or "").strip()
+        if not dsn:
+            raise RuntimeError(
+                "vector_store_query: pgvector needs-api — set PGVECTOR_DSN secret/env "
+                "to a dedicated vector-enabled Postgres. Default backends remain "
+                "chromadb|faiss. " + hint
+            )
+        try:
+            import psycopg  # type: ignore
+        except ImportError as exc:
+            raise ImportError(hint) from exc
+
+        table = "graphyn_embeddings"
+        if isinstance(meta, dict) and meta.get("table"):
+            table = str(meta["table"])
+        lit = "[" + ",".join(str(float(x)) for x in qvec) + "]"
+        hits = []
+        try:
+            with psycopg.connect(dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT chunk_id, document,
+                               1.0 / (1.0 + (embedding <=> %s::vector)) AS score
+                        FROM {table}
+                        WHERE collection = %s
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                        """,
+                        (lit, collection, lit, max(1, int(k))),
+                    )
+                    for cid, doc, score in cur.fetchall():
+                        hits.append(
+                            RetrievalHit(
+                                chunk_id=str(cid),
+                                text=str(doc or ""),
+                                score=float(score or 0.0),
+                                metadata={"backend": "pgvector"},
+                            )
+                        )
+        except Exception as exc:
+            raise RuntimeError(
+                "vector_store_query: pgvector needs-api — query failed "
+                f"({type(exc).__name__}: {exc}). Keep backend=chromadb|faiss. "
+                + hint
+            ) from exc
         return hits

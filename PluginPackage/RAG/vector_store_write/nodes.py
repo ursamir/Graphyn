@@ -115,12 +115,7 @@ class VectorStoreWriteNode(Node):
         if backend == "faiss":
             return {"output": self._write_faiss(persist, collection, embeddings, chunks)}
         if backend in ("pgvector", "pg"):
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise RuntimeError(
-                "vector_store_write: pgvector backend needs-api (DSN wiring). "
-                + install_hint("rag", ["psycopg", "pgvector"])
-            )
+            return {"output": self._write_pgvector(persist, collection, embeddings, chunks)}
         raise RuntimeError(f"vector_store_write: unknown backend {backend!r}")
 
     def _write_chromadb(self, persist: Path, collection: str, embeddings: list, chunks: list):
@@ -202,3 +197,127 @@ class VectorStoreWriteNode(Node):
         (persist / "index_meta.json").write_text(json.dumps(meta), encoding="utf-8")
         log.info("vector_store_write faiss wrote %d vectors → %s", mat.shape[0], persist)
         return VectorStoreRef(backend="faiss", path=str(persist), collection=collection, metadata=meta)
+
+    def _resolve_pg_dsn(self) -> str:
+        """Resolve PGVECTOR DSN from named secret or env — never invent one."""
+        import os
+
+        secret_name = str(getattr(self.config, "pg_dsn_secret", None) or "PGVECTOR_DSN").strip() or "PGVECTOR_DSN"
+        try:
+            from app.core.secrets import resolve_secret
+
+            dsn = (resolve_secret(secret_name) or "").strip()
+        except Exception:
+            dsn = ""
+        if not dsn:
+            dsn = (os.environ.get(secret_name) or os.environ.get("PGVECTOR_DSN") or "").strip()
+        return dsn
+
+    def _write_pgvector(self, persist: Path, collection: str, embeddings: list, chunks: list):
+        """Opt-in pgvector backend. Fail-closed with needs-api when DSN/deps/extension missing.
+
+        Default Wave-1 path remains chromadb|faiss. Do not point PGVECTOR_DSN at
+        production sentinel Postgres unless it already has the vector extension and
+        is intentionally dedicated for Graphyn embeddings.
+        """
+        from app.core.plugins.wave1_runtime import install_hint
+
+        dsn = self._resolve_pg_dsn()
+        secret_name = str(getattr(self.config, "pg_dsn_secret", None) or "PGVECTOR_DSN")
+        hint = install_hint("rag", ["psycopg[binary]>=3.1"])
+        if not dsn:
+            raise RuntimeError(
+                "vector_store_write: pgvector needs-api — set secret/env "
+                f"{secret_name} to a dedicated Postgres DSN that already has the "
+                "vector extension. Do not enable against production sentinel DBs. "
+                "Default backends remain chromadb|faiss. " + hint
+            )
+        try:
+            import psycopg  # type: ignore
+        except ImportError as exc:
+            raise ImportError(
+                "vector_store_write: pgvector client missing (psycopg). " + hint
+            ) from exc
+
+        rows = []
+        for i, item in enumerate(embeddings):
+            vec = _vec(item)
+            if not vec:
+                continue
+            meta = getattr(item, "metadata", None)
+            cid = meta.get("chunk_id") if isinstance(meta, dict) else None
+            if not cid:
+                cid = f"emb-{i}"
+            text = ""
+            if i < len(chunks):
+                text = getattr(chunks[i], "text", None) or ""
+                if not cid or str(cid).startswith("emb-"):
+                    cid = getattr(chunks[i], "chunk_id", None) or cid
+            rows.append((str(cid), text or f"doc-{i}", vec))
+
+        if not rows:
+            meta = {"backend": "pgvector", "collection": collection, "stub": False, "n_embeddings": 0}
+            (persist / "index_meta.json").write_text(json.dumps(meta), encoding="utf-8")
+            return VectorStoreRef(backend="pgvector", path=str(persist), collection=collection, metadata=meta)
+
+        dim = int(len(rows[0][2]))
+        table = "graphyn_embeddings"
+        try:
+            with psycopg.connect(dsn) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM pg_available_extensions WHERE name = %s",
+                        ("vector",),
+                    )
+                    if cur.fetchone() is None:
+                        raise RuntimeError(
+                            "vector extension not available on this Postgres "
+                            "(needs pgvector image / package). " + hint
+                        )
+                    cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                    cur.execute(
+                        f"""
+                        CREATE TABLE IF NOT EXISTS {table} (
+                            collection TEXT NOT NULL,
+                            chunk_id TEXT NOT NULL,
+                            document TEXT,
+                            embedding vector({dim}),
+                            PRIMARY KEY (collection, chunk_id)
+                        )
+                        """
+                    )
+                    for cid, doc, vec in rows:
+                        lit = "[" + ",".join(str(float(x)) for x in vec) + "]"
+                        cur.execute(
+                            f"""
+                            INSERT INTO {table} (collection, chunk_id, document, embedding)
+                            VALUES (%s, %s, %s, %s::vector)
+                            ON CONFLICT (collection, chunk_id) DO UPDATE
+                              SET document = EXCLUDED.document,
+                                  embedding = EXCLUDED.embedding
+                            """,
+                            (collection, cid, doc, lit),
+                        )
+                conn.commit()
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                "vector_store_write: pgvector needs-api — write failed "
+                f"({type(exc).__name__}: {exc}). Keep backend=chromadb|faiss for "
+                "Wave-1 defaults; use a dedicated vector-enabled DSN when ready. "
+                + hint
+            ) from exc
+
+        meta = {
+            "backend": "pgvector",
+            "collection": collection,
+            "stub": False,
+            "n_embeddings": len(rows),
+            "dim": dim,
+            "table": table,
+            "dsn_secret": secret_name,
+        }
+        (persist / "index_meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        log.info("vector_store_write pgvector wrote %d vectors collection=%s", len(rows), collection)
+        return VectorStoreRef(backend="pgvector", path=str(persist), collection=collection, metadata=meta)

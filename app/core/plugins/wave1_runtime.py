@@ -47,6 +47,8 @@ WAVE1_PLUGIN_CAPABILITY: dict[str, str] = {
     "text-embed": "rag",
     "chunk-semantic": "rag",
     "multimodal-caption-embed": "rag",
+    "bm25-index-build": "rag",
+    "yolo-dataset-yaml-build": "vision",
 }
 
 _INSTALL_SCRIPT = "scripts/install_wave1_plugin_venvs.sh"

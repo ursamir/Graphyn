@@ -1,13 +1,13 @@
 [plugin]
 name             = "chunk-semantic"
-version          = "0.1.0"
+version = "0.2.0"
 description      = "Semantic breakpoint chunker"
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["rag", "chunk", "stub"]
+tags = ["rag", "wave1"]
 
 dependencies = [
     "numpy>=1.24",

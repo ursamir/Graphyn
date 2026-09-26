@@ -116,14 +116,21 @@ class YoloTrainNode(Node):
         if not data_yaml:
             raise RuntimeError("yolo_train: dataset yaml_path required when stub=False")
         model = YOLO(model_name)
+        device = str(getattr(self.config, "device", "auto") or "auto")
+        # FaceRecognition-safe: honor GRAPHYN_WAVE1_FORCE_CPU
+        import os as _os
+        if _os.environ.get("GRAPHYN_WAVE1_FORCE_CPU", "1").strip().lower() not in ("0", "false", "no"):
+            if device in ("auto", "", "0", "cuda", "cuda:0"):
+                device = "cpu"
         results = model.train(
             data=str(data_yaml),
             epochs=int(getattr(self.config, "epochs", 100) or 100),
             imgsz=int(getattr(self.config, "imgsz", 640) or 640),
             batch=int(getattr(self.config, "batch", 16) or 16),
-            device=str(getattr(self.config, "device", "auto") or "auto"),
+            device=device,
             project=str(out_dir),
             exist_ok=True,
+            workers=0,
         )
         best = Path(getattr(results, "save_dir", out_dir)) / "weights" / "best.pt"
         if not best.exists():

@@ -67,9 +67,9 @@ declare -A CAP_PKGS=(
 )
 
 declare -A CAP_PLUGINS=(
-  [vision]="yolo-train yolo-predict yolo-val yolo-export yolo-track yolo-resume-train yolo-hyperparam-search yolo-task-detect yolo-task-segment yolo-task-pose yolo-task-obb-classify"
+  [vision]="yolo-train yolo-predict yolo-val yolo-export yolo-track yolo-resume-train yolo-hyperparam-search yolo-task-detect yolo-task-segment yolo-task-pose yolo-task-obb-classify yolo-dataset-yaml-build"
   [tinyml]="tflm-quantize tflm-convert tflm-host-sim tflm-op-support-check tinyml-ptq-calib-builder"
-  [rag]="vector-store-write vector-store-query text-embed chunk-semantic multimodal-caption-embed"
+  [rag]="vector-store-write vector-store-query text-embed chunk-semantic multimodal-caption-embed bm25-index-build"
 )
 
 ALL_CAPS=(vision tinyml rag)

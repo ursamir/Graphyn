@@ -1,13 +1,13 @@
 [plugin]
 name             = "bm25-index-build"
-version          = "0.1.0"
+version = "0.2.0"
 description      = "Build BM25 sparse index for hybrid retrieval"
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["rag", "bm25", "stub"]
+tags = ["rag", "bm25", "wave1"]
 
 dependencies = [
     "numpy>=1.24",

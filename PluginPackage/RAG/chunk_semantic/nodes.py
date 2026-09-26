@@ -1,12 +1,14 @@
 """ChunkSemanticNode — Semantic breakpoint chunker
 
-Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=True returns empty chunks.
+When stub=False, embeds sentences with sentence-transformers (Wave-1 RAG venv)
+and splits on cosine-distance breakpoints.
 """
 from __future__ import annotations
 
 import importlib
 import logging
+import re
 from pathlib import Path
 from typing import ClassVar, Any
 from pydantic import Field
@@ -30,6 +32,27 @@ RawDocument = _types.RawDocument
 
 log = logging.getLogger(__name__)
 
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _as_list(val: Any) -> list:
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    return [val]
+
+
+def _doc_text(item: Any) -> tuple[str, str]:
+    if isinstance(item, str):
+        return item, ""
+    text = getattr(item, "text", None)
+    source = getattr(item, "source", None) or getattr(item, "path", None) or ""
+    if text is None and isinstance(item, dict):
+        text = item.get("text") or item.get("content") or ""
+        source = item.get("source") or item.get("path") or source
+    return str(text or ""), str(source or "")
+
 
 class ChunkSemanticNode(Node):
     """Semantic breakpoint chunker"""
@@ -41,8 +64,8 @@ class ChunkSemanticNode(Node):
         label="Chunk Semantic",
         description="Semantic breakpoint chunker",
         category="Processing",
-        version="0.1.0",
-        tags=["rag", "stub"],
+        version="0.2.0",
+        tags=["rag", "wave1"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -64,42 +87,64 @@ class ChunkSemanticNode(Node):
         breakpoint_percentile: float = Field(default=95.0, title="Breakpoint percentile", description="Breakpoint percentile.")
 
     def process(self, inputs=None, **kwargs):
-        """Stub-capable process — real backends optional."""
         if inputs is None:
             inputs = kwargs
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
         stub = bool(getattr(self.config, 'stub', True))
-        out_dir = Path('workspace/artifacts') / 'rag' / 'chunk_semantic'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            result = []
-            return {"output": result}
-        # Non-stub: attempt real backend; fall back with install hint
-        try:
-            return self._process_real(inputs)
-        except ImportError as exc:
-            raise ImportError(f"chunk_semantic: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
+            return {"output": []}
+        return self._process_real(inputs)
 
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
         try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'rag' / 'chunk_semantic'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": []}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+            from app.core.plugins.wave1_runtime import force_cpu_torch_env
+
+            force_cpu_torch_env()
+            from sentence_transformers import SentenceTransformer  # type: ignore
+            import numpy as np  # type: ignore
+        except ImportError as exc:
+            from app.core.plugins.wave1_runtime import install_hint
+
+            raise ImportError(install_hint("rag", ["sentence-transformers>=2.2", "numpy"])) from exc
+
+        docs = _as_list(inputs.get("input") or inputs.get("documents"))
+        model_name = str(getattr(self.config, "embedding_model", None) or "sentence-transformers/all-MiniLM-L6-v2")
+        pct = float(getattr(self.config, "breakpoint_percentile", 95.0) or 95.0)
+        model = SentenceTransformer(model_name)
+        out: list = []
+        chunk_i = 0
+        for doc in docs:
+            text, source = _doc_text(doc)
+            sents = [s.strip() for s in _SENT_SPLIT.split(text) if s and s.strip()]
+            if not sents:
+                if text.strip():
+                    sents = [text.strip()]
+                else:
+                    continue
+            if len(sents) == 1:
+                out.append(Chunk(text=sents[0], source=source, chunk_id=f"sem-{chunk_i}", metadata={"backend": "semantic"}))
+                chunk_i += 1
+                continue
+            embs = model.encode(sents, normalize_embeddings=True)
+            embs = np.asarray(embs, dtype="float32")
+            # cosine distance between consecutive sentences
+            dists = []
+            for i in range(len(embs) - 1):
+                dist = float(1.0 - float(np.dot(embs[i], embs[i + 1])))
+                dists.append(dist)
+            threshold = float(np.percentile(np.asarray(dists, dtype="float32"), pct)) if dists else 0.0
+            buf: list[str] = [sents[0]]
+            for i, sent in enumerate(sents[1:], start=0):
+                if dists[i] >= threshold and buf:
+                    out.append(Chunk(text=" ".join(buf), source=source, chunk_id=f"sem-{chunk_i}", metadata={"backend": "semantic", "breakpoint": dists[i]}))
+                    chunk_i += 1
+                    buf = [sent]
+                else:
+                    buf.append(sent)
+            if buf:
+                out.append(Chunk(text=" ".join(buf), source=source, chunk_id=f"sem-{chunk_i}", metadata={"backend": "semantic"}))
+                chunk_i += 1
+        log.info("chunk_semantic produced %d chunks from %d docs", len(out), len(docs))
+        return {"output": out}

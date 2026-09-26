@@ -58,3 +58,16 @@ Then rebuild only if PluginPackage code must land in the image:
 docker compose build --no-deps graphyn-api graphyn-ui
 docker compose up -d graphyn-api graphyn-ui
 ```
+
+## pgvector
+
+`vector_store_write` / `vector_store_query` support `backend=pgvector` only when:
+
+1. Secret/env `PGVECTOR_DSN` (or `config.pg_dsn_secret`) points at a **dedicated**
+   Postgres that already provides the `vector` extension, and
+2. `psycopg` is installed in the Wave-1 RAG venv.
+
+Server-99 `sentinel-sota-postgres` (`postgres:16-alpine`) does **not** ship
+pgvector — do **not** flip compose or point Graphyn at that DB for vectors.
+Without a DSN, the backend raises a clear **needs-api** error and the Wave-1
+default remains `chromadb` / `faiss`.
