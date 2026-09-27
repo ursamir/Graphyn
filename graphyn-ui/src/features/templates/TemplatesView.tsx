@@ -6,6 +6,7 @@ import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
+import { MarketplaceBrowse } from './MarketplaceBrowse'
 import { humanizeTemplateName, humanNodeLabel } from '../../lib/format'
 
 function isExampleTemplate(name: string): boolean {
@@ -118,7 +119,7 @@ export default function TemplatesView() {
     errors: Array<{ id?: string; error?: string } | string>
   } | null>(null)
   const [syncing, setSyncing] = React.useState(false)
-  const [filter, setFilter] = React.useState<'all' | 'examples' | 'saved'>('all')
+  const [filter, setFilter] = React.useState<'all' | 'examples' | 'saved' | 'marketplace'>('all')
   const [search, setSearch] = React.useState('')
   /* Facets. Every template declares required_plugins and tags, and the gallery
      used both only as invisible search-blob text — 30 cards in one flat wall
@@ -537,16 +538,18 @@ export default function TemplatesView() {
                 ['all', 'All', items?.length ?? 0],
                 ['examples', 'Examples', exampleCount],
                 ['saved', 'Saved', Math.max(0, (items?.length ?? 0) - exampleCount)],
+                ['marketplace', 'Marketplace', null],
               ] as const
             ).map(([id, label, count]) => (
               <button
                 key={id}
                 type="button"
                 className={filter === id ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
-                onClick={() => setFilter(id)}
+                onClick={() => setFilter(id as typeof filter)}
+                data-testid={id === 'marketplace' ? 'templates-tab-marketplace' : undefined}
               >
                 {label}
-                {items ? ` ${count}` : ''}
+                {id !== 'marketplace' && items ? ` ${count}` : ''}
               </button>
             ))}
           </div>
@@ -569,6 +572,10 @@ export default function TemplatesView() {
           </span>
         </div>
 
+        {filter === 'marketplace' ? <MarketplaceBrowse search={search} /> : null}
+
+        {filter !== 'marketplace' ? (
+        <>
         {/* Plugin facets. Every card lists its required plugins; those chips are
             now the filter control, so "show me everything that uses ASR" is a
             click on the card you're already looking at. */}
@@ -957,6 +964,8 @@ export default function TemplatesView() {
           })}
         </ul>
       )}
+
+      </> ) : null}
 
       {projectGate && (
         <div

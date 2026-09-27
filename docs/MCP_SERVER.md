@@ -27,7 +27,7 @@ python -m app.mcp.server
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — 29 tools
+├── tool_registry.py   # register_all_tools() — ~74 tools
 ├── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
@@ -50,7 +50,11 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 
 ---
 
-## All 29 Tools
+## Tool inventory (see MCP_AGENT_PACK_COVERAGE for full list)
+
+> Historical “29 tools” table below is **partial** — journey/ship/audit/credentials/notifications tools were added later. Count tools via `rg 'register\("' app/mcp/tool_registry.py | wc -l`.
+
+### Core tools (original set)
 
 | Tool | Handler | Delegates to |
 |---|---|---|

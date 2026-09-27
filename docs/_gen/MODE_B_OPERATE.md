@@ -60,3 +60,15 @@ GRAPHYN_SKIP_PLUGIN_LOAD=1 GRAPHYN_DISTRIBUTED_STORE=memory \
 - docs/DISTRIBUTED_EXECUTION.md ?14
 - docs/GETTING_STARTED.md Mode B
 - examples/29_distributed_placement/
+
+## One-click health (control plane)
+
+From a host that can reach the control URL (DESKTOP-001 or tunneled):
+
+```bash
+GRAPHYN_CONTROL_URL=http://127.0.0.1:18001/api/v1 \
+GRAPHYN_API_TOKEN=… \
+  ./scripts/mode_b_health.sh
+```
+
+Probes `/system/health`, `/system/readiness`, and `/workers`. Does **not** start tunnels or workers.

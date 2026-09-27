@@ -817,3 +817,88 @@ def delete_template(name: str, version: str | None = None):
     if not template_dir.exists() and not legacy_path.exists():
         return {"name": name, "deleted": True}
     raise HTTPException(status_code=500, detail="Failed to delete template cleanly")
+
+
+# ── Marketplace catalog (pack-first browse + materialize) ─────────────────────
+
+
+class MarketplaceMaterializeBody(BaseModel):
+    template_id: str
+    param_overrides: dict[str, Any] | None = None
+    merge_parameters_into_first: bool = False
+
+
+@router.get("/marketplace/templates", summary="Search marketplace template catalog")
+def search_marketplace_templates_api(
+    pack: str = "",
+    industry: str = "",
+    modality: str = "",
+    lifecycle: str = "",
+    status: str = "",
+    family: str = "",
+    q: str = "",
+    tags: str = "",
+    limit: int = 25,
+):
+    """Filter ``docs/PIPELINE_TEMPLATE_CATALOG.json`` for console + agents.
+
+    ``tags`` is a comma-separated list. Server-side filter — catalog is ~3k entries.
+    """
+    from app.core.pipeline_template_materializer import search_marketplace_templates
+
+    tag_list = [t.strip() for t in (tags or "").split(",") if t.strip()]
+    result = search_marketplace_templates(
+        pack=pack,
+        industry=industry,
+        modality=modality,
+        lifecycle=lifecycle,
+        status=status,
+        family=family,
+        q=q,
+        tags=tag_list,
+        limit=limit,
+    )
+    if result.get("catalog_missing"):
+        raise HTTPException(
+            status_code=404,
+            detail="Marketplace catalog missing — run scripts/generate_pipeline_template_catalog.py",
+        )
+    return result
+
+
+@router.post("/marketplace/materialize", summary="Materialize marketplace template to Graph IR")
+def materialize_marketplace_template_api(body: MarketplaceMaterializeBody):
+    """Expand a marketplace template id into Graph IR 1.1 (does not save a pipeline)."""
+    from copy import deepcopy
+
+    from app.core.pipeline_template_materializer import (
+        find_template,
+        load_marketplace_catalog,
+        materialize_template_entry,
+    )
+
+    tid = (body.template_id or "").strip()
+    if not tid:
+        raise HTTPException(status_code=400, detail="template_id is required")
+    try:
+        catalog = load_marketplace_catalog()
+        entry = find_template(tid, catalog)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Template not found: {tid}") from None
+
+    entry = deepcopy(entry)
+    overrides = body.param_overrides or {}
+    if overrides:
+        params = dict(entry.get("parameters") or {})
+        params.update(overrides)
+        entry["parameters"] = params
+    try:
+        graph = materialize_template_entry(
+            entry,
+            merge_parameters_into_first=bool(body.merge_parameters_into_first),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Materialize failed: {exc}") from exc
+    return {"ok": True, "template_id": tid, "graph": graph, "status": entry.get("status")}

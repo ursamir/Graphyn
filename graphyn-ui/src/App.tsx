@@ -33,6 +33,7 @@ import { LayoutModeControl, LayoutPrefsProvider, LAYOUT_KEYS } from './layout'
 import { shortRunId } from './lib/format'
 import { KeyboardHelp } from './components/KeyboardHelp'
 import { CommandPalette } from './components/CommandPalette'
+import { NotificationBell } from './components/NotificationBell'
 import BuilderView from './features/builder/BuilderView'
 import RunsView from './features/runs/RunsView'
 import ArtifactsView from './features/artifacts/ArtifactsView'
@@ -1020,6 +1021,7 @@ export default function App() {
             >
               <span className="text-[13px] font-semibold">?</span>
             </button>
+            <NotificationBell />
             <button
               type="button"
               className="btn-icon"

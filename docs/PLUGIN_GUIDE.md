@@ -338,3 +338,17 @@ All 48 plugins are complete. See `plugin-development.md` steering file for the f
 `dataset_builder`, `trainer`, `evaluator`, `edge_optimizer`, `realtime_inference`, `dataset_balancer`, `dataset_versioner`, `experiment_tracker`, `deployment_packager`, `embedding_generator`, `multimodal_fusion`, `asr_transcribe`, `pii_redact`, `structured_llm`, `eval_gate`, `http_webhook`, `doc_parse_chunk`, `caption_export`, `object_store`, `http_request`, `if_switch`, `set_map`, `json_transform`, `schedule_trigger`, `python_code`, `error_catch`, `merge`, `wait_delay`, `csv_table`
 
 **Trainer / ModelBuilder (Keras):** `select_keras_device()` picks `/GPU:0` or `/CPU:0`. GPUs with compute capability ≥12 (Blackwell, e.g. RTX 5070 Ti) default to CPU because this TensorFlow build cannot run Keras training on them (missing CUDA kernels / libdevice). GPU is also refused when free VRAM is below `GRAPHYN_TF_GPU_MIN_FREE_MIB` (default 4096 MiB) so other apps keep the card. CPU `fit` uses soft placement off + `tf.device("/CPU:0")`. Set `GRAPHYN_TF_FORCE_GPU=1` only to attempt unsupported CC; it does not ignore the VRAM gate. `GRAPHYN_TF_DEVICE`: `auto`|`cpu`|`gpu`. `trainer.config.device`: `auto`|`cpu`|`gpu`.
+
+---
+
+## Agent create-plugin path (MCP)
+
+Agents can extend Graphyn without leaving MCP:
+
+1. **Discover** — `list_packs` / `describe_pack` / `list_nodes` / `get_node_spec`
+2. **Scaffold locally** — create `PluginPackage/<Pack>/<slug>/` with `plugin.toml`, `nodes.py`, optional `types.py` (see structure above). Declare `credential_kinds` when the node needs secrets; expose `connection_id` in config (never embed secrets in Graph IR).
+3. **Install** — `install_plugin` with a path or allowlisted URL; then `list_plugins` / `manage_plugin`
+4. **Prove** — `validate_graph` → `execute_pipeline` (stub backends OK) → `inspect_run`
+5. **Template** — optional: add a marketplace family via `scripts/generate_pipeline_template_catalog.py` + seed under `examples/templates/marketplace/`
+
+**Honesty:** MCU flash / OAuth mail connectors remain needs-api / needs-credentials — do not invent them in a plugin just to look complete.

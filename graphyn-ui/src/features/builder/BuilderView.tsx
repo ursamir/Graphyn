@@ -47,7 +47,7 @@ import {
   type NodeCatalogEntry,
   canonicalPort,
 } from '../../types/graph'
-import GraphynNode, { ConfigFieldEditor, categoryLook, normalizeExecStatus, type GraphynNodeData, type NodeExecStatus } from './GraphynNode'
+import GraphynNode, { ConfigFieldEditor, categoryLook, normalizeExecStatus, type CredentialOption, type GraphynNodeData, type NodeExecStatus } from './GraphynNode'
 import DeletableEdge from './DeletableEdge'
 import TriggersDock from './TriggersDock'
 import AgentDrawer from './AgentDrawer'
@@ -245,6 +245,7 @@ function BuilderInner() {
   const [triggersOpen, setTriggersOpen] = React.useState(false)
   const [agentOpen, setAgentOpen] = React.useState(false)
   const [secretNames, setSecretNames] = React.useState<string[]>([])
+  const [credentialsList, setCredentialsList] = React.useState<CredentialOption[]>([])
 
   React.useEffect(() => {
     setAdvancedOpen(false)
@@ -258,6 +259,23 @@ function BuilderInner() {
         if (!cancelled) setSecretNames(Array.isArray(data.names) ? data.names : [])
       } catch {
         if (!cancelled) setSecretNames([])
+      }
+      try {
+        const creds = await apiJson<{ items?: CredentialOption[] }>('/credentials')
+        if (!cancelled) {
+          setCredentialsList(
+            Array.isArray(creds.items)
+              ? creds.items.map((c) => ({
+                  id: c.id,
+                  name: c.name,
+                  kind: c.kind,
+                  is_default: c.is_default,
+                }))
+              : [],
+          )
+        }
+      } catch {
+        if (!cancelled) setCredentialsList([])
       }
     })()
     return () => {
@@ -2148,6 +2166,7 @@ function BuilderInner() {
                                 value={node.data.config?.[key] ?? def.default}
                                 onChange={(v) => node.data.onChangeConfig?.(key, v)}
                                 secretNames={secretNames}
+                                credentials={credentialsList}
                               />
                             </label>
                           )

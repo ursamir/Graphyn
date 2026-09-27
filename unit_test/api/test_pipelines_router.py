@@ -218,3 +218,42 @@ class TestTemplates:
         with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
             resp = api_client.delete("/api/v1/pipelines/templates/nonexistent")
         assert resp.status_code == 404
+
+
+class TestMarketplaceCatalog:
+    def test_search_marketplace_templates(self, api_client):
+        resp = api_client.get(
+            "/api/v1/pipelines/marketplace/templates",
+            params={"pack": "RAG", "limit": 5},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["count"] <= 5
+        assert body["matched"] >= body["count"]
+        assert isinstance(body["templates"], list)
+
+    def test_materialize_marketplace_template(self, api_client):
+        search = api_client.get(
+            "/api/v1/pipelines/marketplace/templates",
+            params={"q": "email-alert", "limit": 1},
+        )
+        assert search.status_code == 200
+        items = search.json().get("templates") or []
+        assert items, "expected at least one email-alert template in catalog"
+        tid = items[0]["id"]
+        resp = api_client.post(
+            "/api/v1/pipelines/marketplace/materialize",
+            json={"template_id": tid},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body.get("ok") is True
+        assert body.get("graph", {}).get("schema_version")
+        assert body.get("graph", {}).get("nodes")
+
+    def test_materialize_missing_returns_404(self, api_client):
+        resp = api_client.post(
+            "/api/v1/pipelines/marketplace/materialize",
+            json={"template_id": "tpl-does-not-exist-zzzz"},
+        )
+        assert resp.status_code == 404

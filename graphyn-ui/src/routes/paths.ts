@@ -55,6 +55,9 @@ export const paths = {
 
   shipDevices: (id: string) => `/workspaces/${enc(id)}/ship/devices`,
 
+  shipPackage: (id: string, packageId: string) =>
+    `/workspaces/${enc(id)}/ship/packages/${enc(packageId)}`,
+
   templates: () => '/templates',
 
   agentInbox: () => '/agent/inbox',

@@ -5,7 +5,7 @@
 
 ## 1. Current MCP tool inventory
 
-**Actual register() count:** **73 unique tools** (72 always including `search_templates` + pack-first tools + `accept_proposal` when `GRAPHYN_MCP_HUMAN_APPROVAL=1`).
+**Actual register() count:** **~74–75 unique tools** (credentials + notifications + marketplace/pack-first; +`accept_proposal` when `GRAPHYN_MCP_HUMAN_APPROVAL=1`). Verify with `rg 'register\("' app/mcp/tool_registry.py | wc -l`.
 
 **Docs drift:** [`MCP_SERVER.md`](./MCP_SERVER.md) still says “28/29 tools”. That narrative is **stale**. Journey waves added pipelines/runs/templates/models/schedules/webhooks/ship/audit/datasets/workers. Prefer this doc + `tool_registry.py` as source of truth until MCP_SERVER is rewritten.
 
@@ -24,6 +24,8 @@
 | Schedules / webhooks | `list_schedules`, `upsert_schedule`, `enable_schedule`, `delete_schedule`, `run_schedule_now`, `get_webhooks`, `put_webhooks`, `test_webhook` |
 | Datasets / workers | `list_dataset_versions`, `get_dataset_version`, `upload_dataset_file`, `list_workers`, `list_jobs` |
 | Secrets | `secrets_list`, `secrets_set` |
+| Credentials | `list_credentials`, `create_credential`, `get_credential`, `update_credential`, `revoke_credential` |
+| Notifications | `list_notifications`, `mark_notifications_read` |
 | Workspace / audit | `list_projects`, `list_data_inputs`, `list_experiments`, `get_trace`, `get_readiness`, `get_audit_events`, `export_audit` |
 
 \* `accept_proposal` only when human-approval flag enabled.

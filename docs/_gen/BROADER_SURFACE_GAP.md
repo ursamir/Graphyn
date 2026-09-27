@@ -33,7 +33,7 @@
 | Run-complete webhook hook | DONE | `app/core/run_notify.notify_run_terminal` → `pipeline_complete` / `pipeline_failed` |
 | Node-level HTTP webhook | DONE | `PluginPackage/Common/http_webhook` |
 | Slack as **notification** sink | PARTIAL / needs-credentials | `rag_slack_connector` is **ingest**, not notify; Slack incoming webhook URL works via `http_webhook` / ops webhook |
-| In-app notification store + REST/MCP | DONE (store) / PARTIAL (UI) | JSONL store + `/system/notifications*` + MCP list/mark-read; **bell UI still MISSING** |
+| In-app notification store + REST/MCP | DONE | JSONL store + `/system/notifications*` + MCP list/mark-read; **console NotificationBell** wired |
 | Email alert on run complete | PARTIAL → closing | SMTP sink on `run_notify` this wave |
 | Slack OAuth bot product | needs-api / needs-credentials | Out of scope without Slack app |
 
@@ -138,3 +138,15 @@
 - OpenAI / Groq / Anthropic / Gemini API keys
 - Slack OAuth bot (use incoming webhook)
 - Gmail OAuth / IMAP (not built)
+
+## Readiness close wave (2026-09-27 IST)
+
+### Closed (closable surface)
+- Console **NotificationBell** → `/system/notifications*`
+- Inspector **connection_id** credential picker (Admin → Credentials)
+- REST `GET /pipelines/marketplace/templates` + `POST /pipelines/marketplace/materialize`
+- Templates → **Marketplace** tab (server-side catalog browse)
+- `paths.shipPackage`, `scripts/mode_b_health.sh`, MCP tool-count docs + agent create-plugin path
+
+### Still needs-credentials / needs-api (not faked)
+- Live SMTP without dry-run; paid LLM keys; Slack/Gmail OAuth; MCU flash/OTA hardware

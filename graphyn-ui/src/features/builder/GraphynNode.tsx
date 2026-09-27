@@ -116,6 +116,8 @@ export function isSecretLikeConfigKey(key: string, title?: string): boolean {
   return /secret|credential|password|token|api[_-]?key/.test(hay)
 }
 
+export type CredentialOption = { id: string; name: string; kind: string; is_default?: boolean }
+
 export function ConfigFieldEditor(props: {
   fieldKey: string
   def: Record<string, unknown>
@@ -123,8 +125,17 @@ export function ConfigFieldEditor(props: {
   onChange: (v: unknown) => void
   /** Named secrets from GET /secrets — names only. */
   secretNames?: string[]
+  /** Platform credential connections from GET /credentials (redacted). */
+  credentials?: CredentialOption[]
 }) {
-  return fieldEditor(props.fieldKey, props.def, props.value, props.onChange, props.secretNames)
+  return fieldEditor(
+    props.fieldKey,
+    props.def,
+    props.value,
+    props.onChange,
+    props.secretNames,
+    props.credentials,
+  )
 }
 
 function SecretNameSelect({
@@ -157,12 +168,48 @@ function SecretNameSelect({
   )
 }
 
+function isConnectionIdField(key: string, title: string): boolean {
+  const hay = `${key} ${title}`.toLowerCase()
+  return key === 'connection_id' || /credential connection id|connection id/.test(hay)
+}
+
+function CredentialConnectionSelect({
+  credentials,
+  value,
+  onPick,
+}: {
+  credentials: CredentialOption[]
+  value: unknown
+  onPick: (id: string) => void
+}) {
+  const current = String(value ?? '')
+  const ids = credentials.map((c) => c.id)
+  return (
+    <select
+      className="field-control mt-1"
+      value={ids.includes(current) ? current : ''}
+      title="Bind a platform credential connection (Admin → Credentials). Empty → workspace default → env."
+      data-testid="connection-id-picker"
+      onChange={(e) => onPick(e.target.value)}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <option value="">Default / env bootstrap…</option>
+      {credentials.map((c) => (
+        <option key={c.id} value={c.id}>
+          {c.name} ({c.kind}){c.is_default ? ' · default' : ''} — {c.id.slice(0, 8)}…
+        </option>
+      ))}
+    </select>
+  )
+}
+
 function fieldEditor(
   key: string,
   def: Record<string, unknown>,
   value: unknown,
   onChange: (v: unknown) => void,
   secretNames?: string[],
+  credentials?: CredentialOption[],
 ) {
   const type = schemaType(def)
   if (type === 'boolean') {
@@ -207,6 +254,30 @@ function fieldEditor(
     secretLike && secretNames && secretNames.length > 0 ? (
       <SecretNameSelect names={secretNames} value={value} onPick={(n) => onChange(n)} />
     ) : null
+
+  if (isConnectionIdField(key, title) && credentials && credentials.length > 0) {
+    return (
+      <div>
+        <input
+          type="text"
+          className="field-control font-mono text-[11px]"
+          value={formatValue(def, value)}
+          placeholder="connection id (or pick below)"
+          title={schemaFieldHint(def)}
+          onChange={(e) => onChange(e.target.value)}
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+        <CredentialConnectionSelect
+          credentials={credentials}
+          value={value}
+          onPick={(id) => onChange(id)}
+        />
+        <p className="mt-1 text-[10px] leading-snug text-ink-400">
+          Stores connection id only — never the secret. Create connections under Admin → Credentials.
+        </p>
+      </div>
+    )
+  }
 
   if (widget === 'textarea' || widget === 'json') {
     return (

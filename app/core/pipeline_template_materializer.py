@@ -363,3 +363,110 @@ def build_graph_from_chain(node_types: list[str], *, name: str = "ad-hoc", descr
         "status": "proposed",
     }
     return materialize_template_entry(entry)
+
+
+def search_marketplace_templates(
+    *,
+    pack: str = "",
+    industry: str = "",
+    modality: str = "",
+    lifecycle: str = "",
+    status: str = "",
+    family: str = "",
+    q: str = "",
+    tags: list[str] | None = None,
+    limit: int = 25,
+    catalog_path: Path | None = None,
+) -> dict[str, Any]:
+    """Filter marketplace catalog entries (shared by REST + MCP).
+
+    Returns ``{templates, count, matched, limit, catalog}``. Does not raise when
+    the catalog is missing — returns empty templates with ``catalog_missing``.
+    """
+    limit_n = max(1, min(int(limit or 25), 200))
+    pack_l = (pack or "").strip().lower()
+    industry_l = (industry or "").strip().lower()
+    modality_l = (modality or "").strip().lower()
+    lifecycle_l = (lifecycle or "").strip().lower()
+    status_l = (status or "").strip().lower()
+    family_l = (family or "").strip().lower()
+    q_l = (q or "").strip().lower()
+    tag_list = [str(t).strip().lower() for t in (tags or []) if str(t).strip()]
+
+    path = catalog_path or DEFAULT_CATALOG
+    if not path.is_file():
+        return {
+            "templates": [],
+            "count": 0,
+            "matched": 0,
+            "limit": limit_n,
+            "catalog": str(path),
+            "catalog_missing": True,
+        }
+
+    doc = load_marketplace_catalog(path)
+    items: list[dict[str, Any]] = []
+    for t in doc.get("templates") or []:
+        if not isinstance(t, dict):
+            continue
+        if pack_l and str(t.get("pack") or "").lower() != pack_l and pack_l not in [
+            str(p).lower() for p in (t.get("packs_used") or [])
+        ]:
+            continue
+        if industry_l and str(t.get("industry") or "").lower() != industry_l:
+            continue
+        if modality_l and modality_l not in [str(m).lower() for m in (t.get("modality") or [])]:
+            continue
+        if lifecycle_l and lifecycle_l not in [str(x).lower() for x in (t.get("lifecycle") or [])]:
+            continue
+        if status_l and str(t.get("status") or "").lower() != status_l:
+            continue
+        if family_l and str(t.get("family") or "").lower() != family_l:
+            continue
+        if tag_list:
+            ttags = {str(x).lower() for x in (t.get("tags") or [])}
+            if not set(tag_list).issubset(ttags):
+                continue
+        if q_l:
+            blob = " ".join(
+                [
+                    str(t.get("id") or ""),
+                    str(t.get("name") or ""),
+                    str(t.get("description") or ""),
+                    " ".join(str(x) for x in (t.get("tags") or [])),
+                ]
+            ).lower()
+            if q_l not in blob:
+                continue
+        items.append(
+            {
+                "id": t.get("id"),
+                "name": t.get("name"),
+                "pack": t.get("pack"),
+                "industry": t.get("industry"),
+                "modality": t.get("modality"),
+                "lifecycle": t.get("lifecycle"),
+                "tags": t.get("tags"),
+                "status": t.get("status"),
+                "family": t.get("family"),
+                "value_prop": t.get("value_prop"),
+                "description": t.get("description"),
+                "node_types": [
+                    s.get("node_type") for s in (t.get("node_chain") or []) if isinstance(s, dict)
+                ],
+            }
+        )
+
+    matched = len(items)
+    page = items[:limit_n]
+    return {
+        "templates": page,
+        "count": len(page),
+        "matched": matched,
+        "limit": limit_n,
+        "catalog": str(path),
+        "catalog_missing": False,
+        "total_in_catalog": int(doc.get("total_templates") or len(doc.get("templates") or [])),
+        "counts_by_pack": doc.get("counts_by_pack") or {},
+        "counts_by_status": doc.get("counts_by_status") or {},
+    }
