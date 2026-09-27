@@ -572,14 +572,10 @@ export default function TemplatesView() {
           </span>
         </div>
 
-        {filter === 'marketplace' ? <MarketplaceBrowse search={search} /> : null}
-
-        {filter !== 'marketplace' ? (
-        <>
         {/* Plugin facets. Every card lists its required plugins; those chips are
             now the filter control, so "show me everything that uses ASR" is a
             click on the card you're already looking at. */}
-        {facets.length > 0 && (
+        {filter !== 'marketplace' && facets.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-medium uppercase tracking-wide text-ink-400">
               Plugin
@@ -615,6 +611,10 @@ export default function TemplatesView() {
         )}
       </div>
 
+      {filter === 'marketplace' ? <MarketplaceBrowse search={search} /> : null}
+
+      {filter !== 'marketplace' ? (
+      <>
       {items === null ? (
         <LoadingBlock />
       ) : filtered.length === 0 ? (
