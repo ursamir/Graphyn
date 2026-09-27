@@ -5,6 +5,7 @@
 | **Date** | 2026-09-27 (Asia/Calcutta) |
 | **Branch** | `cursor/usecase-plugins-workflows` |
 | **Tip (before)** | `efd28604` (credential store) |
+| **Tip (after / shipped)** | `aa22e597` on S99 `~/Desktop/newAudio3` |
 | **Vision** | n8n + MLflow + orchestrator + Edge Impulse + agents (one product) |
 | **Method** | SRS gap matrix + broader surface gap + static UI/API evidence. P0 weighted 2× P1. |
 
@@ -90,3 +91,17 @@
 
 - **Closable ≥90%:** **Yes (92%)** after this wave.
 - **Overall full vision ≥90%:** **Not yet (86%)** — blocked on credentials + device APIs + SSO/OTel, which we will not fake.
+
+## Server-99 smoke (2026-09-27 ~16:31 IST)
+
+| Check | Result |
+|-------|--------|
+| Tip on S99 | `aa22e597` |
+| `GET /system/health` | 200 ok |
+| Marketplace search `email-alert` | matched 6; materialize ok (3 nodes, schema 1.1) |
+| Notifications list | 200 (unread present) |
+| Credentials kinds | anthropic, gemini, ollama, openai_compat, smtp, webhook |
+| UI :5173 | 200; bundle contains `notification-bell`, `marketplace-browse`, `connection-id-picker` |
+| Readiness after rebuild | temporarily `ready=false` while auto-reinstall upgrades isolated plugin venvs (dataset-builder/tensorflow etc.) — expected post-rebuild; not a feature regression |
+
+No FaceRecognition / MCU flash fakes.
