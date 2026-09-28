@@ -83,11 +83,15 @@
 - `unit_test/api/test_auth_gate_sensitive.py` → `/api/v1/credentials`
 - Core store tests (`test_secrets_store.py`) retained for ops bootstrap module
 
-## Smoke checklist (S99)
+## Smoke results (S99, 2026-09-28 IST)
 
-- [ ] `GET /health` (API) → ok
-- [ ] UI `/admin/credentials` loads; list/create surfaces present
-- [ ] `/admin/secrets` → lands on Credentials (canonical)
-- [ ] Rail Admin has **no** Secrets item; Credentials present
-- [ ] Workspace strip IA unchanged
-- [ ] Ops MCP chip ≠ “29 tools”
+Product tip `3b9cc66f` (+ docs stamp `aa82927c`). API host port **8001**.
+
+| Check | Result |
+|-------|--------|
+| `GET /health` | `{"status":"ok"}` |
+| `GET /api/v1/secrets` (+Bearer) | **404** not_found |
+| `GET /api/v1/credentials` (+Bearer) | **200** (smoke-ollama listed) |
+| UI :5173 | **200** |
+| Bundle | `/admin/credentials` yes; SecretsView **absent**; ~77 tools yes; 29 tools **absent**; Workspace/Credentials yes; no “Secrets — named” |
+| Rail IA | Admin = Credentials · Ops · Access (no Secrets) |
