@@ -4,6 +4,7 @@
 |-------|-------|
 | **Date** | 2026-09-28 (Asia/Calcutta / IST) |
 | **Branch** | `cursor/usecase-plugins-workflows` |
+| **Tip SHA** | `3b9cc66f9e8f4ff8f4d88129983be435e2ed1557` |
 | **Scope** | LOCAL only (never Cursor cloud). Tip synced to S99 `~/Desktop/newAudio3`. |
 | **Policy** | Credentials store is **the** secret/connection system. Prefer delete legacy over dual banners. |
 
