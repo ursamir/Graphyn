@@ -302,7 +302,7 @@ export class ErrorBoundary extends React.Component<
                 goView('projects')
               }}
             >
-              Back to Projects
+              Back to Workspaces
             </button>
             <button type="button" className="btn-secondary" onClick={() => window.location.reload()}>
               Reload

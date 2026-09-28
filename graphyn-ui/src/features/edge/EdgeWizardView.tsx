@@ -550,7 +550,7 @@ export default function EdgeWizardView() {
 
   const startRun = async () => {
     if (!linkedProject.trim() || !sourceRunId.trim()) {
-      pushToast('Project + source run_id required for accountable edge packaging', 'error')
+      pushToast('Workspace + source run_id required for accountable edge packaging', 'error')
       setStep(1)
       return
     }
@@ -779,10 +779,10 @@ export default function EdgeWizardView() {
             <span className="text-ink-500">Lineage</span>
             <input
               className="rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
-              placeholder="project"
+              placeholder="workspace"
               value={linkedProject}
               onChange={(e) => setLinkedProject(e.target.value.trim())}
-              aria-label="Project"
+              aria-label="Workspace"
             />
             <FieldSelect
               className="min-w-[14rem] max-w-[22rem] flex-1"
@@ -838,7 +838,7 @@ export default function EdgeWizardView() {
                     disabled={!canJump && n !== step}
                     title={
                       n >= 3 && !hasLineage
-                        ? 'Select project + source run first'
+                        ? 'Select workspace + source run first'
                         : n === 4 && !runId
                           ? 'Run package step first'
                           : undefined
@@ -846,7 +846,7 @@ export default function EdgeWizardView() {
                     onClick={() => {
                       if (n === step) return
                       if (n >= 3 && !hasLineage) {
-                        pushToast('Select project + source run before packaging', 'error')
+                        pushToast('Select workspace + source run before packaging', 'error')
                         return
                       }
                       if (n === 4 && !runId) {
@@ -891,7 +891,7 @@ export default function EdgeWizardView() {
               </p>
               {!linkedProject.trim() || !sourceRunId.trim() ? (
                 <EmptyState
-                  title="Project + source run required"
+                  title="Workspace + source run required"
                   description="Open a workspace, run a train pipeline from Templates/Editor, then return here with that run_id in the lineage bar."
                   action={
                     <div className="flex flex-wrap justify-center gap-2">
@@ -903,7 +903,7 @@ export default function EdgeWizardView() {
                         Open Templates
                       </button>
                       <button type="button" className="btn-secondary" onClick={() => openProjects()}>
-                        Projects
+                        Workspaces
                       </button>
                     </div>
                   }

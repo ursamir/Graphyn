@@ -1423,7 +1423,7 @@ function BuilderInner() {
                     className="max-w-[9rem] rounded border-0 bg-transparent py-0.5 text-[11px] font-medium text-ink-800 outline-none"
                     value={pipelinePick}
                     onChange={(e) => setPipelinePick(e.target.value)}
-                    aria-label="Project pipeline"
+                    aria-label="Workspace pipeline"
                     title="Canonical project pipeline"
                   >
                     {!pipelinePick ? (

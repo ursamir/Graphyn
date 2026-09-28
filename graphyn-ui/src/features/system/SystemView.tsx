@@ -435,7 +435,7 @@ export default function SystemView() {
               className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[11px] text-ink-600"
               title="MCP runs as a separate stdio process — not an HTTP health check"
             >
-              MCP: <code className="font-mono text-[10px]">graphyn mcp</code> · 29 tools
+              MCP: <code className="font-mono text-[10px]">graphyn mcp</code> · ~74 tools (agent-facing)
             </span>
             <button
               type="button"
@@ -779,7 +779,7 @@ export default function SystemView() {
                 setSchedPipeline('')
               }}
             >
-              <option value="">Select project…</option>
+              <option value="">Select workspace…</option>
               {projectOptions.map((n) => (
                 <option key={n} value={n}>
                   {n}
@@ -789,7 +789,7 @@ export default function SystemView() {
           ) : (
             <input
               className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
-              placeholder="Project"
+              placeholder="Workspace"
               value={schedProject}
               onChange={(e) => setSchedProject(e.target.value)}
             />
@@ -832,7 +832,7 @@ export default function SystemView() {
           </label>
         </div>
         {!projectsApiOk && (
-          <p className="text-xs text-ink-500">Projects API unavailable — enter project and pipeline as text.</p>
+          <p className="text-xs text-ink-500">Workspaces API unavailable — enter workspace and pipeline as text.</p>
         )}
         {projectsApiOk && schedProject && !pipelinesApiOk && (
           <p className="text-xs text-ink-500">Pipelines API unavailable — enter pipeline name as text.</p>

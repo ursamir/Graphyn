@@ -446,7 +446,7 @@ export default function ProjectsView() {
         {
           method: 'POST',
           body: JSON.stringify({
-            message: 'Published from Projects',
+            message: 'Published from workspace Home',
             set_env: setEnv,
           }),
         },
@@ -1236,7 +1236,7 @@ export default function ProjectsView() {
                   ref={nameRef}
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  placeholder="my-pipeline-project"
+                  placeholder="my-workspace"
                   className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
                   onKeyDown={(e) => e.key === 'Enter' && void create()}
                 />
@@ -1687,7 +1687,7 @@ export default function ProjectsView() {
             >
               <p>
                 <strong className="font-medium text-ink-900">Pipelines:</strong> Templates are starters
-                · Project pipelines are the canonical saved graphs · Editor edits the active graph.
+                · Workspace pipelines are the canonical saved graphs · Editor edits the active graph.
               </p>
               <button
                 type="button"
@@ -2252,7 +2252,7 @@ export default function ProjectsView() {
           <details className="group overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
             <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 px-4 py-3 text-[13px] font-medium text-ink-800 hover:bg-ink-50/70">
               <ChevronRight className="h-4 w-4 shrink-0 text-ink-400 transition group-open:rotate-90" />
-              Project settings
+              Workspace settings
               <span className="font-normal text-ink-400">status, rename, clone, delete</span>
               <span className="ml-auto shrink-0 rounded-md bg-ink-100 px-1.5 py-0.5 text-[11px] text-ink-500">
                 {statusVal}
