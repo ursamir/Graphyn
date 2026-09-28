@@ -86,7 +86,7 @@ S99: `git pull` → `1cad6c59` → `docker compose build graphyn-ui && up -d` �
 | Field | Value |
 |-------|-------|
 | **Before tip** | `f88ff08d` |
-| **After tip** | `7f966e9d` |
+| **After tip** | `d095121f` |
 | **Scope** | FRONTEND `graphyn-ui` only; S99 local rebuild; locked rail IA unchanged; no FaceRecognition |
 
 ### Fixes
