@@ -5,6 +5,7 @@
 | **Date** | 2026-09-28 (Asia/Calcutta / IST) |
 | **Branch** | `cursor/usecase-plugins-workflows` |
 | **Before tip (walk)** | `6910298b` on S99 `~/Desktop/newAudio3` |
+| **After tip (shipped)** | `1cad6c59` — UI rebuilt on S99 |
 | **Method** | Docs read (PRODUCT_VISION, UI_NORTH_STAR, UI_WORKSPACE_IDE, REQUIREMENTS_SPEC §10, PRODUCT_READINESS_SCORE) + headless Chrome walk of live `graphyn-ui` @ `http://127.0.0.1:5173` (S99) with Bearer planted same-origin |
 | **Screenshots** | `docs/_gen/ui-audit/01-*.png` … `16-*.png` (before rebuild) |
 
@@ -60,14 +61,16 @@
 
 ## After re-walk
 
-_Filled after S99 `graphyn-ui` rebuild + hard refresh._
+S99: `git pull` → `1cad6c59` → `docker compose build graphyn-ui && up -d` → UI :5173 **200**. Bundle HIT: Workspace settings/pipelines, ~74 tools, my-workspace, Back to Workspaces, Select workspace. Live DOM after hard-nav:
 
 | Check | Result |
 |-------|--------|
-| Tip on S99 | _pending_ |
-| Workspace settings / pipelines copy | _pending_ |
-| Ops MCP chip | _pending_ |
-| Rail still locked IA | _pending_ |
+| Tip on S99 | `1cad6c59` |
+| Workspace Home copy | **Workspace pipelines** / **Workspace settings** (Project* gone) |
+| Ops MCP chip | **~74 tools (agent-facing)**; no "29 tools" |
+| Create placeholder | Bundle has `my-workspace` |
+| Rail still locked IA | **PASS** — same strip + groups; Credentials + NotificationBell + Marketplace unchanged |
+| After screenshots | `after-ws-home.png`, `after-ops.png`, `after-ship.png`, `after-workspaces.png` |
 
 ## Remaining UI debt (honest)
 
