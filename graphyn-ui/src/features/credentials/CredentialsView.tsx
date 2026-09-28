@@ -130,10 +130,22 @@ export default function CredentialsView() {
           </button>
         }
       />
-      <p className="mb-4 max-w-2xl rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
+      <p className="mb-3 max-w-2xl rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
         Precedence: explicit connection id → workspace default for kind → env bootstrap
         (<code className="font-mono">OPENAI_API_KEY</code>, <code className="font-mono">GRAPHYN_SMTP_*</code>, …).
-        Raw secrets are never returned by the API.
+        Raw secrets are never returned by the API. Editor nodes pick a connection via the inspector
+        <span className="font-mono text-[11px]"> connection_id</span> field.
+      </p>
+      <p className="mb-4 max-w-2xl text-[12px] text-ink-500">
+        Looking for legacy named env keys?{' '}
+        <button
+          type="button"
+          className="font-medium text-ink-700 underline underline-offset-2 hover:text-ink-950"
+          onClick={() => useAppStore.getState().setView('secrets')}
+        >
+          Admin → Secrets
+        </button>
+        {' '}(optional; Credentials is preferred for platform connections).
       </p>
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
       <form onSubmit={onCreate} className="mb-6 max-w-xl rounded-2xl border border-ink-200 bg-white p-4">

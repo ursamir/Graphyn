@@ -78,7 +78,7 @@ export default function SecretsView() {
     <div className="h-full min-h-0 overflow-auto p-6">
       <PageHeader
         title="Secrets"
-        description="Graphs reference secrets by name (never paste keys into Graph IR)."
+        description="Legacy named env secrets. Prefer Admin → Credentials for platform connections (LLM, SMTP, …)."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" />
@@ -86,6 +86,18 @@ export default function SecretsView() {
           </button>
         }
       />
+      <p className="mb-3 max-w-xl rounded-xl border border-accent-200 bg-accent-50/90 px-3 py-2 text-[12px] text-ink-800">
+        <span className="font-semibold text-ink-950">Credentials is the live store</span> for editor
+        connection pickers (<span className="font-mono text-[11px]">connection_id</span>). Use this Secrets
+        page only for raw name/value env-style keys that graphs still resolve by name.{' '}
+        <button
+          type="button"
+          className="font-semibold text-accent-900 underline underline-offset-2 hover:text-accent-950"
+          onClick={() => useAppStore.getState().setView('credentials')}
+        >
+          Open Credentials
+        </button>
+      </p>
       <p className="mb-4 max-w-xl rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
         {backendMode === 'distributed' ? (
           <>
@@ -168,18 +180,27 @@ export default function SecretsView() {
       ) : names.length === 0 ? (
         <EmptyState
           title="No secrets stored"
-          description="Add a named credential above (for example OPENAI_API_KEY) to use live providers."
+          description="For LLM/SMTP connections, use Admin → Credentials (recommended). This page is for legacy named env secrets."
           action={
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() =>
-                document.querySelector<HTMLInputElement>('input[name="secret-name"], #secret-name')?.focus() ||
-                document.querySelector<HTMLInputElement>('form input')?.focus()
-              }
-            >
-              Add a secret
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => useAppStore.getState().setView('credentials')}
+              >
+                Open Credentials
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() =>
+                  document.querySelector<HTMLInputElement>('input[name="secret-name"], #secret-name')?.focus() ||
+                  document.querySelector<HTMLInputElement>('form input')?.focus()
+                }
+              >
+                Add a secret
+              </button>
+            </div>
           }
         />
       ) : filtered.length === 0 ? (

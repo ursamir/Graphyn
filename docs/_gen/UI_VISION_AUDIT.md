@@ -5,7 +5,7 @@
 | **Date** | 2026-09-28 (Asia/Calcutta / IST) |
 | **Branch** | `cursor/usecase-plugins-workflows` |
 | **Before tip (walk)** | `6910298b` on S99 `~/Desktop/newAudio3` |
-| **After tip (shipped)** | `1cad6c59` — UI rebuilt on S99 |
+| **After tip (shipped)** | `1cad6c59` (terminology/MCP); debt close-out tip below |
 | **Method** | Docs read (PRODUCT_VISION, UI_NORTH_STAR, UI_WORKSPACE_IDE, REQUIREMENTS_SPEC §10, PRODUCT_READINESS_SCORE) + headless Chrome walk of live `graphyn-ui` @ `http://127.0.0.1:5173` (S99) with Bearer planted same-origin |
 | **Screenshots** | `docs/_gen/ui-audit/01-*.png` … `16-*.png` (before rebuild) |
 
@@ -74,8 +74,41 @@ S99: `git pull` → `1cad6c59` → `docker compose build graphyn-ui && up -d` �
 
 ## Remaining UI debt (honest)
 
-- Inactive Home on global pages can *look* as muted as disabled strip siblings (enabled in DOM; optional contrast polish).
-- Dual Secrets vs Credentials education still thin for new users (both under Admin — correct, but onboarding copy could cross-link).
+- ~~Inactive Home muted like disabled strip~~ **CLOSED** this wave (Pick badge + contrast).
+- ~~Secrets vs Credentials education~~ **CLOSED** this wave (cross-links + palette labels).
 - Devices / OTA still needs-api.
 - Full SSO/RBAC Access page still future.
 - Observe panels (Lineage/Compare) live under Runs — correct; keep avoiding Overview↔Editor circular CTAs.
+
+
+## Debt close-out (Home affordance + Secrets/Credentials) — 2026-09-28 IST
+
+| Field | Value |
+|-------|-------|
+| **Before tip** | `f88ff08d` |
+| **After tip** | `7f966e9d` |
+| **Scope** | FRONTEND `graphyn-ui` only; S99 local rebuild; locked rail IA unchanged; no FaceRecognition |
+
+### Fixes
+
+1. **Home affordance (workspace strip)** — Home stays always enabled/clickable. Disabled siblings use `opacity-35` + `grayscale` + muted icon. Enabled Home (no workspace) uses stronger ink/accent icon, `font-medium`, and a **Pick** badge so it never looks identical to greyed Editor/Runs/Models/Ship/Datasets. `data-strip-role` / `data-strip-enabled` for DOM checks. Active strip items also get the same ring as global nav.
+2. **Secrets ↔ Credentials** — Secrets page: copy marks it as legacy env keys; accent banner **"Credentials is the live store"** + Open Credentials; empty state CTA prefers Credentials. Credentials page: notes inspector `connection_id` + link back to Admin → Secrets. Command palette: Credentials (live store) + Secrets (legacy env keys).
+3. **Project chrome** — quick pass found no remaining user-visible Project* leftovers (prior wave already flipped chrome; API `project` fields kept).
+
+### Live re-verify (S99 :5173)
+
+`docker compose build graphyn-ui && up -d` → **200**. Bundle HIT: `data-strip-role`, `opacity-35`, `Credentials is the live store`, `Open Credentials`, `connection_id`.
+
+| Check | Before (`before-debt-*`) | After (`after-debt-*`) |
+|-------|--------------------------|------------------------|
+| Workspaces strip Home vs disabled | Home muted like siblings when not active (`opacity-40`×5; no Pick) | Home dark + **Pick**; siblings `opacity-35`+grayscale×5; `data-strip-role`×6 |
+| Secrets onboarding | "Graphs reference secrets by name…"; empty "Add a named credential…" | Live-store banner + Open Credentials; legacy description; empty dual CTA |
+| Credentials | Precedence only | + `connection_id` note + Admin → Secrets cross-link |
+| Rail IA | PASS | PASS (same strip + Build/Library/Deploy/Admin) |
+
+Screenshots/DOM: `docs/_gen/ui-audit/before-debt-*.png`, `after-debt-*.png`, `dom-before-debt-*.html`, `dom-after-debt-*.html`.
+
+### Remaining (unchanged / out of scope)
+
+- Devices / OTA still needs-api.
+- Full SSO/RBAC Access page still future.

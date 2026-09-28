@@ -805,25 +805,62 @@ export default function App() {
                   <div className="space-y-0.5">
                     {WORKSPACE_NAV_ITEMS.map(({ id, label, icon: Icon }) => {
                       const active = view === id
-                      const enabled = id === 'projects' || Boolean(activeProject)
+                      const isHome = id === 'projects'
+                      // Home always clickable; other strip items greyed-disabled without workspace.
+                      const enabled = isHome || Boolean(activeProject)
                       return (
                         <button
                           key={`ws-${id}`}
                           type="button"
                           disabled={!enabled}
-                          title={enabled ? navTitle(id) : 'Open a workspace first'}
+                          aria-disabled={!enabled}
+                          title={
+                            enabled
+                              ? navTitle(id)
+                              : 'Open a workspace first — Home stays available'
+                          }
                           onClick={() => go(id)}
                           className={clsx(
                             'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                            !enabled && 'cursor-not-allowed opacity-40',
+                            !enabled &&
+                              'cursor-not-allowed opacity-35 text-ink-400 grayscale-[0.35]',
                             active
-                              ? 'bg-white font-medium text-ink-950 shadow-sm'
-                              : enabled && 'text-ink-700 hover:bg-white/70 hover:text-ink-950',
+                              ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
+                              : enabled &&
+                                  (isHome
+                                    ? 'font-medium text-ink-900 hover:bg-white/80 hover:text-ink-950'
+                                    : 'text-ink-700 hover:bg-white/70 hover:text-ink-950'),
                           )}
                           aria-current={active ? 'page' : undefined}
+                          data-strip-role={isHome ? 'home' : 'workspace-scoped'}
+                          data-strip-enabled={enabled ? 'true' : 'false'}
                         >
-                          <Icon className={clsx('h-4 w-4', active ? 'text-accent-800' : 'text-ink-400')} />
+                          <Icon
+                            className={clsx(
+                              'h-4 w-4 shrink-0',
+                              active
+                                ? 'text-accent-800'
+                                : enabled
+                                  ? isHome
+                                    ? 'text-accent-700'
+                                    : 'text-ink-500'
+                                  : 'text-ink-300',
+                            )}
+                          />
                           <span className="flex-1 truncate">{label}</span>
+                          {isHome && enabled && !activeProject ? (
+                            <span
+                              className={clsx(
+                                'shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
+                                active
+                                  ? 'bg-ink-100 text-ink-600'
+                                  : 'bg-accent-100 text-accent-900',
+                              )}
+                              title="No workspace open — Home opens the workspace picker"
+                            >
+                              Pick
+                            </span>
+                          ) : null}
                         </button>
                       )
                     })}
