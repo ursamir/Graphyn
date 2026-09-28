@@ -244,7 +244,6 @@ function BuilderInner() {
   const [pipelineEnv, setPipelineEnv] = React.useState<'draft' | 'staging' | 'prod'>('draft')
   const [triggersOpen, setTriggersOpen] = React.useState(false)
   const [agentOpen, setAgentOpen] = React.useState(false)
-  const [secretNames, setSecretNames] = React.useState<string[]>([])
   const [credentialsList, setCredentialsList] = React.useState<CredentialOption[]>([])
 
   React.useEffect(() => {
@@ -254,12 +253,6 @@ function BuilderInner() {
   React.useEffect(() => {
     let cancelled = false
     void (async () => {
-      try {
-        const data = await apiJson<{ names?: string[] }>('/secrets')
-        if (!cancelled) setSecretNames(Array.isArray(data.names) ? data.names : [])
-      } catch {
-        if (!cancelled) setSecretNames([])
-      }
       try {
         const creds = await apiJson<{ items?: CredentialOption[] }>('/credentials')
         if (!cancelled) {
@@ -2165,7 +2158,6 @@ function BuilderInner() {
                                 def={def}
                                 value={node.data.config?.[key] ?? def.default}
                                 onChange={(v) => node.data.onChangeConfig?.(key, v)}
-                                secretNames={secretNames}
                                 credentials={credentialsList}
                               />
                             </label>

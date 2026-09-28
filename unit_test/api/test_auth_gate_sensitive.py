@@ -5,7 +5,7 @@ import pytest
 
 
 SENSITIVE_GETS = (
-    "/api/v1/secrets",
+    "/api/v1/credentials",
     "/api/v1/workers",
     "/api/v1/plugins",
 )

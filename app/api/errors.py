@@ -201,12 +201,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _validation_error_handler(request: Request, exc: RequestValidationError):
         rid = get_or_set_request_id(request)
         errors = jsonable_encoder(exc.errors())
-        if request.url.path.startswith("/api/v1/secrets"):
+        # Never echo secret-bearing fields from Credentials create/update 422s.
+        if request.url.path.startswith("/api/v1/credentials"):
             cleaned = []
             for err in errors:
                 item = dict(err)
-                loc = item.get("loc") or []
-                if any(part == "value" for part in loc):
+                loc = [str(p) for p in (item.get("loc") or [])]
+                if any(part in ("payload", "api_key", "password", "token", "value") for part in loc):
                     item["input"] = "[redacted]"
                 cleaned.append(item)
             errors = cleaned

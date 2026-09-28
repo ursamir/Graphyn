@@ -110,7 +110,8 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
     if (b === 'workers') return { view: 'workers' }
   }
   if (a === 'admin') {
-    if (b === 'secrets') return { view: 'secrets' }
+    // Legacy /admin/secrets bookmarks → Credentials (sole secret/connection UI)
+    if (b === 'secrets') return { view: 'credentials', canonical: '/admin/credentials' }
     if (b === 'credentials') return { view: 'credentials' }
     if (b === 'ops') return { view: 'system' }
     if (b === 'access') return { view: 'access' as AppView }

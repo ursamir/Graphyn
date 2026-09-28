@@ -12,7 +12,6 @@ export type AppView =
   | 'data'
   | 'projects'
   | 'system'
-  | 'secrets'
   | 'credentials'
   | 'workers'
   | 'edge'

@@ -82,8 +82,24 @@ Node `Config` should expose `connection_id` and pass it to `chat_completion` /
 
 ## Console
 
-Admin → **Credentials** (`/admin/credentials`): thin list/create/revoke UI.
-Named env-style secrets remain under Admin → **Secrets**.
+Admin → **Credentials** (`/admin/credentials`) is the **only** console surface for
+secrets/connections. There is no Admin → Secrets page.
+
+## Env / named-secret bootstrap (ops only — no console page)
+
+Runtime still resolves env-style names via `resolve_secret()` (file store under
+`GRAPHYN_HOME/secrets/`, then process env). Bootstrap from the host — not a second UI:
+
+```bash
+# preferred for providers: create a Credential connection in the console, or:
+export OPENAI_API_KEY=sk-...
+# optional durable named files (CLI; values never printed by `secrets list`):
+echo "$OPENAI_API_KEY" | python -m app.cli.main secrets set OPENAI_API_KEY
+python -m app.cli.main secrets list   # names only
+```
+
+REST `/api/v1/secrets` and MCP `secrets_list` / `secrets_set` were removed.
+Use `/api/v1/credentials` and MCP credential tools instead.
 
 ## Hot path
 

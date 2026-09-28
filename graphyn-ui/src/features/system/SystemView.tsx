@@ -435,7 +435,7 @@ export default function SystemView() {
               className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[11px] text-ink-600"
               title="MCP runs as a separate stdio process — not an HTTP health check"
             >
-              MCP: <code className="font-mono text-[10px]">graphyn mcp</code> · ~74 tools (agent-facing)
+              MCP: <code className="font-mono text-[10px]">graphyn mcp</code> · ~77 tools (agent-facing)
             </span>
             <button
               type="button"

@@ -11,7 +11,6 @@ import {
   FolderKanban,
   Activity,
   Settings,
-  KeyRound,
   Server,
   GitPullRequest,
   Cpu,
@@ -42,7 +41,6 @@ import TemplatesView from './features/templates/TemplatesView'
 import DataView from './features/data/DataView'
 import ProjectsView from './features/projects/ProjectsView'
 import SystemView from './features/system/SystemView'
-import SecretsView from './features/secrets/SecretsView'
 import CredentialsView from './features/credentials/CredentialsView'
 import WorkersView from './features/workers/WorkersView'
 import EdgeWizardView from './features/edge/EdgeWizardView'
@@ -102,7 +100,6 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: 'Admin',
     items: [
-      { id: 'secrets', label: 'Secrets', icon: KeyRound },
       { id: 'credentials', label: 'Credentials', icon: Shield },
       { id: 'system', label: 'Ops', icon: Activity },
       { id: 'access', label: 'Access', icon: Shield },
@@ -121,7 +118,6 @@ const VIEW_LABEL: Record<AppView, string> = {
   experiments: 'Compare runs',
   proposals: 'Agent inbox',
   projects: 'Home',
-  secrets: 'Secrets',
   credentials: 'Credentials',
   system: 'Ops',
   workers: 'Worker fleet',
@@ -142,8 +138,7 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   edge: 'Ship — edge package and devices',
   workers: 'Worker fleet — distributed workers (Mode B only)',
   projects: 'Home — workspace status, pipelines, linked data, runs',
-  secrets: 'Secrets — named credentials for graphs',
-  credentials: 'Credentials — platform connections by kind',
+  credentials: 'Credentials — platform connections & secrets by kind',
   system: 'Ops — health, schedules, webhooks, cleanup, audit',
   models: 'Models — registry stages and prod approve',
   access: 'Access — actor identity and future RBAC',
@@ -736,7 +731,6 @@ export default function App() {
           {view === 'edge' && <EdgeWizardView />}
           {view === 'experiments' && <ExperimentsView />}
           {view === 'proposals' && <ProposalsView />}
-          {view === 'secrets' && <SecretsView />}
           {view === 'credentials' && <CredentialsView />}
           {view === 'models' && <ModelsView />}
           {view === 'access' && <AccessView />}
@@ -1011,7 +1005,7 @@ export default function App() {
                     ? 'border-accent-200 bg-accent-50/60 text-accent-800 hover:border-accent-300'
                     : 'border-dashed border-ink-300 bg-white/80 text-ink-500 hover:border-accent-300 hover:text-accent-800',
                 )}
-                // On a global page (Artifacts/Templates/Secrets/…), activeProject can still be
+                // On a global page (Artifacts/Templates/Credentials/…), activeProject can still be
                 // set from earlier — the workspace was never closed, just not part of this URL.
                 // Say so explicitly instead of the generic "Open workspace", which reads as
                 // "nothing is open" and made the project feel silently lost.

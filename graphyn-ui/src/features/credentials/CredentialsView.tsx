@@ -137,15 +137,9 @@ export default function CredentialsView() {
         <span className="font-mono text-[11px]"> connection_id</span> field.
       </p>
       <p className="mb-4 max-w-2xl text-[12px] text-ink-500">
-        Looking for legacy named env keys?{' '}
-        <button
-          type="button"
-          className="font-medium text-ink-700 underline underline-offset-2 hover:text-ink-950"
-          onClick={() => useAppStore.getState().setView('secrets')}
-        >
-          Admin → Secrets
-        </button>
-        {' '}(optional; Credentials is preferred for platform connections).
+        Ops env bootstrap (no second console page): set process env or use CLI{' '}
+        <code className="font-mono text-[11px]">graphyn secrets</code> — see{' '}
+        <span className="font-mono text-[11px]">docs/ops/CREDENTIAL_STORE.md</span>.
       </p>
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
       <form onSubmit={onCreate} className="mb-6 max-w-xl rounded-2xl border border-ink-200 bg-white p-4">

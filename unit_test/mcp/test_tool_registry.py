@@ -25,8 +25,11 @@ EXPECTED_TOOL_NAMES = {
     "install_plugin",
     "list_plugins",
     "manage_plugin",
-    "secrets_list",
-    "secrets_set",
+    "list_credentials",
+    "create_credential",
+    "get_credential",
+    "update_credential",
+    "revoke_credential",
     "propose_graph",
     "list_proposals",
     "get_proposal",
@@ -65,6 +68,8 @@ def test_register_all_tools_correct_names(monkeypatch: pytest.MonkeyPatch):
     register_all_tools(lambda name, desc, schema, handler: registered.append(name))
     missing = EXPECTED_TOOL_NAMES - set(registered)
     assert not missing, f"Missing core tools: {missing}"
+    assert "secrets_list" not in registered
+    assert "secrets_set" not in registered
 
 
 def test_register_all_tools_non_empty_descriptions():

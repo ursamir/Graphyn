@@ -58,18 +58,20 @@ The API image installs via **one path** (see `Dockerfile`):
 
 **Source of truth for package *names*:** `setup.py` `install_requires`. Optional Redis / MCP / TF / HF / webrtcvad are extras (`pip install -e ".[redis,mcp,...]"`) and are **not** baked into the default image. Validate sync with `python scripts/check_deps.py`.
 
-## Secrets for live providers
+## Credentials & env bootstrap for live providers
 
-Do **not** put API keys in Graph IR. Store names only in graphs (`auth_env`, provider defaults).
+Do **not** put API keys in Graph IR. Prefer **Admin → Credentials** (connection ids on nodes).
+Env / named-file bootstrap remains for ops (no second console page) — see `docs/ops/CREDENTIAL_STORE.md`.
 
 ```bash
-# on the host, with GRAPHYN_HOME matching the volume if you exec into the API container
-echo "$OPENAI_API_KEY" | python -m app.cli.main secrets set OPENAI_API_KEY
-echo "$DEEPGRAM_API_KEY" | python -m app.cli.main secrets set DEEPGRAM_API_KEY
-python -m app.cli.main secrets list   # names only
+# preferred: create a connection via console or POST /api/v1/credentials
+# ops bootstrap (GRAPHYN_HOME matching the API volume):
+export OPENAI_API_KEY=sk-...
+echo "$OPENAI_API_KEY" | python -m app.cli.main secrets set OPENAI_API_KEY   # optional durable file
+python -m app.cli.main secrets list   # names only — never values
 ```
 
-REST: `GET/POST /api/v1/secrets` (Bearer required in this compose profile). List returns names only.
+REST product surface: `/api/v1/credentials` (Bearer). Legacy `/api/v1/secrets` is removed.
 
 ## GPU Safety Notes
 

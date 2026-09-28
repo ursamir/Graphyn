@@ -23,3 +23,12 @@ Record of what was removed in the deep-clean (UI: Workspace-only chrome, drop ha
 - Internal store view id `projects` and `activeProject`.
 - Home nav label **Home**; picker page title **Workspaces**.
 - Backend `active` → `in-progress` status alias (still used for legacy clients).
+
+
+## Secrets → Credentials (product dual removed)
+
+- Removed console **Admin → Secrets** (`SecretsView`, `/admin/secrets` nav, Cmd-K, jump key remapped to Credentials).
+- Removed REST `/api/v1/secrets` and MCP `secrets_list` / `secrets_set`.
+- Kept `app/core/secrets.py` + CLI `graphyn secrets` for **ops env bootstrap** only (documented in `docs/ops/CREDENTIAL_STORE.md`).
+- Bookmarks to `/admin/secrets` canonicalize to `/admin/credentials`.
+- See `docs/_gen/LEGACY_REMOVAL_AND_QUALITY.md`.

@@ -86,7 +86,7 @@ Use `Pipeline` and `PipelineNode` from `app.core.sdk`; call pipeline.run(). See 
 
 - `venv/bin/python -m app.mcp.server`
 
-Console groups (global shell): **Projects** · **Build** (Templates, Agent inbox) · **Library** (Datasets, Plugins, Models, Artifacts) · **Deploy** (Ship, Worker fleet) · **Admin** (Secrets, Ops, Access). With a workspace open: **Home · Editor · Runs · Models · Ship · Datasets** (Runs includes History, Live, outputs, lineage, compare).
+Console groups (global shell): **Projects** · **Build** (Templates, Agent inbox) · **Library** (Datasets, Plugins, Models, Artifacts) · **Deploy** (Ship, Worker fleet) · **Admin** (Credentials, Ops, Access). With a workspace open: **Home · Editor · Runs · Models · Ship · Datasets** (Runs includes History, Live, outputs, lineage, compare).
 
 **Data vs Projects:** Data is files in/out (`workspace/datasets/`). Projects is the dataset workspace over the same output folder (versions/snapshots/lineage). Loop: Upload in Data → Build/ingest in Builder → Runs/Artifacts → manage in Projects → compare in Experiments / package in Edge.
 

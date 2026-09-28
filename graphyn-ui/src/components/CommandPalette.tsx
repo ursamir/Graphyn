@@ -29,8 +29,7 @@ const VIEW_JUMPS: Array<{ id: AppView; label: string; keywords?: string }> = [
   { id: 'plugins', label: 'Library · Plugins', keywords: 'catalog library plugins l' },
   { id: 'edge', label: 'Ship', keywords: 'tflite deploy g edge ship' },
   { id: 'workers', label: 'Worker fleet', keywords: 'distributed gpu w workers fleet' },
-  { id: 'credentials', label: 'Credentials (live store)', keywords: 'credentials connection llm smtp k' },
-  { id: 'secrets', label: 'Secrets (legacy env keys)', keywords: 'secret env keys legacy' },
+  { id: 'credentials', label: 'Credentials', keywords: 'secrets connections keys k admin' },
   { id: 'system', label: 'Ops', keywords: 'health schedules admin s system ops' },
   { id: 'access', label: 'Access', keywords: 'rbac actor roles access' },
 ]

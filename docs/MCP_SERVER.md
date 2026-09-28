@@ -1,9 +1,9 @@
 # MCP Server
 
-> **Inventory drift (2026-09-26):** `tool_registry.py` now registers **~73 tools** (69 prior + `materialize_template` + `get_node_spec` + `list_packs` + `describe_pack`; +`accept_proposal` when human-approval enabled). The “28/29 tools” counts below are **stale**. See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md) for the verified inventory and pack-first agent journey.
+> **Inventory (2026-09-28):** `tool_registry.py` registers **~77 tools** (+`accept_proposal` when human-approval enabled). Legacy `secrets_list` / `secrets_set` removed — use credential tools. See [`MCP_AGENT_PACK_COVERAGE.md`](./MCP_AGENT_PACK_COVERAGE.md).
 
 
-The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes **72 tools by default** (73 when `GRAPHYN_MCP_HUMAN_APPROVAL=1`, which enables `accept_proposal`) over stdio transport. Prefer `tool_registry.py` / MCP_AGENT_PACK_COVERAGE.md as source of truth.
+The MCP server makes the platform natively operable by AI agents via the [Model Context Protocol](https://modelcontextprotocol.io/). It exposes **~77 tools by default** (+1 when `GRAPHYN_MCP_HUMAN_APPROVAL=1`, which enables `accept_proposal`) over stdio transport. Prefer `tool_registry.py` / MCP_AGENT_PACK_COVERAGE.md as source of truth.
 
 **File:** `app/mcp/`  
 **Transport:** stdio (JSON-RPC on stdin/stdout, logs to stderr)  
@@ -27,7 +27,7 @@ python -m app.mcp.server
 app/mcp/
 ├── server.py          # startup, stdio loop, tool dispatch
 ├── auth.py            # check_auth() — Bearer token middleware
-├── tool_registry.py   # register_all_tools() — ~74 tools
+├── tool_registry.py   # register_all_tools() — ~77 tools
 ├── handlers/
     ├── discovery.py   # list_nodes
     ├── graph.py       # generate_graph, validate_graph, get_graph_schema,
@@ -38,7 +38,7 @@ app/mcp/
     ├── provenance.py  # list_artifacts, get_artifact_lineage, replay_run
     ├── optimization.py # optimize_execution
     ├── plugins.py      # install_plugin, list_plugins, manage_plugin
-    ├── secrets.py      # secrets_list, secrets_set
+    ├── credentials.py  # list/create/get/update/revoke_credential
     └── proposals.py    # propose_graph, list/get/accept/reject_proposal
 ```
 
@@ -76,8 +76,11 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 | `install_plugin` | `plugins.py` | `PluginManager.install` + `load_enabled_plugins` |
 | `list_plugins` | `plugins.py` | `PluginManager.list_installed` |
 | `manage_plugin` | `plugins.py` | `enable` / `disable` / `uninstall` |
-| `secrets_list` | `secrets.py` | names only under GRAPHYN_HOME/secrets |
-| `secrets_set` | `secrets.py` | stores value; result does not echo it |
+| `list_credentials` | `credentials.py` | redacted connection metadata |
+| `create_credential` | `credentials.py` | create connection; never echoes secrets |
+| `get_credential` | `credentials.py` | redacted |
+| `update_credential` | `credentials.py` | rotate/update; never echoes secrets |
+| `revoke_credential` | `credentials.py` | soft-revoke or delete |
 | `propose_graph` | `proposals.py` | `create_proposal` (agentic store) |
 | `list_proposals` | `proposals.py` | `list_proposals` |
 | `get_proposal` | `proposals.py` | `get_proposal` |
@@ -277,9 +280,9 @@ Native Slack/Email/GitHub nodes are out of v1; use `http_request` with `auth_env
 ---
 
 
-### `secrets_list`
+### Credential tools
 
-Returns `{"names": ["OPENAI_API_KEY", ...]}`. Never returns values.
+Use `list_credentials` / `create_credential` / `get_credential` / `update_credential` / `revoke_credential`. Raw secrets are never returned. Ops env bootstrap: CLI `graphyn secrets` (see `docs/ops/CREDENTIAL_STORE.md`). Legacy `secrets_list` / `secrets_set` are removed.
 
 ### `secrets_set`
 

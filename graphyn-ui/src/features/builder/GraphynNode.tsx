@@ -107,7 +107,7 @@ function parseValue(def: Record<string, unknown>, raw: string): unknown {
   return raw
 }
 
-/** String config keys that should offer a named-secret picker (B8). */
+/** String config keys that look secret-like (prefer connection_id / Credentials). */
 export function isSecretLikeConfigKey(key: string, title?: string): boolean {
   const hay = `${key} ${title || ''}`.toLowerCase()
   if (/timeout|retries?|max_|min_|count|length|status|path|dir|file|url_path/.test(hay)) {
@@ -123,8 +123,6 @@ export function ConfigFieldEditor(props: {
   def: Record<string, unknown>
   value: unknown
   onChange: (v: unknown) => void
-  /** Named secrets from GET /secrets — names only. */
-  secretNames?: string[]
   /** Platform credential connections from GET /credentials (redacted). */
   credentials?: CredentialOption[]
 }) {
@@ -133,38 +131,7 @@ export function ConfigFieldEditor(props: {
     props.def,
     props.value,
     props.onChange,
-    props.secretNames,
     props.credentials,
-  )
-}
-
-function SecretNameSelect({
-  names,
-  value,
-  onPick,
-}: {
-  names: string[]
-  value: unknown
-  onPick: (name: string) => void
-}) {
-  const current = String(value ?? '')
-  return (
-    <select
-      className="field-control mt-1"
-      value={names.includes(current) ? current : ''}
-      title="Insert a named secret from Admin → Secrets"
-      onChange={(e) => {
-        if (e.target.value) onPick(e.target.value)
-      }}
-      onMouseDown={(e) => e.stopPropagation()}
-    >
-      <option value="">Use named secret…</option>
-      {names.map((n) => (
-        <option key={n} value={n}>
-          {n}
-        </option>
-      ))}
-    </select>
   )
 }
 
@@ -208,7 +175,6 @@ function fieldEditor(
   def: Record<string, unknown>,
   value: unknown,
   onChange: (v: unknown) => void,
-  secretNames?: string[],
   credentials?: CredentialOption[],
 ) {
   const type = schemaType(def)
@@ -250,10 +216,12 @@ function fieldEditor(
   const secretLike =
     type === 'string' &&
     (widget === 'password' || widget === 'secret' || isSecretLikeConfigKey(key, title))
-  const secretPicker =
-    secretLike && secretNames && secretNames.length > 0 ? (
-      <SecretNameSelect names={secretNames} value={value} onPick={(n) => onChange(n)} />
-    ) : null
+  const secretHint = secretLike ? (
+    <p className="mt-1 text-[10px] leading-snug text-ink-400">
+      Prefer Admin → Credentials (<span className="font-mono">connection_id</span>). Env bootstrap
+      resolves at runtime — never paste keys into Graph IR.
+    </p>
+  ) : null
 
   if (isConnectionIdField(key, title) && credentials && credentials.length > 0) {
     return (
@@ -306,7 +274,7 @@ function fieldEditor(
           onChange={(e) => onChange(e.target.value)}
           onMouseDown={(e) => e.stopPropagation()}
         />
-        {secretPicker}
+        {secretHint}
       </div>
     )
   }
@@ -440,7 +408,7 @@ function fieldEditor(
         }}
         onMouseDown={(e) => e.stopPropagation()}
       />
-      {secretPicker}
+      {secretHint}
     </div>
   )
 }

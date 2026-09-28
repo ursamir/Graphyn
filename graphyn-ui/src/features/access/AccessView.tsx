@@ -33,7 +33,7 @@ export default function AccessView() {
         </label>
         <p className="text-[12px] text-ink-500">
           Saved to <code className="font-mono text-[11px]">graphyn.actor</code> in localStorage. Roles
-          (admin / prod-approve / secret-write) are pending the multi-user Access API.
+          (admin / prod-approve / credential-write) are pending the multi-user Access API.
         </p>
         <button type="button" className="btn-primary" onClick={() => setSettingsOpen(true)}>
           <KeyRound className="h-3.5 w-3.5" /> API token &amp; Settings
@@ -41,7 +41,7 @@ export default function AccessView() {
       </div>
       <EmptyState
         title="Roles coming with multi-user API"
-        description="Prod approve, admin Ops, and secret write will gate on roles once Access APIs ship. Actor chips already flow into audit."
+        description="Prod approve, admin Ops, and credential write will gate on roles once Access APIs ship. Actor chips already flow into audit."
         action={
           <div className="inline-flex items-center gap-2 text-sm text-ink-500">
             <Users className="h-4 w-4" /> Plan id C4

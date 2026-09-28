@@ -74,14 +74,20 @@ S99: `git pull` → `1cad6c59` → `docker compose build graphyn-ui && up -d` �
 
 ## Remaining UI debt (honest)
 
-- ~~Inactive Home muted like disabled strip~~ **CLOSED** this wave (Pick badge + contrast).
-- ~~Secrets vs Credentials education~~ **CLOSED** this wave (cross-links + palette labels).
+- ~~Inactive Home muted like disabled strip~~ **CLOSED** (Pick badge + contrast).
+- ~~Dual Secrets vs Credentials~~ — **removed** (Credentials only; see LEGACY_REMOVAL_AND_QUALITY.md).
 - Devices / OTA still needs-api.
 - Full SSO/RBAC Access page still future.
 - Observe panels (Lineage/Compare) live under Runs — correct; keep avoiding Overview↔Editor circular CTAs.
 
 
-## Debt close-out (Home affordance + Secrets/Credentials) — 2026-09-28 IST
+## Debt close-out (Home affordance) — 2026-09-28 IST
+
+> Secrets/Credentials **cross-links** from `d095121f` were **superseded**: legacy Secrets UI/API/MCP deleted (see `LEGACY_REMOVAL_AND_QUALITY.md`). Home Pick badge retained.
+
+## Prior note (superseded dual education)
+
+## Debt close-out archive — 2026-09-28 IST
 
 | Field | Value |
 |-------|-------|

@@ -19,7 +19,7 @@ Unauthenticated by design (always): `GET /`, `GET /health`.
 Static mounts `/files`, `/input-files`, `/run-files` use the **same** bearer policy as `/api/v1` when a token is configured.  
 OpenAPI UI (`/docs`, `/redoc`, `/openapi.json`) is not bearer-gated — treat the API host as operator-trusted network.
 
-Sensitive routers (plugins install, secrets, workers admin/job claim, deploy-related project packaging, proposals) are mounted with the **same** `_auth_dep` as the rest of `/api/v1`. There is no separate admin IdP.
+Sensitive routers (plugins install, credentials, workers admin/job claim, deploy-related project packaging, proposals) are mounted with the **same** `_auth_dep` as the rest of `/api/v1`. There is no separate admin IdP.
 
 ---
 
@@ -35,7 +35,8 @@ Sensitive routers (plugins install, secrets, workers admin/job claim, deploy-rel
 | **Artifacts** | Bearer holder (all keys / blobs) | Bearer holder / workers with bearer | Bearer holder | Replay via bearer | n/a |
 | **Datasets** (input/output mounts) | Bearer holder | Bearer holder | Bearer holder | n/a | n/a |
 | **Plugins** | Bearer holder (list/search) | n/a | Enable/disable/uninstall: bearer | **Install** + dependency install: bearer | n/a |
-| **Secrets** (named store) | Bearer holder — **names/metadata only** | Bearer holder (set/put) | Bearer holder (delete) | Resolved in-process by nodes | **Never** via list/get API/MCP/CLI list; only via `resolve_secret()` inside the runtime |
+| **Credentials** (platform connections) | Bearer holder — **redacted fields only** | Bearer holder (create/update) | Bearer holder (revoke/delete) | Resolved in-process by nodes | **Never** via list/get API/MCP; raw values only inside runtime resolve |
+| **Named-secret files** (ops bootstrap under `GRAPHYN_HOME/secrets/`) | CLI `secrets list` — names only | CLI `secrets set` | CLI `secrets delete` | `resolve_secret()` in-process | **Never** via product REST/MCP (removed) |
 | **Workers** | Bearer holder | Register / heartbeat: bearer | Deregister: bearer | Claim/complete jobs: bearer | n/a |
 | **Deployments** (edge packs / wizard outputs) | Bearer holder (project-scoped files) | Bearer holder | Bearer holder | Package/deploy actions: bearer | n/a |
 | **Proposals** | Bearer holder | Bearer holder / MCP with auth | Accept/reject: bearer | Apply via accept: bearer | n/a |
@@ -57,16 +58,15 @@ Once multi-user identity exists, **cross-project access must be prevented by def
 
 ---
 
-## 3. Secrets hardening
+## 3. Credentials & secrets hardening
 
 | Control | Behaviour |
 |---|---|
-| Storage | `GRAPHYN_HOME/secrets/<NAME>` files, dir `0700`, files `0600` |
-| List / get API | Returns **names only** — no GET-by-name value endpoint |
-| Writes | Same bearer gate as other `/api/v1` admin routes |
-| MCP / CLI list | Names only; set responses echo the name, never the value |
-| Validation errors | `/api/v1/secrets` 422 responses redact `input` for the `value` field |
-| Node resolution | `resolve_secret(name)` → store then env; miss errors cite the **name**, never the value |
+| Product store | `GRAPHYN_HOME/credentials/` (encrypted payloads); Admin → Credentials UI |
+| REST / MCP | `/api/v1/credentials` + credential MCP tools — **redacted** only |
+| Ops bootstrap | Optional `GRAPHYN_HOME/secrets/<NAME>` files (`0700`/`0600`) + process env via CLI |
+| Validation errors | `/api/v1/credentials` 422 responses redact `payload` / secret field `input` |
+| Node resolution | `connection_id` → credential store; else `resolve_secret(name)` → file then env; miss errors cite the **name**, never the value |
 | Logging | Store/API paths must not log secret values |
 
 ---

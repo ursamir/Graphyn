@@ -18,7 +18,7 @@ const NAV_ORDER: AppView[] = [
   'artifacts',
   'plugins',
   'workers',
-  'secrets',
+  'credentials',
   'system',
   'access',
 ]

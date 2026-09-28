@@ -23,7 +23,6 @@
 | Ship | `create_ship_package`, `get_ship_package`, `list_ship_packages`, `download_ship_package`, `promote_ship_package` |
 | Schedules / webhooks | `list_schedules`, `upsert_schedule`, `enable_schedule`, `delete_schedule`, `run_schedule_now`, `get_webhooks`, `put_webhooks`, `test_webhook` |
 | Datasets / workers | `list_dataset_versions`, `get_dataset_version`, `upload_dataset_file`, `list_workers`, `list_jobs` |
-| Secrets | `secrets_list`, `secrets_set` |
 | Credentials | `list_credentials`, `create_credential`, `get_credential`, `update_credential`, `revoke_credential` |
 | Notifications | `list_notifications`, `mark_notifications_read` |
 | Workspace / audit | `list_projects`, `list_data_inputs`, `list_experiments`, `get_trace`, `get_readiness`, `get_audit_events`, `export_audit` |
@@ -126,7 +125,7 @@ discover packs/nodes
 
 ## 5. Security
 
-- **Secrets:** only `secrets_set` / `secrets_list` (names only). Node configs take **secret names**, never raw keys.
+- **Credentials:** `list/create/get/update/revoke_credential` (redacted). Nodes store **connection ids**, never raw keys. Ops env bootstrap via CLI `secrets` only.
 - **Inline secrets in IR:** `instantiate_template` / `save_pipeline` reject via `InlineSecretError`.
 - **Promote / prod:** require human approval paths already present (`approve_model_prod`, `promote_ship_package`, `hitl_approve` node, `accept_proposal` flag).
 - **needs-api:** agents must not invent Devices/flash tooling.

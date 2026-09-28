@@ -91,15 +91,6 @@ def register_all_tools(register: Callable) -> None:
         list_plugins_handler,
         manage_plugin_handler,
     )
-    from app.mcp.handlers.secrets import (
-        SECRETS_LIST_DESCRIPTION,
-        SECRETS_LIST_SCHEMA,
-        SECRETS_SET_DESCRIPTION,
-        SECRETS_SET_SCHEMA,
-        secrets_list_handler,
-        secrets_set_handler,
-    )
-
     from app.mcp.handlers.credentials import (
         LIST_CREDENTIALS_DESCRIPTION,
         LIST_CREDENTIALS_SCHEMA,
@@ -317,8 +308,6 @@ def register_all_tools(register: Callable) -> None:
     register("install_plugin", INSTALL_PLUGIN_DESCRIPTION, INSTALL_PLUGIN_SCHEMA, install_plugin_handler)
     register("list_plugins", LIST_PLUGINS_DESCRIPTION, LIST_PLUGINS_SCHEMA, list_plugins_handler)
     register("manage_plugin", MANAGE_PLUGIN_DESCRIPTION, MANAGE_PLUGIN_SCHEMA, manage_plugin_handler)
-    register("secrets_list", SECRETS_LIST_DESCRIPTION, SECRETS_LIST_SCHEMA, secrets_list_handler)
-    register("secrets_set", SECRETS_SET_DESCRIPTION, SECRETS_SET_SCHEMA, secrets_set_handler)
     register("list_credentials", LIST_CREDENTIALS_DESCRIPTION, LIST_CREDENTIALS_SCHEMA, list_credentials_handler)
     register("create_credential", CREATE_CREDENTIAL_DESCRIPTION, CREATE_CREDENTIAL_SCHEMA, create_credential_handler)
     register("get_credential", GET_CREDENTIAL_DESCRIPTION, GET_CREDENTIAL_SCHEMA, get_credential_handler)
