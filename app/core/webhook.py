@@ -66,11 +66,11 @@ class WebhookService:
             if parsed.scheme not in _ALLOWED_SCHEMES:
                 raise ValueError(
                     f"Webhook URL must use http or https scheme, "
-                    f"got {parsed.scheme!r}. URL: {url!r}"
+                    f"got {parsed.scheme!r}."
                 )
             if not parsed.netloc:
                 raise ValueError(
-                    f"Webhook URL must have a valid host. URL: {url!r}"
+                    "Webhook URL must have a valid host."
                 )
 
             validate_webhook_target_url(url)
@@ -123,6 +123,21 @@ class WebhookService:
                 exc,
             )
             return dict(empty)
+
+
+    def public_config(self) -> dict:
+        """Return webhook config safe for API responses (URL redacted).
+
+        Persisted ``url`` remains available via :meth:`load` for delivery;
+        clients only ever see host/path (or empty / ``***``).
+        """
+        from app.core.egress import redact_webhook_url_for_api
+
+        cfg = self.load()
+        out = dict(cfg)
+        out["url"] = redact_webhook_url_for_api(str(cfg.get("url") or ""))
+        out["url_configured"] = bool(str(cfg.get("url") or "").strip())
+        return out
 
     def notify(self, event: str, payload: dict[str, Any]) -> None:
         """Fire-and-forget HTTP POST in a background thread.

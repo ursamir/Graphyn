@@ -147,11 +147,11 @@ class WebhookBody(BaseModel):
 
 @router.get("/webhooks", summary="Get webhook configuration")
 def get_webhooks():
-    """Return the current webhook configuration (``url`` + ``events``, possibly empty)."""
+    """Return webhook configuration with URL redacted (host/path only)."""
     from fastapi.responses import JSONResponse
     from app.api.concurrency import etag_value
 
-    cfg = _webhook_svc.load()
+    cfg = _webhook_svc.public_config()
     resp = JSONResponse(content=cfg)
     if cfg.get("resource_version") is not None:
         resp.headers["ETag"] = etag_value(cfg["resource_version"])
@@ -183,6 +183,9 @@ def set_webhooks(body: WebhookBody, request: Request):
         cfg = _webhook_svc.save(body.url, body.events)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from app.core.egress import redact_webhook_url_for_api
+
+    redacted_url = redact_webhook_url_for_api(body.url)
     try:
         from app.core.audit import record_audit
 
@@ -190,15 +193,23 @@ def set_webhooks(body: WebhookBody, request: Request):
             actor=resolve_actor(request),
             action="webhook.set",
             resource_type="webhook",
-            resource_id=body.url[:64] or "webhook",
-            meta={"events": list(body.events or [])},
+            resource_id=(redacted_url[:64] if redacted_url else "webhook"),
+            meta={"events": list(body.events or []), "url_configured": bool((body.url or "").strip())},
             request_id=getattr(request.state, "request_id", None),
         )
     except Exception:
         pass
-    out = {"ok": True, "url": body.url, "events": body.events, **{
-        k: cfg.get(k) for k in ("resource_version", "secret_name") if isinstance(cfg, dict)
-    }}
+    out = {
+        "ok": True,
+        "url": redacted_url,
+        "url_configured": bool((body.url or "").strip()),
+        "events": body.events,
+        **{
+            k: cfg.get(k)
+            for k in ("resource_version", "secret_name")
+            if isinstance(cfg, dict)
+        },
+    }
     resp = JSONResponse(content=out)
     if out.get("resource_version") is not None:
         resp.headers["ETag"] = etag_value(out["resource_version"])
@@ -208,11 +219,14 @@ def set_webhooks(body: WebhookBody, request: Request):
 @router.post("/webhooks/test", summary="Send a test webhook notification")
 def test_webhook(request: Request):
     """Fire a test event to the configured webhook URL."""
+    from app.core.egress import redact_webhook_url_for_api
+
     config = _webhook_svc.load()
     url = config.get("url")
     if not url:
         return {"ok": False, "reason": "No webhook URL configured"}
     _webhook_svc.notify("test", {"message": "Test notification from Graphyn"})
+    redacted_url = redact_webhook_url_for_api(str(url))
     try:
         from app.core.audit import record_audit
 
@@ -220,12 +234,12 @@ def test_webhook(request: Request):
             actor=resolve_actor(request),
             action="webhook.test",
             resource_type="webhook",
-            resource_id=str(url)[:64],
+            resource_id=redacted_url[:64] or "webhook",
             meta={},
         )
     except Exception:
         pass
-    return {"ok": True, "url": url}
+    return {"ok": True, "url": redacted_url, "url_configured": True}
 
 
 # ── Auth status (honesty banner) ──────────────────────────────────────────────

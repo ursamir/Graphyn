@@ -30,6 +30,11 @@ def _pm():
 def _require_project(name: str):
     try:
         return _pm()._require_project(name)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_name", "message": str(exc)},
+        ) from exc
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404,

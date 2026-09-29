@@ -70,6 +70,16 @@ def normalize_audit_event(obj: dict[str, Any]) -> dict[str, Any]:
         out["metadata"] = out.get("meta") or {}
     if "meta" not in out and "metadata" in out:
         out["meta"] = out.get("metadata") or {}
+    # SEC-P0: never surface raw webhook URLs (the secret) via audit/trace.
+    if str(out.get("resource_type") or "") == "webhook":
+        rid = str(out.get("resource_id") or "")
+        if rid and "://" in rid:
+            try:
+                from app.core.egress import redact_webhook_url_for_api
+
+                out["resource_id"] = redact_webhook_url_for_api(rid) or "***"
+            except Exception:
+                out["resource_id"] = "***"
     return out
 
 

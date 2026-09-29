@@ -64,8 +64,15 @@ class ProjectManager:
 
     @classmethod
     def _validate_name(cls, name: str) -> None:
-        """Raise ValueError if name is not safe for use as a directory component (G3-30 fix)."""
-        if not cls._SAFE_NAME_RE.match(name):
+        """Raise ValueError if name is not safe for use as a directory component (G3-30 / SEC-P0)."""
+        if not isinstance(name, str) or not cls._SAFE_NAME_RE.match(name):
+            raise ValueError(
+                f"Invalid project name {name!r}. "
+                "Names must contain only letters, digits, hyphens, and underscores "
+                "(1–128 characters)."
+            )
+        # Explicit rejects (belt-and-braces alongside the regex)
+        if name in (".", "..") or "/" in name or "\\" in name or chr(0) in name:
             raise ValueError(
                 f"Invalid project name {name!r}. "
                 "Names must contain only letters, digits, hyphens, and underscores "
@@ -76,7 +83,22 @@ class ProjectManager:
         return self.BASE / name
 
     def _require_project(self, name: str) -> Path:
+        # SEC-P0: validate before path join — closes traversal via ".."/separators
+        # reachable from projects.py (40+) and ship.py without going through create().
+        self._validate_name(name)
         d = self._project_dir(name)
+        # Defense in depth: resolved path must stay under BASE
+        base = self.BASE.resolve()
+        try:
+            resolved = d.resolve()
+        except OSError:
+            resolved = d.absolute()
+        if base not in resolved.parents and resolved != base:
+            raise ValueError(
+                f"Invalid project name {name!r}. "
+                "Names must contain only letters, digits, hyphens, and underscores "
+                "(1–128 characters)."
+            )
         if not d.exists():
             raise FileNotFoundError(f"Project '{name}' not found")
         return d

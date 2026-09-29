@@ -279,8 +279,8 @@ def _parse_plugin_source_url(
     """
     from urllib.parse import urlparse
 
-    raw = source.strip()
-    if raw.startswith("git+"):
+    raw = _normalize_plugin_source_scheme(source.strip())
+    if raw.lower().startswith("git+"):
         raw = raw[4:]
 
     parsed = urlparse(raw)
@@ -332,6 +332,50 @@ def _plugin_source_matches_allowed(source: str, allowed_entry: str) -> bool:
     return False
 
 
+
+
+def _normalize_plugin_source_scheme(source: str) -> str:
+    """Lowercase the URL scheme (and a leading ``git+``) without altering the rest.
+
+    ``HTTPS://Host/Path`` → ``https://Host/Path``
+    ``GIT+SSH://…`` → ``git+ssh://…`` (still rejected by parser; consistent form)
+    ``Git+HTTPS://…`` → ``git+https://…``
+    """
+    s = (source or "").strip()
+    if not s:
+        return s
+    lower = s.lower()
+    if lower.startswith("git+"):
+        rest = s[4:]
+        # Lowercase scheme of the inner URL if present
+        if "://" in rest:
+            sch, after = rest.split("://", 1)
+            return "git+" + sch.lower() + "://" + after
+        return "git+" + rest
+    if "://" in s:
+        sch, after = s.split("://", 1)
+        return sch.lower() + "://" + after
+    return s
+
+
+def _looks_like_remote_plugin_source(source: str) -> bool:
+    """True when *source* is a URL-like remote (any scheme:// or git+), case-insensitive.
+
+    Local filesystem paths (relative or absolute) return False so they stay
+    unrestricted by GRAPHYN_PLUGIN_ALLOWED_SOURCES.
+    """
+    s = (source or "").strip()
+    if not s:
+        return False
+    lower = s.lower()
+    if lower.startswith("git+"):
+        return True
+    # scheme://  (http, https, git, ssh, file, mixed-case HTTPS://, …)
+    if "://" in s:
+        return True
+    return False
+
+
 def plugin_source_is_allowed(source: str) -> bool:
     """Return True if *source* is permitted by GRAPHYN_PLUGIN_ALLOWED_SOURCES.
 
@@ -350,20 +394,30 @@ def plugin_source_is_allowed(source: str) -> bool:
     archive and raw URL shapes under an exact repository base are allowed when
     the path remains under that repository.
 
+    Schemes are compared case-insensitively (``HTTPS://`` ≡ ``https://``).
+    Unsupported remote schemes (``ssh://``, ``file://``, …) never match an
+    allowlist entry and are denied whenever a remote source is detected.
+
     **Redirect policy:** callers that follow HTTP redirects (installer download,
     plugin index fetch) must re-validate every hop and the final URL with this
     function and fail closed on any disallowed hop. Redirect handling itself
     lives in those callers, not here.
     """
-    if not source.startswith(("git+", "http://", "https://", "git://")):
+    if not _looks_like_remote_plugin_source(source):
         return True
+    # Normalize scheme case before structural matching (SEC-P0 allowlist bypass).
+    normalized = _normalize_plugin_source_scheme(source)
+    parsed = _parse_plugin_source_url(normalized)
+    if parsed is None:
+        # Remote-looking but unsupported / unparseable scheme (ssh://, file://, …)
+        return False
     allowed = plugin_allowed_sources()
     if not allowed:
         # Fail closed for remote installs when the deployment requires auth.
         if auth_required():
             return False
         return True
-    return any(_plugin_source_matches_allowed(source, entry) for entry in allowed)
+    return any(_plugin_source_matches_allowed(normalized, entry) for entry in allowed)
 
 
 def plugin_isolated_timeout() -> float:

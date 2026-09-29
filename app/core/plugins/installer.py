@@ -66,6 +66,57 @@ def _zip_member_is_symlink(member: zipfile.ZipInfo) -> bool:
     return stat.S_ISLNK(mode) if mode else False
 
 
+
+def redact_url_userinfo(url: str) -> str:
+    """Return *url* with userinfo (``user:pass@``) replaced by ``***@``.
+
+    Used in PluginInstallError messages and job-status surfaces so embedded
+    credentials (e.g. ``https://user:TOKEN@host/…``) never leak to API clients.
+    Also scans longer error strings for embedded URLs with userinfo.
+    """
+    import re
+    from urllib.parse import urlsplit, urlunsplit
+
+    if not url or not isinstance(url, str):
+        return url
+
+    def _redact_one(raw: str) -> str:
+        prefix = ""
+        body = raw
+        if body.lower().startswith("git+"):
+            prefix = body[:4]
+            body = body[4:]
+        try:
+            parts = urlsplit(body)
+        except Exception:
+            return raw
+        if not parts.scheme or not parts.netloc:
+            return raw
+        netloc = parts.netloc
+        if "@" not in netloc:
+            return raw
+        hostport = netloc.rsplit("@", 1)[-1]
+        redacted_netloc = "***@" + hostport
+        return prefix + urlunsplit(
+            (parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment)
+        )
+
+    # Fast path: whole string is a single URL.
+    if "://" in url and " " not in url.strip():
+        return _redact_one(url)
+
+    # Error-message path: redact every embedded scheme://userinfo@host… occurrence.
+    pattern = re.compile(
+        r"((?:git\+)?[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+)",
+        re.IGNORECASE,
+    )
+
+    def _sub(match: re.Match[str]) -> str:
+        return _redact_one(match.group(1))
+
+    return pattern.sub(_sub, url)
+
+
 class PluginInstaller:
     """Resolves a plugin source string to a local directory containing
     ``plugin.toml`` (or ``plugin.json``).
@@ -127,13 +178,26 @@ class PluginInstaller:
         PluginInstallError
             On any fetch, clone, extraction, validation, or allowlist failure.
         """
-        # SEC-6 fix: validate remote sources against the allowlist before
-        # fetching any content.  Local path sources are never restricted.
-        if source.startswith(("git+", "http://", "https://")):
+        # SEC-6 / SEC-P0: validate ALL remote sources against the allowlist
+        # before fetching. Normalize scheme case so HTTPS:// / GIT+… cannot
+        # skip the gate. Unsupported schemes (ssh://, file://, …) are rejected.
+        from app.core.config import (  # noqa: PLC0415
+            _looks_like_remote_plugin_source,
+            _normalize_plugin_source_scheme,
+            _parse_plugin_source_url,
+        )
+
+        if _looks_like_remote_plugin_source(source):
+            source = _normalize_plugin_source_scheme(source)
+            if _parse_plugin_source_url(source) is None:
+                raise PluginInstallError(
+                    f"Unsupported plugin source scheme in {redact_url_userinfo(source)!r}. "
+                    "Allowed remote schemes: http://, https://, git://, and git+http(s)://."
+                )
             self._check_allowed_source(source)
 
         # --- 1. Git source ---
-        if source.startswith("git+") or source.endswith(".git"):
+        if source.startswith("git+") or source.startswith("git://") or source.endswith(".git"):
             return self._resolve_git(source)
 
         # --- 2. HTTP archive ---
@@ -199,7 +263,7 @@ class PluginInstaller:
 
         allowed = _allowed_sources()
         raise PluginInstallError(
-            f"Plugin source {source!r} is not in the allowed sources list. "
+            f"Plugin source {redact_url_userinfo(source)!r} is not in the allowed sources list. "
             f"Set GRAPHYN_PLUGIN_ALLOWED_SOURCES to include this base URL. "
             f"Current allowed bases: {allowed or '(empty — remote installs blocked when auth is required)'}"
         )
@@ -234,7 +298,7 @@ class PluginInstaller:
             )
             if result.returncode != 0:
                 raise PluginInstallError(
-                    f"Git clone failed for {url!r}.\n"
+                    f"Git clone failed for {redact_url_userinfo(url)!r}.\n"
                     f"git stderr:\n{result.stderr.strip()}"
                 )
             manifest_dir = self._find_manifest_dir(tmpdir)
@@ -245,7 +309,7 @@ class PluginInstaller:
         except subprocess.TimeoutExpired:
             shutil.rmtree(tmpdir, ignore_errors=True)
             raise PluginInstallError(
-                f"Git clone timed out after 120 seconds for {url!r}. "
+                f"Git clone timed out after 120 seconds for {redact_url_userinfo(url)!r}. "
                 "The remote server may be slow or unresponsive."
             )
         except PluginInstallError:
@@ -254,7 +318,7 @@ class PluginInstaller:
         except Exception as exc:
             shutil.rmtree(tmpdir, ignore_errors=True)
             raise PluginInstallError(
-                f"Unexpected error cloning {url!r}: {exc}"
+                f"Unexpected error cloning {redact_url_userinfo(url)!r}: {exc}"
             ) from exc
 
     def _resolve_http_archive(self, url: str, expected_sha256: str | None = None) -> Path:
@@ -280,7 +344,7 @@ class PluginInstaller:
         except Exception as exc:
             shutil.rmtree(tmpdir, ignore_errors=True)
             raise PluginInstallError(
-                f"Unexpected error downloading {url!r}: {exc}"
+                f"Unexpected error downloading {redact_url_userinfo(url)!r}: {exc}"
             ) from exc
 
     def _download_with_limit(self, url: str) -> bytes:
@@ -308,7 +372,7 @@ class PluginInstaller:
                             location = response.headers.get("location")
                             if not location:
                                 raise PluginInstallError(
-                                    f"HTTP redirect from {current!r} missing Location header"
+                                    f"HTTP redirect from {redact_url_userinfo(current)!r} missing Location header"
                                 )
                             current = urljoin(current, location)
                             continue
@@ -317,21 +381,21 @@ class PluginInstaller:
                             total += len(chunk)
                             if total > _MAX_DOWNLOAD_BYTES:
                                 raise PluginInstallError(
-                                    f"Download from {url!r} exceeds the maximum allowed size "
+                                    f"Download from {redact_url_userinfo(url)!r} exceeds the maximum allowed size "
                                     f"of {_MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB."
                                 )
                             chunks.append(chunk)
                         return b"".join(chunks)
                 raise PluginInstallError(
-                    f"Too many redirects while downloading {url!r}"
+                    f"Too many redirects while downloading {redact_url_userinfo(url)!r}"
                 )
         except httpx.HTTPStatusError as exc:
             raise PluginInstallError(
-                f"HTTP download failed for {url!r}: status {exc.response.status_code}"
+                f"HTTP download failed for {redact_url_userinfo(url)!r}: status {exc.response.status_code}"
             ) from exc
         except httpx.RequestError as exc:
             raise PluginInstallError(
-                f"Network error downloading {url!r}: {exc}"
+                f"Network error downloading {redact_url_userinfo(url)!r}: {exc}"
             ) from exc
 
     def _resolve_local_dir(self, path: Path) -> Path:

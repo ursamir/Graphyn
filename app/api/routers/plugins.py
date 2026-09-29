@@ -53,12 +53,22 @@ _dep_install_jobs_lock = threading.Lock()
 
 # ── Remote-source detection ───────────────────────────────────────────────────
 
-_REMOTE_PREFIXES = ("git+", "http://", "https://")
+_REMOTE_PREFIXES = ("git+", "http://", "https://", "git://", "ssh://")
 
 
 def _is_remote_source(source: str) -> bool:
-    """Return True when *source* is a remote URL (git+, http://, https://)."""
-    return source.startswith(_REMOTE_PREFIXES)
+    """Return True when *source* is a remote URL (any scheme:// or git+).
+
+    Case-insensitive so ``HTTPS://…`` / ``GIT+https://…`` still take the
+    async install path (and hit the installer allowlist gate).
+    """
+    s = (source or "").strip()
+    lower = s.lower()
+    if lower.startswith("git+"):
+        return True
+    if "://" in s:
+        return True
+    return False
 
 
 def _parse_name_from_source(source: str) -> str:
@@ -81,7 +91,7 @@ def _parse_name_from_source(source: str) -> str:
                 break
     # For remote URLs _parse_name_version returns the full URL as the name;
     # extract the last meaningful path segment in that case.
-    if source.startswith(_REMOTE_PREFIXES):
+    if _is_remote_source(source):
         # Strip query string / fragment, then take the last path segment
         clean = source.split("?")[0].split("#")[0].rstrip("/")
         segment = clean.rsplit("/", 1)[-1]
@@ -108,11 +118,21 @@ _ERROR_STATUS: dict[type, int] = {
 
 def _plugin_http_error(exc: Exception) -> HTTPException:
     """Convert a known plugin exception to an HTTPException with a standard body."""
+    from app.core.plugins.installer import redact_url_userinfo
+
     status = _ERROR_STATUS.get(type(exc), 500)
     return HTTPException(
         status_code=status,
-        detail={"error": type(exc).__name__, "detail": str(exc)},
+        detail={"error": type(exc).__name__, "detail": redact_url_userinfo(str(exc))},
     )
+
+
+def _safe_exc_detail(exc: Exception) -> str:
+    """Exception text safe for API clients (URL userinfo redacted)."""
+    from app.core.plugins.installer import redact_url_userinfo
+
+    return redact_url_userinfo(str(exc))
+
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -236,16 +256,19 @@ def install_plugin(
                 with _install_jobs_lock:
                     _install_jobs[parsed_name] = {"status": "installed", "error": None}
             except Exception as exc:
+                from app.core.plugins.installer import redact_url_userinfo
+
+                safe_err = redact_url_userinfo(str(exc))
                 log.error(
                     "Background install of '%s' failed: %s",
                     parsed_name,
-                    exc,
+                    safe_err,
                     exc_info=True,
                 )
                 with _install_jobs_lock:
                     _install_jobs[parsed_name] = {
                         "status": "failed",
-                        "error": str(exc),
+                        "error": safe_err,
                     }
 
         background_tasks.add_task(_bg_install)
@@ -269,7 +292,7 @@ def install_plugin(
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail={"error": "UnexpectedError", "detail": str(exc)},
+            detail={"error": "UnexpectedError", "detail": _safe_exc_detail(exc)},
         ) from exc
 
     return {"name": record.name, "version": record.version, "status": "installed"}

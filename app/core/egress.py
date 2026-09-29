@@ -238,3 +238,27 @@ def webhook_url_log_label(url: str) -> str:
             host = f"{host}:{parsed.port}"
         return f"{parsed.scheme}://{host}"
     return "<invalid-url>"
+
+
+def redact_webhook_url_for_api(url: str) -> str:
+    """Redact a webhook URL for API / audit / trace responses.
+
+    Returns ``scheme://host[:port]`` only. Webhook secrets commonly live in the
+    path (``/hooks/<token>``) or query string, so path/query/fragment/userinfo
+    are never returned — a non-empty path becomes ``/***``. Empty input stays
+    empty; unparseable URLs become ``***`` (SEC-P0).
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.hostname:
+        return "***"
+    host = parsed.hostname
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    # Never include userinfo / path / query / fragment — path often *is* the secret.
+    if parsed.path and parsed.path not in ("", "/"):
+        return f"{parsed.scheme}://{host}/***"
+    return f"{parsed.scheme}://{host}"
+
