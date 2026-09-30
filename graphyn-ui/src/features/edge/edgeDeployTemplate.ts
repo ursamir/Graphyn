@@ -203,20 +203,41 @@ export type ModelPathResolveInput = {
   artifactUri?: string | null
 }
 
+/** ``artifacts/...`` is the same file as ``workspace/artifacts/...`` (download jail). */
+export function canonicalizeWorkspacePath(path: string): string {
+  const v = path.trim().replace(/\/$/, '')
+  if (!v || v.startsWith('/') || v.startsWith('workspace/')) return v
+  if (v.startsWith('artifacts/')) return `workspace/${v}`
+  return v
+}
+
+function artifactSlug(path: string): string {
+  const m = path.match(/(?:^|\/)(?:workspace\/)?artifacts\/([^/]+)/)
+  return m?.[1] || ''
+}
+
+function artifactRunId(path: string): string {
+  const m = path.match(/\/runs\/([a-f0-9]+)/i)
+  return m?.[1] || ''
+}
+
 /** Ordered candidates for Edge Optimizer (canonical run dir first). */
 export function resolveModelPathCandidates(input: ModelPathResolveInput): string[] {
   const out: string[] = []
   const push = (p?: string | null) => {
-    const v = (p || '').trim().replace(/\/$/, '')
+    const v = canonicalizeWorkspacePath(p || '')
     if (!v || out.includes(v)) return
     out.push(v)
   }
 
-  const slug = (input.slug || '').trim().replace(/^workspace\/artifacts\//, '').split('/')[0]
-  const runId = (input.runId || '').trim()
+  const stagePath = canonicalizeWorkspacePath((input.stagePath || '').trim())
+  const artifactUri = canonicalizeWorkspacePath((input.artifactUri || '').trim())
+  const hinted = `${stagePath} ${artifactUri}`
+  const slug =
+    (input.slug || '').trim().replace(/^workspace\/artifacts\//, '').split('/')[0] ||
+    artifactSlug(hinted)
+  const runId = (input.runId || '').trim() || artifactRunId(hinted)
   const stage = (input.stage || '').trim().toLowerCase() || 'staging'
-  const stagePath = (input.stagePath || '').trim().replace(/\/$/, '')
-  const artifactUri = (input.artifactUri || '').trim().replace(/\/$/, '')
 
   if (slug && runId) {
     push(`workspace/artifacts/${slug}/runs/${runId}/saved_model`)

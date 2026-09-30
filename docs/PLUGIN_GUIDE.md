@@ -67,7 +67,7 @@ embed raw secrets in Graph IR.
 - `runtime = "inprocess"` (default) — deps install into the **shared API Python**. Heavy optional wheels often fail here; the Plugins UI labels this **shared env**. Install progress lists the actual package names being pip-installed (not a generic “PyTorch” stub).
 - `torch` in `optional_dependencies` is skipped at boot unless `GRAPHYN_ISOLATED_INSTALL_TORCH=1`.
 - API Docker/uvicorn: `/health` binds immediately; plugin catalog loads in a background thread. Poll `/api/v1/system/readiness` (`registry_ready`) until the Builder catalog is populated. `docker logs` shows `graphyn: plugin '…' installing …` progress (pip stdout is captured).
-- Local ASR (`asr_transcribe` with `local_whisper` / `faster_whisper`): install host extra `pip install -e ".[asr]"` or declare `faster-whisper` in the plugin `optional_dependencies`.
+- Local ASR (`asr_transcribe` with `local_whisper` / `faster_whisper`): `faster-whisper` is on the isolated boot allowlist, so it installs into the plugin venv at load. Host extra `pip install -e ".[asr]"` is only for in-process use.
 - Shared-env installs guarded by `PLATFORM_CONSTRAINTS`; UI/API: `GET|POST /plugins/{name}/dependencies`
 - Optional **Install optional** installs packages **one-by-one**. `tflite-runtime` is skipped (and shown satisfied) when TensorFlow is already in the venv — nodes use `tensorflow.lite` as fallback. A single missing wheel no longer aborts the whole optional batch.
 - Existing Docker volumes created before optional extras were installed into isolated venvs:

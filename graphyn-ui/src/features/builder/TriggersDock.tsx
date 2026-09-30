@@ -109,7 +109,7 @@ export default function TriggersDock({
     }
     try {
       await navigator.clipboard.writeText(webhookUrl)
-      pushToast('Webhook URL copied', 'success')
+      pushToast('Copied the endpoint preview. The secret path stays on the server.', 'success')
     } catch {
       pushToast('Could not copy — select the URL manually', 'error')
     }
@@ -208,9 +208,6 @@ export default function TriggersDock({
                 onChange={(e) => setIntervalMinutes(Number(e.target.value) || 60)}
               />
             </label>
-            <p className="text-[10px] leading-snug text-ink-400">
-              Cron coming when API supports it.
-            </p>
             <label className="inline-flex items-center gap-2 text-[11px] text-ink-700">
               <input
                 type="checkbox"
@@ -233,9 +230,10 @@ export default function TriggersDock({
 
         <section className="space-y-1.5 border-t border-ink-100 pt-2">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Webhook</div>
-          <p className="text-[10px] leading-snug text-ink-500">
-            Per-workflow wiring is a global URL + event filter for now. Filter events in Ops.
-          </p>
+            <p className="text-[10px] leading-snug text-ink-500">
+              One webhook for this API. Choose which events to send in Ops. The address below omits
+              the secret path.
+            </p>
           <div className="flex gap-1.5">
             <input
               readOnly

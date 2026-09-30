@@ -75,6 +75,10 @@ _ISOLATED_BOOT_OPTIONAL_ALLOWLIST = frozenset(
         "sentence-transformers",
         "tflite-runtime",
         "ai-edge-litert",
+        # Local ASR (asr_transcribe local_whisper / faster_whisper).
+        # av 19 dropped metadata_errors, which faster-whisper 1.2 still passes.
+        "faster-whisper",
+        "av",
     }
 )
 

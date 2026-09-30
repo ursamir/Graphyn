@@ -175,6 +175,30 @@ class EdgeOptimizerNode(Node):
         log.info("EdgeOptimizerNode: converting SavedModel dir %s via from_saved_model", mp)
         return tf.lite.TFLiteConverter.from_saved_model(str(mp))
 
+    def _copy_tflite(self, artifact, out_path: Path, src: Path) -> DeploymentArtifact:
+        """Pass an existing .tflite through when no Keras source sits beside it."""
+        import shutil
+
+        dest = out_path / "model.tflite"
+        if src.resolve() != dest.resolve():
+            shutil.copy2(src, dest)
+        labels = list(getattr(artifact, "labels", None) or [])
+        sibling = src.parent / "labels.txt"
+        if not labels and sibling.is_file():
+            labels = [ln.strip() for ln in sibling.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        labels_path = out_path / "labels.txt"
+        labels_path.write_text("\n".join(labels), encoding="utf-8")
+        file_size = dest.stat().st_size
+        return DeploymentArtifact(
+            artifact_path=str(dest),
+            model_format="tflite",
+            target_hardware="cpu",
+            quantization=str(self.config.quantization),
+            labels=labels,
+            file_size_bytes=file_size,
+            metadata={"source": str(src), "copied": True},
+        )
+
     def _export_tflite(self, artifact: ModelArtifact, out_path: Path) -> DeploymentArtifact:
         """Convert SavedModel to TFLite with the configured quantization.
 
@@ -185,6 +209,11 @@ class EdgeOptimizerNode(Node):
         Returns:
             DeploymentArtifact describing the exported TFLite model.
         """
+        mp = Path(artifact.model_path)
+        if mp.is_file() and mp.suffix.lower() == ".tflite":
+            log.info("EdgeOptimizerNode: source is already TFLite; copying %s", mp)
+            return self._copy_tflite(artifact, out_path, mp)
+
         try:
             import tensorflow as tf
         except ImportError:
@@ -353,6 +382,77 @@ class EdgeOptimizerNode(Node):
             file_size_bytes=file_size,
         )
 
+    @staticmethod
+    def _resolve_model_path(raw: str) -> Path:
+        """Find a model path the download jail would accept.
+
+        Ship verifies ``artifacts/...`` via the workspace root. The isolated
+        worker's cwd is the repo root, so that relative path misses
+        ``workspace/artifacts/...`` unless we try the same candidates.
+        """
+        text = (raw or "").strip()
+        if not text:
+            return Path(text)
+        path = Path(text)
+        candidates: list[Path] = []
+        if path.is_absolute():
+            candidates.append(path)
+        else:
+            candidates.append(Path.cwd() / path)
+            try:
+                from app.core.config import project_dir
+
+                root = project_dir()
+            except Exception:
+                root = None
+            if root is not None:
+                candidates.append(root / path)
+                parts = path.parts
+                if parts and parts[0] == "workspace":
+                    candidates.append(root / Path(*parts[1:]))
+                if parts and parts[0] == "artifacts":
+                    candidates.append(Path.cwd() / "workspace" / path)
+        seen: set[str] = set()
+        for cand in candidates:
+            key = str(cand)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if cand.exists():
+                    return cand
+            except OSError:
+                continue
+        return path
+
+    @staticmethod
+    def _prefer_trainable_source(path: Path) -> Path:
+        """Use a Keras SavedModel or ``.keras`` beside an exported file.
+
+        A picked ``.../tflite/model.tflite`` is already an export. Conversion
+        and int8 calibration need the sibling ``saved_model`` or ``model.keras``.
+        """
+        try:
+            if not path.exists() or path.is_dir():
+                return path
+        except OSError:
+            return path
+        if path.suffix.lower() in {".keras", ".h5"}:
+            return path
+        if path.suffix.lower() not in {".tflite", ".onnx"}:
+            return path
+        parents = [path.parent]
+        if path.parent.parent != path.parent:
+            parents.append(path.parent.parent)
+        for parent in parents:
+            for cand in (parent / "saved_model", parent / "model.keras"):
+                try:
+                    if cand.exists():
+                        return cand
+                except OSError:
+                    continue
+        return path
+
     # ── main process ─────────────────────────────────────────────────────────
 
     def process(self, artifact) -> DeploymentArtifact:
@@ -380,10 +480,17 @@ class EdgeOptimizerNode(Node):
                 "implemented. Proceeding without pruning."
             )
 
-        if not artifact.model_path or not Path(artifact.model_path).exists():
+        resolved = self._resolve_model_path(getattr(artifact, "model_path", "") or "")
+        trainable = self._prefer_trainable_source(resolved)
+        if not trainable.exists():
             raise FileNotFoundError(
                 f"EdgeOptimizerNode: model not found at '{artifact.model_path}'"
             )
+        if str(trainable) != (artifact.model_path or ""):
+            try:
+                artifact = artifact.model_copy(update={"model_path": str(trainable)})
+            except Exception:
+                artifact.model_path = str(trainable)
 
         out_path = Path(self.config.output_path)
         out_path.mkdir(parents=True, exist_ok=True)

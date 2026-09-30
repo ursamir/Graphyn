@@ -171,29 +171,6 @@ def _run_status(run_path: Path, meta: dict[str, Any] | None = None) -> str:
     return status or "unknown"
 
 
-def _bytes_under(path: Path) -> int:
-    total = 0
-    if not path.exists():
-        return 0
-    try:
-        if path.is_file() or path.is_symlink():
-            try:
-                if path.is_file() and not path.is_symlink():
-                    return path.stat().st_size
-            except OSError:
-                return 0
-            return 0
-        for f in path.rglob("*"):
-            try:
-                if f.is_file() and not f.is_symlink():
-                    total += f.stat().st_size
-            except OSError:
-                continue
-    except OSError:
-        return total
-    return total
-
-
 def _jailed(path: Path, jail: Path) -> bool:
     try:
         resolved = path.resolve()
@@ -203,27 +180,42 @@ def _jailed(path: Path, jail: Path) -> bool:
         return False
 
 
-def _rmtree_jailed(path: Path, jail: Path) -> int:
-    """Remove ``path`` if it resolves inside ``jail``. Returns bytes freed.
+def _on_rmtree_error(_func, target, exc: BaseException) -> None:
+    """Keep going when a file vanishes mid-delete (two cleanups) or cannot be removed."""
+    if isinstance(exc, FileNotFoundError):
+        return
+    logger.warning("failed to delete %s: %s", target, exc)
 
-    Symlinks are unlinked (the target is not followed).
+
+def _rmtree_jailed(path: Path, jail: Path) -> tuple[int, bool]:
+    """Remove ``path`` if it resolves inside ``jail``.
+
+    Returns ``(bytes_freed, removed)``. File bytes are counted. Directories
+    are removed without a pre-walk (a full size scan of artifact trees is
+    what made cleanup exceed the console request timeout). Symlinks are
+    unlinked; the target is not followed.
     """
     if not path.exists() and not path.is_symlink():
-        return 0
+        return 0, False
     if not _jailed(path, jail):
         logger.warning("refusing to delete path outside jail: %s (jail=%s)", path, jail)
-        return 0
-    freed = 0
+        return 0, False
     try:
-        if path.is_symlink() or path.is_file():
+        if path.is_symlink():
             path.unlink()
-            return 0
-        freed = _bytes_under(path)
-        shutil.rmtree(path)
+            return 0, True
+        if path.is_file():
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            path.unlink()
+            return size, True
+        shutil.rmtree(path, onexc=_on_rmtree_error)
     except OSError as exc:
         logger.warning("failed to delete %s: %s", path, exc)
-        return 0
-    return freed
+        return 0, False
+    return 0, True
 
 
 def _slug_for_run(run_id: str, run_path: Path, meta: dict[str, Any] | None = None) -> str | None:
@@ -313,27 +305,32 @@ def retarget_latest(slug: str, deleted_run_id: str | None = None) -> str | None:
     return None
 
 
-def _delete_workspace_run_artifacts(slug: str | None, run_id: str) -> int:
+def _delete_workspace_run_artifacts(slug: str | None, run_id: str) -> tuple[int, int]:
+    """Delete workspace artifacts for one run. Returns ``(bytes_freed, trees_removed)``."""
     if not slug:
         # Best-effort: scan artifacts/*/runs/<run_id>
         art_root = artifacts_dir()
         if not art_root.is_dir():
-            return 0
+            return 0, 0
         freed = 0
+        removed = 0
         for slug_dir in art_root.iterdir():
             if not slug_dir.is_dir():
                 continue
             candidate = slug_dir / "runs" / run_id
             if candidate.exists() or candidate.is_symlink():
-                freed += _rmtree_jailed(candidate, art_root)
+                n_freed, ok = _rmtree_jailed(candidate, art_root)
+                freed += n_freed
+                if ok:
+                    removed += 1
                 retarget_latest(slug_dir.name, run_id)
                 _prune_empty_runs_dir(slug_dir.name)
-        return freed
+        return freed, removed
     run_art = artifact_fs_path(artifact_layout(slug, run_id)["run_dir"])
-    freed = _rmtree_jailed(run_art, artifacts_dir())
+    freed, ok = _rmtree_jailed(run_art, artifacts_dir())
     retarget_latest(slug, run_id)
     _prune_empty_runs_dir(slug)
-    return freed
+    return freed, 1 if ok else 0
 
 
 def _prune_empty_runs_dir(slug: str) -> None:
@@ -552,8 +549,9 @@ def delete_run(
         ProvenanceStore().purge_run(run_id)
     except Exception as exc:
         logger.warning("delete_run: artifact/provenance cleanup failed for %s: %s", run_id, exc)
-    bytes_freed += _delete_workspace_run_artifacts(slug, run_id)
-    bytes_freed += _rmtree_jailed(run_path, runs_root)
+    art_freed, _art_n = _delete_workspace_run_artifacts(slug, run_id)
+    journal_freed, _journal_ok = _rmtree_jailed(run_path, runs_root)
+    bytes_freed += art_freed + journal_freed
     return {
         "deleted": run_id,
         "slug": slug,
@@ -693,16 +691,15 @@ def cleanup_workspace(
     deleted_ids: list[str] = []
     for entry, run_id, slug in to_delete:
         if delete_artifacts:
-            before = _bytes_under(artifact_fs_path(artifact_layout(slug, run_id)["run_dir"])) if slug else 0
-            freed_art = _delete_workspace_run_artifacts(slug, run_id)
-            if freed_art or (slug and before):
-                artifacts_deleted += 1
+            freed_art, n_art = _delete_workspace_run_artifacts(slug, run_id)
+            artifacts_deleted += n_art
             bytes_freed += freed_art
         else:
             # Journal-only: if this run was latest we already skipped it when
             # keep_latest. If not, leave workspace artifacts in place.
             pass
-        bytes_freed += _rmtree_jailed(entry, runs_root)
+        journal_freed, _journal_ok = _rmtree_jailed(entry, runs_root)
+        bytes_freed += journal_freed
         runs_deleted += 1
         deleted_ids.append(run_id)
 
@@ -719,8 +716,10 @@ def cleanup_workspace(
                     continue
                 if mtime >= cutoff:
                     continue
-            bytes_freed += _rmtree_jailed(entry, cache_root)
-            cache_deleted += 1
+            cache_freed, cache_ok = _rmtree_jailed(entry, cache_root)
+            bytes_freed += cache_freed
+            if cache_ok:
+                cache_deleted += 1
 
     blob_stats = {"blobs_deleted": 0, "bytes_freed": 0}
     if delete_cache:
@@ -759,8 +758,10 @@ def cleanup_workspace(
                     continue
                 if mtime >= cutoff and days != 0:
                     continue
-                bytes_freed += _rmtree_jailed(run_folder, art_root)
-                artifacts_deleted += 1
+                orphan_freed, orphan_ok = _rmtree_jailed(run_folder, art_root)
+                bytes_freed += orphan_freed
+                if orphan_ok:
+                    artifacts_deleted += 1
             retarget_latest(slug)
             _prune_empty_runs_dir(slug)
 

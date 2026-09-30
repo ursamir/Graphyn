@@ -5,7 +5,7 @@ Responsibility:   Fire-and-forget HTTP POST webhook notifications. Persists
                   webhook configuration and sends notifications in background
                   threads with SSRF protection.
 Owns:             WebhookService — save(), load(), notify(), _send().
-Public Surface:   WebhookService.save(url, events), .notify(event, payload)
+Public Surface:   WebhookService.save, .load, .url_for_save, .notify, .deliver_now, .public_config
 Must NOT:         Import from app.domain or app.api at module level.
                   Must never raise on notification failure (fire-and-forget).
 Dependencies:     stdlib (json, logging, threading, urllib),
@@ -105,6 +105,41 @@ class WebhookService:
         WebhookService._class_config_cache = None
         return self.load()
 
+    def url_for_save(self, submitted: str, *, keep_url: bool) -> str:
+        """Resolve the URL to persist.
+
+        The API only returns a redacted preview (``scheme://host/***``). Saving
+        that preview, or saving with ``keep_url`` and a blank field, must keep
+        the URL already on disk. A redacted string is never written as the
+        delivery target.
+        """
+        from app.core.trust.egress import redact_webhook_url_for_api
+
+        current = str(self.load().get("url") or "")
+        submitted = (submitted or "").strip()
+        if keep_url:
+            return current
+        redacted = redact_webhook_url_for_api(current) if current else ""
+        if submitted and redacted and submitted == redacted:
+            return current
+        if submitted == "***" or "/***" in submitted:
+            raise ValueError(
+                "That address is a redacted preview. Enter the full webhook URL, "
+                "or leave it blank to keep the saved one."
+            )
+        return submitted
+
+    def deliver_now(self, event: str, payload: dict[str, Any]) -> str | None:
+        """POST one event and wait. Returns an error string, or None on success.
+
+        Unlike :meth:`notify`, this ignores the event filter (used by the
+        console test button) and does not return before the HTTP call finishes.
+        """
+        url = str(self.load().get("url") or "").strip()
+        if not url:
+            return "No webhook URL configured"
+        return self._send(url, event, payload)
+
     def load(self) -> dict:
         """Read webhook configuration. Always returns ``url`` + ``events`` keys."""
         empty = {"url": "", "events": [], "resource_version": "0", "secret_name": None}
@@ -192,8 +227,8 @@ class WebhookService:
         )
         thread.start()
 
-    def _send(self, url: str, event: str, payload: dict[str, Any]) -> None:
-        """Internal: perform the HTTP POST. Logs warning on failure.
+    def _send(self, url: str, event: str, payload: dict[str, Any]) -> str | None:
+        """Perform the HTTP POST. Returns an error string, or None on success.
 
         SSRF protection: re-validates the destination, then POSTs through a
         transport pinned to one of those resolved public IPs (Host/SNI stay on
@@ -221,18 +256,22 @@ class WebhookService:
             with httpx.Client(timeout=10.0, transport=_PinTransport()) as client:
                 response = client.post(url, json=body)
                 response.raise_for_status()
+            return None
         except ValueError as exc:
+            msg = _redact_exc_text(exc, url)
             logger.warning(
                 "Webhook blocked for event '%s' to %s: %s",
                 event,
                 log_target,
-                _redact_exc_text(exc, url),
+                msg,
             )
+            return msg or "Webhook target was rejected"
         except Exception as exc:
+            msg = f"{type(exc).__name__}: {_redact_exc_text(exc, url)}"
             logger.warning(
-                "Webhook notification failed for event '%s' to %s: %s: %s",
+                "Webhook notification failed for event '%s' to %s: %s",
                 event,
                 log_target,
-                type(exc).__name__,
-                _redact_exc_text(exc, url),
+                msg,
             )
+            return msg

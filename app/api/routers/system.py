@@ -19,6 +19,7 @@ Reason To Change: New system endpoint added, or cleanup policy changes.
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -64,11 +65,14 @@ def metrics_snapshot():
 
 class CleanupRequest(BaseModel):
     older_than_days: int = Field(7, ge=0)
-    delete_cache: bool = True
+    delete_cache: bool = False
     delete_artifacts: bool = False
     keep_latest: bool = True
     reconcile_abandoned: bool = True
     stale_after_hours: float = Field(1.0, ge=0)
+
+
+_CLEANUP_LOCK = threading.Lock()
 
 
 @router.post("/cleanup", summary="Clean up old runs and cache")
@@ -93,14 +97,22 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
     """
     from app.core.runs.run_cleanup import cleanup_workspace
 
-    result = cleanup_workspace(
-        older_than_days=body.older_than_days,
-        delete_cache=body.delete_cache,
-        delete_artifacts=body.delete_artifacts,
-        keep_latest=body.keep_latest,
-        reconcile_abandoned=body.reconcile_abandoned,
-        stale_after_hours=body.stale_after_hours,
-    )
+    if not _CLEANUP_LOCK.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Cleanup is already running. Wait for it to finish.",
+        )
+    try:
+        result = cleanup_workspace(
+            older_than_days=body.older_than_days,
+            delete_cache=body.delete_cache,
+            delete_artifacts=body.delete_artifacts,
+            keep_latest=body.keep_latest,
+            reconcile_abandoned=body.reconcile_abandoned,
+            stale_after_hours=body.stale_after_hours,
+        )
+    finally:
+        _CLEANUP_LOCK.release()
     try:
         from app.core.trust.audit import record_audit
 
@@ -113,7 +125,16 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
                 "older_than_days": body.older_than_days,
                 "delete_cache": body.delete_cache,
                 "delete_artifacts": body.delete_artifacts,
-                **{k: result.get(k) for k in ("runs_deleted", "cache_deleted", "artifacts_deleted", "reconciled") if isinstance(result, dict)},
+                **{
+                    k: result.get(k)
+                    for k in (
+                        "runs_deleted",
+                        "cache_entries_deleted",
+                        "artifacts_deleted",
+                        "blobs_deleted",
+                    )
+                    if isinstance(result, dict)
+                },
             },
         )
     except Exception:
@@ -141,9 +162,10 @@ def get_projects_registry(
 # ── Webhooks ──────────────────────────────────────────────────────────────────
 
 class WebhookBody(BaseModel):
-    url: str
+    url: str = ""
     events: list[str] = []
     resource_version: Optional[str] = None
+    keep_url: bool = False
 
 
 @router.get("/webhooks", summary="Get webhook configuration")
@@ -181,12 +203,13 @@ def set_webhooks(body: WebhookBody, request: Request):
                 VersionConflict(via_if_match=via_if_match, current=current)
             )
     try:
-        cfg = _webhook_svc.save(body.url, body.events)
+        url_to_save = _webhook_svc.url_for_save(body.url, keep_url=body.keep_url)
+        cfg = _webhook_svc.save(url_to_save, body.events)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     from app.core.trust.egress import redact_webhook_url_for_api
 
-    redacted_url = redact_webhook_url_for_api(body.url)
+    redacted_url = redact_webhook_url_for_api(str(cfg.get("url") or ""))
     try:
         from app.core.trust.audit import record_audit
 
@@ -195,7 +218,7 @@ def set_webhooks(body: WebhookBody, request: Request):
             action="webhook.set",
             resource_type="webhook",
             resource_id=(redacted_url[:64] if redacted_url else "webhook"),
-            meta={"events": list(body.events or []), "url_configured": bool((body.url or "").strip())},
+            meta={"events": list(body.events or []), "url_configured": bool(str(cfg.get("url") or "").strip())},
             request_id=getattr(request.state, "request_id", None),
         )
     except Exception:
@@ -203,8 +226,8 @@ def set_webhooks(body: WebhookBody, request: Request):
     out = {
         "ok": True,
         "url": redacted_url,
-        "url_configured": bool((body.url or "").strip()),
-        "events": body.events,
+        "url_configured": bool(str(cfg.get("url") or "").strip()),
+        "events": cfg.get("events") if isinstance(cfg, dict) else body.events,
         **{
             k: cfg.get(k)
             for k in ("resource_version", "secret_name")
@@ -226,7 +249,7 @@ def test_webhook(request: Request):
     url = config.get("url")
     if not url:
         return {"ok": False, "reason": "No webhook URL configured"}
-    _webhook_svc.notify("test", {"message": "Test notification from Graphyn"})
+    reason = _webhook_svc.deliver_now("test", {"message": "Test notification from Graphyn"})
     redacted_url = redact_webhook_url_for_api(str(url))
     try:
         from app.core.trust.audit import record_audit
@@ -240,7 +263,7 @@ def test_webhook(request: Request):
         )
     except Exception:
         pass
-    return {"ok": True, "url": redacted_url, "url_configured": True}
+    return {"ok": reason is None, "url": redacted_url, "url_configured": True, **({"reason": reason} if reason else {})}
 
 
 # ── Auth status (honesty banner) ──────────────────────────────────────────────
@@ -280,16 +303,19 @@ class ScheduleEnabledBody(BaseModel):
 
 @router.get("/schedules", summary="List interval schedules")
 def get_schedules():
-    from app.core.pipelines.schedules import list_schedules
+    from app.core.pipelines.schedules import SchedulesDataError, list_schedules
 
-    return {"schedules": list_schedules()}
+    try:
+        return {"schedules": list_schedules()}
+    except SchedulesDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/schedules", summary="Create an interval schedule")
 def post_schedule(body: ScheduleCreateBody, request: Request):
     """Create schedule. Honors Idempotency-Key (API-CONV-004)."""
     from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
-    from app.core.pipelines.schedules import create_schedule
+    from app.core.pipelines.schedules import SchedulesDataError, create_schedule
 
     cached = begin_idempotent(
         request, body=body.model_dump(), route="POST /api/v1/system/schedules"
@@ -307,6 +333,8 @@ def post_schedule(body: ScheduleCreateBody, request: Request):
                 enabled=body.enabled,
                 env=body.env,
             )
+        except SchedulesDataError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         try:
@@ -328,9 +356,12 @@ def post_schedule(body: ScheduleCreateBody, request: Request):
 @router.post("/schedules/tick", summary="Tick due schedules (ops)")
 def tick_schedules(request: Request):
     """Fire any enabled schedules whose next_run_at is due."""
-    from app.core.pipelines.schedules import tick_due_schedules
+    from app.core.pipelines.schedules import SchedulesDataError, tick_due_schedules
 
-    fired = tick_due_schedules()
+    try:
+        fired = tick_due_schedules()
+    except SchedulesDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     try:
         from app.core.trust.audit import record_audit
 
@@ -348,10 +379,12 @@ def tick_schedules(request: Request):
 
 @router.delete("/schedules/{schedule_id}", summary="Delete a schedule")
 def remove_schedule(schedule_id: str, request: Request):
-    from app.core.pipelines.schedules import delete_schedule
+    from app.core.pipelines.schedules import SchedulesDataError, delete_schedule
 
     try:
         delete_schedule(schedule_id)
+    except SchedulesDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Schedule not found") from exc
     try:
@@ -371,10 +404,12 @@ def remove_schedule(schedule_id: str, request: Request):
 
 @router.post("/schedules/{schedule_id}/enable", summary="Enable or disable a schedule")
 def enable_schedule(schedule_id: str, body: ScheduleEnabledBody, request: Request):
-    from app.core.pipelines.schedules import set_schedule_enabled
+    from app.core.pipelines.schedules import SchedulesDataError, set_schedule_enabled
 
     try:
         item = set_schedule_enabled(schedule_id, body.enabled)
+    except SchedulesDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Schedule not found") from exc
     try:
@@ -392,12 +427,45 @@ def enable_schedule(schedule_id: str, body: ScheduleEnabledBody, request: Reques
     return item
 
 
+class ScheduleEnvBody(BaseModel):
+    env: str = Field("draft", description="draft | staging | prod")
+
+
+@router.post("/schedules/{schedule_id}/env", summary="Set the environment a schedule runs")
+def schedule_env(schedule_id: str, body: ScheduleEnvBody, request: Request):
+    from app.core.pipelines.schedules import SchedulesDataError, set_schedule_env
+
+    try:
+        item = set_schedule_env(schedule_id, body.env)
+    except SchedulesDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Schedule not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(
+            actor=resolve_actor(request),
+            action="schedule.env",
+            resource_type="schedule",
+            resource_id=schedule_id,
+            meta={"env": item.get("env")},
+        )
+    except Exception:
+        pass
+    return item
+
+
 @router.post("/schedules/{schedule_id}/run", summary="Run a schedule immediately")
 def run_schedule(schedule_id: str, request: Request):
-    from app.core.pipelines.schedules import run_schedule_now
+    from app.core.pipelines.schedules import SchedulesDataError, run_schedule_now
 
     try:
         item = run_schedule_now(schedule_id)
+    except SchedulesDataError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Schedule not found") from exc
     except Exception as exc:

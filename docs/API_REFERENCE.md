@@ -831,7 +831,7 @@ Delete run directories and cache entries.
 {"older_than_days": 7, "delete_cache": true}
 ```
 
-Cleanup respects `older_than_days` cutoff for runs and cache directories.
+Cleanup respects `older_than_days` cutoff for runs and cache directories. Omitted `delete_cache` defaults to false. A second call while one cleanup is still running returns `409`. Directory sizes are not pre-scanned; `bytes_freed` counts file unlinks, and removed directories report `0` bytes.
 
 **Response:**
 ```json
@@ -861,10 +861,7 @@ List all dataset projects with optional search/filter.
 
 Get the current webhook configuration.
 
-**Response:**
-```json
-{"url": "https://example.com/webhook", "events": ["pipeline_complete", "pipeline_failed"]}
-```
+**Response:** `url` is `scheme://host/***` when the saved URL has a path (the path is often the secret). `url_configured` is true when a URL is stored. `events` lists subscriptions; an empty list means every event.
 
 ---
 
@@ -874,8 +871,10 @@ Save webhook configuration.
 
 **Request body:**
 ```json
-{"url": "https://example.com/webhook", "events": ["pipeline_complete"]}
+{"url": "https://example.com/hooks/secret", "events": ["pipeline_complete"], "keep_url": false}
 ```
+
+`keep_url: true` (or a body `url` equal to the redacted preview) keeps the URL already stored and updates `events` only. A blank `url` with `keep_url` false clears the webhook. Sending a redacted preview that does not match the stored URL returns **422**.
 
 **Response:**
 ```json
@@ -888,14 +887,14 @@ Invalid or SSRF-blocked URLs return **422** with a `detail` string (not 500).
 
 ### `POST /api/v1/system/webhooks/test`
 
-Fire a test event to the configured webhook URL.
+Fire a test event to the configured webhook URL and wait for the HTTP result. The test is sent even when `events` does not list `test`.
 
 **Response:**
 ```json
-{"ok": true, "url": "https://example.com/webhook"}
+{"ok": true, "url": "https://example.com/***"}
 ```
 
-Returns `{"ok": false, "reason": "No webhook URL configured"}` if no URL is set.
+Returns `{"ok": false, "reason": "..."}` when no URL is set or delivery fails. The reason does not include the secret path.
 
 Terminal run statuses fire `pipeline_complete` / `pipeline_failed` via `app.core.runs.run_notify` when configured.
 
@@ -909,7 +908,11 @@ List interval schedules that run project pipelines while the API process is up.
 
 ### `POST /api/v1/system/schedules`
 
-Create a schedule. Body: `{ "name", "project", "pipeline", "interval_minutes", "enabled" }`.
+Create a schedule. Body: `{ "name", "project", "pipeline", "interval_minutes", "enabled", "env" }`. `env` is `draft`, `staging`, or `prod` (default `prod` when omitted). Draft runs the saved pipeline. Staging and prod require a published version.
+
+### `POST /api/v1/system/schedules/{id}/env`
+
+Body: `{ "env": "draft"|"staging"|"prod" }`. Clears `last_error`.
 
 ### `POST /api/v1/system/schedules/tick`
 

@@ -33,6 +33,10 @@ def test_create_list_delete_schedule(tmp_path: Path):
     assert list_schedules(base_dir=tmp_path)[0]["name"] == "hourly"
     set_schedule_enabled(item["id"], False, base_dir=tmp_path)
     assert list_schedules(base_dir=tmp_path)[0]["enabled"] is False
+    from app.core.pipelines.schedules import set_schedule_env
+
+    updated = set_schedule_env(item["id"], "draft", base_dir=tmp_path)
+    assert updated["env"] == "draft"
     delete_schedule(item["id"], base_dir=tmp_path)
     assert list_schedules(base_dir=tmp_path) == []
 

@@ -146,6 +146,25 @@ def test_tflite_converter_uses_keras_file_not_saved_model(tmp_path):
         fake_tf.lite.TFLiteConverter.from_saved_model.assert_called_once_with(str(saved_dir))
 
 
+def test_resolve_artifacts_prefix_and_prefer_saved_model(tmp_path, monkeypatch):
+    """``artifacts/.../model.tflite`` is the workspace file; convert the sibling SavedModel."""
+    nodes = _load_edge_nodes()
+    run = tmp_path / "artifacts" / "speech-commands" / "runs" / "abc123"
+    saved = run / "saved_model"
+    saved.mkdir(parents=True)
+    (saved / "saved_model.pb").write_bytes(b"pb")
+    tflite = run / "tflite" / "model.tflite"
+    tflite.parent.mkdir()
+    tflite.write_bytes(b"tflite")
+    monkeypatch.chdir(tmp_path.parent)
+    monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+
+    raw = "artifacts/speech-commands/runs/abc123/tflite/model.tflite"
+    resolved = nodes.EdgeOptimizerNode._resolve_model_path(raw)
+    assert resolved == tflite
+    assert nodes.EdgeOptimizerNode._prefer_trainable_source(resolved) == saved
+
+
 def test_int8_repr_path_sibling_of_keras_file(tmp_path):
     import numpy as np
     from app.models.model_artifact import ModelArtifact

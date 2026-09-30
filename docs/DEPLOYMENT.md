@@ -142,6 +142,7 @@ Full runbook, env vars, cancel/lease, and UI (**Deploy → Workers**): [DISTRIBU
 
 | Variable | Default | Where | Purpose |
 |---|---|---|---|
+| `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS` | unset in the process; Compose `1` | `app/api/routers/data.py` | When unset, input-label symlinks that resolve outside `datasets/input` are listed as `accessible: false` and cannot be browsed. Compose defaults to `1` so the bundled `examples/` dataset links work. Set `0` to fail closed. |
 | `GRAPHYN_SECRET_ENV_ALLOWLIST` | empty | `app/core/trust/secrets.py` | Comma-separated env names that node-selected secret names may read even if not secret-shaped / `GRAPHYN_*` (default: only `*_API_KEY`, `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_DSN`, `*_URL`, `*_URI` not starting with `GRAPHYN_`) |
 | `GRAPHYN_LLM_BASE_URL_ALLOWLIST` | empty | `app/core/ml/llm_client.py` | Comma-separated hosts an env/secret LLM key may be sent to when a node `base_url` differs from the provider default (connections bind to their own `base_url`) |
 | `GRAPHYN_ALLOWED_HOSTS` | empty | `app/api/main.py` | Extra `Host` names accepted while `GRAPHYN_API_TOKEN` is unset; `*` disables the guard |

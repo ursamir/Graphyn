@@ -62,12 +62,17 @@ export default function SystemView() {
   const [ready, setReady] = React.useState<unknown>(null)
   const [metrics, setMetrics] = React.useState<unknown>(null)
   const [webhookUrl, setWebhookUrl] = React.useState('')
+  const [webhookDraft, setWebhookDraft] = React.useState('')
+  const [webhookConfigured, setWebhookConfigured] = React.useState(false)
+  const [webhookVersion, setWebhookVersion] = React.useState<string | null>(null)
   const [webhookEvents, setWebhookEvents] = React.useState<string[]>([])
   const [cleanupDays, setCleanupDays] = React.useState(7)
   const [deleteCache, setDeleteCache] = React.useState(false)
   const [deleteArtifacts, setDeleteArtifacts] = React.useState(false)
   const [cleanupArmed, setCleanupArmed] = React.useState(false)
   const [cleanupConfirmText, setCleanupConfirmText] = React.useState('')
+  const [cleanupBusy, setCleanupBusy] = React.useState(false)
+  const cleanupInFlight = React.useRef(false)
   const [reconcileAbandoned, setReconcileAbandoned] = React.useState(true)
   const [reconciling, setReconciling] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -103,17 +108,20 @@ export default function SystemView() {
       next_run_at?: string
       last_run_id?: string
       last_error?: string
+      env?: string
     }>
   >([])
   const [schedName, setSchedName] = React.useState('hourly')
   const [schedProject, setSchedProject] = React.useState('')
   const [schedPipeline, setSchedPipeline] = React.useState('')
   const [schedInterval, setSchedInterval] = React.useState(60)
+  const [schedEnv, setSchedEnv] = React.useState<'draft' | 'staging' | 'prod'>('draft')
   const [projectOptions, setProjectOptions] = React.useState<string[]>([])
   const [pipelineOptions, setPipelineOptions] = React.useState<string[]>([])
   const [projectsApiOk, setProjectsApiOk] = React.useState(true)
   const [pipelinesApiOk, setPipelinesApiOk] = React.useState(true)
   const [pipelinesLoading, setPipelinesLoading] = React.useState(false)
+  const [schedSaving, setSchedSaving] = React.useState(false)
   const [venvGcBusy, setVenvGcBusy] = React.useState(false)
 
   const metricsObj = metrics && typeof metrics === 'object' && !Array.isArray(metrics)
@@ -148,7 +156,12 @@ export default function SystemView() {
       apiJson('/system/health'),
       apiJson('/system/readiness'),
       apiJson('/system/metrics'),
-      apiJson<{ url?: string; events?: string[] }>('/system/webhooks'),
+      apiJson<{
+        url?: string
+        events?: string[]
+        url_configured?: boolean
+        resource_version?: string
+      }>('/system/webhooks'),
       apiJson<{ events?: unknown[] }>('/audit', { query: { limit: 100 } }),
       apiJson<{
         auth_required?: boolean
@@ -178,6 +191,9 @@ export default function SystemView() {
     if (settled[3].status === 'fulfilled') {
       const w = settled[3].value
       setWebhookUrl(w.url ?? '')
+      setWebhookConfigured(Boolean(w.url_configured ?? (w.url ?? '').trim()))
+      setWebhookVersion(w.resource_version != null ? String(w.resource_version) : null)
+      setWebhookDraft('')
       setWebhookEvents(w.events ?? [])
     }
     if (settled[4].status === 'fulfilled') {
@@ -212,6 +228,7 @@ export default function SystemView() {
           next_run_at?: string
           last_run_id?: string
           last_error?: string
+          env?: string
         }>,
       )
     } else {
@@ -344,7 +361,7 @@ export default function SystemView() {
     <div className="h-full min-h-0 overflow-y-auto p-6 space-y-5">
       <PageHeader
         title="Ops"
-        description="Health, schedules, webhooks, cleanup, audit. Shared-bearer single-tenant — see trust note on Status."
+        description="Health, schedules, webhooks, cleanup, and audit."
         actions={
           <button type="button" className="btn-secondary" onClick={() => void refresh()}>
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -381,29 +398,6 @@ export default function SystemView() {
 
       {systemTab === 'status' && (
         <div className="space-y-4">
-          <div
-            className="rounded-2xl border border-ink-200 bg-ink-50/80 px-4 py-3 text-xs text-ink-700 shadow-sm"
-            role="note"
-            data-testid="ops-trust-honesty"
-          >
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-              Auth &amp; token honesty
-            </div>
-            <ul className="mt-1.5 list-disc space-y-1 pl-4 leading-relaxed">
-              <li>
-                Single-tenant <strong>shared Bearer</strong> (SEC-001 / DIST-AUTH): API operators and
-                Mode B workers use the same token — no fake RBAC.
-              </li>
-              <li>
-                Console stores the token in <code className="font-mono text-[11px]">localStorage</code>{' '}
-                (interim). XSS can exfiltrate it (THREAT-001/002); CSP is baseline-only.
-              </li>
-              <li>
-                Backup / restore of <code className="font-mono text-[11px]">GRAPHYN_HOME</code> + project
-                dir: see <code className="font-mono text-[11px]">docs/OPS_BACKUP_RESTORE.md</code>.
-              </li>
-            </ul>
-          </div>
           <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Backend</span>
             {backendLabel ? (
@@ -433,18 +427,21 @@ export default function SystemView() {
             ) : null}
             <span
               className="rounded-full border border-ink-200 bg-ink-50 px-2.5 py-0.5 text-[11px] text-ink-600"
-              title="MCP runs as a separate stdio process — not an HTTP health check"
+              title="MCP is a separate process, not part of this health check"
             >
-              MCP: <code className="font-mono text-[10px]">graphyn mcp</code> · ~77 tools (agent-facing)
+              MCP: <code className="font-mono text-[10px]">graphyn mcp</code>
             </span>
             <button
               type="button"
               className="btn-secondary ml-auto"
-              disabled={reconciling}
+              disabled={reconciling || cleanupBusy}
               onClick={() => {
+                if (cleanupInFlight.current) return
+                cleanupInFlight.current = true
                 setReconciling(true)
                 void apiJson('/system/cleanup', {
                   method: 'POST',
+                  timeoutMs: 600000,
                   body: JSON.stringify({
                     older_than_days: 36500,
                     delete_cache: false,
@@ -461,7 +458,10 @@ export default function SystemView() {
                   .catch((err) =>
                     pushToast(err instanceof Error ? err.message : String(err), 'error'),
                   )
-                  .finally(() => setReconciling(false))
+                  .finally(() => {
+                    cleanupInFlight.current = false
+                    setReconciling(false)
+                  })
               }}
             >
               {reconciling ? 'Reconciling…' : 'Reconcile abandoned runs'}
@@ -613,9 +613,8 @@ export default function SystemView() {
               </dl>
               {registryFailed ? (
                 <p className="mt-3 rounded-lg bg-rose-50 p-2 text-[11px] text-rose-800">
-                  Node registry failed to load and will not recover on its own — this is a
-                  hard AutoDiscovery error (e.g. a duplicate node_type or a broken plugin
-                  import), not a slow install. Fix the plugin, then restart the API.
+                  The node catalog failed to load. It stays failed until the plugin problem is
+                  fixed and the API is restarted.
                   <br />
                   <code className="mt-1 block whitespace-pre-wrap break-all font-mono">
                     {registryInitError}
@@ -759,11 +758,11 @@ export default function SystemView() {
         <div>
           <h3 className="text-sm font-semibold">Schedules</h3>
           <p className="text-xs text-ink-500">
-            Run a project pipeline on a fixed interval while this API is up. Choose an interval in
-            minutes (not cron expressions).
+            Run a saved pipeline on a fixed interval while this API is up. Draft runs the pipeline
+            as saved. Staging and prod run a published version.
           </p>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
           <input
             className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
             placeholder="Name"
@@ -830,7 +829,25 @@ export default function SystemView() {
               aria-label="Interval in minutes"
             />
           </label>
+          <label className="block text-sm text-ink-600">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+              Environment
+            </span>
+            <select
+              className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              value={schedEnv}
+              onChange={(e) => setSchedEnv(e.target.value as 'draft' | 'staging' | 'prod')}
+              aria-label="Schedule environment"
+            >
+              <option value="draft">Draft</option>
+              <option value="staging">Staging</option>
+              <option value="prod">Prod</option>
+            </select>
+          </label>
         </div>
+        <p className="text-[11px] text-ink-400">
+          Name, workspace, and pipeline use letters, numbers, underscores, and hyphens.
+        </p>
         {!projectsApiOk && (
           <p className="text-xs text-ink-500">Workspaces API unavailable — enter workspace and pipeline as text.</p>
         )}
@@ -841,8 +858,10 @@ export default function SystemView() {
           <button
             type="button"
             className="btn-primary"
-            disabled={!canAddSchedule}
+            disabled={!canAddSchedule || schedSaving}
             onClick={() => {
+              if (schedSaving) return
+              setSchedSaving(true)
               void apiJson('/system/schedules', {
                 method: 'POST',
                 body: JSON.stringify({
@@ -850,6 +869,7 @@ export default function SystemView() {
                   project: schedProject.trim(),
                   pipeline: schedPipeline.trim(),
                   interval_minutes: schedInterval,
+                  env: schedEnv,
                   enabled: true,
                 }),
               })
@@ -860,9 +880,10 @@ export default function SystemView() {
                 .catch((err) =>
                   pushToast(err instanceof Error ? err.message : String(err), 'error'),
                 )
+                .finally(() => setSchedSaving(false))
             }}
           >
-            Add schedule
+            {schedSaving ? 'Adding…' : 'Add schedule'}
           </button>
           <button
             type="button"
@@ -911,7 +932,7 @@ export default function SystemView() {
                     <StatusBadge status={s.enabled ? 'enabled' : 'disabled'} />
                   </div>
                   <div className="text-[11px] text-ink-500">
-                    every {s.interval_minutes ?? '—'} min
+                    every {s.interval_minutes ?? '—'} min · {s.env || 'prod'}
                     {s.enabled && s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
                     {!s.enabled ? ' · paused' : ''}
                     {s.last_run_id ? ` · last run ${String(s.last_run_id).slice(0, 8)}…` : ''}
@@ -923,6 +944,28 @@ export default function SystemView() {
                   ) : null}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
+                  <select
+                    className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs"
+                    value={s.env || 'prod'}
+                    aria-label={`Environment for ${s.name || 'schedule'}`}
+                    onChange={(e) =>
+                      void apiJson(`/system/schedules/${s.id}/env`, {
+                        method: 'POST',
+                        body: JSON.stringify({ env: e.target.value }),
+                      })
+                        .then(() => {
+                          pushToast(`Schedule environment set to ${e.target.value}`, 'success')
+                          void refresh()
+                        })
+                        .catch((err) =>
+                          pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                        )
+                    }
+                  >
+                    <option value="draft">Draft</option>
+                    <option value="staging">Staging</option>
+                    <option value="prod">Prod</option>
+                  </select>
                   <button
                     type="button"
                     className="btn-secondary"
@@ -991,23 +1034,32 @@ export default function SystemView() {
         <div>
           <h3 className="text-sm font-semibold">Webhooks</h3>
           <p className="text-xs text-ink-500">
-            Send a POST when pipelines finish or fail. Leave events unchecked to receive all event
-            types.
+            Send a POST when pipelines finish or fail. Leave events unchecked to receive every
+            event. The saved address is shown without its secret path.
           </p>
         </div>
-        {!webhookUrl.trim() ? (
+        {webhookConfigured ? (
+          <p className="rounded-lg border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-700">
+            Current endpoint:{' '}
+            <code className="font-mono text-[11px]">{webhookUrl || 'configured'}</code>
+          </p>
+        ) : (
           <p className="rounded-lg border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
             No webhook URL saved yet.
           </p>
-        ) : null}
+        )}
         <label className="block text-sm text-ink-600">
           <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-            Endpoint URL
+            {webhookConfigured ? 'Replace endpoint URL' : 'Endpoint URL'}
           </span>
           <input
-            value={webhookUrl}
-            onChange={(e) => setWebhookUrl(e.target.value)}
-            placeholder="https://hooks.example.com/…"
+            value={webhookDraft}
+            onChange={(e) => setWebhookDraft(e.target.value)}
+            placeholder={
+              webhookConfigured
+                ? 'Leave blank to keep the current endpoint'
+                : 'https://hooks.example.com/…'
+            }
             className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
           />
         </label>
@@ -1032,43 +1084,78 @@ export default function SystemView() {
             </label>
           ))}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             className="btn-primary"
-            onClick={() =>
+            disabled={!webhookDraft.trim() && !webhookConfigured}
+            onClick={() => {
+              const replacing = webhookDraft.trim().length > 0
               void apiJson('/system/webhooks', {
                 method: 'PUT',
-                body: JSON.stringify({ url: webhookUrl.trim(), events: webhookEvents }),
+                body: JSON.stringify({
+                  url: replacing ? webhookDraft.trim() : '',
+                  events: webhookEvents,
+                  keep_url: !replacing && webhookConfigured,
+                  resource_version: webhookVersion,
+                }),
               })
-                .then(() =>
-                  pushToast(webhookUrl.trim() ? 'Webhook saved' : 'Webhook cleared', 'success'),
-                )
+                .then(() => {
+                  pushToast(replacing || webhookConfigured ? 'Webhook saved' : 'Webhook cleared', 'success')
+                  void refresh()
+                })
                 .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
-            }
+            }}
           >
             Save
           </button>
           <button
             type="button"
             className="btn-secondary"
-            disabled={!webhookUrl.trim()}
+            disabled={!webhookConfigured}
             onClick={() =>
               void apiJson<{ ok?: boolean; reason?: string }>('/system/webhooks/test', {
                 method: 'POST',
+                timeoutMs: 20000,
               })
                 .then((res) => {
                   if (res?.ok === false) {
                     pushToast(res.reason || 'Webhook test failed', 'error')
                     return
                   }
-                  pushToast('Test webhook sent', 'success')
+                  pushToast('Test webhook delivered', 'success')
                 })
                 .catch((err) => pushToast(err instanceof Error ? err.message : String(err), 'error'))
             }
           >
             Send test
           </button>
+          {webhookConfigured ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() =>
+                void apiJson('/system/webhooks', {
+                  method: 'PUT',
+                  body: JSON.stringify({
+                    url: '',
+                    events: [],
+                    keep_url: false,
+                    resource_version: webhookVersion,
+                  }),
+                })
+                  .then(() => {
+                    pushToast('Webhook cleared', 'success')
+                    void refresh()
+                  })
+                  .catch((err) =>
+                    pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                  )
+              }
+            >
+              Clear
+            </button>
+          ) : null}
         </div>
       </section>
       )}
@@ -1163,6 +1250,11 @@ export default function SystemView() {
                     ? 'Also delete workspace artifacts for those runs'
                     : 'Keep workspace artifacts'}
                 </li>
+                <li>
+                  {reconcileAbandoned
+                    ? 'Mark abandoned running or queued runs as failed first'
+                    : 'Leave running and queued runs unchanged'}
+                </li>
               </ul>
             </div>
             <label className="block text-sm text-rose-950">
@@ -1176,14 +1268,23 @@ export default function SystemView() {
                 className="mt-1 w-full rounded-lg border border-rose-200 bg-white px-3 py-2 font-mono text-sm"
               />
             </label>
+            {cleanupBusy && (
+              <p className="text-xs text-rose-900/90">
+                Cleaning up… a large workspace can take a few minutes. Leave this open.
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 className="btn-danger"
-                disabled={cleanupConfirmText.trim() !== 'CLEANUP'}
+                disabled={cleanupBusy || cleanupConfirmText.trim() !== 'CLEANUP'}
                 onClick={() => {
+                  if (cleanupInFlight.current) return
+                  cleanupInFlight.current = true
+                  setCleanupBusy(true)
                   void apiJson('/system/cleanup', {
                     method: 'POST',
+                    timeoutMs: 600000,
                     body: JSON.stringify({
                       older_than_days: cleanupDays,
                       delete_cache: deleteCache,
@@ -1201,13 +1302,18 @@ export default function SystemView() {
                     .catch((err) =>
                       pushToast(err instanceof Error ? err.message : String(err), 'error'),
                     )
+                    .finally(() => {
+                      cleanupInFlight.current = false
+                      setCleanupBusy(false)
+                    })
                 }}
               >
-                Confirm cleanup
+                {cleanupBusy ? 'Cleaning up…' : 'Confirm cleanup'}
               </button>
               <button
                 type="button"
                 className="btn-secondary"
+                disabled={cleanupBusy}
                 onClick={() => {
                   setCleanupArmed(false)
                   setCleanupConfirmText('')

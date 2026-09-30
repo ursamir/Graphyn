@@ -57,6 +57,20 @@ def test_rotation_clears_old_secret_from_public_view(
     assert svc.load()["url"] == new_url
 
 
+def test_url_for_save_keeps_secret_instead_of_redacted_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+    svc = WebhookService()
+    with patch("app.core.notify.webhook.validate_webhook_target_url"):
+        svc.save(SECRET_URL, ["pipeline_complete"])
+    preview = svc.public_config()["url"]
+    assert svc.url_for_save(preview, keep_url=False) == SECRET_URL
+    assert svc.url_for_save("", keep_url=True) == SECRET_URL
+    with pytest.raises(ValueError, match="redacted preview"):
+        svc.url_for_save("https://other.example/***", keep_url=False)
+
+
 def test_audit_list_redacts_historical_webhook_urls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -32,7 +32,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 ## Builder (`BuilderView`)
 
 - Primary **Run / Cancel · Save · graph name**; Validate / Templates / Triggers / Agent live under **More**.
-- **Triggers dock (A6/A9/A10):** interval schedules via `GET/POST /system/schedules` (filtered by project); webhook URL from `GET /system/webhooks` + copy; honesty that wiring is global URL + event filter; link to Ops. Label “Interval (minutes)” — no cron until API supports it.
+- **Triggers dock (A6/A9/A10):** interval schedules via `GET/POST /system/schedules` (filtered by project); webhook preview from `GET /system/webhooks` (redacted; copy does not include the secret path); link to Ops. Label “Interval (minutes)”.
 - **Agent drawer (B1/B2):** prompt → `POST /proposals` stub graph; pending count + Open inbox; optional “Save to project after load” preference (`graphyn.builder.saveAfterProposalLoad`) — Accept remains inbox-side.
 - **Mode A badge (A13):** when Local and graph has placement fields → “Placement ignored in Mode A” toast pointing at header Mode chip.
 - **Credential picker:** `connection_id` fields use a `<select>` filled from `GET /credentials` (Admin → Credentials). Empty falls through to the workspace default, then env.
@@ -135,7 +135,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Page title **Ship**; tabs **Package | Devices** (Devices embeds `DevicesView`).
 - Wizard step **Package run** (not “Run” — avoids nav collision).
 - Step pills: cannot jump to 3/4 without project + source run; step 4 also needs package `runId`.
-- **Dropdowns** use shared `FieldSelect` (portal menu) so long run/model labels are not clipped by the sticky lineage bar / overflow parents — native `<select>` was unusable here.
+- **Dropdowns** use shared `FieldSelect` (portal menu, width matches the trigger). A short list opens under the control; when the viewport is tight it grows upward from that same control. Native `<select>` was clipped by the sticky lineage bar.
 - Configure: registry / artifact pickers **probe-resolve** real model paths via `resolveModelPathCandidates` + `GET /outputs/file` (canonical `…/runs/<id>/saved_model` then `.keras`, then alias). Prefer model-like artifacts; never invent `${project}/saved_model`.
 - Download path: prefer package URI from run artifacts, else `guessPackagePath` under run `artifacts_dir` or `edge-deploy/latest/packages`.
 - Failure diagnostics: run id + Open run / lineage / outputs / Editor.
@@ -167,6 +167,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Page title **Worker fleet**; PageHeader Mode B hint only when distributed. Empty = Mode B + copyable `graphyn worker start`.
 - Tabs: **Workers | Queue**. Queue explains no list-all `/jobs` API + Mode A/B copy; recent runs as proxy.
 - Detail drawer: labels/pools display-only (no PATCH); **Deregister** ConfirmButton → `DELETE /workers/{id}`.
+- Workers use the same API token as this console. No requirement IDs on the page.
 
 ## Credentials (`CredentialsView`)
 
@@ -177,10 +178,10 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 
 - Page title **Ops** — health, schedules, webhooks, cleanup, audit.
 - Refresh uses **per-endpoint** `Promise.allSettled` — one failing probe does not blank the whole page; Health/Readiness/Schedules/Webhooks show inline errors when their fetch fails.
-- Status: human facts only (no duplicate Raw JSON). Health = liveness; Readiness shows catalog node count, backend, storage checks. Metrics chips without a second summary line. Maintenance: clean unused plugin venvs (plain language).
-- Schedules: interval_minutes; empty state; Add disabled until name/project/pipeline filled; last error labeled clearly.
-- Webhooks: endpoint + event checkboxes; Save/Test disabled without URL; test surfaces `{ok:false,reason}`.
-- Cleanup: confirm with typed CLEANUP; never deletes running runs / examples / dataset inputs.
+- Status: operator facts only. Health is liveness; Readiness shows catalog node count, backend, and storage checks. Metrics chips have no second summary line. Maintenance clears unused plugin venvs. No requirement IDs, threat numbers, or doc paths on this page.
+- Schedules: interval in minutes; environment is draft (saved pipeline), staging, or prod. New schedules from Ops default to draft. Add disabled until name/project/pipeline filled; last error labeled clearly. A missing prod/staging version says to publish or switch to draft. A corrupt `schedules.json` returns 503 with the repair message.
+- Webhooks: saved endpoint is shown redacted. Save keeps that URL unless a new full URL is typed (`keep_url`). Test waits for delivery and surfaces `{ok:false,reason}`. Clear removes the endpoint.
+- Cleanup: confirm with typed CLEANUP; never deletes running runs / examples / dataset inputs. Confirm stays busy until the request finishes (client waits up to 10 minutes; a second click does not start another cleanup). Reconcile on Status uses the same wait. Omitted `delete_cache` on the API defaults to false.
 - Audit: actor/resource filters, count, Export JSON of filtered events.
 
 ## Access (`AccessView`)

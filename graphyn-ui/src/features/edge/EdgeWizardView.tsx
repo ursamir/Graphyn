@@ -507,7 +507,7 @@ export default function EdgeWizardView() {
     const uri = String(
       hit.data_path || hit.uri || hit.path || (typeof meta?.path === 'string' ? meta.path : '') || '',
     ).trim()
-    const slugFromUri = uri.match(/workspace\/artifacts\/([^/]+)/)?.[1]
+    const slugFromUri = uri.match(/(?:^|\/)(?:workspace\/)?artifacts\/([^/]+)/)?.[1]
     void resolveAndSetModelPath({
       slug: slugFromUri || null,
       runId: sourceRunId || null,

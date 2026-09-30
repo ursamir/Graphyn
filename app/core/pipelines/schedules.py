@@ -212,6 +212,25 @@ def set_schedule_enabled(
     return _mutate(path, _set)
 
 
+def set_schedule_env(
+    schedule_id: str, env: str, base_dir: str | Path | None = None
+) -> dict[str, Any]:
+    env_s = (env or "draft").strip().lower()
+    if env_s not in ("draft", "staging", "prod"):
+        raise ValueError("env must be draft, staging, or prod")
+    path = schedules_path(base_dir)
+
+    def _set(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        for item in items:
+            if item.get("id") == schedule_id:
+                item["env"] = env_s
+                item["last_error"] = None
+                return items, item
+        raise KeyError(schedule_id)
+
+    return _mutate(path, _set)
+
+
 def _execute_pipeline(project: str, pipeline: str, env: str = "prod") -> str:
     from app.core.config import datasets_output_dir
     from app.core.ir.loader import load_ir
@@ -222,7 +241,16 @@ def _execute_pipeline(project: str, pipeline: str, env: str = "prod") -> str:
     project_dir = datasets_output_dir() / project
     if not project_dir.is_dir():
         raise FileNotFoundError(f"Project not found: {project}")
-    data = get_environment_graph(project_dir, pipeline, env=env or "prod")
+    chosen = env or "prod"
+    try:
+        data = get_environment_graph(project_dir, pipeline, env=chosen)
+    except FileNotFoundError as exc:
+        if str(exc).startswith("No version pointed"):
+            raise FileNotFoundError(
+                f"Pipeline {pipeline} has no published {chosen} version. "
+                "Publish that environment, or set this schedule to draft to run the saved pipeline."
+            ) from exc
+        raise
     graph = load_ir(data)
     run_mgr = RunManager()
     run_mgr._write_meta_field("project", project)
@@ -256,7 +284,22 @@ def run_schedule_now(schedule_id: str, base_dir: str | Path | None = None) -> di
         }
 
     exec_info = _mutate(path, _read)
-    run_id = _execute_pipeline(exec_info["project"], exec_info["pipeline"], env=exec_info["env"])
+    try:
+        run_id = _execute_pipeline(exec_info["project"], exec_info["pipeline"], env=exec_info["env"])
+    except Exception as exc:
+        logger.warning("schedule %s failed to start: %s", schedule_id, exc)
+
+        def _record_error(
+            items: list[dict[str, Any]],
+        ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+            for it in items:
+                if it.get("id") == schedule_id:
+                    it["last_error"] = str(exc)[:500]
+                    return items, {**it}
+            raise KeyError(schedule_id)
+
+        _mutate(path, _record_error)
+        raise
     now = _now()
 
     def _update(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:

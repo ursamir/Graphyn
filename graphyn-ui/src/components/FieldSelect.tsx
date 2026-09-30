@@ -31,7 +31,13 @@ type FieldSelectProps = {
   id?: string
 }
 
-type MenuPos = { top: number; left: number; width: number; maxHeight: number }
+type MenuPos = {
+  top?: number
+  bottom?: number
+  left: number
+  width: number
+  maxHeight: number
+}
 
 export function FieldSelect({
   value,
@@ -72,15 +78,24 @@ export function FieldSelect({
     const pad = 8
     const spaceBelow = window.innerHeight - r.bottom - pad
     const spaceAbove = r.top - pad
-    const preferBelow = spaceBelow >= 160 || spaceBelow >= spaceAbove
+    // Short lists (backend, target) must stay glued to the trigger. Using the
+    // max menu height as the upward offset floated them over the fields above.
+    const estimated = Math.min(280, Math.max(44, items.length * 40 + 8))
+    const preferBelow = spaceBelow >= estimated || spaceBelow >= spaceAbove
     const maxHeight = Math.min(280, Math.max(120, preferBelow ? spaceBelow : spaceAbove))
-    setPos({
-      top: preferBelow ? r.bottom + 4 : Math.max(pad, r.top - 4 - maxHeight),
-      left: Math.min(r.left, window.innerWidth - Math.min(r.width, 420) - pad),
-      width: Math.max(r.width, Math.min(420, window.innerWidth - pad * 2)),
-      maxHeight,
-    })
-  }, [])
+    const width = Math.min(r.width, window.innerWidth - pad * 2)
+    const left = Math.max(pad, Math.min(r.left, window.innerWidth - width - pad))
+    if (preferBelow) {
+      setPos({ top: r.bottom + 4, left, width, maxHeight })
+    } else {
+      setPos({
+        bottom: window.innerHeight - r.top + 4,
+        left,
+        width,
+        maxHeight,
+      })
+    }
+  }, [items.length])
 
   React.useEffect(() => {
     if (!open) return
@@ -172,6 +187,7 @@ export function FieldSelect({
             className="fixed z-[80] overflow-auto rounded-xl border border-ink-200 bg-white py-1 shadow-lg outline-none ring-1 ring-ink-950/5"
             style={{
               top: pos.top,
+              bottom: pos.bottom,
               left: pos.left,
               width: pos.width,
               maxHeight: pos.maxHeight,

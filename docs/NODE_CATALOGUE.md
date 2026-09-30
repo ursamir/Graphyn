@@ -73,6 +73,8 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | `send_email` | Output | stdlib (`app.core.notify.smtp_notify`); `GRAPHYN_SMTP_*` env or SMTP `connection_id`; `dry_run` |
 | `credential_probe` | Utility | stdlib (smoke plugin: declares a credential kind, resolves a connection) |
 
+`edge_optimizer` resolves `artifacts/...` the same way downloads do (`workspace/artifacts/...`). A picked `model.tflite` uses the sibling Keras `saved_model` or `model.keras` when one is present, so int8/float conversion still runs; otherwise the `.tflite` is copied through.
+
 ## Agents Plugins — `PluginPackage/Agents/` (9 nodes)
 
 | node_type | Purpose |
