@@ -3,34 +3,34 @@
 Canonical IA (Phase 1): `docs/IA_PROJECT_FIRST.md`.  
 **North-star UI:** `docs/UI_NORTH_STAR.md` — path routes; Phase 0–D UI wave (Devices/OTA, OTel, Subflows, cron, job list-all still needs-API). Canvas: `graphyn-ui-north-star`.
 
-## Path routing foundation (Phase 0 · partial)
+## Path routing
 
 | Module | Role |
 |---|---|
 | `src/routes/paths.ts` | Typed History API builders (`paths.editor`, `paths.runPanel`, …) |
-| `src/routes/legacyHash.ts` | `#/...` → path map (`resolveLegacyHash`) |
-| `src/routes/HashRedirect.tsx` | Mount under router; `replace` navigate + clear hash |
-| `src/routes/viewMap.ts` | `AppView` → path (`pathForView`) for gradual migration |
-| `src/main.tsx` | Wraps app in `BrowserRouter` |
+| `src/routes/parsePath.ts` | Pathname → view. `stripLegacyAppHash()` drops a leftover `#/…` fragment. |
+| `src/routes/viewMap.ts` | `AppView` → path (`pathForView`) |
+| `src/routes/nav.ts` | `goView`, jump keys, nav labels |
+| `src/main.tsx` | Wraps the app in `BrowserRouter` |
 
-`App.tsx` syncs pathname ↔ store via `parsePathname` / `navigatePath`. Workspace sidebar chrome only when URL is `/workspaces/:id` (not localStorage alone). Mount `<HashRedirect />` for one-way legacy `#/...` bookmarks; `navigatePath` strips orphan `#/…` fragments.
+`App.tsx` syncs pathname ↔ store via `parsePathname` / `navigatePath`. Workspace chrome follows the URL `/workspaces/:id`, not localStorage alone. Views must not write `#/...`. `/admin/secrets` bookmarks land on `/admin/credentials`.
 
-## Activity bar (workspace open)
+## Workspace strip
 
-| Label | Target path (north-star) | Legacy hash |
-|---|---|---|
-| **Home** | `/workspaces/:id` | `#/projects?project=…` |
-| **Editor** | `/workspaces/:id/editor` | `#/builder` |
-| **Runs** | `/workspaces/:id/runs` | `#/runs` |
-| **Artifacts** | `/library/artifacts` | `#/artifacts` |
-| **Datasets** | `/workspaces/:id/datasets` | `#/data` |
-| **Templates** | `/templates` | `#/templates` |
+| Label | Path |
+|---|---|
+| **Home** | `/workspaces/:id` |
+| **Editor** | `/workspaces/:id/editor` |
+| **Runs** | `/workspaces/:id/runs` |
+| **Models** | `/workspaces/:id/models` |
+| **Ship** | `/workspaces/:id/ship` |
+| **Datasets** | `/workspaces/:id/datasets` |
 
-**Not activity-bar peers:** Lineage (`…/runs/:runId/lineage`, legacy `#/trace`), Compare (`…/runs/compare`, legacy `#/experiments`) — deep links or Runs panels only.
+Lineage (`…/runs/:runId/lineage`) and Compare (`…/runs/compare`) are Runs panels, not strip items.
 
-## Global / Settings (collapsed)
+## Library and admin
 
-Templates · **Agent inbox** · Artifacts · **Library · Plugins** · **Ship** · **Worker fleet** · Secrets · **Ops** · Access
+Templates · Agent inbox · Artifacts · Plugins · Worker fleet · Credentials · Ops · Access. Global Library does not host Models or Ship.
 
 ## Header chrome
 
@@ -62,4 +62,4 @@ Templates · **Agent inbox** · Artifacts · **Library · Plugins** · **Ship** 
 
 Primary jumps: Home, Editor, Runs, Datasets, Artifacts, Templates, Library · Plugins, Ship (Package|Devices), Worker fleet, Ops.
 
-Secondary **Runs panels:** Runs → Lineage (`/workspaces/:id/runs/:runId/lineage`, legacy `#/trace`), Runs → Compare (`/workspaces/:id/runs/compare`, legacy `#/runs?tab=compare`).
+Secondary **Runs panels:** Runs → Lineage (`/workspaces/:id/runs/:runId/lineage`), Runs → Compare (`/workspaces/:id/runs/compare`).

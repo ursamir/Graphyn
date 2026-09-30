@@ -50,4 +50,3 @@ Keep prior calm chrome (stable border/background). Prefer sidebar Workspace stri
 - `docs/UI_NORTH_STAR.md` §4.2
 - `docs/IA_PROJECT_FIRST.md` — Workspace vs global chrome contract
 - `docs/UI_LINKAGE.md`
-- `docs/CLEANUP_LEGACY.md` — what was removed

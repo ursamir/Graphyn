@@ -3,7 +3,7 @@
 
 Invokes real MCP tools via the official MCP Python SDK over stdio.
 Auth token read from env GRAPHYN_API_TOKEN (never printed).
-Transcript written to docs/_gen/MCP_AGENTIC_SELFTEST.md (secrets redacted).
+Transcript written to GRAPHYN_SELFTEST_OUT (default /tmp/MCP_AGENTIC_SELFTEST.md; secrets redacted).
 """
 from __future__ import annotations
 

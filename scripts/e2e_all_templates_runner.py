@@ -28,7 +28,7 @@ TOKEN = __import__("os").environ.get("GRAPHYN_API_TOKEN") or (
 EX_TEMPLATES = ROOT / "examples" / "templates"
 WS_TEMPLATES = ROOT / "workspace" / "configs" / "templates"
 EXAMPLES = ROOT / "examples"
-OUT = ROOT / "docs" / "_e2e_template_matrix.json"
+OUT = ROOT / "workspace" / "reports" / "e2e_template_matrix.json"
 WEBHOOK = "https://httpbin.org/post"
 
 # Named UI templates (examples/templates + workspace copies)
@@ -398,6 +398,7 @@ def list_all_template_names() -> list[str]:
 
 
 def main():
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     only = [a for a in sys.argv[1:] if not a.startswith("-")]
     skip_examples = "--templates-only" in sys.argv or bool(only)
     names = only if only else list_all_template_names()

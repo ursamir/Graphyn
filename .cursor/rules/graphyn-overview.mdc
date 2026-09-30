@@ -23,8 +23,8 @@ AI/workflow DAG engine. Brand/package: **graphyn-sdk**. Primary domain: audio ML
 
 - Platform (`app/core` storage/cache) must not import `app/domain/` or `AudioSample` directly
 - Domain registers serializers at startup (`register_audio_serializer()`)
-- Import `resolve_capability` from `registry_runtime`, not `orchestrator`
-- Do not edit `plugins/` or reintroduce fat `pipeline.py` / `run_manager.py` (shims only)
+- Import `resolve_capability` from `app.core.host.registry_runtime`, not from the orchestrator.
+- Do not edit `plugins/` or reintroduce `pipeline.py` or `run_manager.py`.
 
 ## Where to look
 

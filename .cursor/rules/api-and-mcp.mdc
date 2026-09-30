@@ -10,5 +10,5 @@ alwaysApply: false
 - Execute via `get_backend().execute()` or SDK `Pipeline` — not private orchestrator APIs.
 - Path safety: `_safe_child()`, run-id / artifact-id regexes, workspace sandbox for input/export.
 - Auth: optional `GRAPHYN_API_TOKEN`; MCP token in `arguments._meta.auth_token`.
-- MCP: 78 tools via `tool_registry` + handlers (count `register("` in `tool_registry.py`); logs on stderr, JSON-RPC on stdio.
+- MCP: 77 tools by default. `tool_registry.py` has 78 `register("` calls; `accept_proposal` is registered only when `GRAPHYN_MCP_HUMAN_APPROVAL=1`. Logs on stderr, JSON-RPC on stdio.
 - Docs: `docs/API_REFERENCE.md`, `docs/MCP_SERVER.md`, `docs/MCP_AGENT_PACK_COVERAGE.md`, `docs/SDK_AND_CLI.md`.

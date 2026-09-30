@@ -24,16 +24,21 @@ plugins/*
 PluginPackage/*/input/*
 PluginPackage/*/output/*
 
-# Process / IDE caches (never commit)
-review_agent_work/
+# Process caches (never commit)
 .kiro/*
 !.kiro/steering/
 !.kiro/steering/**
-Requirement/
 .venv-test/
-.graphyn-e2e/
 *.egg-info/
 
 .env
 
+# Local Graphyn homes (e2e, lean MCP, mode-b worker)
 .graphyn*
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml

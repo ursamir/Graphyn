@@ -17,6 +17,7 @@ jobs:
       - name: Full suite (deps + unit_test + templates)
         run: bash scripts/ci_smoke.sh
         env:
+          # Optional plugin wheels at test time. Bundled plugin install is GRAPHYN_AUTO_INSTALL_PLUGINS.
           GRAPHYN_PLUGIN_AUTO_INSTALL: "1"
 
 

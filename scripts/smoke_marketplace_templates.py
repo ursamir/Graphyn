@@ -269,7 +269,7 @@ def main() -> int:
     token = _load_token()
     ensure_project(token)
     ids = pick_ids(args)
-    ledger_path = Path(args.ledger) if args.ledger else (ROOT / "docs" / "_gen" / "tpl_execute_ledger.jsonl")
+    ledger_path = Path(args.ledger) if args.ledger else (ROOT / "workspace" / "reports" / "tpl_execute_ledger.jsonl")
     done: set[str] = set()
     if args.resume and ledger_path.is_file():
         for line in ledger_path.read_text(encoding="utf-8").splitlines():
@@ -346,7 +346,7 @@ def main() -> int:
             print(f"progress ok={ok_n} fail={fail_n} seen={i+len(done)}", flush=True)
 
     ledger_fh.close()
-    out = ROOT / "docs" / "_gen" / "marketplace_smoke_report.json"
+    out = ROOT / "workspace" / "reports" / "marketplace_smoke_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     summary = {
         "total_this_pass": len(results),

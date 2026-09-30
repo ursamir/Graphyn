@@ -2,14 +2,14 @@
 
 Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Canonical IA: `docs/IA_PROJECT_FIRST.md`.
 
-**Nav labels (2026-09-16):** Workspace strip: Home · Editor · Runs · Models · Ship · Datasets. Library & admin: Templates · Agent inbox (always) · Artifacts · Plugins · Workers · Secrets · Ops · Access. Global Library also lists Models + Artifacts.
+**Nav labels:** Workspace strip: Home · Editor · Runs · Models · Ship · Datasets. Library and admin: Templates · Agent inbox · Artifacts · Plugins · Workers · Credentials · Ops · Access.
 
 **Client / polling contracts (2026-09-30):**
 - `apiFetch` forwards the caller's `AbortSignal` for the whole response lifetime (headers **and** body streaming); `timeoutMs` covers the headers phase only; a caller-aborted request is never retried. `parseError` / `configuredActor` are exported from `api/client.ts`.
 - Background polls use `lib/usePolling.ts` (in-flight skip + pause while `document.hidden`, catch-up on visible): Runs status (2 s) + Live tab (3 s), Workers (15 s), NotificationBell (45 s), App pending-proposals badge (60 s). Poll failures toast once per outage.
 - `graphyn-ui/nginx.conf` `/api/`: `proxy_buffering off` (NDJSON/SSE), `proxy_read_timeout 3600s`; server `client_max_body_size 2g`.
 
-**Path routes:** `src/routes/paths.ts`, `viewMap.ts`, `nav.ts` (`goView` / `replacePathSearch` / `onPathChange`). Hash is one-way legacy redirect only (`HashRedirect` + `legacyHash.ts`) — views must not write `#/...`.
+**Path routes:** `src/routes/paths.ts`, `viewMap.ts`, `nav.ts` (`goView` / `replacePathSearch` / `onPathChange`). Views must not write `#/...`. `stripLegacyAppHash()` in `parsePath.ts` drops a leftover `#/…` fragment. `/admin/secrets` canonicalizes to `/admin/credentials`.
 
 ## Models (`ModelsView`)
 
@@ -35,7 +35,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - **Triggers dock (A6/A9/A10):** interval schedules via `GET/POST /system/schedules` (filtered by project); webhook URL from `GET /system/webhooks` + copy; honesty that wiring is global URL + event filter; link to Ops. Label “Interval (minutes)” — no cron until API supports it.
 - **Agent drawer (B1/B2):** prompt → `POST /proposals` stub graph; pending count + Open inbox; optional “Save to project after load” preference (`graphyn.builder.saveAfterProposalLoad`) — Accept remains inbox-side.
 - **Mode A badge (A13):** when Local and graph has placement fields → “Placement ignored in Mode A” toast pointing at header Mode chip.
-- **Credential picker (B8):** secret-like string config fields get named-secret `<select>` from `GET /secrets`.
+- **Credential picker:** `connection_id` fields use a `<select>` filled from `GET /credentials` (Admin → Credentials). Empty falls through to the workspace default, then env.
 - **HITL/wait (B6):** selected `wait*` node shows callout (dedicated HITL TBD).
 - **Retry/timeout (B9/B14):** graph settings note — per-node fields live in Config when plugin exposes them.
 - `actionError`: **View outputs** / Retry only for run failures (or last run succeeded); not for validate / missing-path errors.
@@ -171,10 +171,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 ## Credentials (`CredentialsView`)
 
 - **Revoke** = soft revoke (`DELETE /credentials/{id}`); separate danger **Delete permanently** ConfirmButton uses `?delete=true`.
-
-## Secrets (`SecretsView`)
-
-- Searchable names only; rotate = POST same name with Replace confirm; usage-index honesty note.
+- Named secret values are not a console page. Ops bootstrap stays on CLI `graphyn secrets`.
 
 ## System (`SystemView`)
 

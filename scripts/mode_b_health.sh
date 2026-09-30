@@ -60,7 +60,7 @@ try:
         else:
             print("   -", w)
     if not items:
-        print("  (none registered — start a lean worker; see docs/_gen/MODE_B_OPERATE.md)")
+        print("  (none registered — start a worker; see docs/DISTRIBUTED_EXECUTION.md)")
 except Exception as e:
     print("  (unreadable body)", e)
 PY

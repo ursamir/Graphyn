@@ -857,5 +857,4 @@ Any artifact/model/package/device build → Lineage (A7/A17) → Replay → Repr
 
 - Vision: [PRODUCT_VISION.md](./PRODUCT_VISION.md)  
 - Phase 1 IA (legacy notes): [IA_PROJECT_FIRST.md](./IA_PROJECT_FIRST.md) — **URL strategy superseded by §4.3 here**  
-- Usability log: [UI_UX_REVIEW.md](./UI_UX_REVIEW.md)  
 - Canvas: `graphyn-ui-north-star`

@@ -13,7 +13,7 @@ python3 -m venv "$VENV"
 "$VENV/bin/python" scripts/_import_smoke.py
 
 # Do NOT set GRAPHYN_SKIP_PLUGIN_LOAD globally — isolation tests that need it
-# set it themselves. Full suite is the gate (DEEP_REVIEW P0-4).
+# set it themselves. Full suite is the gate.
 unset GRAPHYN_SKIP_PLUGIN_LOAD || true
 export GRAPHYN_PLUGIN_AUTO_INSTALL="${GRAPHYN_PLUGIN_AUTO_INSTALL:-1}"
 

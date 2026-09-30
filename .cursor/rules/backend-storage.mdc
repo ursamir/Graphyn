@@ -1,12 +1,12 @@
 ---
 description: Runs, artifacts, provenance, and domain boundary rules
-globs: "app/core/runs/run_journal.py,app/core/runs/run_control.py,app/core/runs/run_journal.py,app/core/artifacts/artifact_store.py,app/core/artifacts/artifact_serializer.py,app/core/artifacts/provenance.py,app/core/logger.py,app/core/notify/webhook.py,app/domain/**/*.py,app/models/**/*.py"
+globs: "app/core/runs/**/*.py,app/core/artifacts/**/*.py,app/core/logger.py,app/core/notify/**/*.py,app/domain/**/*.py,app/models/**/*.py"
 alwaysApply: false
 ---
 
 # Observability, Storage, Domain (BC6)
 
-- `run_journal.py` = filesystem persistence; `run_control.py` = active run registry; `run_manager.py` = shim only.
+- `run_journal.py` persists a run on disk. `run_control.py` tracks the in-process active run. There is no `run_manager.py`.
 - Artifacts: content-addressed via `ArtifactStore` + handlers from `ArtifactSerializerRegistry`.
 - Domain services (`app/domain/`) must not be imported by platform storage code.
 - Models under `app/models/` are PortDataTypes; audio serialization registers at process start.

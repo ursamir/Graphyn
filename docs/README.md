@@ -29,8 +29,6 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 | [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port types, workspace layout, artifacts |
 | [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Current limitations |
 | [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) | Path routes + production foundation + journeys J1–J6 + Phase 0–D |
-| [UI_UX_REVIEW.md](./UI_UX_REVIEW.md) | 2026-09-15 console UX / IA justification review |
-| [PROJECT_REVIEW.md](../PROJECT_REVIEW.md) | 2026-09-15 deep review — prioritized fix pack for agents/devs |
 | [TRUST_MODEL.md](./TRUST_MODEL.md) | Auth modes, resource authorization matrix, secrets, python_code + HTTP egress |
 
 ## Concepts
