@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from unit_test.plugins._helpers import materialize_isolated_class
 from app.core.plugins.manager import PluginManager
-from app.core.llm_client import NeedsCredentialsError
+from app.core.ml.llm_client import NeedsCredentialsError
 
 PLUGIN_SOURCE = "PluginPackage/Agents/llm_chat/"
 NODE_TYPE = "llm_chat"

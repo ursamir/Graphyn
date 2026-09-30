@@ -11,16 +11,17 @@ Must NOT:         Import from app.domain, app.api, or orchestrator.
 Dependencies:     stdlib (threading, datetime), app.core.distributed.models,
                   app.core.distributed.store (lazy via get_distributed_store;
                   mutate_workers for cross-process-safe RMW).
-Reason To Change: Persistence backend added (Redis/disk), or TTL policy changes.
+Reason To Change: Persistence backend added (Redis/disk), TTL policy changes, or
+                  cache read-through (state_version) / status validation rules.
 """
 from __future__ import annotations
 
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
-from app.core.distributed.models import WorkerInfo, WorkerResources
+from app.core.distributed.models import WorkerInfo, WorkerResources, WorkerStatus
 
 if TYPE_CHECKING:
     from app.core.distributed.store import DistributedStateStore
@@ -29,6 +30,17 @@ log = logging.getLogger(__name__)
 
 # Default stale threshold (~3 missed 15s heartbeats).
 DEFAULT_STALE_AFTER_S = 45.0
+_VALID_STATUSES = frozenset(get_args(WorkerStatus))
+
+
+def _validate_status(status: str | None) -> str | None:
+    if status is None:
+        return None
+    if status not in _VALID_STATUSES:
+        raise ValueError(
+            f"invalid worker status {status!r}; expected one of {sorted(_VALID_STATUSES)}"
+        )
+    return status
 
 
 def _utcnow() -> datetime:
@@ -49,6 +61,7 @@ class WorkerRegistry:
         self._lock = threading.RLock()
         self._workers: dict[str, WorkerInfo] = {}
         self._store = store
+        self._seen_version: Any = None
         if load_persisted and store is not None:
             self._hydrate_from_store()
 
@@ -99,12 +112,41 @@ class WorkerRegistry:
         except Exception as exc:
             log.warning("WorkerRegistry: persist failed: %s", exc)
 
+    def _reload_unlocked(self) -> None:
+        assert self._store is not None
+        try:
+            token = self._store.state_version("workers")
+        except Exception:
+            token = None
+        self._apply_workers_snapshot_unlocked(self._store.load_workers())
+        self._seen_version = token
+
+    def _refresh_if_stale_unlocked(self) -> None:
+        """Read-through for get/list: reload when the store's version changed.
+
+        Another API process (multi-uvicorn) may have registered/heartbeated a
+        worker; serving only this process's cache would report it missing or
+        stale. Redis (version ``None``) is always read-through.
+        """
+        if self._store is None:
+            return
+        try:
+            token = self._store.state_version("workers")
+        except Exception:
+            token = None
+        if token is not None and token == self._seen_version:
+            return
+        try:
+            self._reload_unlocked()
+        except Exception as exc:
+            log.warning("WorkerRegistry: read-through refresh failed: %s", exc)
+
     def _durable_mutate_workers(self, mutator):
         """Apply ``mutator(workers) -> (new_workers, result)`` under store lock; refresh."""
         assert self._store is not None
         result = self._store.mutate_workers(mutator)
         try:
-            self._apply_workers_snapshot_unlocked(self._store.load_workers())
+            self._reload_unlocked()
         except Exception as exc:
             log.warning("WorkerRegistry: durable refresh failed: %s", exc)
         return result
@@ -138,7 +180,9 @@ class WorkerRegistry:
 
         Raises:
             KeyError: if ``worker_id`` is not registered.
+            ValueError: if ``status`` is not a valid ``WorkerStatus``.
         """
+        status = _validate_status(status)
         with self._lock:
             if self._store is not None:
                 def mut(workers: dict[str, Any]):
@@ -181,6 +225,7 @@ class WorkerRegistry:
 
     def get(self, worker_id: str) -> WorkerInfo | None:
         with self._lock:
+            self._refresh_if_stale_unlocked()
             return self._workers.get(worker_id)
 
     def remove(self, worker_id: str) -> bool:
@@ -205,6 +250,7 @@ class WorkerRegistry:
     ) -> list[WorkerInfo]:
         """Return registered workers (optionally excluding stale ones)."""
         with self._lock:
+            self._refresh_if_stale_unlocked()
             workers = list(self._workers.values())
         if include_stale:
             return workers
@@ -282,3 +328,6 @@ def _reset_worker_registry(
                 pass
         _REGISTRY = WorkerRegistry(store=store, load_persisted=False)
         return _REGISTRY
+
+# Public names. A leading underscore stays private to this module.
+reset_worker_registry = _reset_worker_registry

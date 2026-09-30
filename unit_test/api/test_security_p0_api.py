@@ -12,10 +12,10 @@ SECRET_URL = "https://hooks.example.com/hooks/api-secret-token-999"
 
 class TestWebhookApiRedaction:
     def test_get_put_test_never_echo_raw_url(self, api_client, tmp_workspace: Path):
-        from app.core.webhook import WebhookService
+        from app.core.notify.webhook import WebhookService
 
         WebhookService._class_config_cache = None
-        with patch("app.core.webhook.validate_webhook_target_url"):
+        with patch("app.core.notify.webhook.validate_webhook_target_url"):
             put = api_client.put(
                 "/api/v1/system/webhooks",
                 json={"url": SECRET_URL, "events": ["run_done"]},

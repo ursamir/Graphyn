@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["mlops", "artifact", "stub"]
+tags = ["mlops", "artifact"]
 
 dependencies = [
     "numpy>=1.24",
@@ -17,6 +17,6 @@ runtime = "inprocess"
 node_types = ["artifact_checksum"]
 
 [config_schema.artifact_checksum]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
-algo = { type = "string", title = "Algo", default = "sha256", description = "Algo." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
+algo = { type = "string", title = "Algo", default = "sha256", enum = ["sha256", "sha512", "sha384", "sha224", "sha1", "md5", "blake2b", "blake2s", "sha3_256", "sha3_512", "sha3_384", "sha3_224"], description = "Hash algorithm (shake_* unsupported: variable length)." }
 write_sidecar = { type = "boolean", title = "Write sidecar", default = true, description = "Write sidecar." }

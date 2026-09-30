@@ -15,8 +15,11 @@ List all registered nodes, optionally filtered by category.
 
 **Query params:**
 - `category` (optional) — filter by category string (e.g. `"Preprocessing"`, `"Augmentation"`)
+- `limit` (optional, default **50**, max 500) — page size
+- `offset` (optional, default 0) — page start
+- `envelope` (optional) — default on (`{ items, total, limit, offset, next_offset }`); pass `0` for a bare array (still limited by `limit`)
 
-**Response:** Array of node objects.
+**Response (default):** paginated envelope. Clients that need the full catalog (Editor) must request `limit=500` and/or follow `next_offset` until null.
 
 ```json
 [
@@ -152,6 +155,8 @@ Find nodes whose ports are compatible with a given port type.
 
 ## Pipelines — `/api/v1/pipelines`
 
+Validate and run live in `app/api/routers/pipelines.py`. Template and marketplace routes live in `app/api/routers/pipeline_templates.py` and register on the same router.
+
 ### `POST /api/v1/pipelines/validate`
 
 Validate a pipeline without executing it. Accepts IR JSON (`schema_version` present)
@@ -205,7 +210,7 @@ Each line is a JSON object. Two types of objects are interleaved:
 {"type": "error", "run_id": "…", "timestamp": "...", "error_type": "ValueError", "message": "..."}
 ```
 
-The stream starts with `run_started` (and `X-Run-Id`). It ends with either `{"type": "done", "run_id": "…"}` (success) or `{"type": "error", "run_id": "…"}` (failure), then closes.
+The stream starts with `run_started` (and `X-Run-Id`). It **always** ends with either `{"type": "done", "run_id": "…"}` (success — synthesized if the backend emitted none) or `{"type": "error", "run_id": "…"}` (failure), then closes. Back-pressure: at most 512 events are buffered per stream; when a slow client lets the buffer fill, the **oldest non-terminal** events are dropped (the terminal event is never dropped) and the execution thread never blocks. A disconnected client stops buffering; the run itself continues and is visible via `GET /runs/{run_id}`. The `run.start` audit actor is `X-Actor` (default `api`).
 
 All timestamps are UTC-aware ISO 8601 strings ending in `+00:00`.
 
@@ -542,7 +547,7 @@ Point `workspace/artifacts/<slug>/<alias>` at this run’s artifact tree.
 
 **Response:** `{ "slug", "run_id", "alias", "path", "latest" }` (`latest` mirrors `path` for backward compatibility).
 
-**Errors:** `404` missing run, `409` no slug/artifacts, `422` invalid alias.
+**Errors:** `404` missing run (or its artifact run dir vanished before the alias was published), `409` no slug/artifacts, `422` invalid alias.
 
 ---
 
@@ -779,6 +784,8 @@ Readiness check with basic filesystem dependency validation.
 
 `status` is `starting` while plugins load, `ready` when the registry initialized cleanly, or `failed` when `registry_init_error` is set.
 
+This endpoint always recomputes. The PERS-020 guard on critical list GETs (`/runs`, `/artifacts`, `/projects`, `/models`, `/plugins`) reuses a snapshot cached for `GRAPHYN_READINESS_CACHE_S` seconds (default `5`, `0` disables). `checks.store_corrupt` inspects only known index locations (`artifacts/*.corrupt`, `artifacts/{by_run,by_name,_registry}/*.corrupt`, `artifacts/*/*.json.corrupt`, `plugins/*.json.corrupt`, `registry.json.corrupt`) — never a recursive workspace walk.
+
 `backend_mode` is `local` (Mode A) or `distributed` (Mode B). The console header chip uses this field.
 
 `GET /api/v1/system/health`, `/readiness`, and `/auth-status` are **public** (no Bearer) so the UI can show Mode / Auth honesty before Settings is filled. All other `/api/v1/*` routes still require the token when `GRAPHYN_API_TOKEN` is set.
@@ -890,7 +897,7 @@ Fire a test event to the configured webhook URL.
 
 Returns `{"ok": false, "reason": "No webhook URL configured"}` if no URL is set.
 
-Terminal run statuses fire `pipeline_complete` / `pipeline_failed` via `app.core.run_notify` when configured.
+Terminal run statuses fire `pipeline_complete` / `pipeline_failed` via `app.core.runs.run_notify` when configured.
 
 ---
 
@@ -989,9 +996,9 @@ Stream progress events for a HuggingFace ingestion job (same SSE format as URL s
 
 ## Projects — `/api/v1/projects`
 
-Full project lifecycle management. See `app/api/routers/projects.py` for the complete endpoint list. Key operations include create, get, update, delete, clone, list versions, manage taxonomy, contract, spec, annotations, quality reports, and snapshots.
+Full project lifecycle management. See `app/api/routers/projects.py` for the complete endpoint list. Key operations include create, get, update, delete, clone, list versions, manage taxonomy, contract, spec, annotations, quality reports, and snapshots. `POST /projects` returns `409` when the name already exists.
 
-### Project pipelines (Wave 1 + versions)
+### Project pipelines (versions)
 
 Graph IR assets owned by a project live at
 `workspace/datasets/output/{project}/pipelines/{name}.graph.json` (**draft** head).

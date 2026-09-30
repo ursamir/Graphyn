@@ -97,10 +97,13 @@ def _node_types(record: Any) -> list[str]:
 
 
 def _error(exc: BaseException, error_type: str | None = None) -> dict[str, Any]:
+    from app.core.plugins.installer import redact_url_userinfo
+
     return {
         "error": True,
         "error_type": error_type or type(exc).__name__,
-        "message": str(exc),
+        # Plugin sources may embed ``user:TOKEN@`` — never echo it to clients.
+        "message": redact_url_userinfo(str(exc)),
     }
 
 

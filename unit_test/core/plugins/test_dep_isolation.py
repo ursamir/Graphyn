@@ -122,7 +122,7 @@ import zipfile
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
-from app.core.node_executor import NodeExecutor
+from app.core.execution.node_executor import NodeExecutor
 from app.core.nodes.base import Node
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.registry import NodeRegistry
@@ -250,6 +250,7 @@ def test_isolated_venv_requirements_defers_exotic_optionals(monkeypatch) -> None
             "tensorflow>=2.12",
             "tensorflow-hub>=0.14",
             "tflite-runtime>=2.14",
+            "pyannote.audio>=3.1",
             "torch>=2.0",
             "onnxruntime>=1.16",
         ],
@@ -260,7 +261,10 @@ def test_isolated_venv_requirements_defers_exotic_optionals(monkeypatch) -> None
     assert "tensorflow>=2.12" in reqs
     assert "tensorflow-hub>=0.14" in reqs
     assert "onnxruntime>=1.16" in reqs
-    assert not any("tflite-runtime" in r for r in reqs)
+    # tflite-runtime joined the boot allowlist with the TFLM runtimes
+    # (commit 8910551); genuinely exotic optionals are still deferred.
+    assert "tflite-runtime>=2.14" in reqs
+    assert not any("pyannote" in r for r in reqs)
     assert not any(r.lower().startswith("torch") for r in reqs)
 
 
@@ -677,26 +681,70 @@ def test_allowlist_applies_to_index_download_url(monkeypatch) -> None:
         installer._resolve_index("plug", None)
 
 
+def _mock_httpx_client(handler):
+    """Return a factory replacing ``installer.httpx.Client`` with a MockTransport client.
+
+    Keeps the test fully offline while exercising the real per-hop redirect
+    loop in ``PluginInstaller._download_with_limit``.
+    """
+    import httpx as _httpx
+
+    real_client = _httpx.Client
+
+    def _factory(*args, **kwargs):
+        kwargs["transport"] = _httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    return _factory
+
+
 def test_allowlist_applies_to_redirect_target(monkeypatch) -> None:
+    """Redirect hops are re-validated fail-closed before any request is sent."""
+    import httpx as _httpx
+
     monkeypatch.setenv("GRAPHYN_PLUGIN_ALLOWED_SOURCES", "https://allowed.example/")
     installer = PluginInstaller()
-    hop = MagicMock()
-    hop.url = "https://evil.example/p.zip"
-    final = MagicMock()
-    final.url = "https://evil.example/p.zip"
-    final.history = [hop]
-    final.raise_for_status = lambda: None
-    final.iter_bytes = lambda chunk_size=65536: iter(())
+    requested: list[str] = []
 
-    class _CM:
-        def __enter__(self):
-            return final
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        requested.append(str(request.url))
+        if request.url.host == "allowed.example":
+            return _httpx.Response(302, headers={"location": "https://evil.example/p.zip"})
+        return _httpx.Response(200, content=b"PAYLOAD")
 
-        def __exit__(self, *a):
-            return False
-
-    with patch("app.core.plugins.installer.httpx.stream", return_value=_CM()):
+    with patch("app.core.plugins.installer.httpx.Client", _mock_httpx_client(handler)):
         with pytest.raises(PluginInstallError, match="allowed sources"):
+            installer._download_with_limit("https://allowed.example/p.zip")
+    # The disallowed hop must never be fetched.
+    assert requested == ["https://allowed.example/p.zip"]
+
+
+def test_allowlist_redirect_within_allowed_host_succeeds(monkeypatch) -> None:
+    import httpx as _httpx
+
+    monkeypatch.setenv("GRAPHYN_PLUGIN_ALLOWED_SOURCES", "https://allowed.example/")
+    installer = PluginInstaller()
+
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        if request.url.path == "/p.zip":
+            return _httpx.Response(301, headers={"location": "/mirror/p.zip"})
+        return _httpx.Response(200, content=b"PAYLOAD")
+
+    with patch("app.core.plugins.installer.httpx.Client", _mock_httpx_client(handler)):
+        assert installer._download_with_limit("https://allowed.example/p.zip") == b"PAYLOAD"
+
+
+def test_redirect_missing_location_fails_closed(monkeypatch) -> None:
+    import httpx as _httpx
+
+    monkeypatch.setenv("GRAPHYN_PLUGIN_ALLOWED_SOURCES", "https://allowed.example/")
+    installer = PluginInstaller()
+
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        return _httpx.Response(302)
+
+    with patch("app.core.plugins.installer.httpx.Client", _mock_httpx_client(handler)):
+        with pytest.raises(PluginInstallError, match="missing Location"):
             installer._download_with_limit("https://allowed.example/p.zip")
 
 

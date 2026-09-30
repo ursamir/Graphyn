@@ -127,7 +127,7 @@ def initialize_registry() -> None:
 
         if not _skip_plugin_load:
             try:
-                from app.core.tf_runtime import configure_tf_stable_defaults  # noqa: PLC0415
+                from app.core.ml.tf_runtime import configure_tf_stable_defaults  # noqa: PLC0415
 
                 configure_tf_stable_defaults()
             except Exception as exc:

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.core.pipeline_environments import (
+from app.core.pipelines.pipeline_environments import (
     get_environment_graph,
     get_environments,
     list_versions,
     promote_environment,
     publish_version,
 )
-from app.core.project_pipelines import put_pipeline
+from app.core.pipelines.project_pipelines import put_pipeline
 
 
 def _graph(name: str = "hello"):

@@ -1,9 +1,12 @@
 """ChunkRecursiveNode — Recursive char/token chunker
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import hashlib
+import json
 
 import importlib
 import logging
@@ -30,6 +33,76 @@ RawDocument = _types.RawDocument
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _text(obj: Any) -> str:
+    if obj is None:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, list):
+        return "\n".join(_text(x) for x in obj)
+    data = _dump(obj)
+    if isinstance(data, dict):
+        for key in ("text", "query", "content", "answer", "user", "path", "value", "final"):
+            if data.get(key):
+                return str(data[key])
+        return json.dumps(data, default=str)
+    return str(obj)
+
+def _chunk_id(text: str, index: int) -> str:
+    digest = hashlib.sha1(f"{index}:{text}".encode()).hexdigest()[:12]
+    return f"c{index}-{digest}"
+
+def _split_chunks(text: str, size: int, overlap: int) -> list[str]:
+    size = max(1, int(size or 1))
+    overlap = max(0, min(int(overlap or 0), size - 1))
+    if not text:
+        return []
+    step = size - overlap
+    out = []
+    i = 0
+    while i < len(text):
+        piece = text[i : i + size].strip()
+        if piece:
+            out.append(piece)
+        if i + size >= len(text):
+            break
+        i += step
+    return out
+
+def _chunk_recursive(config, inputs, types):
+    text = _text(inputs.get("input"))
+    size = int(_cfg(config, "chunk_size", 800) or 800)
+    overlap = int(_cfg(config, "chunk_overlap", 100) or 0)
+    pieces = _split_chunks(text, size, overlap)
+    return [
+        _T(types, "Chunk", text=p, chunk_id=_chunk_id(p, i), metadata={"splitter": "recursive"})
+        for i, p in enumerate(pieces)
+    ]
+
+
 
 class ChunkRecursiveNode(Node):
     """Recursive char/token chunker"""
@@ -42,7 +115,7 @@ class ChunkRecursiveNode(Node):
         description="Recursive char/token chunker",
         category="Processing",
         version="0.1.0",
-        tags=["rag", "stub"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -59,7 +132,7 @@ class ChunkRecursiveNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         chunk_size: int = Field(default=1000, title="Chunk size", description="Chunk size.")
         chunk_overlap: int = Field(default=200, title="Chunk overlap", description="Chunk overlap.")
         length_fn: str = Field(default='chars', title="Length fn", description="Length fn.")
@@ -71,10 +144,17 @@ class ChunkRecursiveNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'rag' / 'chunk_recursive'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = []
             return {"output": result}
@@ -84,23 +164,8 @@ class ChunkRecursiveNode(Node):
         except ImportError as exc:
             raise ImportError(f"chunk_recursive: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'rag' / 'chunk_recursive'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": []}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _chunk_recursive(self.config, inputs, _types)}

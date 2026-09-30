@@ -33,7 +33,7 @@ def test_metadata(installed_cls):
     meta = installed_cls.metadata
     assert meta.label and meta.category and meta.version
 
-from app.core.node_executor import NodeExecutor
+from app.core.execution.node_executor import NodeExecutor
 
 
 def test_passthrough(installed_cls):

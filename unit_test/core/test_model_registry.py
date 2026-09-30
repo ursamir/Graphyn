@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.core.model_registry import (
+from app.core.mlops.model_registry import (
     approve_prod,
     get_model,
     list_models,
@@ -20,6 +20,10 @@ def test_register_request_approve(tmp_path: Path, monkeypatch):
     art = tmp_path / "artifacts" / slug / "runs" / run_id
     art.mkdir(parents=True)
     (art / "model.bin").write_bytes(b"x")
+    # register_model requires the run to exist and have succeeded.
+    rdir = tmp_path / "runs" / run_id
+    rdir.mkdir(parents=True)
+    (rdir / "meta.json").write_text('{"run_id": "run-m1", "status": "succeeded"}')
 
     rec = register_model(
         "wakeword",

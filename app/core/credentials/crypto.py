@@ -37,8 +37,13 @@ def credentials_dir() -> Path:
     root.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(root, 0o700)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.warning(
+            "credentials dir mode 0700 not applied on %s (%s). "
+            "POSIX permissions are not enforced on this platform.",
+            root,
+            exc,
+        )
     return root
 
 
@@ -81,8 +86,13 @@ def _load_or_create_key() -> bytes:
         raise
     try:
         os.chmod(path, 0o600)
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.warning(
+            "credentials key mode 0600 not applied on %s (%s). "
+            "POSIX permissions are not enforced on this platform.",
+            path,
+            exc,
+        )
     logger.info("credentials: generated new master key at %s (mode 0600)", path)
     return _derive_master(raw)
 

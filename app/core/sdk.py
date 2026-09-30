@@ -9,7 +9,8 @@ Public Surface:   Pipeline (run, run_with_manager, from_json, from_yaml, to_ir,
 Must NOT:         Contain execution logic — delegates entirely to
                   get_backend().execute() and RunManager. Must not import from
                   app.domain or app.api at module level.
-Dependencies:     BC1 (ir.models, ir.loader), BC5 (runtime_backend — lazy),
+Dependencies:     BC1 (ir.models, ir.loader, graph_prepare — lazy),
+                  BC5 (runtime_backend — lazy),
                   BC6 (run_journal — lazy, provenance — lazy),
                   BC3 (registry_runtime — lazy via PipelineNode._validate),
                   app.core.logger (lazy), app.core.plugins.manager (lazy).
@@ -24,7 +25,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    from app.core.artifact_store import ArtifactRecord
+    from app.core.artifacts.artifact_store import ArtifactRecord
     from app.core.ir.models import GraphIR
 
 log = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ class ArtifactCollection:
 
         Requirements: req-04 §4
         """
-        from app.core.provenance import ProvenanceStore  # lazy — avoids circular dep
+        from app.core.artifacts.provenance import ProvenanceStore  # lazy — avoids circular dep
         try:
             store = ProvenanceStore()
             return store.get_lineage(artifact_id)
@@ -166,8 +167,7 @@ def _make_subscriber_logger_class():
             super().__init__(queue=queue)
             self._subscribers = subscribers
 
-        def _emit(self, event: dict) -> None:
-            super()._emit(event)
+        def _notify(self, event: dict) -> None:
             for cb in list(self._subscribers):
                 try:
                     cb(event)
@@ -178,6 +178,16 @@ def _make_subscriber_logger_class():
                         event.get("type"),
                         exc_info=True,
                     )
+
+        def _emit(self, event: dict) -> None:
+            super()._emit(event)
+            self._notify(event)
+
+        def _emit_structured(self, event: dict) -> None:
+            # Typed events (node_start / node_end / pipeline_done …) bypass
+            # ``_emit`` in PipelineLogger — forward them too.
+            super()._emit_structured(event)
+            self._notify(event)
 
     return _SL
 
@@ -204,7 +214,7 @@ class PipelineNode:
 
     def _validate(self) -> None:
         """Validate config using registry.get_class() + Config.model_validate()."""
-        from app.core.registry_runtime import get_registry
+        from app.core.host.registry_runtime import get_registry
         import pydantic
 
         registry = get_registry()
@@ -429,16 +439,42 @@ class Pipeline:
         Returns ``(raw_outputs, run_manager)`` so both public methods can
         build their return values from the same execution.
         """
-        from app.core.runtime_backend import get_backend  # noqa: PLC0415
-        from app.core.run_journal import RunManager  # noqa: PLC0415
-
-        if run_manager is None:
-            run_manager = RunManager()
+        from app.core.execution.runtime_backend import get_backend  # noqa: PLC0415
+        from app.core.runs.run_journal import RunManager  # noqa: PLC0415
+        from app.core.execution.graph_prepare import (  # noqa: PLC0415
+            persist_project_fields,
+            prepare_graph,
+            record_run_start,
+        )
 
         # Clone through IR dump/load with plain containers to avoid deepcopy
         # failures on mappingproxy values embedded by pydantic internals.
-        from app.core.ir.loader import dump_ir, load_ir  # noqa: PLC0415
-        graph = load_ir(_to_plain_jsonable(dump_ir(self._graph_ir)))
+        from app.core.ir.loader import dump_ir  # noqa: PLC0415
+
+        # Shared pre-execution pipeline (same as REST / MCP): workspace path
+        # rewire, project stamping, inline-secret refusal and VAL-003 deep
+        # validation. Raises GraphPrepareError (ValueError) before any run
+        # journal entry is created.
+        try:
+            prepared = prepare_graph(_to_plain_jsonable(dump_ir(self._graph_ir)))
+        except Exception as exc:
+            if run_manager is not None:
+                try:
+                    run_manager.mark_failed(str(exc) or type(exc).__name__)
+                except Exception:
+                    pass
+            raise
+        graph = prepared.graph
+
+        if run_manager is None:
+            run_manager = RunManager()
+        persist_project_fields(run_manager, prepared.project_fields)
+        record_run_start(
+            getattr(run_manager, "run_id", ""),
+            graph,
+            actor=str(getattr(self, "_audit_actor", "") or "sdk"),
+            mode=str(getattr(self, "_audit_mode", "") or "sdk"),
+        )
 
         _logger = self._make_subscriber_logger(logger)
 
@@ -464,6 +500,19 @@ class Pipeline:
                 observer=observer,
                 run_manager=run_manager,
             )
+        except BaseException as exc:
+            # Never leave the durable run 'pending'/'running' after a failure
+            # (e.g. a backend that raised before the orchestrator took over).
+            # mark_* are compare-and-set: a terminal status already written by
+            # the orchestrator (failed / cancelled) is preserved.
+            try:
+                if getattr(run_manager, "is_cancelled", False):
+                    run_manager.mark_cancelled()
+                else:
+                    run_manager.mark_failed(str(exc) or type(exc).__name__)
+            except Exception:
+                pass
+            raise
         finally:
             self._last_run_id = getattr(run_manager, "run_id", None)
         return raw_outputs, run_manager
@@ -707,7 +756,7 @@ class Pipeline:
             List of validation error strings. Empty list means valid.
         """
         from app.core.ir.loader import load_ir, dump_ir  # noqa: PLC0415
-        from app.core.planner import PipelineGraph, _ir_to_pipeline_config  # noqa: PLC0415
+        from app.core.execution.planner import PipelineGraph, ir_to_pipeline_config  # noqa: PLC0415
 
         errors: list[str] = []
 
@@ -721,7 +770,7 @@ class Pipeline:
 
         # Step 2: node type resolution + config validation + topology (cycle check)
         try:
-            pipeline_cfg = _ir_to_pipeline_config(self._graph_ir)
+            pipeline_cfg = ir_to_pipeline_config(self._graph_ir)
             PipelineGraph(pipeline_cfg)
         except Exception as exc:
             errors.append(str(exc))
@@ -736,8 +785,8 @@ class Pipeline:
         """
         from pathlib import Path
 
-        from app.core.run_control import get_active_run
-        from app.core.run_status import InvalidTransition, load_durable_status, next_status
+        from app.core.runs.run_control import get_active_run
+        from app.core.runs.run_status import InvalidTransition, load_durable_status, next_status
 
         if self._last_run_id is None:
             raise InvalidTransition("unknown", "pause")
@@ -756,8 +805,8 @@ class Pipeline:
         """
         from pathlib import Path
 
-        from app.core.run_control import get_active_run
-        from app.core.run_status import InvalidTransition, load_durable_status, next_status
+        from app.core.runs.run_control import get_active_run
+        from app.core.runs.run_status import InvalidTransition, load_durable_status, next_status
 
         if self._last_run_id is None:
             raise InvalidTransition("unknown", "resume")
@@ -779,7 +828,7 @@ class Pipeline:
         """
         if self._last_run_id is None:
             return
-        from app.core.run_control import get_active_run
+        from app.core.runs.run_control import get_active_run
         run = get_active_run(self._last_run_id)
         if run is not None:
             run.cancel()

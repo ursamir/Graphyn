@@ -1,8 +1,8 @@
 """Tests for smtp_notify + run_notify email sink."""
 from __future__ import annotations
 
-from app.core.smtp_notify import send_email
-from app.core.run_notify import notify_run_terminal
+from app.core.notify.smtp_notify import send_email
+from app.core.runs.run_notify import notify_run_terminal
 
 
 def test_send_email_dry_run(monkeypatch):
@@ -33,8 +33,8 @@ def test_run_notify_email_sink(monkeypatch):
         calls.append(("email", kwargs))
         return {"ok": True, "dry_run": True}
 
-    monkeypatch.setattr("app.core.webhook.WebhookService", FakeWH)
-    monkeypatch.setattr("app.core.smtp_notify.send_email", fake_send_email)
+    monkeypatch.setattr("app.core.notify.webhook.WebhookService", FakeWH)
+    monkeypatch.setattr("app.core.notify.smtp_notify.send_email", fake_send_email)
     monkeypatch.setenv("GRAPHYN_NOTIFY_EMAIL_TO", "ops@example.com")
     monkeypatch.setenv("GRAPHYN_SMTP_DRY_RUN", "1")
     notify_run_terminal("completed", "r9", graph_name="g")
@@ -52,8 +52,8 @@ def test_run_notify_skips_email_without_to(monkeypatch):
     def boom(**kwargs):
         raise AssertionError("send_email should not be called")
 
-    monkeypatch.setattr("app.core.webhook.WebhookService", FakeWH)
-    monkeypatch.setattr("app.core.smtp_notify.send_email", boom)
+    monkeypatch.setattr("app.core.notify.webhook.WebhookService", FakeWH)
+    monkeypatch.setattr("app.core.notify.smtp_notify.send_email", boom)
     monkeypatch.delenv("GRAPHYN_NOTIFY_EMAIL_TO", raising=False)
     notify_run_terminal("failed", "r10", error="x")
     assert calls == ["pipeline_failed"]

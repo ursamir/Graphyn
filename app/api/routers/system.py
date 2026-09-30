@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from app.api.actor import resolve_actor
 from app.core.config import runs_dir as _runs_dir, cache_dir as _cache_dir
 from app.domain.project_manager import ProjectManager
-from app.core.webhook import WebhookService
+from app.core.notify.webhook import WebhookService
 from app.api.observability import snapshot_metrics
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -48,9 +48,10 @@ def health_check():
 @router.get("/readiness", summary="Readiness check")
 def readiness_check():
     """Return readiness status with dependency checks (Wave B ready/signals)."""
-    from app.core.readiness import readiness_snapshot
+    from app.core.host.readiness import readiness_snapshot
 
-    return readiness_snapshot()
+    # Probe endpoint: always fresh (guarded GETs use the short-TTL cache).
+    return readiness_snapshot(max_age_s=0)
 
 
 @router.get("/metrics", summary="In-process API metrics snapshot")
@@ -90,7 +91,7 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
     ``examples/`` and ``datasets/input`` are never touched. Deletion is jailed
     to ``runs/``, ``cache/``, and ``artifacts/`` under the project dir.
     """
-    from app.core.run_cleanup import cleanup_workspace
+    from app.core.runs.run_cleanup import cleanup_workspace
 
     result = cleanup_workspace(
         older_than_days=body.older_than_days,
@@ -101,7 +102,7 @@ def cleanup(body: CleanupRequest = CleanupRequest()):
         stale_after_hours=body.stale_after_hours,
     )
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor="api",
@@ -183,11 +184,11 @@ def set_webhooks(body: WebhookBody, request: Request):
         cfg = _webhook_svc.save(body.url, body.events)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    from app.core.egress import redact_webhook_url_for_api
+    from app.core.trust.egress import redact_webhook_url_for_api
 
     redacted_url = redact_webhook_url_for_api(body.url)
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -219,7 +220,7 @@ def set_webhooks(body: WebhookBody, request: Request):
 @router.post("/webhooks/test", summary="Send a test webhook notification")
 def test_webhook(request: Request):
     """Fire a test event to the configured webhook URL."""
-    from app.core.egress import redact_webhook_url_for_api
+    from app.core.trust.egress import redact_webhook_url_for_api
 
     config = _webhook_svc.load()
     url = config.get("url")
@@ -228,7 +229,7 @@ def test_webhook(request: Request):
     _webhook_svc.notify("test", {"message": "Test notification from Graphyn"})
     redacted_url = redact_webhook_url_for_api(str(url))
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -279,7 +280,7 @@ class ScheduleEnabledBody(BaseModel):
 
 @router.get("/schedules", summary="List interval schedules")
 def get_schedules():
-    from app.core.schedules import list_schedules
+    from app.core.pipelines.schedules import list_schedules
 
     return {"schedules": list_schedules()}
 
@@ -287,8 +288,8 @@ def get_schedules():
 @router.post("/schedules", summary="Create an interval schedule")
 def post_schedule(body: ScheduleCreateBody, request: Request):
     """Create schedule. Honors Idempotency-Key (API-CONV-004)."""
-    from app.api.idempotency import begin_idempotent, complete_idempotent
-    from app.core.schedules import create_schedule
+    from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
+    from app.core.pipelines.schedules import create_schedule
 
     cached = begin_idempotent(
         request, body=body.model_dump(), route="POST /api/v1/system/schedules"
@@ -296,41 +297,42 @@ def post_schedule(body: ScheduleCreateBody, request: Request):
     if cached is not None:
         return cached
 
-    try:
-        item = create_schedule(
-            name=body.name,
-            project=body.project,
-            pipeline=body.pipeline,
-            interval_minutes=body.interval_minutes,
-            enabled=body.enabled,
-            env=body.env,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        from app.core.audit import record_audit
+    with idempotency_guard(request):
+        try:
+            item = create_schedule(
+                name=body.name,
+                project=body.project,
+                pipeline=body.pipeline,
+                interval_minutes=body.interval_minutes,
+                enabled=body.enabled,
+                env=body.env,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            from app.core.trust.audit import record_audit
 
-        record_audit(
-            actor=resolve_actor(request),
-            action="schedule.create",
-            resource_type="schedule",
-            resource_id=item["id"],
-            meta={"name": body.name, "project": body.project, "pipeline": body.pipeline},
-        )
-    except Exception:
-        pass
-    complete_idempotent(request, status_code=200, body=item)
+            record_audit(
+                actor=resolve_actor(request),
+                action="schedule.create",
+                resource_type="schedule",
+                resource_id=item["id"],
+                meta={"name": body.name, "project": body.project, "pipeline": body.pipeline},
+            )
+        except Exception:
+            pass
+        complete_idempotent(request, status_code=200, body=item)
     return item
 
 
 @router.post("/schedules/tick", summary="Tick due schedules (ops)")
 def tick_schedules(request: Request):
     """Fire any enabled schedules whose next_run_at is due."""
-    from app.core.schedules import tick_due_schedules
+    from app.core.pipelines.schedules import tick_due_schedules
 
     fired = tick_due_schedules()
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -346,14 +348,14 @@ def tick_schedules(request: Request):
 
 @router.delete("/schedules/{schedule_id}", summary="Delete a schedule")
 def remove_schedule(schedule_id: str, request: Request):
-    from app.core.schedules import delete_schedule
+    from app.core.pipelines.schedules import delete_schedule
 
     try:
         delete_schedule(schedule_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Schedule not found") from exc
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -369,14 +371,14 @@ def remove_schedule(schedule_id: str, request: Request):
 
 @router.post("/schedules/{schedule_id}/enable", summary="Enable or disable a schedule")
 def enable_schedule(schedule_id: str, body: ScheduleEnabledBody, request: Request):
-    from app.core.schedules import set_schedule_enabled
+    from app.core.pipelines.schedules import set_schedule_enabled
 
     try:
         item = set_schedule_enabled(schedule_id, body.enabled)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Schedule not found") from exc
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -392,7 +394,7 @@ def enable_schedule(schedule_id: str, body: ScheduleEnabledBody, request: Reques
 
 @router.post("/schedules/{schedule_id}/run", summary="Run a schedule immediately")
 def run_schedule(schedule_id: str, request: Request):
-    from app.core.schedules import run_schedule_now
+    from app.core.pipelines.schedules import run_schedule_now
 
     try:
         item = run_schedule_now(schedule_id)
@@ -401,7 +403,7 @@ def run_schedule(schedule_id: str, request: Request):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -426,7 +428,7 @@ def get_notifications(
     offset: int = Query(0, ge=0),
 ):
     """Return newest-first in-app notifications (run/ops events)."""
-    from app.core.in_app_notify import list_notifications
+    from app.core.notify.in_app_notify import list_notifications
 
     return list_notifications(unread_only=unread_only, limit=limit, offset=offset)
 
@@ -434,8 +436,8 @@ def get_notifications(
 @router.post("/notifications/mark-read", summary="Mark in-app notifications read")
 def post_notifications_mark_read(body: NotificationsMarkBody, request: Request):
     """Mark selected notification ids as read, or all when ``all`` is true."""
-    from app.core.audit import record_audit
-    from app.core.in_app_notify import mark_read
+    from app.core.trust.audit import record_audit
+    from app.core.notify.in_app_notify import mark_read
 
     result = mark_read(body.ids, all_read=bool(body.all))
     try:

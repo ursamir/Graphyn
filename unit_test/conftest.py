@@ -15,6 +15,132 @@ from app.core.nodes.registry import NodeRegistry
 from app.models.audio_sample import AudioSample
 
 
+# ── Environment isolation (runs before any fixture / plugin load) ────────────
+#
+# Without this, tests write the developer's real ``~/.graphyn`` (plugin
+# registry, credentials store, notifications.jsonl) and the repo ``workspace/``
+# which causes cross-run ``PluginAlreadyInstalledError`` cascades and leaks
+# test data into the real install. ``pytest_configure`` runs before test
+# modules are imported and before the session plugin bootstrap, so every
+# ``graphyn_home()`` / ``project_dir()`` lookup resolves into a throwaway dir.
+
+_TEST_ENV_ROOT: Path | None = None
+_REAL_HOME_ENV_KEYS = (
+    "GRAPHYN_HOME",
+    "GRAPHYN_PLUGINS_DIR",
+    "GRAPHYN_PLUGIN_VENVS_DIR",
+    "GRAPHYN_NOTIFICATIONS_PATH",
+    "GRAPHYN_PROJECT_DIR",
+    "GRAPHYN_BACKEND",
+    "GRAPHYN_CONTROL_URL",
+    "GRAPHYN_API_URL",
+)
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+def _real_venvs_dir() -> Path:
+    raw = os.environ.get("GRAPHYN_PLUGIN_VENVS_DIR", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    home = os.environ.get("GRAPHYN_HOME", "").strip()
+    base = Path(home).expanduser() if home else Path.home() / ".graphyn"
+    return base / "plugins" / "venvs"
+
+
+def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001
+    global _TEST_ENV_ROOT
+    import tempfile
+
+    if _TEST_ENV_ROOT is not None:
+        return
+    real_venvs = _real_venvs_dir()
+    for key in _REAL_HOME_ENV_KEYS:
+        os.environ.pop(key, None)
+
+    root = Path(tempfile.mkdtemp(prefix="graphyn-pytest-"))
+    _TEST_ENV_ROOT = root
+    home = root / "graphyn_home"
+    venvs = home / "plugins" / "venvs"
+    venvs.mkdir(parents=True)
+    workspace = root / "workspace"
+    workspace.mkdir()
+
+    # Isolated plugin venvs are multi-GB and take many minutes to build, so the
+    # developer's existing venvs are *reused* through per-venv symlinks.
+    # ``shutil.rmtree(<symlink>, ignore_errors=True)`` (uninstall / gc paths)
+    # refuses to follow symlinks, so tests can never delete the real venvs.
+    # Missing venvs are never built (see ``_install_offline_venv_guard``).
+    if os.environ.get("GRAPHYN_TEST_FRESH_VENVS", "").strip().lower() not in ("1", "true", "yes"):
+        if real_venvs.is_dir():
+            for child in real_venvs.iterdir():
+                if child.is_dir():
+                    try:
+                        (venvs / child.name).symlink_to(child.resolve(), target_is_directory=True)
+                    except OSError:
+                        pass
+
+    os.environ["GRAPHYN_HOME"] = str(home)
+    os.environ["GRAPHYN_PROJECT_DIR"] = str(workspace)
+    os.environ["GRAPHYN_NOTIFICATIONS_PATH"] = str(home / "notifications.jsonl")
+    _install_offline_venv_guard(venvs)
+
+
+def _install_offline_venv_guard(session_venvs: Path) -> None:
+    """Stop the suite from building isolated plugin venvs (see ``_venv_guard``).
+
+    Applied in-process and, via a ``sitecustomize`` shim prepended to
+    PYTHONPATH, in CLI/API subprocesses running the host interpreter.
+    """
+    import sys
+
+    from unit_test import _venv_guard
+
+    _venv_guard.install(session_venvs)
+    shim = session_venvs.parent.parent.parent / "pyhook"
+    shim.mkdir(exist_ok=True)
+    (shim / "sitecustomize.py").write_text(_venv_guard.SITECUSTOMIZE_SRC, encoding="utf-8")
+    repo_root = str(Path(__file__).resolve().parents[1])
+    parts = [str(shim), repo_root] + [
+        p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p
+    ]
+    os.environ["PYTHONPATH"] = os.pathsep.join(parts)
+    os.environ[_venv_guard.ENV_DIR] = str(session_venvs)
+    os.environ[_venv_guard.ENV_PREFIX] = sys.prefix
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:  # noqa: ARG001
+    import shutil
+
+    if _TEST_ENV_ROOT is not None and os.environ.get("GRAPHYN_TEST_KEEP_HOME", "") == "":
+        shutil.rmtree(_TEST_ENV_ROOT, ignore_errors=True)
+
+
+# ── Heavy (torch / transformers) tests ────────────────────────────────────────
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list) -> None:  # noqa: ARG001
+    """Skip ``heavy`` tests unless GRAPHYN_RUN_HEAVY=1; ``requires_plugins`` in skip mode."""
+    run_heavy = _truthy_env("GRAPHYN_RUN_HEAVY")
+    skip_plugins = _truthy_env("GRAPHYN_SKIP_PLUGIN_LOAD")
+    heavy_skip = pytest.mark.skip(
+        reason=(
+            "heavy torch/transformers test: in-process model loads can segfault "
+            "(torch/triton) after other tests; set GRAPHYN_RUN_HEAVY=1 and run the "
+            "file on its own"
+        )
+    )
+    plugins_skip = pytest.mark.skip(
+        reason="requires the populated plugin registry; unset GRAPHYN_SKIP_PLUGIN_LOAD"
+    )
+    for item in items:
+        if not run_heavy and item.get_closest_marker("heavy") is not None:
+            item.add_marker(heavy_skip)
+        if skip_plugins and item.get_closest_marker("requires_plugins") is not None:
+            item.add_marker(plugins_skip)
+
+
 # ── Session bootstrap ─────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="session", autouse=True)
@@ -76,12 +202,16 @@ def make_audio_sample():
 # ── Thread safety — prevent hangs ────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def patch_threads():
+def patch_threads(request):
     """Patch ThreadPoolExecutor.submit and Thread.start to no-ops.
 
     Applied to every test automatically. Prevents background threads from
-    keeping the process alive after a test completes.
+    keeping the process alive after a test completes. ``heavy`` tests are
+    exempt: torch / transformers model loading needs real worker threads.
     """
+    if request.node.get_closest_marker("heavy") is not None:
+        yield
+        return
     noop = MagicMock(return_value=None)
     with (
         patch("concurrent.futures.ThreadPoolExecutor.submit", noop),
@@ -124,7 +254,6 @@ def tmp_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     ws = tmp_path / "workspace"
     ws.mkdir()
-    monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(ws))
     monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(ws))
     return ws
 

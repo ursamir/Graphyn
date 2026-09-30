@@ -114,7 +114,7 @@ summary = get_graph_capability_summary_handler({"graph": dump_ir(graph)})
 ## Filtering Nodes by Capability
 
 ```python
-from app.core.registry_runtime import get_registry
+from app.core.host.registry_runtime import get_registry
 
 registry = get_registry()
 

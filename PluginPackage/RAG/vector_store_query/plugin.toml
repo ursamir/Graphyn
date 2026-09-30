@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["rag", "vector", "wave1"]
+tags = ["rag", "vector"]
 
 dependencies = [
     "numpy>=1.24",
@@ -22,7 +22,7 @@ runtime = "isolated"
 node_types = ["vector_store_query"]
 
 [config_schema.vector_store_query]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
 top_k = { type = "integer", title = "Top k", default = 5, description = "Top k." }
-backend = { type = "string", title = "Backend", default = "chromadb", description = "Backend." }
+backend = { type = "string", title = "Backend", default = "chromadb", enum = ["chromadb", "faiss", "pgvector"], description = "Vector store backend: chromadb | faiss | pgvector." }
 persist_path = { type = "string", title = "Persist path", default = "workspace/artifacts/vectorstores/default", description = "Persist path." }

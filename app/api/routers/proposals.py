@@ -79,6 +79,17 @@ def get_proposal_endpoint(proposal_id: str):
     return data
 
 
+def _resolver_actor(request: Request, body: "ResolveBody | None") -> str:
+    """Body actor > X-Actor header > ``human`` (accept/reject are human decisions)."""
+    from app.api.actor import resolve_actor
+
+    explicit = body.actor if body else None
+    header = request.headers.get("x-actor")
+    if not (explicit and explicit.strip()) and not (header and header.strip()):
+        return "human"
+    return resolve_actor(request, explicit)
+
+
 @router.post("/{proposal_id}/accept", summary="Accept a proposal")
 def accept_proposal_endpoint(
     proposal_id: str,
@@ -89,7 +100,7 @@ def accept_proposal_endpoint(
 
     Honors Idempotency-Key (API-CONV-004).
     """
-    from app.api.idempotency import begin_idempotent, complete_idempotent
+    from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
     from app.core.agentic.proposals import accept_proposal
 
     body_data = body.model_dump() if body is not None else {}
@@ -101,23 +112,28 @@ def accept_proposal_endpoint(
     if cached is not None:
         return cached
 
-    actor = (body.actor if body else None) or "human"
-    try:
-        result = accept_proposal(proposal_id, actor=actor)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    complete_idempotent(request, status_code=200, body=result)
+    with idempotency_guard(request):
+        actor = _resolver_actor(request, body)
+        try:
+            result = accept_proposal(proposal_id, actor=actor)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        complete_idempotent(request, status_code=200, body=result)
     return result
 
 
 @router.post("/{proposal_id}/reject", summary="Reject a proposal")
-def reject_proposal_endpoint(proposal_id: str, body: ResolveBody | None = None):
+def reject_proposal_endpoint(
+    proposal_id: str,
+    request: Request,
+    body: ResolveBody | None = None,
+):
     """Reject proposal and record audit."""
     from app.core.agentic.proposals import reject_proposal
 
-    actor = (body.actor if body else None) or "human"
+    actor = _resolver_actor(request, body)
     reason = body.reason if body else None
     try:
         return reject_proposal(proposal_id, actor=actor, reason=reason)

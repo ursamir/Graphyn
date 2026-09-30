@@ -37,6 +37,7 @@ import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { goView } from '../../routes/nav'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
+import { normalizeRunStatus } from '../../lib/runStatus'
 import { ConfirmButton, EmptyState, ErrorBanner, NeedProjectPrompt, StatusBadge } from '../../components/ui'
 import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
 import {
@@ -370,6 +371,8 @@ function BuilderInner() {
   const stickToBottomRef = React.useRef(true)
   nodesRef.current = nodes
   edgesRef.current = edges
+  const graphNameRef = React.useRef(graphName)
+  graphNameRef.current = graphName
 
   React.useEffect(() => {
     if (isRunning) setLogCollapsed(false)
@@ -450,6 +453,39 @@ function BuilderInner() {
   )
 
 
+  /**
+   * Backend `node_index` is the index in the planner's execution order, NOT
+   * the canvas array index. Approximate that order client-side (stable Kahn
+   * topological sort over the canvas edges, ties broken by canvas order) so
+   * the rare event lacking `node_id` can still be mapped. Returns null when
+   * the graph has a cycle (no reliable order).
+   */
+  const executionOrderIds = React.useCallback((): string[] | null => {
+    const ns = nodesRef.current
+    const es = edgesRef.current
+    const indeg = new Map<string, number>()
+    const out = new Map<string, string[]>()
+    for (const n of ns) {
+      indeg.set(n.id, 0)
+      out.set(n.id, [])
+    }
+    for (const e of es) {
+      if (!indeg.has(e.source) || !indeg.has(e.target)) continue
+      indeg.set(e.target, (indeg.get(e.target) ?? 0) + 1)
+      out.get(e.source)!.push(e.target)
+    }
+    const order: string[] = []
+    const done = new Set<string>()
+    while (order.length < ns.length) {
+      const next = ns.find((n) => !done.has(n.id) && (indeg.get(n.id) ?? 0) === 0)
+      if (!next) return null
+      done.add(next.id)
+      order.push(next.id)
+      for (const t of out.get(next.id) ?? []) indeg.set(t, (indeg.get(t) ?? 0) - 1)
+    }
+    return order
+  }, [])
+
   const setNodeExecStatus = React.useCallback(
     (
       matcher: { index?: number; nodeId?: string; nodeType?: string },
@@ -457,8 +493,14 @@ function BuilderInner() {
       extra?: { lastError?: string },
     ) => {
       const norm = normalizeExecStatus(status)
+      // Match by node_id only. Fall back to the execution-order index only
+      // when the event carries no node_id at all.
+      let targetId: string | undefined = matcher.nodeId
+      if (!targetId && matcher.index != null && !Number.isNaN(matcher.index)) {
+        targetId = executionOrderIds()?.[matcher.index]
+      }
       setNodes((nds) =>
-        nds.map((n, i) => {
+        nds.map((n) => {
           const patch = (data: typeof n.data) => ({
             ...n,
             data: {
@@ -467,15 +509,11 @@ function BuilderInner() {
               lastError: extra?.lastError !== undefined ? extra.lastError : (norm === 'failed' ? data.lastError : undefined),
             },
           })
-          if (matcher.nodeId && n.id === matcher.nodeId) return patch(n.data)
-          if (matcher.index != null && !Number.isNaN(matcher.index) && i === matcher.index) {
-            return patch(n.data)
-          }
-          // Fallback: first idle/pending match by type only when index missing
+          if (targetId) return n.id === targetId ? patch(n.data) : n
+          // Last resort: first pending match by type only when neither id nor index given
           if (
             matcher.nodeType &&
-            matcher.index == null &&
-            !matcher.nodeId &&
+            (matcher.index == null || Number.isNaN(matcher.index)) &&
             n.data.nodeType === matcher.nodeType &&
             normalizeExecStatus(n.data.status) === 'pending'
           ) {
@@ -485,34 +523,34 @@ function BuilderInner() {
         }),
       )
     },
-    [setNodes],
+    [setNodes, executionOrderIds],
   )
 
   const applyStatusesFromEvents = React.useCallback(
     (events: Array<Record<string, unknown>>) => {
-      const byIndex = new Map<number, NodeExecStatus>()
+      const order = executionOrderIds()
       const byId = new Map<string, NodeExecStatus>()
       for (const ev of events) {
         const t = String(ev.type ?? '')
         const idx = Number(ev.node_index)
-        const nodeId = typeof ev.node_id === 'string' ? ev.node_id : undefined
+        let nodeId = typeof ev.node_id === 'string' ? ev.node_id : undefined
         let st: NodeExecStatus | null = null
         if (t === 'node_start') st = 'running'
         else if (t === 'node_end' || t === 'node_complete') st = 'succeeded'
         else if (t === 'node_error') st = 'failed'
         else if (t === 'node_skip') st = 'skipped'
         if (!st) continue
-        if (!Number.isNaN(idx)) byIndex.set(idx, st)
+        if (!nodeId && order && !Number.isNaN(idx)) nodeId = order[idx]
         if (nodeId) byId.set(nodeId, st)
       }
       setNodes((nds) =>
-        nds.map((n, i) => {
-          const st = byId.get(n.id) ?? byIndex.get(i)
+        nds.map((n) => {
+          const st = byId.get(n.id)
           return st ? { ...n, data: { ...n.data, status: st } } : n
         }),
       )
     },
-    [setNodes],
+    [setNodes, executionOrderIds],
   )
 
   const currentGraph = React.useCallback(
@@ -723,6 +761,13 @@ function BuilderInner() {
     abortRef.current?.abort()
     abortRef.current = null
     setIsRunning(false)
+    setNodes((nds) =>
+      nds.map((n) =>
+        normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
+          ? { ...n, data: { ...n.data, status: 'cancelled' } }
+          : n,
+      ),
+    )
     setRunCancelled(true)
     setRunHadErrors(false)
     setRunOutcome('cancelled')
@@ -776,6 +821,9 @@ function BuilderInner() {
     abortRef.current = controller
     runIdRef.current = null
     let streamCancelled = false
+    // A newer run (or Cancel / unmount) replaces abortRef.current; from then
+    // on this invocation must not write run state, or it clobbers the new run.
+    const isCurrent = () => abortRef.current === controller
     try {
       const graph = graphForRun()
       const res = await apiFetch('/pipelines/run', {
@@ -814,10 +862,18 @@ function BuilderInner() {
       let hadError = false
       let wasCancelled = false
       let lastErrorDetail = ''
+      // Pipeline-level terminal events: backend sends type=done on success and
+      // type=error on failure. A stream that ends without either was cut off.
+      let sawDone = false
+      let sawError = false
       let runId: string | null = headerRunId?.trim() || null
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+        if (!isCurrent()) {
+          void reader.cancel().catch(() => {})
+          return
+        }
         buffer += decoder.decode(value, { stream: true })
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
@@ -846,6 +902,8 @@ function BuilderInner() {
             if (t === 'node_skip') {
               setNodeExecStatus({ index: idx, nodeId, nodeType: typeof ev.node_type === 'string' ? ev.node_type : undefined }, 'skipped')
             }
+            if (t === 'done' || t === 'pipeline_done') sawDone = true
+            if (t === 'error' || t === 'pipeline_error') sawError = true
             if (t === 'node_error' || t === 'error') {
               hadError = true
               const errMsg = String(ev.error_message ?? ev.message ?? ev.error ?? 'Node failed')
@@ -883,6 +941,57 @@ function BuilderInner() {
           }
         }
       }
+      if (!isCurrent()) return
+      let polledTerminal: 'completed' | 'failed' | 'cancelled' | null = null
+      if (!sawDone && !sawError && !wasCancelled && !streamCancelled) {
+        const msg = 'Stream disconnected — checking run status'
+        setStatusMessage(msg)
+        addLog(msg, 'warning')
+        if (!runId) {
+          hadError = true
+          lastErrorDetail = 'Stream disconnected before the run id was known; check Observe → Runs.'
+        } else {
+          // Poll until the journal reports a terminal state (or this run is superseded).
+          while (isCurrent()) {
+            try {
+              const st = await apiJson<{ status?: string }>(
+                `/runs/${encodeURIComponent(runId)}/status`,
+                { signal: controller.signal, retries: 0 },
+              )
+              const norm = normalizeRunStatus(st?.status)
+              if (norm === 'completed' || norm === 'failed' || norm === 'cancelled') {
+                polledTerminal = norm
+                break
+              }
+            } catch (pollErr) {
+              if (controller.signal.aborted) throw pollErr
+              /* transient — keep polling */
+            }
+            await new Promise((r) => setTimeout(r, 2000))
+          }
+          if (!isCurrent()) return
+          if (polledTerminal === 'failed') {
+            hadError = true
+            lastErrorDetail = lastErrorDetail || 'Run failed (reported by run status after stream disconnect).'
+          } else if (polledTerminal === 'cancelled') {
+            wasCancelled = true
+          }
+          addLog(`Run status after disconnect: ${polledTerminal}`, polledTerminal === 'completed' ? 'success' : 'warning')
+          // Pull authoritative per-node statuses from the journal.
+          try {
+            const detail = await apiJson<{ logs?: Array<Record<string, unknown>> }>(
+              `/runs/${encodeURIComponent(runId)}`,
+            )
+            if (isCurrent() && Array.isArray(detail.logs)) {
+              applyStatusesFromEvents(
+                detail.logs.filter((l) => l && typeof l === 'object') as Array<Record<string, unknown>>,
+              )
+            }
+          } catch {
+            /* best-effort */
+          }
+        }
+      }
       if (streamCancelled || wasCancelled) {
         setRunCancelled(true)
         setRunHadErrors(false)
@@ -917,6 +1026,8 @@ function BuilderInner() {
       }
       if (runId) setLastRunId(runId)
     } catch (err) {
+      // Superseded by Cancel / a newer run / unmount: that path owns the UI state.
+      if (!isCurrent()) return
       if (err instanceof DOMException && err.name === 'AbortError') {
         streamCancelled = true
         setRunCancelled(true)
@@ -932,7 +1043,7 @@ function BuilderInner() {
         )
         return
       }
-      if (err instanceof ApiError && err.status === 0) return
+      if (err instanceof ApiError && err.status === 0 && controller.signal.aborted) return
       const msg = err instanceof Error ? err.message : String(err)
       addLog(msg, 'error')
       setRunHadErrors(true)
@@ -949,8 +1060,12 @@ function BuilderInner() {
         ),
       )
     } finally {
-      setIsRunning(false)
-      abortRef.current = null
+      // Only the current run may clear shared run state — a finished/aborted
+      // first run must not flip isRunning off under a second run.
+      if (isCurrent()) {
+        setIsRunning(false)
+        abortRef.current = null
+      }
     }
   }
 
@@ -1158,9 +1273,24 @@ function BuilderInner() {
     let cancelled = false
     void (async () => {
       try {
-        const detail = await apiJson<{ logs?: Array<Record<string, unknown>> }>(`/runs/${lastRunId}`)
+        const detail = await apiJson<{
+          logs?: Array<Record<string, unknown>>
+          meta?: { graph_name?: unknown }
+        }>(`/runs/${encodeURIComponent(lastRunId)}`)
         if (cancelled || !Array.isArray(detail.logs)) return
         const events = detail.logs.filter((l) => l && typeof l === 'object') as Array<Record<string, unknown>>
+        // Only paint statuses when this run belongs to the graph on the canvas:
+        // graph name must match (when recorded) and every node_id referenced
+        // by the run must exist on the canvas. Otherwise another graph's run
+        // would be painted onto unrelated nodes.
+        const runGraphName = typeof detail.meta?.graph_name === 'string' ? detail.meta.graph_name.trim() : ''
+        const canvasGraphName = graphNameRef.current.trim()
+        if (runGraphName && canvasGraphName && runGraphName !== canvasGraphName) return
+        const canvasIds = new Set(nodesRef.current.map((n) => n.id))
+        const runIds = events
+          .map((e) => (typeof e.node_id === 'string' ? e.node_id : null))
+          .filter((x): x is string => Boolean(x))
+        if (runIds.length === 0 || runIds.some((id) => !canvasIds.has(id))) return
         if (events.some((e) => typeof e.type === 'string' && String(e.type).startsWith('node_'))) {
           applyStatusesFromEvents(events)
         }
@@ -1362,6 +1492,14 @@ function BuilderInner() {
                             {n.label || humanNodeLabel(n.node_type)}
                           </span>
                         </span>
+                        {n.config_schema?.properties?.stub?.default === true && (
+                          <span
+                            className="shrink-0 rounded-md bg-amber-100 px-1.5 py-px text-[9px] font-medium text-amber-800"
+                            title="Default config.stub=true returns a placeholder, not a real result"
+                          >
+                            stub
+                          </span>
+                        )}
                         {isIsolatedRuntime(n.runtime, n.node_type) && (
                           <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-[9px] font-medium text-ink-500">
                             iso

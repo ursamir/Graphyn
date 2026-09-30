@@ -1,20 +1,30 @@
 """TextEmbedNode — Text embeddings for chunks
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
 
 import importlib
 import logging
 from pathlib import Path
-from typing import ClassVar, Any
+from typing import ClassVar, Any, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+
+
+def _force_cpu() -> None:
+    """Stay on CPU when another process owns the GPU. Default on."""
+    import os
+
+    flag = os.environ.get("GRAPHYN_ML_FORCE_CPU", "1").strip().lower()
+    if flag in ("0", "false", "no"):
+        return
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 try:
     _pkg = __name__.rsplit(".", 1)[0] if "." in __name__ else __name__
@@ -42,7 +52,7 @@ class TextEmbedNode(Node):
         description="Text embeddings for chunks",
         category="Features",
         version="0.2.0",
-        tags=["rag", "wave1"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -59,8 +69,8 @@ class TextEmbedNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
-        backend: str = Field(default='sentence_transformers', title="Backend", description="Backend.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
+        backend: Literal["sentence_transformers", "openai"] = Field(default="sentence_transformers", title="Backend", description="sentence_transformers (local). openai is declared but not implemented yet and raises.")
         model_name_or_path: str = Field(default='sentence-transformers/all-MiniLM-L6-v2', title="Model name or path", description="Model name or path.")
         normalize: bool = Field(default=True, title="Normalize", description="Normalize.")
         api_secret_name: str = Field(default='OPENAI_API_KEY', title="Api secret name", description="Api secret name.")
@@ -71,7 +81,7 @@ class TextEmbedNode(Node):
             inputs = kwargs
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
-        stub = bool(getattr(self.config, "stub", True))
+        stub = bool(getattr(self.config, 'stub', False))
         raw = inputs.get("input") or []
         if not isinstance(raw, list):
             raw = [raw]
@@ -88,15 +98,17 @@ class TextEmbedNode(Node):
                     )
                 )
             return {"output": out}
+        backend = str(getattr(self.config, "backend", "sentence_transformers") or "sentence_transformers")
+        if backend != "sentence_transformers":
+            raise NotImplementedError(f"text_embed: backend {backend!r} is not implemented; use sentence_transformers")
         try:
-            from app.core.plugins.wave1_runtime import force_cpu_torch_env
-
-            force_cpu_torch_env()
+            _force_cpu()
             from sentence_transformers import SentenceTransformer  # type: ignore
         except ImportError as exc:
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise ImportError(install_hint("rag", ["sentence-transformers>=2.2"])) from exc
+            raise ImportError(
+                "sentence-transformers is not installed in this plugin venv. "
+                "Use Plugins → Install optional (venv)."
+            ) from exc
         model = SentenceTransformer(str(getattr(self.config, "model_name_or_path", "sentence-transformers/all-MiniLM-L6-v2")))
         texts = [getattr(x, "text", None) or (x if isinstance(x, str) else str(x)) for x in raw]
         vectors = model.encode(texts, normalize_embeddings=bool(getattr(self.config, "normalize", True)))

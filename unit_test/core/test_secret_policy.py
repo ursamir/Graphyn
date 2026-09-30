@@ -54,7 +54,7 @@ def test_rejects_hmac_secret_suffix():
 
 def test_local_backend_execute_rejects_inline_secrets():
     from app.core.ir.loader import load_ir
-    from app.core.runtime_backend import LocalPythonBackend
+    from app.core.execution.runtime_backend import LocalPythonBackend
 
     graph = load_ir(
         {

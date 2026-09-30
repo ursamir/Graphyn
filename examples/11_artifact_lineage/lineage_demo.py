@@ -125,7 +125,7 @@ def main() -> None:
 
     # ── ArtifactStore query ───────────────────────────────────────────
     print(f"\n{_h('Step 3 — Query ArtifactStore')}")
-    from app.core.artifact_store import ArtifactStore
+    from app.core.artifacts.artifact_store import ArtifactStore
     store = ArtifactStore()
 
     all_artifacts = store.list(run_id=result.run_id)
@@ -136,7 +136,7 @@ def main() -> None:
 
     # ── Lineage tree ──────────────────────────────────────────────────
     print(f"\n{_h('Step 4 — Walk lineage tree')}")
-    from app.core.provenance import ProvenanceStore
+    from app.core.artifacts.provenance import ProvenanceStore
     prov_store = ProvenanceStore()
 
     # Find the last artifact (deepest in the pipeline)

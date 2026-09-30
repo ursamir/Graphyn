@@ -13,7 +13,7 @@ class TestIfMatch:
     def test_pipeline_put_if_match_mismatch_412(self, api_client, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
         from app.domain.project_manager import ProjectManager
-        from app.core.project_pipelines import put_pipeline
+        from app.core.pipelines.project_pipelines import put_pipeline
         from app.core.ir.loader import CURRENT_IR_VERSION
 
         pm = ProjectManager()
@@ -38,7 +38,7 @@ class TestIfMatch:
     def test_webhook_resource_version_roundtrip(self, api_client, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
         # Clear webhook cache
-        from app.core.webhook import WebhookService
+        from app.core.notify.webhook import WebhookService
 
         WebhookService._class_config_cache = None
         r1 = api_client.get("/api/v1/system/webhooks")
@@ -62,7 +62,7 @@ class TestIfMatch:
 class TestAuditSchema:
     def test_record_audit_has_timestamp_result_request_id(self, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
-        from app.core.audit import list_audit, record_audit
+        from app.core.trust.audit import list_audit, record_audit
 
         ev = record_audit(
             actor="tester",
@@ -124,7 +124,7 @@ class TestDatasetVersion:
     def test_force_delete_referenced_409(self, api_client, tmp_path, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
         from app.core.config import datasets_output_dir, runs_dir
-        from app.core.dataset_versions import write_manifest
+        from app.core.mlops.dataset_versions import write_manifest
 
         out = datasets_output_dir() / "dsproj" / "v1"
         out.mkdir(parents=True)
@@ -157,7 +157,7 @@ class TestDatasetVersion:
     def test_get_includes_content_hash(self, api_client, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
         from app.core.config import datasets_output_dir
-        from app.core.dataset_versions import write_manifest
+        from app.core.mlops.dataset_versions import write_manifest
 
         out = datasets_output_dir() / "dsproj2" / "v1"
         out.mkdir(parents=True)
@@ -174,7 +174,7 @@ class TestDatasetVersion:
 class TestArtifactCommitAfterCancel:
     def test_register_artifact_forbidden_when_cancelled(self, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
-        from app.core.run_journal import ArtifactCommitForbidden, RunManager
+        from app.core.runs.run_journal import ArtifactCommitForbidden, RunManager
 
         mgr = RunManager(base_dir=str(Path(tmp_workspace) / "runs"))
         mgr.cancel()

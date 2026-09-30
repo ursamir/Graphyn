@@ -59,7 +59,7 @@ def start_url_job(body: UrlIngestBody):
     if not body.label:
         raise HTTPException(status_code=422, detail="label must not be empty")
 
-    from app.core.egress import HttpEgressError, validate_http_egress_url
+    from app.core.trust.egress import HttpEgressError, validate_http_egress_url
 
     for url in body.urls:
         try:

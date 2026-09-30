@@ -365,6 +365,15 @@ class EdgeOptimizerNode(Node):
             DeploymentArtifact with artifact_path, model_format, quantization,
             labels, and file_size_bytes.
         """
+        if isinstance(artifact, dict):
+            artifact = (
+                artifact.get("model_artifact")
+                or artifact.get("input")
+                or artifact.get("model")
+                or artifact.get("output")
+            )
+        if artifact is None or isinstance(artifact, dict):
+            raise FileNotFoundError("EdgeOptimizerNode: expected a ModelArtifact input")
         if self.config.prune:
             log.warning(
                 "EdgeOptimizerNode: prune=True is set but pruning is not yet "

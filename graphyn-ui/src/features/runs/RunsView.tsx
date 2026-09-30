@@ -6,6 +6,7 @@ import { emptyGraph } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { useAppStore } from '../../store/appStore'
 import { runMatchesProject } from '../../lib/projectStamp'
+import { usePolling } from '../../lib/usePolling'
 import {
   isLiveRunStatus,
   isTerminalRunStatus,
@@ -448,12 +449,16 @@ export default function RunsView() {
   const openProposals = useAppStore((s) => s.openProposals)
   const openProjects = useAppStore((s) => s.openProjects)
   const activeProject = useAppStore((s) => s.activeProject)
-  const setActiveProject = useAppStore((s) => s.setActiveProject)
   const loadGraphIntoBuilder = useAppStore((s) => s.loadGraphIntoBuilder)
 
   const [runs, setRuns] = React.useState<RunSummary[] | null>(null)
   const [offset, setOffset] = React.useState(0)
   const [selected, setSelected] = React.useState<string | null>(null)
+  // Mirrors `selected` synchronously (open() sets it before the re-render) so
+  // async results can check they still belong to the selected run.
+  const selectedRef = React.useRef<string | null>(null)
+  selectedRef.current = selected
+  const openSeqRef = React.useRef(0)
   const [detail, setDetail] = React.useState<Record<string, unknown> | null>(null)
   const [status, setStatus] = React.useState<Record<string, unknown> | null>(null)
   const [debug, setDebug] = React.useState<Record<string, unknown> | null>(null)
@@ -536,6 +541,11 @@ export default function RunsView() {
 
   const open = async (id: string) => {
     const switching = selected !== id
+    // Latest-request guard: a slower open(A) must never paint A's detail
+    // under run B after the user switched selection.
+    const seq = ++openSeqRef.current
+    const stale = () => seq !== openSeqRef.current || selectedRef.current !== id
+    selectedRef.current = id
     setSelected(id)
     setDetail(null)
     setDebug(null)
@@ -557,6 +567,7 @@ export default function RunsView() {
         apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
         apiJson<RunArtifact[]>(`/runs/${id}/artifacts`).catch(() => []),
       ])
+      if (stale()) return
       setDetail(d)
       setStatus(st)
       setDebug(dbg)
@@ -565,10 +576,6 @@ export default function RunsView() {
       void loadRunModels(id)
       setRunArtifacts(Array.isArray(arts) ? arts : [])
       const meta = d?.meta && typeof d.meta === 'object' ? (d.meta as Record<string, unknown>) : null
-      const proj = String(meta?.project ?? d?.project ?? '').trim()
-      if (proj && useAppStore.getState().activeProject !== proj) {
-        setActiveProject(proj)
-      }
       // Only pick a default panel when opening a different run (or a forced pending panel).
       // Reloading the same run must not yank the user off Logs / Outputs / Lineage.
       if (pendingPanelRef.current) {
@@ -583,22 +590,34 @@ export default function RunsView() {
         }
       }
     } catch (err) {
+      if (stale()) return
       setError(err instanceof Error ? err.message : String(err))
     }
   }
 
-  React.useEffect(() => {
-    if (!selected) return
+  const selectedIsLive = (() => {
+    if (!selected) return false
     const metaStatus = (detail?.meta as { status?: string } | undefined)?.status
-    const s = String(status?.status ?? metaStatus ?? '')
-    if (!['running', 'paused'].includes(s.toLowerCase())) return
-    const t = setInterval(() => {
-      void apiJson<Record<string, unknown>>(`/runs/${selected}/status`)
-        .then(setStatus)
-        .catch(() => undefined)
-    }, 2000)
-    return () => clearInterval(t)
-  }, [selected, status?.status, detail])
+    const s = String(status?.status ?? metaStatus ?? '').toLowerCase()
+    return s === 'running' || s === 'paused'
+  })()
+  usePolling(
+    async () => {
+      const id = selected
+      if (!id) return
+      const st = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}/status`, { retries: 0 })
+      // Selection changed while in flight — drop the stale result.
+      if (selectedRef.current !== id) return
+      setStatus(st)
+      const norm = normalizeRunStatus(st?.status)
+      if (norm === 'completed' || norm === 'failed' || norm === 'cancelled') {
+        // Run just finished: refresh logs / outputs / artifacts for it.
+        await refetchRunDetail(id)
+      }
+    },
+    2000,
+    { enabled: selectedIsLive, immediate: false, resetKey: selected },
+  )
 
   const downloadZip = async () => {
     if (!selected) return
@@ -638,6 +657,7 @@ export default function RunsView() {
   const loadRunModels = async (runId: string) => {
     try {
       const res = await apiJson<{ models?: Array<{ name: string; stages?: Record<string, { run_id?: string; slug?: string; updated_at?: string }> }> }>('/models')
+      if (selectedRef.current !== runId) return
       const list = Array.isArray(res?.models) ? res.models : []
       setRunModels(
         list.filter((m) => {
@@ -646,7 +666,7 @@ export default function RunsView() {
         }),
       )
     } catch {
-      setRunModels([])
+      if (selectedRef.current === runId) setRunModels([])
     }
   }
 
@@ -660,6 +680,7 @@ export default function RunsView() {
         apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
         apiJson<RunArtifact[]>(`/runs/${id}/artifacts`).catch(() => []),
       ])
+      if (selectedRef.current !== id) return
       setDetail(d)
       setStatus(st)
       setDebug(dbg)
@@ -1006,47 +1027,44 @@ export default function RunsView() {
     }
   }, [activeProject])
 
-  React.useEffect(() => {
-    if (focusRunsTab !== 'live') return
-    void loadLive()
-    const t = window.setInterval(() => void loadLive(), 3000)
-    return () => window.clearInterval(t)
-  }, [focusRunsTab, loadLive])
+  usePolling(loadLive, 3000, { enabled: focusRunsTab === 'live', resetKey: loadLive })
 
   React.useEffect(() => {
     if (focusRunsTab !== 'live' || !liveSelected) {
       setLiveDetail(null)
       setLiveStatus(null)
       setLiveDebug(null)
-      return
     }
-    let cancelled = false
-    const fetchDetail = async () => {
+  }, [focusRunsTab, liveSelected])
+
+  const liveSelectedRef = React.useRef(liveSelected)
+  liveSelectedRef.current = liveSelected
+  usePolling(
+    async () => {
+      const id = liveSelected
+      if (!id) return
+      const cancelled = () => liveSelectedRef.current !== id
       try {
         const [d, st, dbg] = await Promise.all([
-          apiJson<Record<string, unknown>>(`/runs/${liveSelected}`),
-          apiJson<Record<string, unknown>>(`/runs/${liveSelected}/status`).catch(() => null),
-          apiJson<Record<string, unknown>>(`/runs/${liveSelected}/debug-report`).catch(() => null),
+          apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}`),
+          apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}/status`).catch(() => null),
+          apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}/debug-report`).catch(() => null),
         ])
-        if (cancelled) return
+        if (cancelled()) return
         setLiveDetail(d)
         setLiveStatus(st)
         setLiveDebug(dbg)
       } catch {
-        if (!cancelled) {
+        if (!cancelled()) {
           setLiveDetail(null)
           setLiveStatus(null)
           setLiveDebug(null)
         }
       }
-    }
-    void fetchDetail()
-    const t = window.setInterval(() => void fetchDetail(), 3000)
-    return () => {
-      cancelled = true
-      window.clearInterval(t)
-    }
-  }, [focusRunsTab, liveSelected])
+    },
+    3000,
+    { enabled: focusRunsTab === 'live' && Boolean(liveSelected), resetKey: liveSelected },
+  )
 
   if (!activeProject) {
     return (

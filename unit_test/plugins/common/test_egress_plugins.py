@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.core.egress import HttpEgressError
+from app.core.trust.egress import HttpEgressError
 from app.core.plugins.manager import PluginManager
 
 ASR_SOURCE = "PluginPackage/Common/asr_transcribe/"
@@ -24,7 +24,11 @@ def asr_cls(tmp_path, fresh_registry):
     mgr = PluginManager(registry=fresh_registry, base_dir=str(tmp_path))
     mgr._plugins_dir = str(tmp_path)
     mgr.install(ASR_SOURCE)
-    return fresh_registry.get_class("asr_transcribe")
+    # asr_transcribe is runtime="isolated": the registry holds a host stub, so
+    # load the real class to exercise its in-process HTTP helper.
+    from unit_test.plugins._helpers import materialize_isolated_class
+
+    return materialize_isolated_class(fresh_registry.get_class("asr_transcribe"))
 
 
 @pytest.fixture

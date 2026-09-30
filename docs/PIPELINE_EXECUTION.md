@@ -119,7 +119,7 @@ Migration: `graphyn migrate --config pipeline.yaml` → `pipeline.graph.json`.
 
 ## Data Structures
 
-**File:** `app/core/planner.py`
+**File:** `app/core/execution/planner.py`
 
 ```python
 @dataclass
@@ -149,14 +149,14 @@ class PipelineConfig:
 
 ```python
 # Canonical — all interfaces use this
-from app.core.runtime_backend import get_backend
+from app.core.execution.runtime_backend import get_backend
 result = get_backend().execute(graph, logger=None, use_cache=True, checkpoint=False,
     streaming=False, parallel=False, observer=None, run_manager=None,
     max_workers=None, resume_run_id=None, include_nodes=None,
     exclude_nodes=None, input_overrides=None, event_driven=False)
 
 # Direct orchestrator access (internal / backward compat only)
-from app.core.orchestrator import run_pipeline_ir
+from app.core.execution.orchestrator import run_pipeline_ir
 result = run_pipeline_ir(graph, ...)
 ```
 
@@ -164,7 +164,7 @@ result = run_pipeline_ir(graph, ...)
 
 `run_pipeline()` is a **deprecated shim** — it reads raw YAML, emits `DeprecationWarning`, then calls `run_pipeline_ir`. Use `get_backend().execute()` for all new code.
 
-The legacy `app/core/pipeline.py` re-export shim was **removed** (2026-09-16). Import from `app.core.planner`, `app.core.orchestrator`, or use `get_backend().execute()` directly. YAML execution: `app.core.ir.yaml_shim.run_pipeline_from_yaml` (deprecated).
+The legacy `app/core/pipeline.py` re-export shim was **removed** (2026-09-16). Import from `app.core.execution.planner`, `app.core.execution.orchestrator`, or use `get_backend().execute()` directly. YAML execution: `app.core.ir.yaml_shim.run_pipeline_from_yaml` (deprecated).
 
 ```yaml
 pipeline:
@@ -245,7 +245,7 @@ Parses a raw YAML dict into a `PipelineConfig`:
 
 ## `PipelineGraph`
 
-**File:** `app/core/planner.py`
+**File:** `app/core/execution/planner.py`
 
 ```python
 graph = PipelineGraph(config, observer=None)
@@ -265,7 +265,7 @@ graph.get_node(node_id)  # → Node instance
 
 ## `NodeExecutor`
 
-**File:** `app/core/node_executor.py`
+**File:** `app/core/execution/node_executor.py`
 
 ```python
 executor = NodeExecutor(node, run_id="run-abc")
@@ -346,9 +346,37 @@ Unconnected optional ports receive `None`.
 
 ---
 
+## Run lifecycle
+
+**Files:** `app/core/execution/orchestrator.py`, `app/core/runs/run_journal.py` (`RunManager`), `app/core/runs/run_status.py`, `app/core/distributed/backend.py`
+
+**Statuses** (`meta.json` `status`): `pending` → `running` ⇄ `paused` → `succeeded` | `failed` | `cancelled`.
+
+- **Terminal guarantee.** Once the `RunManager` exists, every exit path of `run_pipeline_ir_async` (success, exception, `asyncio.CancelledError`, bad partial-run ids) leaves the run terminal, tears down every executor that was set up, and deregisters the run — no `running` ghosts. Partial-run ids (`include_nodes` / `exclude_nodes`) are validated *before* the run is registered.
+- **Compare-and-set status writes.** `mark_running` / `pause` / `resume` / `save_metadata` (succeeded) / `mark_failed` / `mark_cancelled` go through `RunManager._transition_status` under the meta lock and the `run_status` transition matrix. The **first terminal status wins**: a late `mark_failed` never overwrites `succeeded`/`cancelled`, `save_metadata` on a cancelled run merges the fields but keeps `cancelled` (and emits no success notification). These methods return `bool` (True = written).
+- **Durable cancel marker.** `RunManager.cancel()` (and the API offline cancel of a queued run in another process) writes `runs/<run_id>/cancel_requested` via `write_cancel_marker()`. The marker is never rewritten, so it cannot be lost to a racing `meta.json` write; while it exists every transition except `cancel` is refused. `is_cancelled` checks the in-process event plus (throttled to one probe / 0.5 s) the marker / durable `status: cancelled`; `poll_cancelled()` is the unthrottled check used at node boundaries. A run cancelled while queued is never started.
+- **Mode A cancel wiring.** The orchestrator installs `NodeExecutor.set_cancel_check` on every executor (terminates isolated plugin subprocesses, interrupts retry back-off). In-process `process()` still cannot be interrupted mid-call (`docs/KNOWN_ISSUES.md` DIST-CANCEL-1).
+- **Event-driven runs.** The first failure or cancel closes every event source and cancels idle handler tasks; a later cancel never overwrites `failed`.
+
+### Logical vs materialized graph
+
+Before execution the graph is **run-scoped** (`_scope_graph_to_run` → `workspace_paths.scope_outputs_to_run`: output paths are rewritten under `workspace/artifacts/<slug>/runs/<run_id>/`). Because that materialized graph embeds the run id, its hash changes on every run. Therefore:
+
+| Key | Derived from |
+|---|---|
+| `meta.json` `graph_hash` / `RunManager._graph_hash` (resume validation, checkpoint index, provenance) | **logical** graph — `_logical_graph_hash(graph)` = SHA-256 of `dump_ir(graph)` before scoping |
+| `meta.json` `materialized_graph_hash` | the executed graph (`graph.json`), only when it differs |
+| Node seeds | `planner.derive_node_seed(graph_seed, node_type, index, logical_config)` — `PipelineGraph(..., seed_configs=logical_configs)` |
+| Cache keys | logical node config |
+| Node execution config | materialized (run-scoped) config |
+
+`RunManager.save_graph_ir(graph_dict, *, logical_hash=None)` writes `graph.json` (materialized) and sets `graph_hash` to `logical_hash` when given. Custom run managers without the keyword still work (falls back to the materialized hash). **Mode B:** `DistributedBackend` applies the same contract — scopes outputs to the run, saves the logical hash, derives per-node seeds with `derive_node_seed` (identical to Mode A; `NodeJob.seed` carries it) and keys the cache off the logical config.
+
+---
+
 ## `PipelineCache`
 
-**File:** `app/core/pipeline_cache.py`
+**File:** `app/core/execution/pipeline_cache.py`
 
 Caches node outputs under `workspace/cache/{sha256}/`. Domain-agnostic — uses `ArtifactSerializerRegistry.infer_type()` to detect serializable output types; no domain model imports.
 
@@ -373,25 +401,27 @@ stats = cache.clear()  # {"entries_deleted": N, "bytes_freed": N}
 
 ### Cache key
 
-`SHA-256(node_type + sorted_json(config) + combined_input_hash)` where `combined_input_hash` is `SHA-256` of all per-port input hashes concatenated (preserves port identity).
+`SHA-256(node_type + sorted_json(config) + combined_input_hash)` (plus node seed and node version) where `combined_input_hash` is `SHA-256` of all per-port input hashes concatenated (preserves port identity). Input values are digested by full content (Pydantic models field-by-field, ndarrays by dtype/shape/bytes, containers recursively); a value with no stable content representation makes the node uncacheable for that call (it re-executes). The orchestrator and the distributed backend key the cache off the **logical** node config (pre run-scoping), so run-scoped output paths do not defeat the cache.
 
 ### Cache format
 
 ```
 workspace/cache/{sha256}/
-├── outputs.json          # generic JSON-serializable outputs
-# or for AudioSample outputs:
-├── port_{name}/
-│   ├── 0.wav … N.wav
-│   └── manifest.json
-└── manifest.json         # lists cached_ports
+├── manifest.json         # commit marker, always written:
+│                         #   all_ports, json_ports, cached_ports, port_types
+├── outputs.json          # JSON-serializable ports (plain values / model_dump)
+└── port_{name}/          # ports with an ArtifactSerializerRegistry handler
+    ├── 0.wav … N.wav
+    └── manifest.json
 ```
+
+Entries are **all-or-nothing**: if any output port cannot be serialized nothing is written (logged; mark the node `cacheable=False` to silence), and `load()` returns a hit only when every port in `all_ports` is restored. Entries are assembled in a staging dir and renamed into place; manifests without the full port inventory are misses.
 
 ---
 
 ## Checkpoints
 
-**File:** `app/core/checkpoint.py`
+**File:** `app/core/runs/checkpoint.py`
 
 When `checkpoint=True`, after each node executes, `_write_checkpoint()` writes the node's serializable output ports to:
 
@@ -431,7 +461,7 @@ workspace/runs/{run_id}/
 
 ## `validate_pipeline()`
 
-**File:** `app/core/validation.py`
+**File:** `app/core/execution/validation.py`
 
 ```python
 def validate_pipeline(config: Any, registry: Any) -> list[dict]:
@@ -465,6 +495,18 @@ For each edge:
 For consecutive node pairs in a linear pipeline:
 - Checks `CompatibilityChecker.check_connection(src, "output", dst, "input")`
 - Failures are silently ignored (best-effort; hard errors come from `PipelineGraph`)
+
+### `validate_graph_ir_result(graph, registry)` — Graph IR findings
+
+Returns `{valid, errors, warnings}`; each finding has a stable `code` (see `docs/REQUIREMENTS_SPEC.md` VAL table). Codes emitted today: `VAL-DUP-ID`, `VAL-EMPTY`, `VAL-UNK-TYPE`, `VAL-CONFIG`, `VAL-MISS-NODE`, `VAL-MISS-PORT`, `VAL-TYPE`, `VAL-CYCLE`, `VAL-UNREACH`, plus:
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `VAL-COND` | error | Edge `condition` fails length (≤500), syntax or AST-whitelist check (`conditions.validate_condition_syntax`, no evaluation) |
+| `VAL-CARDINALITY` | error / warning | Several edges into a `cardinality="single"` input port (runtime would keep only the last value). **Warning** instead of error when the fan-in looks like a merge of mutually exclusive branches (an edge carries a condition, or a source descends from a node routing through >1 distinct output ports) |
+| `VAL-UNCONNECTED-INPUT` | warning | Required input port with no incoming edge — warning only, since source nodes are commonly fed via runtime `input_overrides` (templates, SDK `Pipeline.run`) |
+
+Condition semantics at runtime (`app/core/execution/conditions.py`): `*` and `%` are **numeric-only** (no `"a" * 10**9` string/list repetition, no printf-style `%` formatting) and integer products are capped (`_MAX_INT_BITS`); violations raise `ConditionEvaluationError`.
 
 ---
 

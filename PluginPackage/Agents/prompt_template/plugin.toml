@@ -7,16 +7,20 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["agents", "prompt", "stub"]
+tags = ["agents", "prompt"]
 
 dependencies = [
     "numpy>=1.24",
+]
+
+optional_dependencies = [
+    "jinja2>=3.0",
 ]
 
 runtime = "inprocess"
 node_types = ["prompt_template"]
 
 [config_schema.prompt_template]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
-template = { type = "string", title = "Template", default = "", description = "Template." }
-engine = { type = "string", title = "Engine", default = "fstring", description = "Engine." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
+template = { type = "string", title = "Template", default = "", description = "Prompt template. Empty → pass the input through as text." }
+engine = { type = "string", title = "Engine", default = "format", enum = ["format", "jinja", "fstring"], description = "format: str.format '{name}'; jinja: sandboxed Jinja2 '{{ name }}' (strict undefined); fstring: alias of format." }

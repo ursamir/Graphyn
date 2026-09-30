@@ -16,7 +16,7 @@ Owns:             Route definitions for GET /runs, GET /runs/{run_id},
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
                   ArtifactStore, and ProvenanceStore.
-Dependencies:     fastapi, app.core.run_journal, app.core.artifact_store,
+Dependencies:     fastapi, app.core.runs.run_journal, app.core.artifacts.artifact_store,
                   app.core.config, stdlib (json, pathlib, re).
 Reason To Change: New run history endpoint added, or response schema changes.
 """
@@ -72,15 +72,15 @@ def _load_meta(run_path: Path) -> dict:
 
 
 def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
-    from app.core.run_status import normalize_status
-    from app.core.workspace_paths import (
+    from app.core.runs.run_status import normalize_status
+    from app.core.paths.workspace_paths import (
         artifact_fs_path,
         artifact_layout,
         artifact_slug,
         read_metrics_json,
         slug_from_artifacts_posix,
     )
-    from app.core.run_project import infer_project_from_graph_file, normalize_project_name, normalize_version_tag
+    from app.core.runs.run_project import infer_project_from_graph_file, normalize_project_name, normalize_version_tag
 
     out = dict(meta)
     if "status" in out:
@@ -101,9 +101,9 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
             out["version_tag"] = inferred["version_tag"]
         if need_graph_name:
             try:
-                from app.core.run_outputs import _load_run_graph
+                from app.core.runs.run_outputs import load_run_graph
 
-                graph = _load_run_graph(run_path)
+                graph = load_run_graph(run_path)
                 gmeta = graph.get("metadata") if isinstance(graph, dict) else None
                 if isinstance(gmeta, dict) and gmeta.get("name"):
                     out["graph_name"] = str(gmeta["name"]).strip()
@@ -132,8 +132,8 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
 
 
 def _run_slug_and_artifacts(run_id: str, run_path: Path, meta: dict) -> tuple[str | None, str | None]:
-    from app.core.workspace_paths import artifact_layout, artifact_slug, slug_from_artifacts_posix
-    from app.core.run_outputs import _load_run_graph
+    from app.core.paths.workspace_paths import artifact_layout, artifact_slug, slug_from_artifacts_posix
+    from app.core.runs.run_outputs import load_run_graph
 
     artifacts = meta.get("artifacts_dir") if isinstance(meta.get("artifacts_dir"), str) else None
     slug = slug_from_artifacts_posix(artifacts) if artifacts else None
@@ -142,7 +142,7 @@ def _run_slug_and_artifacts(run_id: str, run_path: Path, meta: dict) -> tuple[st
         if isinstance(name, str) and name.strip():
             slug = artifact_slug(name)
     if not slug:
-        graph = _load_run_graph(run_path)
+        graph = load_run_graph(run_path)
         gmeta = graph.get("metadata") if isinstance(graph, dict) else None
         if isinstance(gmeta, dict) and gmeta.get("name"):
             slug = artifact_slug(str(gmeta["name"]))
@@ -168,63 +168,13 @@ def list_runs(
     When ``project`` is set, return only runs scoped to that project (Phase 2).
     """
     from app.api.store_guard import ensure_store_readable
-    from app.core.run_project import normalize_project_name, project_matches
+    from app.core.runs.run_listing import list_runs as _list_runs
 
     ensure_store_readable()
-    runs_root = _get_runs_root()
-    if not runs_root.exists():
-        return []
-
-    # Sort by directory mtime (OS-level — no file reads) then slice, so only
-    # the requested page of meta.json files is read from disk.  This keeps the
-    # operation O(page_size) in disk I/O regardless of total run count.
-    try:
-        entries = sorted(
-            (e for e in runs_root.iterdir() if e.is_dir()),
-            key=lambda e: e.stat().st_mtime,
-            reverse=True,
-        )
-    except OSError:
-        return []
-
-    needle = normalize_project_name(project)
-    if needle:
-        # Scan newest-first until we fill the requested page of matches.
-        matched = []
-        skipped = 0
-        for entry in entries:
-            meta_path = entry / "meta.json"
-            if not meta_path.exists():
-                continue
-            try:
-                meta = json.loads(meta_path.read_text())
-            except Exception:
-                continue
-            if not isinstance(meta, dict):
-                continue
-            if not project_matches(meta, needle, entry):
-                continue
-            if skipped < offset:
-                skipped += 1
-                continue
-            matched.append(_enrich_run_summary(meta, entry))
-            if len(matched) >= limit:
-                break
-        return matched
-
-    page = entries[offset : offset + limit]
-    runs = []
-    for entry in page:
-        meta_path = entry / "meta.json"
-        if not meta_path.exists():
-            continue
-        try:
-            meta = json.loads(meta_path.read_text())
-        except Exception:
-            continue
-        if isinstance(meta, dict):
-            runs.append(_enrich_run_summary(meta, entry))
-    return runs
+    # Shared lister (app.core.runs.run_listing): created_at desc + run_id tiebreak,
+    # per-entry error isolation — same order as MCP list_runs / CLI runs list.
+    page = _list_runs(_get_runs_root(), limit=limit, offset=offset, project=project)
+    return [_enrich_run_summary(meta, entry) for entry, meta in page.rows]
 
 
 # ── Get run ───────────────────────────────────────────────────────────────────
@@ -255,7 +205,7 @@ def get_run(run_id: str):
     slug, artifacts_dir = _run_slug_and_artifacts(run_id, run_path, meta)
     is_latest = False
     if slug:
-        from app.core.workspace_paths import latest_run_id
+        from app.core.paths.workspace_paths import latest_run_id
         is_latest = latest_run_id(slug) == run_id
     if artifacts_dir:
         meta.setdefault("artifacts_dir", artifacts_dir)
@@ -278,7 +228,7 @@ def delete_run_endpoint(run_id: str):
     run of that slug, or remove the alias if none remain. Returns 409 when
     the run is currently running or paused.
     """
-    from app.core.run_cleanup import RunInProgressError, delete_run
+    from app.core.runs.run_cleanup import RunInProgressError, delete_run
 
     _run_dir(run_id)  # 400/404 + jail
     try:
@@ -329,7 +279,7 @@ def get_run_status(run_id: str):
     except Exception:
         return {"status": "unknown"}
 
-    from app.core.run_status import normalize_status
+    from app.core.runs.run_status import normalize_status
 
     status = normalize_status(meta.get("status", "unknown"))
     progress_pct: float | None = None
@@ -427,7 +377,7 @@ def get_checkpoint_samples(
 def list_run_outputs(run_id: str):
     """Return files from the run dir, artifact records, graph output_path, and legacy Example 6."""
     run_path = _run_dir(run_id)
-    from app.core.run_outputs import list_run_output_files
+    from app.core.runs.run_outputs import list_run_output_files
 
     return list_run_output_files(run_id, run_path)
 
@@ -436,7 +386,7 @@ def list_run_outputs(run_id: str):
 def download_run_outputs_zip(run_id: str):
     """Zip listed output files for one-click download."""
     run_path = _run_dir(run_id)
-    from app.core.run_outputs import list_run_output_files, pack_outputs_zip
+    from app.core.runs.run_outputs import list_run_output_files, pack_outputs_zip
 
     entries = list_run_output_files(run_id, run_path)
     payload = pack_outputs_zip(entries)
@@ -452,7 +402,7 @@ def download_run_outputs_zip(run_id: str):
 def promote_run(run_id: str, request: Request, body: dict | None = Body(None)):
     """Point workspace/artifacts/<slug>/<alias> at this run (default alias=latest)."""
     from app.api.actor import resolve_actor
-    from app.core.workspace_paths import (
+    from app.core.paths.workspace_paths import (
         artifact_fs_path,
         artifact_layout,
         publish_alias,
@@ -484,10 +434,13 @@ def promote_run(run_id: str, request: Request, body: dict | None = Body(None)):
         raise HTTPException(status_code=409, detail="Run has no artifacts to promote")
     try:
         pointer = publish_alias(slug, run_id, alias)
+    except FileNotFoundError as exc:
+        # publish_alias no longer creates a missing run artifact dir.
+        raise HTTPException(status_code=404, detail=str(exc) or "Run artifacts not found")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -507,8 +460,8 @@ def promote_run(run_id: str, request: Request, body: dict | None = Body(None)):
 def list_run_artifacts(run_id: str):
     """Return all artifacts registered for a specific run."""
     from app.api.store_guard import ensure_store_readable, raise_http_store_corrupt
-    from app.core.artifact_store import ArtifactStore
-    from app.core.store_integrity import StoreCorrupt
+    from app.core.artifacts.artifact_store import ArtifactStore
+    from app.core.persist.store_integrity import StoreCorrupt
 
     ensure_store_readable()
     _run_dir(run_id)  # raises 404 if run not found
@@ -525,8 +478,8 @@ def list_run_artifacts(run_id: str):
 def get_run_provenance(run_id: str):
     """Return a provenance summary including artifacts and provenance records for a run."""
     _run_dir(run_id)  # raises 404 if run not found
-    from app.core.artifact_store import ArtifactStore
-    from app.core.provenance import ProvenanceStore
+    from app.core.artifacts.artifact_store import ArtifactStore
+    from app.core.artifacts.provenance import ProvenanceStore
     artifacts = ArtifactStore().list(run_id=run_id)
     provenance_records = ProvenanceStore().find_by_run(run_id)
     return {
@@ -562,8 +515,8 @@ def get_run_debug_report(run_id: str):
         or "error" in str(e.get("message", "")).lower()
     ]
 
-    from app.core.artifact_store import ArtifactStore
-    from app.core.provenance import ProvenanceStore
+    from app.core.artifacts.artifact_store import ArtifactStore
+    from app.core.artifacts.provenance import ProvenanceStore
 
     artifacts = ArtifactStore().list(run_id=run_id)
     provenance_records = ProvenanceStore().find_by_run(run_id)

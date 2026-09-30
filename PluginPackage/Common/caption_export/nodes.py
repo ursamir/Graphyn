@@ -207,7 +207,10 @@ class CaptionExportNode(Node):
             words = [{"word": text, "start": 0.0, "end": max(1.0, 0.4 * len(text.split())), "speaker": ""}]
         cues = _cues_from_words(words, int(self.config.max_words_per_cue) or 12)
         out_dir = Path(self.config.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         base = self.config.basename or "captions"
         formats = [str(f).lower() for f in (self.config.formats or ["srt"])]
         allowed = {"srt", "vtt", "json"}

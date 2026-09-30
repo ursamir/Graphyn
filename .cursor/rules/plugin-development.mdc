@@ -13,4 +13,4 @@ alwaysApply: false
 - Install: `PluginManager.install(..., upgrade=True)` or `graphyn plugin install ...`.
 - Propagate `AudioSample.metadata` keys on transforms.
 - After new nodes: update steering tables + `PluginPackage/NODES.md` + `docs/PLUGIN_GUIDE.md`.
-- Detail: `.kiro/steering/plugin-development.md`, `plugin-ecosystem.md`.
+- Detail: `docs/PLUGIN_GUIDE.md`, `docs/NODE_CATALOGUE.md`.

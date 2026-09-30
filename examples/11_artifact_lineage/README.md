@@ -69,7 +69,7 @@ if result.artifacts:
     print(tree)
 
 # Query the store directly
-from app.core.artifact_store import ArtifactStore
+from app.core.artifacts.artifact_store import ArtifactStore
 store = ArtifactStore()
 records = store.list(run_id=result.run_id)
 records = store.list(artifact_type="audio_samples")

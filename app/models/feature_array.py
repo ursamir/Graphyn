@@ -6,7 +6,7 @@ Responsibility:   Typed data contract for acoustic feature arrays extracted
 Owns:             FeatureArray Pydantic model — data (float32 [T,F]), label,
                   sample_rate, source_path, feature_type, metadata.
 Public Surface:   FeatureArray
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain feature extraction logic.
 Dependencies:     pydantic (PortDataType base), numpy, typing.
 Reason To Change: FeatureArray schema gains new fields, or feature_type

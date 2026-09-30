@@ -17,4 +17,4 @@ node_types = ["python_code"]
 [config_schema.python_code]
 source = { type = "string", title = "Source", default = "", description = "Python source for trusted operators. Not a sandbox.", widget = "code" }
 allowed_paths = { type = "array", title = "Allowed paths", default = [], description = "Explicit filesystem read allowlist (empty = open() denied).", widget = "json" }
-allow_network = { type = "boolean", title = "Allow network", default = false, description = "Permit network-related imports (default Off; still not a sandbox)." }
+allow_network = { type = "boolean", title = "Allow network", default = false, description = "Reserved (default Off). Raw network module imports are refused in-process; use an egress-checked HTTP node. Not a sandbox." }

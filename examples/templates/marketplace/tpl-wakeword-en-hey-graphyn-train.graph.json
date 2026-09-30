@@ -55,13 +55,13 @@
       "src_id": "n0",
       "src_port": "output",
       "dst_id": "n1",
-      "dst_port": "input"
+      "dst_port": "dataset"
     },
     {
       "src_id": "n1",
       "src_port": "output",
       "dst_id": "n2",
-      "dst_port": "input"
+      "dst_port": "model_artifact"
     },
     {
       "src_id": "n2",
@@ -71,7 +71,15 @@
     }
   ],
   "parameters": {
-    "phrase": "hey graphyn",
-    "language": "en"
+    "phrase": {
+      "type": "string",
+      "default": "hey graphyn",
+      "description": ""
+    },
+    "language": {
+      "type": "string",
+      "default": "en",
+      "description": ""
+    }
   }
 }

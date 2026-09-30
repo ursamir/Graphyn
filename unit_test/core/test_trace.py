@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from app.core.audit import list_audit, record_audit
-from app.core.provenance import ProvenanceStore
-from app.core.trace import assemble_trace
+from app.core.trust.audit import list_audit, record_audit
+from app.core.artifacts.provenance import ProvenanceStore
+from app.core.runs.trace import assemble_trace
 
 
 def test_assemble_trace_requires_subject():
@@ -26,7 +26,7 @@ def test_assemble_trace_partial_missing_everything(tmp_workspace: Path):
 
 
 def test_assemble_trace_from_artifact_with_lineage(tmp_workspace: Path):
-    from app.core.artifact_store import ArtifactStore
+    from app.core.artifacts.artifact_store import ArtifactStore
 
     store = ArtifactStore()
     # Register a tiny generic artifact (bytes payload)

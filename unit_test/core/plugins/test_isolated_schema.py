@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from app.core.example_templates import repo_root
+from app.core.templates.example_templates import repo_root
 from app.core.nodes.compat import CompatibilityChecker
 from app.core.plugins.isolated_schema import specs_from_source
 from app.core.plugins.runtime_registry import get_runtime_registry

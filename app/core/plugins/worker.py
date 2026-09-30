@@ -26,7 +26,7 @@ def _load_job(path: Path) -> dict[str, Any]:
 
 def _run(job: dict[str, Any]) -> None:
     # Before pickle.load / plugin imports that pull in TensorFlow.
-    from app.core.tf_runtime import configure_tf_stable_defaults
+    from app.core.ml.tf_runtime import configure_tf_stable_defaults
 
     configure_tf_stable_defaults()
 
@@ -57,7 +57,7 @@ def _run(job: dict[str, Any]) -> None:
     node_cls = registry.get_class(node_type)
     inputs = coerce_node_inputs(inputs, node_cls)
     node = node_cls(config=config, seed=seed)
-    from app.core.write_paths import ensure_node_write_dirs
+    from app.core.paths.write_paths import ensure_node_write_dirs
 
     ensure_node_write_dirs(node)
     node.setup()
@@ -69,6 +69,11 @@ def _run(job: dict[str, Any]) -> None:
         except Exception:
             pass
 
+    # Recast dynamic ``_graphyn_plugin_*`` types onto ``app.models`` (or plain
+    # dicts) before pickle so the host RestrictedUnpickler can load outputs.
+    from app.core.plugins.isolated_executor import recast_plugin_types
+
+    outputs = recast_plugin_types(outputs)
     with outputs_path.open("wb") as fh:
         pickle.dump(outputs, fh, protocol=pickle.HIGHEST_PROTOCOL)
 

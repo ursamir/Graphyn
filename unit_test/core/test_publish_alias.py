@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.core.workspace_paths import publish_alias
+from app.core.paths.workspace_paths import publish_alias
 
 
 def test_publish_alias_staging(tmp_path: Path, monkeypatch):
@@ -12,7 +12,7 @@ def test_publish_alias_staging(tmp_path: Path, monkeypatch):
     # Ensure layout dirs exist under project
     slug = "edge-demo"
     run_id = "run-alias-1"
-    from app.core.workspace_paths import artifact_fs_path, artifact_layout
+    from app.core.paths.workspace_paths import artifact_fs_path, artifact_layout
 
     layout = artifact_layout(slug, run_id)
     run_dir = artifact_fs_path(layout["run_dir"])

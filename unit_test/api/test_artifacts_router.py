@@ -39,7 +39,7 @@ class TestListArtifacts:
         Validates: Req 24 criteria 5
         """
         store = _make_store()
-        with patch("app.core.artifact_store.ArtifactStore", return_value=store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=store):
             resp = api_client.get("/api/v1/artifacts")
         assert resp.status_code == 200
         body = resp.json()
@@ -51,7 +51,7 @@ class TestListArtifacts:
         Validates: Req 24 criteria 6
         """
         store = _make_store()
-        with patch("app.core.artifact_store.ArtifactStore", return_value=store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=store):
             api_client.get("/api/v1/artifacts?run_id=r1")
         store.list.assert_called_once_with(run_id="r1", node_type=None, artifact_type=None)
 
@@ -59,7 +59,7 @@ class TestListArtifacts:
         """GET /api/v1/artifacts returns serialized artifact records."""
         record = _make_artifact_record()
         store = _make_store(records=[record])
-        with patch("app.core.artifact_store.ArtifactStore", return_value=store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=store):
             resp = api_client.get("/api/v1/artifacts")
         assert resp.status_code == 200
         raw = resp.json()
@@ -77,7 +77,7 @@ class TestGetArtifact:
         record = _make_artifact_record("art-001")
         store = MagicMock()
         store.get.return_value = record
-        with patch("app.core.artifact_store.ArtifactStore", return_value=store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=store):
             resp = api_client.get("/api/v1/artifacts/art-001")
         assert resp.status_code == 200
         assert resp.json()["artifact_id"] == "art-001"
@@ -87,11 +87,11 @@ class TestGetArtifact:
 
         Validates: Req 24 criteria 8
         """
-        from app.core.artifact_store import ArtifactNotFoundError
+        from app.core.artifacts.artifact_store import ArtifactNotFoundError
 
         store = MagicMock()
         store.get.side_effect = ArtifactNotFoundError("not found")
-        with patch("app.core.artifact_store.ArtifactStore", return_value=store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=store):
             resp = api_client.get("/api/v1/artifacts/art-missing")
         assert resp.status_code == 404
 
@@ -118,7 +118,7 @@ class TestGetArtifactLineage:
         lineage = {"artifact_id": "art-001", "inputs": [], "run_id": "run-001"}
         prov_store = MagicMock()
         prov_store.get_lineage.return_value = lineage
-        with patch("app.core.provenance.ProvenanceStore", return_value=prov_store):
+        with patch("app.core.artifacts.provenance.ProvenanceStore", return_value=prov_store):
             resp = api_client.get("/api/v1/artifacts/art-001/lineage")
         assert resp.status_code == 200
         body = resp.json()
@@ -134,7 +134,7 @@ class TestGetArtifactLineage:
         }
         prov_store = MagicMock()
         prov_store.get_lineage.return_value = error_lineage
-        with patch("app.core.provenance.ProvenanceStore", return_value=prov_store):
+        with patch("app.core.artifacts.provenance.ProvenanceStore", return_value=prov_store):
             resp = api_client.get("/api/v1/artifacts/unknown-art/lineage")
         assert resp.status_code == 200
 
@@ -145,11 +145,11 @@ class TestReplayArtifact:
 
         Validates: Req 24 criteria 11
         """
-        from app.core.artifact_store import ArtifactNotFoundError
+        from app.core.artifacts.artifact_store import ArtifactNotFoundError
 
         art_store = MagicMock()
         art_store.get.side_effect = ArtifactNotFoundError("not found")
-        with patch("app.core.artifact_store.ArtifactStore", return_value=art_store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=art_store):
             resp = api_client.post("/api/v1/artifacts/art-missing/replay")
         assert resp.status_code == 404
 
@@ -168,7 +168,7 @@ class TestReplayArtifact:
         (runs_dir / "run-001").mkdir()
 
         with (
-            patch("app.core.artifact_store.ArtifactStore", return_value=art_store),
+            patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=art_store),
             patch("app.core.config.runs_dir", return_value=runs_dir),
         ):
             resp = api_client.post("/api/v1/artifacts/art-001/replay")

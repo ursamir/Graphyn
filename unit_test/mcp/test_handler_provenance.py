@@ -20,7 +20,7 @@ class TestListArtifacts:
         """list_artifacts returns dict with artifacts list and count."""
         mock_store = MagicMock()
         mock_store.list.return_value = []
-        with patch("app.core.artifact_store.ArtifactStore", return_value=mock_store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=mock_store):
             result = list_artifacts_handler({})
         assert "artifacts" in result
         assert "count" in result
@@ -31,7 +31,7 @@ class TestListArtifacts:
         """run_id filter is forwarded to ArtifactStore.list()."""
         mock_store = MagicMock()
         mock_store.list.return_value = []
-        with patch("app.core.artifact_store.ArtifactStore", return_value=mock_store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=mock_store):
             list_artifacts_handler({"run_id": "run-001"})
         mock_store.list.assert_called_once_with(
             run_id="run-001", node_type=None, artifact_type=None
@@ -41,7 +41,7 @@ class TestListArtifacts:
         """ArtifactStore exception returns error dict."""
         mock_store = MagicMock()
         mock_store.list.side_effect = RuntimeError("store failure")
-        with patch("app.core.artifact_store.ArtifactStore", return_value=mock_store):
+        with patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=mock_store):
             result = list_artifacts_handler({})
         assert result.get("error") is True
         assert result.get("error_type") == "store_error"
@@ -53,7 +53,7 @@ class TestGetArtifactLineage:
         lineage = {"artifact_id": "art-001", "inputs": [], "run_id": "run-001"}
         mock_store = MagicMock()
         mock_store.get_lineage.return_value = lineage
-        with patch("app.core.provenance.ProvenanceStore", return_value=mock_store):
+        with patch("app.core.artifacts.provenance.ProvenanceStore", return_value=mock_store):
             result = get_artifact_lineage_handler({"artifact_id": "art-001"})
         assert result.get("artifact_id") == "art-001"
 
@@ -72,7 +72,7 @@ class TestGetArtifactLineage:
         }
         mock_store = MagicMock()
         mock_store.get_lineage.return_value = error_node
-        with patch("app.core.provenance.ProvenanceStore", return_value=mock_store):
+        with patch("app.core.artifacts.provenance.ProvenanceStore", return_value=mock_store):
             result = get_artifact_lineage_handler({"artifact_id": "unknown"})
         assert result.get("artifact_id") == "unknown"
 
@@ -124,5 +124,6 @@ class TestReplayRun:
             result = replay_run_handler({"run_id": "run-001"})
 
         assert "run_id" in result
-        assert result.get("status") == "started"
+        assert result.get("status") == "pending"
+        assert result.get("accepted") is True
         assert result["run_id"] != "run-001"  # new run_id

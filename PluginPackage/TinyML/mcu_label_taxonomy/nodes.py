@@ -1,7 +1,7 @@
 """McuLabelTaxonomyNode — MCU class taxonomy remap
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
 
@@ -29,6 +29,54 @@ McuSample = _types.McuSample
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _as_list(obj: Any) -> list:
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, tuple):
+        return list(obj)
+    return [obj]
+
+def _mcu_taxonomy(config, inputs, types):
+    taxonomy = _cfg(config, "taxonomy", {}) or {}
+    if isinstance(taxonomy, list):
+        taxonomy = {str(i): name for i, name in enumerate(taxonomy)}
+    drop = bool(_cfg(config, "drop_unknown", False))
+    out = []
+    for item in _as_list(inputs.get("input")):
+        data = _dump(item)
+        if not isinstance(data, dict):
+            data = {"payload": item}
+        label = str(data.get("label") or "")
+        mapped = taxonomy.get(label, label)
+        if drop and label not in taxonomy and mapped == label and taxonomy:
+            continue
+        out.append(_T(types, "McuSample", sample_id=str(data.get("sample_id") or ""), payload=data.get("payload"), modality=str(data.get("modality") or "audio"), label=str(mapped), metadata=data.get("metadata") or {}))
+    return out
+
+
 
 class McuLabelTaxonomyNode(Node):
     """MCU class taxonomy remap"""
@@ -41,7 +89,7 @@ class McuLabelTaxonomyNode(Node):
         description="MCU class taxonomy remap",
         category="Preprocessing",
         version="0.1.0",
-        tags=["tinyml", "stub"],
+        tags=["tinyml"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -58,7 +106,7 @@ class McuLabelTaxonomyNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         taxonomy: dict = Field(default_factory=dict)
         drop_unknown: bool = Field(default=True, title="Drop unknown", description="Drop unknown.")
 
@@ -69,10 +117,17 @@ class McuLabelTaxonomyNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'tinyml' / 'mcu_label_taxonomy'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = []
             return {"output": result}
@@ -82,23 +137,8 @@ class McuLabelTaxonomyNode(Node):
         except ImportError as exc:
             raise ImportError(f"mcu_label_taxonomy: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'tinyml' / 'mcu_label_taxonomy'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": []}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _mcu_taxonomy(self.config, inputs, _types)}

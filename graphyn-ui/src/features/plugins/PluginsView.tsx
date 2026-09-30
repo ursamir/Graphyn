@@ -1,7 +1,7 @@
 import React from 'react'
 import clsx from 'clsx'
 import { Download, RefreshCw, PackagePlus, MoreHorizontal, Search, Trash2 } from 'lucide-react'
-import { apiJson } from '../../api/client'
+import { ApiError, apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
 import { formatLocaleDateTime, formatRelativeTime, isIsolatedRuntime } from '../../lib/format'
@@ -250,29 +250,76 @@ export default function PluginsView() {
     }
   }
 
-  const pollInstall = (name: string) => {
+  /**
+   * Poll a background (remote) install. GET /plugins/{name} returns either a
+   * job stub `{name, status: 'installing'|'failed', error}` while the job is
+   * tracked, or — once done — the full PluginRecord, which has NO `status`
+   * field (version / installed_at instead). For upgrades the old record is
+   * visible the whole time, so "installed" means installed_at changed from
+   * the pre-install baseline. Capped at 10 min; 404s surface as errors;
+   * overlapping ticks are skipped so the completion path runs exactly once.
+   */
+  const pollInstall = (name: string, baselineInstalledAt?: string | null) => {
     if (pollRef.current) window.clearInterval(pollRef.current)
     setPkgInstalling(name)
     setPkgInstallError(null)
+    const startedAt = Date.now()
+    const MAX_MS = 10 * 60 * 1000
+    let inFlight = false
+    let finished = false
+    let consecutive404 = 0
+    const stop = () => {
+      finished = true
+      if (pollRef.current) window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    const fail = (msg: string) => {
+      stop()
+      setPkgInstalling(null)
+      setPkgInstallError(msg)
+      pushToast(msg, 'error')
+    }
     pollRef.current = window.setInterval(() => {
-      void apiJson<Plugin>(`/plugins/${encodeURIComponent(name)}`)
+      if (inFlight || finished) return
+      if (Date.now() - startedAt > MAX_MS) {
+        fail(`Install of ${name} did not finish within 10 minutes — check Plugins → Installed or server logs.`)
+        return
+      }
+      inFlight = true
+      void apiJson<Plugin>(`/plugins/${encodeURIComponent(name)}`, { retries: 0 })
         .then(async (rec) => {
-          if (rec.status === 'installed' || rec.status === 'failed') {
-            if (pollRef.current) window.clearInterval(pollRef.current)
-            setPkgInstalling(null)
-            if (rec.status === 'failed') {
-              const msg = rec.error ?? `Install failed: ${name}`
-              setPkgInstallError(msg)
-              pushToast(msg, 'error')
-            } else {
-              setPkgInstallError(null)
-              pushToast(`Installed ${name}`, 'success')
-              setMainTab('installed')
-            }
-            await afterMutation({ announceCatalog: rec.status !== 'failed' })
+          if (finished) return
+          consecutive404 = 0
+          if (rec.status === 'failed') {
+            fail(rec.error ?? `Install failed: ${name}`)
+            await afterMutation({ announceCatalog: false })
+            return
           }
+          if (rec.status === 'installing') return
+          const isRecord = rec.status === 'installed' || Boolean(rec.version || rec.installed_at)
+          if (!isRecord) return
+          // Upgrade: the pre-existing record is returned until the new one lands.
+          if (baselineInstalledAt && rec.installed_at === baselineInstalledAt) return
+          stop()
+          setPkgInstalling(null)
+          setPkgInstallError(null)
+          pushToast(`Installed ${name}`, 'success')
+          setMainTab('installed')
+          await afterMutation({ announceCatalog: true })
         })
-        .catch(() => undefined)
+        .catch((err: unknown) => {
+          if (finished) return
+          if (err instanceof ApiError && err.status === 404) {
+            consecutive404 += 1
+            if (consecutive404 >= 3) {
+              fail(`Install of ${name} is no longer tracked by the server (404). ${err.message}`)
+            }
+          }
+          /* other errors: transient — keep polling until the cap */
+        })
+        .finally(() => {
+          inFlight = false
+        })
     }, 1500)
   }
 
@@ -341,9 +388,10 @@ export default function PluginsView() {
         }),
       })
       const name = res.name ?? source
+      const baseline = plugins?.find((p) => p.name === name)?.installed_at ?? null
       if (res.status === 'installing') {
         pushToast(`Installing ${name}…`, 'info')
-        pollInstall(name)
+        pollInstall(name, baseline)
       } else if (res.status === 'installed' || res.status == null) {
         pushToast(`Installed ${name}`, 'success')
         setPkgInstalling(null)
@@ -355,7 +403,7 @@ export default function PluginsView() {
         pushToast(msg, 'error')
       } else {
         pushToast(`Install status: ${res.status ?? 'unknown'}`, 'info')
-        pollInstall(name)
+        pollInstall(name, baseline)
       }
       setSource('')
     } catch (err) {

@@ -157,15 +157,19 @@ def build_all() -> list[dict]:
             life = ["prep","train","eval"] if "trainer" in nodes else (["observe"] if "stream" in task or "compliance" in task else ["prep"])
             add(tpl(family="audio", name=f"{task}-{dom}", description=f"Audio {task} pipeline for {dom} industry use case.",
                     pack="Audio", packs_used=packs, industry=dom, modality=["audio"], lifecycle=life,
-                    tags=["audio", task, dom], node_chain=chain(*nodes),
+                    tags=["audio", task, dom],
+                    node_chain=chain(
+                        *nodes,
+                        overrides=[{"path": f"workspace/datasets/input/{dom}-{task}"}] + [None] * (len(nodes) - 1),
+                    ),
                     parameters={"dataset_path": f"workspace/datasets/input/{dom}-{task}", "sample_rate": 16000}))
             if "trainer" in nodes:
                 add(tpl(family="audio", name=f"{task}-{dom}-edge-tflite", description=f"Edge TFLite deploy after audio {task} for {dom}.",
                         pack="Audio", packs_used=["Audio","Common"], industry=dom, modality=["audio"], lifecycle=["train","deploy"],
                         tags=["audio","edge","tflite",task],
                         node_chain=chain("dataset_ingest","audio_conditioner","feature_frontend","dataset_builder","model_builder","trainer","evaluator","edge_optimizer","deployment_packager",
-                                         overrides=[None,None,None,None,None,None,None,{"backend":"tflite","quantization":"int8"},{"target":"edge"}]),
-                        parameters={"export_format":"tflite"}, status="alter-existing"))
+                                         overrides=[{"path": f"workspace/datasets/input/{dom}-{task}"},None,None,None,None,None,None,{"backend":"tflite","quantization":"int8"},{"target":"edge"}]),
+                        parameters={"dataset_path": f"workspace/datasets/input/{dom}-{task}", "export_format":"tflite"}, status="alter-existing"))
     for dom in AUDIO_DOMAINS:
         for name, nodes, tags in [
             (f"prep-augment-export-{dom}", ["dataset_ingest","audio_conditioner","audio_quality_gate","segmenter","augmentation_pipeline","audio_exporter"], ["prep","augment"]),

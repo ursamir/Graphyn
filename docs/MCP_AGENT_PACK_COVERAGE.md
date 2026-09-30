@@ -62,7 +62,7 @@ discover packs/nodes
 | Filter marketplace catalog | `search_templates` | P0 | **Implemented** (reads catalog JSON + optional seeded dir) |
 | Pack taxonomy | `list_packs` / `describe_pack` | P0 | **Implemented** |
 | Node contract from design catalog | `get_node_spec` | P0 | **Implemented** (ports+config from PLATFORM_CATALOG + refinements) |
-| Expand catalog → IR | `materialize_template` | P0 | **Implemented** (MCP + `app/core/pipeline_template_materializer.py`) |
+| Expand catalog → IR | `materialize_template` | P0 | **Implemented** (MCP + `app/core/templates/pipeline_template_materializer.py`) |
 | Ad-hoc chain → IR | `build_graph_from_chain` | P1 | Helper exists |
 | Param validation vs template schema | `validate_template_params` | P1 | Proposed |
 | Pack install aligned to PluginPackage roots | extend `install_plugin` | P1 | Document paths: TinyML/Vision/RAG/… |

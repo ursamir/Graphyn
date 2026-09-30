@@ -4,6 +4,9 @@
 Hot: create / rotate / revoke without API restart — every read hits SQLite.
 Payloads are sealed with app.core.credentials.crypto; list/get never return
 raw secret fields.
+
+Merge updates that change an endpoint field (``base_url`` / ``host`` / ...)
+must re-supply every stored secret field; otherwise CredentialError.
 """
 from __future__ import annotations
 
@@ -212,6 +215,36 @@ def get_payload(connection_id: str) -> tuple[str, dict[str, Any]]:
     return row["kind"], raw
 
 
+# Non-secret fields that decide *where* the sealed secret is sent. Changing one
+# via a merge PATCH while keeping the stored secret would let anyone with
+# update rights redirect the key to their own host.
+_ENDPOINT_FIELDS = frozenset({"base_url", "host", "port", "endpoint", "url"})
+
+
+def _require_secret_on_endpoint_change(
+    kind: str, current: dict[str, Any], patch: dict[str, Any]
+) -> None:
+    from app.core.credentials.kinds import secret_field_names
+
+    changed = [
+        f for f in _ENDPOINT_FIELDS
+        if f in patch and str(patch.get(f) or "") != str(current.get(f) or "")
+    ]
+    if not changed:
+        return
+    secrets = secret_field_names(kind)
+    kept = [
+        f for f in secrets
+        if current.get(f) not in (None, "") and f not in patch
+    ]
+    if kept:
+        raise CredentialError(
+            f"Changing {', '.join(sorted(changed))} requires re-supplying the secret "
+            f"field(s) {', '.join(sorted(kept))} (or rotate=True with a full payload); "
+            "a stored secret is never re-bound to a new endpoint implicitly."
+        )
+
+
 def update_connection(
     connection_id: str,
     *,
@@ -241,6 +274,7 @@ def update_connection(
                 if rotate:
                     merged = validate_payload(kind, payload, partial=False)
                 else:
+                    _require_secret_on_endpoint_change(kind, current, payload)
                     merged = dict(current)
                     merged.update(payload)
                     merged = validate_payload(kind, merged, partial=False)

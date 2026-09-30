@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["rag", "chunk", "stub"]
+tags = ["rag", "chunk"]
 
 dependencies = [
     "numpy>=1.24",
@@ -17,7 +17,7 @@ runtime = "inprocess"
 node_types = ["chunk_recursive"]
 
 [config_schema.chunk_recursive]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
 chunk_size = { type = "integer", title = "Chunk size", default = 1000, description = "Chunk size." }
 chunk_overlap = { type = "integer", title = "Chunk overlap", default = 200, description = "Chunk overlap." }
 length_fn = { type = "string", title = "Length fn", default = "chars", description = "Length fn." }

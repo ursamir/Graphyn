@@ -12,4 +12,5 @@ from app.core.nodes.ports import PortDataType
 class AgentResult(PortDataType):
     final: str = ""
     steps: list = Field(default_factory=list)
+    mode: str = "extractive"
     metadata: dict[str, Any] = Field(default_factory=dict)

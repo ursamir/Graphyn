@@ -68,6 +68,7 @@ def test_process_smoke(installed_cls, make_audio_sample):
         config={"backend": "spectral", "denoise": True, "dereverb": False},
         seed=0,
     )
+    node.setup()  # NodeExecutor normally calls setup(); process() requires it.
     result = node.process({"input": [make_audio_sample()]})
     assert "output" in result
     assert isinstance(result["output"], list)
@@ -81,6 +82,7 @@ def test_process_output_shape_preserved(installed_cls, make_audio_sample):
         config={"backend": "spectral", "denoise": True},
         seed=0,
     )
+    node.setup()
     sample = make_audio_sample(sr=16000, n=8000)
     result = node.process({"input": [sample]})
     assert result["output"][0].sample_rate == 16000

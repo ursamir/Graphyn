@@ -7,8 +7,8 @@ Owns:             NodeRegistry — register, unregister, get_class, get_metadata
                   list_nodes, find_compatible_nodes, to_json, get_config_schema,
                   get_port_schema.
 Public Surface:   NodeRegistry (all public methods above).
-Must NOT:         Import from app.domain, app.api, app.core.orchestrator,
-                  app.core.planner, or any BC4/BC5/BC6 module.
+Must NOT:         Import from app.domain, app.api, app.core.execution.orchestrator,
+                  app.core.execution.planner, or any BC4/BC5/BC6 module.
 Dependencies:     BC2 (nodes.catalogue, nodes.compat, nodes.errors,
                   nodes.metadata, nodes.ports), stdlib (json, threading).
 Reason To Change: Registry query API changes, new introspection methods are

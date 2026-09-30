@@ -24,7 +24,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-from app.core.runtime_backend import get_backend as _get_backend  # module-level — patchable in tests
+from app.core.execution.runtime_backend import get_backend as _get_backend  # module-level — patchable in tests
 
 # NEW-7 fix: module-level shared executor — avoids creating a new ThreadPoolExecutor
 # per replay_run call (which leaks OS threads under load).
@@ -122,7 +122,7 @@ def list_artifacts_handler(arguments: dict[str, Any]) -> dict:
     Accepts an optional ``limit`` (default 200) to cap response size.
     """
     try:
-        from app.core.artifact_store import ArtifactStore
+        from app.core.artifacts.artifact_store import ArtifactStore
 
         run_id = arguments.get("run_id")
         node_type = arguments.get("node_type")
@@ -154,7 +154,7 @@ def get_artifact_lineage_handler(arguments: dict[str, Any]) -> dict:
         }
 
     try:
-        from app.core.provenance import ProvenanceStore
+        from app.core.artifacts.provenance import ProvenanceStore
 
         store = ProvenanceStore()
         lineage = store.get_lineage(artifact_id)
@@ -173,7 +173,7 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
     """Replay a previous run from its stored graph.json (Req 6 §3).
 
     Delegates to Pipeline.run_with_manager() (V1.md §3.1).
-    Returns {"run_id": new_run_id, "status": "started"} or an error dict.
+    Returns {"run_id": new_run_id, "status": "pending", "accepted": True} or an error dict.
     """
     run_id = arguments.get("run_id")
     if not run_id:
@@ -187,12 +187,12 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
         from pathlib import Path
 
         from app.core.ir.loader import load_ir_from_file
-        from app.core.run_journal import RunManager
-        from app.mcp.handlers.artifacts import _safe_run_dir
+        from app.core.runs.run_journal import RunManager
+        from app.mcp.handlers.artifacts import safe_run_dir
 
         from app.core.config import runs_dir as _runs_dir
         try:
-            run_dir = _safe_run_dir(_runs_dir(), run_id)
+            run_dir = safe_run_dir(_runs_dir(), run_id)
         except ValueError as exc:
             return {
                 "error": True,
@@ -248,6 +248,6 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
                 "message": str(submit_exc),
             }
 
-        return {"run_id": new_run_manager.run_id, "status": "started"}
+        return {"run_id": new_run_manager.run_id, "status": "pending", "accepted": True}
     except Exception as e:
         return {"error": True, "error_type": "replay_error", "message": str(e)}

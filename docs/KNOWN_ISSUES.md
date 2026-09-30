@@ -4,6 +4,43 @@
 
 ---
 
+## Resolved recently
+
+### (resolved 2026-09-30) STORE-CONCURRENCY — file-backed stores lost updates / double-executed under concurrency
+
+- **Project files** (`app/domain/project_manager.py`): every write (project.json, links, taxonomy, contract, spec, annotations.jsonl, curation) is atomic (unique same-dir tmp + fsync + `os.replace`), and every read-modify-write holds a per-project lock (`<project>/.graphyn.lock`, threads + `fcntl`). Concurrent annotation POSTs no longer truncate each other (2000 → 8 repro); GETs never see a half-written file.
+- **Idempotency-Key** (`app/api/idempotency.py`): `begin_idempotent` atomically reserves an in-flight placeholder; a concurrent same-key request gets **409 `idempotency_in_progress`** instead of executing twice. Failed handlers release it (`idempotency_guard` / `abort_idempotent`, wired into every caller); orphaned placeholders expire after 15 min.
+- **Pipeline versions/envs** (`app/core/pipelines/pipeline_environments.py`): versions sort numerically (`v10` > `v9`, fixes `latest_version`); `vN` allocation, publish and promote run under the per-pipeline lock and a version file is never overwritten; a corrupt `environments.json` raises `EnvironmentsCorrupt` (copy saved as `environments.json.corrupt-<sha>`) instead of being read as `{}` and erasing the prod pointer on the next write.
+- **Model registry** (`app/core/mlops/model_registry.py`, `app/api/routers/models.py`): `register_model` requires `runs/<run_id>` to exist and have succeeded (404 `run_not_found` / 409 `run_not_succeeded`); `publish_alias` no longer creates empty run dirs (raises `FileNotFoundError`); `POST /models` with `stage=prod` → **403 `prod_requires_approval`** (prod only via request-prod → approve-prod); registry RMW is locked + atomic.
+- **If-Match** (`project_pipelines.py`, `ship_packages.py`): compare + write are done under one per-resource lock. Pipeline `resource_version` is now a content hash of the bytes returned (old `st_mtime_ns` tokens are still accepted once).
+- **Dataset versions** (`app/core/mlops/dataset_versions.py`): `write_manifest` uses a unique tmp (concurrent GETs no longer fail `os.replace`); the delete guard (`find_references`) also scans run `graph.json` / `ir.json`.
+
+### (resolved 2026-09-29) EVENT-DRIVEN-EXIT-1 — event-driven runs could linger after cancel/failure
+
+`_run_event_driven` (`app/core/execution/orchestrator.py`) now runs a watcher that, on the first failure or cancel, closes **every** event source and cancels handler tasks still blocked on an idle source, so an idle watcher can no longer hang the run. The first terminal status wins (a later cancel never overwrites `failed`).
+
+### (resolved 2026-09-29) RUN-LIFECYCLE — ghost `running` runs / terminal status overwrite
+
+Every exit path of `run_pipeline_ir_async` leaves the run terminal (`succeeded` / `failed` / `cancelled`), tears down every executor that was set up and deregisters the run. `RunManager` status writes are compare-and-set (first terminal status wins); a durable `cancel_requested` marker makes cross-process / queued cancels stick. Resume/checkpoint/provenance/seed keys use the **logical** graph hash (pre run-scoping) in both Mode A and Mode B. See [PIPELINE_EXECUTION.md § Run lifecycle](./PIPELINE_EXECUTION.md#run-lifecycle).
+
+### (resolved 2026-09-29) SECRET-ENV-NAME — graph-selected secret names could read any process env var
+
+`app.core.trust.secrets.resolve_secret` only falls back to process env for secret-shaped names (`*_API_KEY`, `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_DSN`, `*_URL`, `*_URI`) that do not start with `GRAPHYN_`, or names in `GRAPHYN_SECRET_ENV_ALLOWLIST`. `resolve_llm_credentials` and every plugin that takes a secret *name* from config (`http_request`, `http_webhook`, `rag_slack_connector`, `rag_notion_connector`, `vector_store_query`/`write`, `speaker_separator`, `structured_llm`, `asr_transcribe`) route through it. `structured_llm` also uses `llm_client.resolve_llm_endpoint` (key ↔ `base_url` binding). See [TRUST_MODEL.md](./TRUST_MODEL.md).
+
+### (resolved 2026-09-29) MARKETPLACE-INGEST-CWD — empty dataset_ingest path scanned CWD
+
+Marketplace templates (e.g. `tpl-audio-kws-retail`) kept the dataset root in `parameters.dataset_path` but materialized `dataset_ingest.config.path` as **empty**. UI showed the field description (“workspace/ relative path…”) as a placeholder. `resolve_ingest_dir("")` treated `Path("")` as `.` (CWD), then recursive `limit=0` loaded every audio file under the project into RAM (~60GB OOM). **Fix:** refuse empty/CWD/bare-workspace ingest roots; require filesystem `path`; materializer binds OOB seed datasets + sanitizes configs; catalog + generator write `config_overrides.path`.
+
+### (resolved 2026-09-29) MARKETPLACE-OOB-SEED — fictional ingest paths + bad config keys
+
+Materialized templates pointed at non-existent folders (`workspace/datasets/input/security-kws`) and wrote forbidden keys (`audio_conditioner.sample_rate`). **Fix:** out-of-box materialize rewrites ingest onto bundled seeds, remaps aliases, strips unknown Config fields via registry, default ingest `limit=8`.
+
+### (resolved 2026-09-29) MARKETPLACE-QG-REJECTED-EDGE — quality gate wired ``rejected`` to next node
+
+Linear materialize scoring tied on `list[AudioSample]` for `output` vs `rejected`; lexicographic sort preferred `rejected`, so SED/KWS chains fed the empty reject port into augmentation → empty dataset → `model_builder` “0 classes”. **Fix:** prefer primary output ports over side-channels when scores tie.
+
+---
+
 ## Open — Fix This Sprint
 
 ### TEST-SUITE-1 — Full pytest suite residuals (2026-09-16)
@@ -28,15 +65,9 @@
 **Mitigation (2026-09):** `PluginManager.load_enabled_plugins()` heals records when `{GRAPHYN_HOME}/plugins/installed/<name>` still has a manifest, otherwise prunes the stale record. `maybe_auto_install_and_load()` treats non-loadable enabled records as empty and installs bundled `PluginPackage` plugins. `initialize_registry()` falls back to AutoDiscovery on `plugins_home` when the manager leaves the registry empty.  
 **Workaround (bytecode only):** Clear stale plugin caches (`~/.graphyn/plugins/installed/**/__pycache__`) and rerun plugin load/install. Do **not** set `GRAPHYN_SKIP_PLUGIN_LOAD=1` when starting the API/UI catalog.
 
-### EVENT-DRIVEN-EXIT-1 — Event-driven demos may not terminate promptly — partially mitigated
-
-**Files:** `examples/15_event_driven_pipeline/event_driven_demo.py`, `app/core/events.py`  
-**Detail:** File-watcher shutdown is shorter/capped; on some Linux environments loops may still linger briefly after cancel.  
-**Workaround:** Run with a process timeout in CI/sweeps; treat output artifacts and completion logs as pass criteria.
-
 ### TF-GPU-CC12-1 — Keras training unsupported on compute capability ≥12
 
-**Files:** `app/core/tf_runtime.py` (`select_keras_device`), `PluginPackage/Common/trainer/nodes.py`  
+**Files:** `app/core/ml/tf_runtime.py` (`select_keras_device`), `PluginPackage/Common/trainer/nodes.py`  
 **Detail:** RTX 50-series (e.g. RTX 5070 Ti, CC 12.0) is visible to TensorFlow but Keras `fit` fails (PTX/libdevice/XLA JIT). Soft-placement CPU fallback without pinning also fails (CPU weights + GPU train step).  
 **Workaround:** Platform defaults Keras to CPU on CC ≥12. Force that class of GPU only with `GRAPHYN_TF_FORCE_GPU=1` (expected to fail until TF/CUDA support catches up). FaceRecognition and other GPU apps are left alone: memory growth + `GRAPHYN_TF_GPU_MIN_FREE_MIB` (default 4096). Opt-in compose overlay `docker-compose.gpu.yml` is required before Graphyn can see the NVIDIA device at all.
 
@@ -46,24 +77,59 @@
 
 ### DIST-CANCEL-1 — In-process `node.process()` cannot be forcibly interrupted mid-call
 
-**Files:** `app/core/node_executor.py`, `app/core/distributed/backend.py`, worker CLI  
-**Detail:** Isolated plugin subprocesses honour cancel via process-group terminate; cooperative cancel runs between retries / before `process`. Non-isolated in-process `process()` is observed only before/after the call, between retries, or when it returns.  
-**Workaround:** Prefer `runtime=isolated` for long GPU/training nodes (`trainer`, `evaluator`, `edge_optimizer`, `realtime_inference` already default isolated); use job cancel + worker cancel-watch for remote jobs. Full mid-call interrupt for in-process remains deferred.
+**Files:** `app/core/execution/node_executor.py`, `app/core/execution/orchestrator.py`, `app/core/distributed/backend.py`, worker CLI  
+**Now (2026-09-29):** Mode A local runs wire `NodeExecutor.set_cancel_check` for every executor, so a cancel terminates isolated plugin subprocesses (process-group terminate) and interrupts retry back-off; the orchestrator checks cancel (unthrottled `poll_cancelled`, incl. the durable `cancel_requested` marker) at every node boundary and refuses to start a run cancelled while queued. Remote jobs use job cancel + worker cancel-watch.  
+**Still open:** a non-isolated in-process `process()` is observed only before/after the call, between retries, or when it returns.  
+**Workaround:** Prefer `runtime=isolated` for long GPU/training nodes (`trainer`, `evaluator`, `edge_optimizer`, `realtime_inference` already default isolated). Full mid-call interrupt for in-process remains deferred.
 
 ### DIST-CANCEL-2 — Streaming `execute_stream` cancel is cooperative only (partial)
 
-**Files:** `app/core/node_executor.py`  
+**Files:** `app/core/execution/node_executor.py`  
 **Detail:** `execute_stream` now polls `request_cancel` / `cancel_check` before start and between yielded items (raises `cancelled by control plane`). It still cannot interrupt mid-yield inside `node.process_stream` — same cooperative limit as non-isolated `process()` (DIST-CANCEL-1).  
 **Status:** Cooperative checks landed; full mid-stream interrupt deferred. Regression: `unit_test/core/test_node_executor_cancel.py`.
 
 ### DIST-RECLAIM-1 — Preferred-worker pin after lease reclaim (mitigated)
 
 **Was:** Reclaimed jobs could stay pinned to a dead preferred worker.  
-**Now:** `reclaim_expired_leases` calls `widen_placement_after_reclaim` (`mode=worker` → `mode=auto`, clears pin; keeps tags/GPU/VRAM/pool). `lease_generation` increments so a stale worker `complete` after reclaim is rejected (fencing).  
+**Now:** `reclaim_expired_leases` calls `widen_placement_after_reclaim` (`mode=worker` → `mode=auto`, clears pin; keeps tags/GPU/VRAM/pool). `lease_generation` increments so a stale worker `complete` **and output upload** after reclaim is rejected (fencing — workers always report the generation they claimed; 409 = fenced/terminal). Heartbeat v2 renews only the worker's `active_job_ids`, and `GET` job polling never renews leases.  
 **Remaining edge cases (still open):**
 - Very short lease TTL under network partition / clock skew can cause reclaim storms (job flip-flops pending↔claimed).
-- A dead worker that still holds a process may finish after reclaim; fencing rejects that complete, but the late side-effects (artifacts written locally) are not rolled back.
+- A dead worker that still holds a process may finish after reclaim; fencing rejects that complete. Generation-scoped output blobs from that attempt are deleted and recorded in `artifacts/distributed_blob_tombstones.jsonl`. Content-addressed `sha256/` blobs are recorded but not deleted (they may be shared). In-process side effects inside `node.process()` (files the node wrote itself) are still not rolled back.
 - *(Mitigated 2026-09-15)* Heartbeat lease renew failures return HTTP 503 so workers retry instead of looking healthy while leases expire.
+
+---
+
+## Open — Known caveats of the 2026-09 hardening round
+
+### MODEB-VERSION-SKEW-1 — Mixed-version Mode B workers reject new protocol fields
+
+**Files:** `app/core/distributed/models.py` (`WorkerInfo`, `NodeJob`, `JobResult` use `extra="forbid"`)  
+**Detail:** New fields (`NodeJob.finished_at`, `NodeJob.result_consumed_at`, `JobResult.output_sha256`, heartbeat `active_job_ids`) are rejected by older workers/control planes with a validation error.  
+**Workaround:** Upgrade the control plane and every worker together (same commit). Drain workers before upgrading.
+
+### PLUGIN-GIT-REDIRECT-1 — `git clone` plugin installs no longer follow HTTP redirects
+
+**Files:** `app/core/plugins/installer.py` (`_git_protocol_config`: `-c http.followRedirects=false`, protocol allowlist)  
+**Detail:** A redirect could leave the allowlisted host, so it is refused. Renamed/transferred GitHub repos that only resolve via redirect now fail to install.  
+**Workaround:** Use the repository's current canonical URL (and update `GRAPHYN_PLUGIN_ALLOWED_SOURCES` to match).
+
+### API-HOST-GUARD-1 — Tokenless API requires a loopback / IP-literal Host
+
+**Files:** `app/api/main.py` (`host_header_allowed`)  
+**Detail:** DNS-rebinding guard: while `GRAPHYN_API_TOKEN` is unset, requests whose `Host` is not `localhost` / `*.localhost` / an IP literal / `graphyn-api` (compose service) / a name in `GRAPHYN_ALLOWED_HOSTS` get **403**. Accessing an unauthenticated dev API through a LAN hostname (e.g. `http://gpu-box:8001`) breaks.  
+**Workaround:** Set `GRAPHYN_API_TOKEN` (recommended), or list the hostname in `GRAPHYN_ALLOWED_HOSTS` (comma-separated; `*` disables the guard).
+
+### IR-CAPABILITY-DEFAULT-1 — IR `capability_metadata` cannot force a field back to its default
+
+**Files:** `app/core/host/registry_runtime.py` (`resolve_capability`, `_merge_ir_capability`)  
+**Detail:** IR capability fields overlay plugin `NodeMetadata` only when explicitly set **and** different from the `IRCapabilityMetadata` default (a `dump_ir`/`load_ir` round-trip marks every field as set, so default-valued fields are treated as padding). E.g. IR `cacheable: true` cannot re-enable caching for a plugin that declares `cacheable = false`.  
+**Workaround:** Change the plugin's metadata (`plugin.toml` / `NodeMetadata`) instead of the IR.
+
+### AGENT-LOOP-EXTRACTIVE-1 — `agent_loop` is extractive only
+
+**Files:** `PluginPackage/Agents/agent_loop/nodes.py`  
+**Detail:** `agent_loop` calls no LLM and no tools: it scans the context for the goal's terms and returns goal + excerpt (`mode="extractive"`). `model`, `api_secret_name` and `tool_allowlist` are reserved and ignored.  
+**Workaround:** Compose `prompt_template` → `llm_chat` → `tool_router` / `mcp_tool_call` for generative agent loops.
 
 ---
 
@@ -146,7 +212,7 @@ Chose **Option A — trusted workflows only**. UI/docs/metadata no longer call A
 
 ### (resolved 2026-09-07) SEC-003 HTTP egress policy
 
-`http_request` / `http_webhook` share `app/core/egress.py`. Default `GRAPHYN_HTTP_EGRESS_MODE=trusted` (no behaviour change). `restricted` blocks private/link-local/loopback/metadata ranges and optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST`. ASR/LLM keep provider clients (documented; not wired). See `docs/TRUST_MODEL.md`.
+`http_request` / `http_webhook` share `app/core/trust/egress.py`. Default `GRAPHYN_HTTP_EGRESS_MODE=trusted` (no behaviour change). `restricted` blocks private/link-local/loopback/metadata ranges and optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST`. ASR/LLM keep provider clients (documented; not wired). See `docs/TRUST_MODEL.md`.
 
 ### (resolved 2026-09-07) SEC-001 plugin source allowlist prefix matching
 

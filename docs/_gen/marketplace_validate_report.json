@@ -1,9 +1,9 @@
 {
-  "plugins_installed": 154,
+  "plugins_installed": 156,
   "plugin_install_errors": [],
   "plugin_install_error_count": 0,
-  "templates_total": 3014,
-  "validate_ok": 3014,
+  "templates_total": 3032,
+  "validate_ok": 3032,
   "validate_fail": 0,
   "materialize_or_load_fail": 0,
   "ok_pct": 100.0,

@@ -2,7 +2,8 @@
 """
 Bounded Context:  BC1 — Graph Language
 Responsibility:   Fail-closed policy: reject Graph IR node configs that embed
-                  secret-shaped values inline (use Secrets store / *_env instead).
+                  secret-shaped values inline (forbidden key names, plus
+                  recognizable token shapes on any field).
 Owns:             find_inline_secrets(), assert_no_inline_secrets(),
                   InlineSecretError.
 Public Surface:   Same as Owns.
@@ -51,6 +52,19 @@ _ALLOW_EXACT = frozenset(
     }
 )
 _ALLOW_SUFFIX = ("_env", "_secret_name", "_ref")
+# Recognizable credential shapes, independent of the field name. Encoded or
+# split values can still evade this; it closes the rename-the-key bypass for
+# common token formats.
+_VALUE_SECRET_RE = re.compile(
+    r"(?:"
+    r"sk-(?:ant-)?[A-Za-z0-9_\-]{16,}"
+    r"|ghp_[A-Za-z0-9]{20,}"
+    r"|github_pat_[A-Za-z0-9_]{20,}"
+    r"|AKIA[0-9A-Z]{16}"
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r")"
+)
 
 
 class InlineSecretError(ValueError):
@@ -92,6 +106,8 @@ def _walk_config(config: Any, path: str, hits: list[str]) -> None:
             if _is_forbidden_key(key) and _nonempty(val) and not isinstance(
                 val, (dict, list, tuple, MappingProxyType)
             ):
+                hits.append(child)
+            elif isinstance(val, str) and _VALUE_SECRET_RE.search(val):
                 hits.append(child)
             else:
                 _walk_config(val, child, hits)

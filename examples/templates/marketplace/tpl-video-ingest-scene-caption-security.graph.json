@@ -87,10 +87,16 @@
       "dst_port": "input"
     },
     {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "video"
+    },
+    {
       "src_id": "n2",
       "src_port": "output",
       "dst_id": "n3",
-      "dst_port": "input"
+      "dst_port": "scenes"
     },
     {
       "src_id": "n3",
@@ -105,7 +111,7 @@
       "dst_port": "input"
     },
     {
-      "src_id": "n5",
+      "src_id": "n3",
       "src_port": "output",
       "dst_id": "n6",
       "dst_port": "input"

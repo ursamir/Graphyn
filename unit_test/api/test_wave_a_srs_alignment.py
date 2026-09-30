@@ -49,7 +49,7 @@ class TestIdempotency:
             "pipeline": "pipe1",
             "interval_minutes": 15,
         }
-        with patch("app.core.schedules.create_schedule") as create:
+        with patch("app.core.pipelines.schedules.create_schedule") as create:
             create.return_value = {"id": "sched-1", **body, "enabled": True}
             headers = {"Idempotency-Key": "wave-a-key-1", "X-Actor": "tester"}
             r1 = api_client.post("/api/v1/system/schedules", json=body, headers=headers)
@@ -64,7 +64,7 @@ class TestIdempotency:
         from app.api import idempotency as idem
 
         idem._MEMORY.clear()
-        with patch("app.core.schedules.create_schedule") as create:
+        with patch("app.core.pipelines.schedules.create_schedule") as create:
             create.return_value = {"id": "sched-2", "name": "a"}
             headers = {"Idempotency-Key": "wave-a-key-2", "X-Actor": "tester"}
             api_client.post(
@@ -138,10 +138,10 @@ class TestRunStateMachine:
 
     def test_run_manager_starts_pending(self, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
-        from app.core.run_journal import RunManager
+        from app.core.runs.run_journal import RunManager
 
         # Force re-read of project dir
-        import app.core.run_journal as rj
+        import app.core.runs.run_journal as rj
 
         mgr = RunManager(base_dir=str(Path(tmp_workspace) / "runs"))
         meta = json.loads(Path(mgr.base_path, "meta.json").read_text())
@@ -246,8 +246,8 @@ class TestValidateSchema:
         with patch("app.api.routers.pipelines._is_ir_payload", return_value=True), \
              patch("app.core.ir.loader.load_ir") as load_ir, \
              patch("app.core.ir.secret_policy.assert_no_inline_secrets"), \
-             patch("app.core.workspace_paths.apply_output_rewire", side_effect=lambda g: g), \
-             patch("app.core.validation.validate_graph_ir_result", return_value=result):
+             patch("app.core.paths.workspace_paths.apply_output_rewire", side_effect=lambda g: g), \
+             patch("app.core.execution.validation.validate_graph_ir_result", return_value=result):
             load_ir.return_value = MagicMock(nodes=[], edges=[])
             resp = api_client.post(
                 "/api/v1/pipelines/validate",

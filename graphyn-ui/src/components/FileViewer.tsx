@@ -14,8 +14,13 @@ import {
 import { detectFileKind, formatBytes, type FileKind } from '../lib/fileKind'
 import { CopyableMono } from './ui'
 import clsx from 'clsx'
+import { useAppStore } from '../store/appStore'
 
 const TEXT_MAX_BYTES = 3 * 1024 * 1024
+
+function tooLargeMessage(bytes: number): string {
+  return `File is ${(bytes / (1024 * 1024)).toFixed(1)} MB — download to open (preview capped at 3 MB).`
+}
 
 type FileViewerProps = {
   path: string
@@ -72,6 +77,7 @@ function JsonTree({ value, path = '$', depth = 0 }: { value: unknown; path?: str
 }
 
 export function FileViewer({ path, name, size, className, source = 'outputs' }: FileViewerProps) {
+  const pushToast = useAppStore((s) => s.pushToast)
   const kind: FileKind = detectFileKind(name || path)
   const endpoint = source === 'inputs' ? '/data/inputs/file' : '/outputs/file'
   const fetchBlobUrl = source === 'inputs' ? fetchInputBlobUrl : fetchOutputBlobUrl
@@ -85,6 +91,7 @@ export function FileViewer({ path, name, size, className, source = 'outputs' }: 
 
   React.useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
     let createdUrl: string | null = null
     setError(null)
     setBlobUrl(null)
@@ -106,14 +113,28 @@ export function FileViewer({ path, name, size, className, source = 'outputs' }: 
           return
         }
         if (kind === 'json' || kind === 'text') {
-          const res = await apiFetch(endpoint, { query: { path } })
+          // Check the cap BEFORE downloading: listing size first, then
+          // Content-Length, then the bytes actually received.
+          if (size != null && size > TEXT_MAX_BYTES) {
+            setError(tooLargeMessage(size))
+            return
+          }
+          const res = await apiFetch(endpoint, { query: { path }, signal: controller.signal })
+          if (cancelled) return
           if (!res.ok) {
             const body = (await res.json().catch(() => ({}))) as { detail?: string }
             throw new Error(body.detail || `HTTP ${res.status}`)
           }
+          const declared = Number(res.headers.get('Content-Length'))
+          if (Number.isFinite(declared) && declared > TEXT_MAX_BYTES) {
+            void res.body?.cancel().catch(() => {})
+            setError(tooLargeMessage(declared))
+            return
+          }
           const buf = await res.arrayBuffer()
+          if (cancelled) return
           if (buf.byteLength > TEXT_MAX_BYTES) {
-            setError(`File is ${(buf.byteLength / (1024 * 1024)).toFixed(1)} MB — download to open (preview capped at 3 MB).`)
+            setError(tooLargeMessage(buf.byteLength))
             return
           }
           const raw = new TextDecoder().decode(buf)
@@ -150,12 +171,15 @@ export function FileViewer({ path, name, size, className, source = 'outputs' }: 
 
     return () => {
       cancelled = true
+      controller.abort()
       if (createdUrl) URL.revokeObjectURL(createdUrl)
     }
-  }, [path, kind, endpoint, fetchBlobUrl])
+  }, [path, kind, endpoint, fetchBlobUrl, size])
 
   const download = () => {
-    void downloadFile(path, label)
+    downloadFile(path, label).catch((err: unknown) => {
+      pushToast(`Download failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
+    })
   }
 
   return (

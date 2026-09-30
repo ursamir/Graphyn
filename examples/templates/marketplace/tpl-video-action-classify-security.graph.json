@@ -62,7 +62,7 @@
       "src_id": "n0",
       "src_port": "output",
       "dst_id": "n1",
-      "dst_port": "input"
+      "dst_port": "video"
     },
     {
       "src_id": "n1",
@@ -74,7 +74,7 @@
       "src_id": "n2",
       "src_port": "output",
       "dst_id": "n3",
-      "dst_port": "input"
+      "dst_port": "model_artifact"
     },
     {
       "src_id": "n3",

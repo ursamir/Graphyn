@@ -4,15 +4,20 @@ Bounded Context:  BC5 — Execution Runtime
 Responsibility:   DistributedRuntimeBackend — wave scheduler that runs local
                   nodes via NodeExecutor and remote nodes via the job queue
                   with artifact URI refs (no full-graph local rematerialize).
+                  Like the local orchestrator it scopes outputs to the run and
+                  keys graph_hash / node seeds / cache keys off the logical
+                  (pre-scoping) graph.
 Owns:             DistributedBackend, IR wave helpers, loopback worker helpers.
 Public Surface:   DistributedBackend, run_loopback_worker_once,
                   start_loopback_worker_thread, compute_ir_waves.
 Must NOT:         Import from app.domain or app.api at module level.
 Dependencies:     runtime_backend, distributed.{registry,queue,placement,
-                  models,transfer}, ir.models, planner helpers, node_executor,
+                  models,transfer}, ir.models, planner helpers (derive_node_seed),
+                  orchestrator (logical_graph_hash, scope_graph_to_run), node_executor,
                   registry_runtime, stdlib.
-Reason To Change: Parallel within-wave execution, conditional edges, or
-                  cancel/lease reclaim.
+Reason To Change: Parallel within-wave execution, cache/pause policy,
+                  cancel/lease reclaim, placement pinning, or run-end blob
+                  cleanup / output integrity verification.
 """
 from __future__ import annotations
 
@@ -24,11 +29,11 @@ import uuid
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
-from app.core.runtime_backend import LocalPythonBackend, RuntimeBackend
+from app.core.execution.runtime_backend import LocalPythonBackend, RuntimeBackend
 
 if TYPE_CHECKING:
     from app.core.ir.models import GraphIR
-    from app.core.run_journal import RunManager
+    from app.core.runs.run_journal import RunManager
 
 log = logging.getLogger(__name__)
 
@@ -91,27 +96,257 @@ def compute_ir_waves(graph: "GraphIR") -> list[list[str]]:
 def _assemble_inputs(
     node_id: str,
     *,
-    incoming: dict[str, list[tuple[str, str, str]]],
+    incoming: dict[str, list[tuple[str, str, str, str | None]]],
     node_outputs: dict[str, dict[str, Any]],
     input_overrides: dict | None,
 ) -> dict[str, Any]:
-    """Wire upstream outputs → inputs for *node_id* (unconditional edges).
+    """Wire upstream outputs → inputs for *node_id*.
 
-    Conditional edges are ignored for P1 (documented in DISTRIBUTED_EXECUTION.md);
-    only ``condition is None`` / absent edges are supported here. Overrides win.
+    Edges with a condition are evaluated against the source outputs
+    (same helper as the local orchestrator). A false condition leaves the
+    destination port unwired. Overrides win.
     """
+    from app.core.execution.conditions import ConditionEvaluationError, evaluate_condition
+
     inputs: dict[str, Any] = {}
     if input_overrides and node_id in input_overrides:
         for port, value in (input_overrides[node_id] or {}).items():
             inputs[port] = value
 
-    for src_id, src_port, dst_port in incoming.get(node_id, []):
+    for src_id, src_port, dst_port, condition in incoming.get(node_id, []):
         if dst_port in inputs:
             continue
         upstream = node_outputs.get(src_id, {})
+        if not isinstance(upstream, dict):
+            upstream = {}
+        if condition:
+            try:
+                if not evaluate_condition(str(condition), upstream):
+                    continue
+            except ConditionEvaluationError as exc:
+                raise ValueError(
+                    f"Conditional edge {src_id}.{src_port}→{node_id}.{dst_port} "
+                    f"failed: {exc}"
+                ) from exc
         if src_port in upstream:
             inputs[dst_port] = upstream[src_port]
     return inputs
+
+
+def _cache_load(
+    *,
+    use_cache: bool,
+    node_type: str,
+    config: dict[str, Any],
+    inputs: dict[str, Any],
+    seed: int,
+) -> tuple[str | None, Any]:
+    """Return ``(cache_key, outputs)``. Outputs is None on miss or when disabled."""
+    if not use_cache:
+        return None, None
+    from app.core.execution.pipeline_cache import PipelineCache
+
+    version = None
+    try:
+        from app.core.host.registry_runtime import get_registry
+
+        version = get_registry().get_metadata(node_type).version
+    except Exception:
+        version = None
+    cache = PipelineCache()
+    key = cache.compute_key(
+        node_type,
+        config,
+        inputs,
+        node_seed=seed,
+        node_version=version,
+    )
+    return key, cache.load(key)
+
+
+def _wait_remote_result(queue: Any, run: Any, job_id: str, *, timeout_s: float) -> Any:
+    """Wait for a remote job, propagating run pause as a claim hold.
+
+    In-flight ``process()`` on a worker is not frozen (same cooperative limit
+    as in-process cancel). New claims for this run are held until resume.
+    Cancel still aborts the job.
+    """
+    import time as _time
+
+    deadline = _time.monotonic() + float(timeout_s)
+    noted = False
+    while True:
+        if getattr(run, "is_cancelled", False):
+            try:
+                queue.cancel(job_id)
+            except Exception:
+                pass
+        if getattr(run, "is_paused", False):
+            queue.set_run_paused(run.run_id, True)
+            if not noted:
+                try:
+                    run._write_meta_field(
+                        "remote_pause",
+                        "claims held while paused; an in-flight node process() "
+                        "finishes unless the run is cancelled",
+                    )
+                except Exception:
+                    pass
+                noted = True
+            run.wait_if_paused()
+            if not getattr(run, "is_paused", False):
+                queue.set_run_paused(run.run_id, False)
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            result = queue.wait_for_result(job_id, timeout_s=0)
+            if result is not None:
+                _ack(queue, job_id)
+            return result
+        result = queue.wait_for_result(job_id, timeout_s=min(0.5, remaining))
+        if result is not None:
+            if not getattr(run, "is_paused", False):
+                queue.set_run_paused(run.run_id, False)
+            _ack(queue, job_id)
+            return result
+
+
+def _ack(queue: Any, job_id: str) -> None:
+    """Mark a result consumed so history trimming may drop it later."""
+    ack = getattr(queue, "ack_result", None)
+    if ack is None:
+        return
+    try:
+        ack(job_id)
+    except Exception as exc:  # noqa: BLE001 — ack is best-effort
+        log.debug("DistributedBackend: ack_result failed for %s: %s", job_id, exc)
+
+
+def _keep_blobs() -> bool:
+    return (os.environ.get("GRAPHYN_DISTRIBUTED_KEEP_BLOBS") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _cleanup_run_blobs(
+    queue: Any,
+    *,
+    run_id: str,
+    job_ids: list[str],
+    input_uploads: dict[str, int | None],
+    root: Any = None,
+) -> None:
+    """Delete this run's transfer blobs once the run is terminal.
+
+    * ``jobs/<job_id>/…`` output blobs are generation-scoped and never shared.
+    * Content-addressed input blobs are deleted only when no other
+      non-terminal job references them and nobody re-put them since this run
+      uploaded them (mtime unchanged). Anything missed is swept by
+      ``cleanup_workspace`` TTL.
+    """
+    if _keep_blobs():
+        return
+    try:
+        from app.core.distributed.transfer import (
+            safe_path,
+            delete_blobs,
+            delete_job_blobs,
+            uri_to_key,
+        )
+
+        active_uris: set[str] = set()
+        refs_fn = getattr(queue, "active_blob_refs", None)
+        if refs_fn is not None:
+            active_uris, _active_jobs = refs_fn(exclude_run_id=run_id)
+        delete_job_blobs(list(job_ids), root=root)
+        doomed: list[str] = []
+        for uri, mtime_ns in input_uploads.items():
+            if uri in active_uris or mtime_ns is None:
+                continue
+            try:
+                path = safe_path(uri_to_key(uri), root)
+                if path.stat().st_mtime_ns != mtime_ns:
+                    continue
+            except (OSError, ValueError):
+                continue
+            doomed.append(uri)
+        delete_blobs(doomed, root=root)
+    except Exception as exc:  # noqa: BLE001 — cleanup never fails the run
+        log.warning("DistributedBackend: blob cleanup for run %s failed: %s", run_id, exc)
+
+
+def _blob_grace_s() -> float:
+    try:
+        return max(
+            0.0,
+            float(os.environ.get("GRAPHYN_DISTRIBUTED_BLOB_GRACE_S", "30") or "30"),
+        )
+    except ValueError:
+        return 30.0
+
+
+def _schedule_run_blob_cleanup(
+    queue: Any,
+    *,
+    run_id: str,
+    job_ids: list[str],
+    input_uploads: dict[str, int | None],
+) -> None:
+    """Run :func:`_cleanup_run_blobs` after ``GRAPHYN_DISTRIBUTED_BLOB_GRACE_S``.
+
+    The short grace keeps a just-finished run's transfer blobs inspectable
+    (debugging, late UI reads). If the process exits first, the
+    ``cleanup_workspace`` TTL sweep removes them.
+    """
+    if _keep_blobs() or (not job_ids and not input_uploads):
+        return
+    try:
+        from app.core.distributed.transfer import blob_root
+
+        root = blob_root()  # pin now: env/project may change before the timer fires
+    except Exception:
+        root = None
+    kwargs = {
+        "run_id": run_id,
+        "job_ids": list(job_ids),
+        "input_uploads": dict(input_uploads),
+        "root": root,
+    }
+    grace = _blob_grace_s()
+    if grace <= 0:
+        _cleanup_run_blobs(queue, **kwargs)
+        return
+    timer = threading.Timer(grace, _cleanup_run_blobs, args=(queue,), kwargs=kwargs)
+    timer.daemon = True
+    timer.name = f"graphyn-blob-cleanup-{run_id}"
+    timer.start()
+
+
+def _blob_mtime_ns(uri: str) -> int | None:
+    try:
+        from app.core.distributed.transfer import safe_path, uri_to_key
+
+        return safe_path(uri_to_key(uri)).stat().st_mtime_ns
+    except (OSError, ValueError):
+        return None
+
+
+def _cache_save(cache_key: str | None, node_type: str, outputs: Any) -> None:
+    if not cache_key:
+        return
+    cacheable = True
+    try:
+        from app.core.host.registry_runtime import get_registry
+
+        cacheable = bool(get_registry().get_metadata(node_type).cacheable)
+    except Exception:
+        cacheable = True
+    if not cacheable:
+        return
+    from app.core.execution.pipeline_cache import PipelineCache
+
+    PipelineCache().save(cache_key, outputs)
 
 
 def _run_local_node(
@@ -125,9 +360,9 @@ def _run_local_node(
     cancel_check: Any | None = None,
 ) -> dict[str, Any]:
     """Execute one node on the control plane via NodeExecutor."""
-    from app.core.node_executor import NodeExecutor
-    from app.core.registry_runtime import get_registry
-    from app.core.write_paths import ensure_node_write_dirs
+    from app.core.execution.node_executor import NodeExecutor
+    from app.core.host.registry_runtime import get_registry
+    from app.core.paths.write_paths import ensure_node_write_dirs
 
     registry = get_registry()
     node_class = registry.get_class(node_type)
@@ -195,7 +430,7 @@ class DistributedBackend(RuntimeBackend):
         from app.core.distributed.placement import placement_needs_remote, resolve_worker
         from app.core.distributed.registry import get_worker_registry
         from app.core.ir.secret_policy import assert_no_inline_secrets
-        from app.core.registry_runtime import get_registry, resolve_capability
+        from app.core.host.registry_runtime import get_registry, resolve_capability
 
         assert_no_inline_secrets(graph)
 
@@ -212,6 +447,9 @@ class DistributedBackend(RuntimeBackend):
 
         placements: dict[str, str | None] = {}
         needs_remote = False
+        # Local copy so each resolved assignment bumps the target's load score
+        # (spreads multi-node resolution instead of hot-spotting one worker).
+        alive = list(alive)
         for node in graph.nodes:
             cap = getattr(node, "capability_metadata", None)
             if node_registry is not None:
@@ -230,6 +468,12 @@ class DistributedBackend(RuntimeBackend):
             placements[node.id] = target
             if target not in (None, "local"):
                 needs_remote = True
+                alive = [
+                    w.model_copy(update={"active_jobs": int(w.active_jobs or 0) + 1})
+                    if w.worker_id == target
+                    else w
+                    for w in alive
+                ]
             elif target is None:
                 if placement_needs_remote(
                     getattr(node, "placement", None), capability=cap
@@ -314,8 +558,8 @@ class DistributedBackend(RuntimeBackend):
         from app.core.distributed.queue import get_job_queue
         from app.core.distributed.transfer import get_port_value, put_port_value
         from app.core.ir.loader import dump_ir
-        from app.core.run_control import deregister_active_run, register_active_run
-        from app.core.run_journal import RunManager
+        from app.core.runs.run_control import deregister_active_run, register_active_run
+        from app.core.runs.run_journal import RunManager
 
         if include_nodes is not None and exclude_nodes is not None:
             raise ValueError("include_nodes and exclude_nodes are mutually exclusive")
@@ -335,33 +579,46 @@ class DistributedBackend(RuntimeBackend):
         if run_manager is None:
             run_manager = RunManager()
         run = run_manager
-        run.save_graph_ir(dump_ir(graph))
+
+        # Logical vs materialized graph (same contract as the local orchestrator):
+        # graph_hash, per-node seeds and cache keys come from the logical
+        # (pre-run-scoping) graph; execution / jobs use the run-scoped configs.
+        from app.core.execution.orchestrator import logical_graph_hash, scope_graph_to_run
+        from app.core.execution.planner import plain_jsonable, derive_node_seed
+
+        logical_hash = logical_graph_hash(graph)
+        logical_configs = {n.id: plain_jsonable(n.config or {}) for n in graph.nodes}
+        graph_seed = int(getattr(getattr(graph, "metadata", None), "seed", 0) or 0)
+        node_seeds = {
+            n.id: derive_node_seed(graph_seed, n.node_type, i, logical_configs[n.id])
+            for i, n in enumerate(graph.nodes)
+        }
+        graph = scope_graph_to_run(graph, run)
+        try:
+            run.save_graph_ir(dump_ir(graph), logical_hash=logical_hash)
+        except TypeError:
+            # Custom run managers without the logical_hash keyword.
+            run.save_graph_ir(dump_ir(graph))
         register_active_run(run)
 
         queue = get_job_queue()
         run_id = run.run_id
-        seed = int(getattr(getattr(graph, "metadata", None), "seed", 0) or 0)
         nodes_by_id = {n.id: n for n in graph.nodes}
         node_stats: list[dict] = []
         start_time = _time.time()
         run._write_meta_field("num_nodes", len(active_nodes))
         terminal_status: str | None = None
 
-        incoming: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+        incoming: dict[str, list[tuple[str, str, str, str | None]]] = defaultdict(list)
         for edge in graph.edges:
-            # P1: skip conditional edges (support unconditional wiring only).
-            if getattr(edge, "condition", None):
-                log.warning(
-                    "DistributedBackend P1 ignores conditional edge %s.%s→%s.%s "
-                    "(condition=%r)",
+            incoming[edge.dst_id].append(
+                (
                     edge.src_id,
                     edge.src_port,
-                    edge.dst_id,
                     edge.dst_port,
-                    edge.condition,
+                    getattr(edge, "condition", None),
                 )
-                continue
-            incoming[edge.dst_id].append((edge.src_id, edge.src_port, edge.dst_port))
+            )
 
         waves = compute_ir_waves(graph)
         node_outputs: dict[str, dict[str, Any]] = {}
@@ -372,6 +629,8 @@ class DistributedBackend(RuntimeBackend):
         execution_order = [nid for wave in waves for nid in wave]
 
         enqueued_job_ids: list[str] = []
+        run_job_ids: list[str] = []
+        input_uploads: dict[str, int | None] = {}
 
         def _cancel_enqueued_jobs() -> None:
             for jid in list(enqueued_job_ids):
@@ -393,7 +652,7 @@ class DistributedBackend(RuntimeBackend):
                 for node_id in wave:
                     if node_id not in active_nodes:
                         passthrough: dict[str, Any] = {}
-                        for src_id, src_port, dst_port in incoming.get(node_id, []):
+                        for src_id, src_port, dst_port, _cond in incoming.get(node_id, []):
                             upstream = node_outputs.get(src_id, {})
                             passthrough[dst_port] = upstream.get(src_port)
                         node_outputs[node_id] = passthrough
@@ -410,14 +669,28 @@ class DistributedBackend(RuntimeBackend):
 
                     if target in (None, "local"):
                         _node_start = _time.time()
-                        outputs = _run_local_node(
-                            node_id=node_id,
+                        cfg = dict(ir_node.config) if ir_node.config else {}
+                        node_seed = node_seeds[node_id]
+                        cache_key, cached = _cache_load(
+                            use_cache=use_cache,
                             node_type=ir_node.node_type,
-                            config=dict(ir_node.config) if ir_node.config else {},
-                            seed=seed,
+                            config=logical_configs[node_id],
                             inputs=inputs,
-                            run_id=run_id,
+                            seed=node_seed,
                         )
+                        if cached is not None:
+                            outputs = cached
+                        else:
+                            outputs = _run_local_node(
+                                node_id=node_id,
+                                node_type=ir_node.node_type,
+                                config=cfg,
+                                seed=node_seed,
+                                inputs=inputs,
+                                run_id=run_id,
+                            )
+                            if use_cache:
+                                _cache_save(cache_key, ir_node.node_type, outputs or {})
                         node_outputs[node_id] = outputs or {}
                         node_workers[node_id] = "local"
                         node_stats.append({
@@ -428,9 +701,31 @@ class DistributedBackend(RuntimeBackend):
                         run._write_meta_field("node_stats", node_stats)
                         continue
 
+                    node_seed = node_seeds[node_id]
+                    cache_key, cached = _cache_load(
+                        use_cache=use_cache,
+                        node_type=ir_node.node_type,
+                        config=logical_configs[node_id],
+                        inputs=inputs,
+                        seed=node_seed,
+                    )
+                    if cached is not None:
+                        node_outputs[node_id] = cached
+                        node_workers[node_id] = "cache"
+                        node_stats.append({
+                            "node_id": node_id,
+                            "node_type": ir_node.node_type,
+                            "duration_s": 0.0,
+                            "cache_hit": True,
+                        })
+                        run._write_meta_field("node_stats", node_stats)
+                        continue
+
                     input_refs: dict[str, str] = {}
                     for port, value in inputs.items():
-                        input_refs[port] = put_port_value(value)
+                        uri = put_port_value(value)
+                        input_refs[port] = uri
+                        input_uploads[uri] = _blob_mtime_ns(uri)
 
                     placement = getattr(ir_node, "placement", None)
                     from app.core.distributed.placement import effective_job_constraints
@@ -438,7 +733,7 @@ class DistributedBackend(RuntimeBackend):
 
                     cap = getattr(ir_node, "capability_metadata", None)
                     try:
-                        from app.core.registry_runtime import get_registry, resolve_capability
+                        from app.core.host.registry_runtime import get_registry, resolve_capability
                         import warnings as _warnings
 
                         with _warnings.catch_warnings():
@@ -448,8 +743,16 @@ class DistributedBackend(RuntimeBackend):
                         pass
                     constraints = effective_job_constraints(placement, capability=cap)
 
+                    # Only an explicit IR ``mode=worker`` pins the job. pool/auto/
+                    # capability placements enqueue constraints only, so any
+                    # eligible worker claims it (no run-start hotspot pin).
                     job_placement = placement
-                    if isinstance(target, str) and target not in ("local", ""):
+                    if (
+                        placement is not None
+                        and getattr(placement, "mode", None) == "worker"
+                        and isinstance(target, str)
+                        and target not in ("local", "")
+                    ):
                         job_placement = _IRPlacement(
                             mode="worker",
                             worker=str(target),
@@ -468,7 +771,7 @@ class DistributedBackend(RuntimeBackend):
                         node_id=node_id,
                         node_type=ir_node.node_type,
                         config=dict(ir_node.config) if ir_node.config else {},
-                        seed=seed,
+                        seed=node_seed,
                         input_refs=input_refs,
                         placement=job_placement,
                         require_gpu=bool(constraints["require_gpu"]),
@@ -480,6 +783,7 @@ class DistributedBackend(RuntimeBackend):
                     _remote_start = _time.time()
                     stored = queue.enqueue(job)
                     enqueued_job_ids.append(stored.job_id)
+                    run_job_ids.append(stored.job_id)
                     log.info(
                         "Enqueued remote job %s for node %s → target %s refs=%s "
                         "require_gpu=%s tags=%s",
@@ -494,7 +798,9 @@ class DistributedBackend(RuntimeBackend):
                     job_timeout = float(
                         stored.timeout_s if stored.timeout_s is not None else default_timeout
                     )
-                    result = queue.wait_for_result(stored.job_id, timeout_s=job_timeout)
+                    result = _wait_remote_result(
+                        queue, run, stored.job_id, timeout_s=job_timeout
+                    )
                     if result is None:
                         raise TimeoutError(
                             f"Timed out waiting for distributed job {stored.job_id} "
@@ -512,8 +818,11 @@ class DistributedBackend(RuntimeBackend):
 
                     outputs = {}
                     if result.output_refs:
+                        digests = dict(getattr(result, "output_sha256", None) or {})
                         for port, uri in result.output_refs.items():
-                            outputs[port] = get_port_value(uri)
+                            outputs[port] = get_port_value(
+                                uri, expected_sha256=digests.get(port)
+                            )
                     else:
                         for ev in result.events or []:
                             if isinstance(ev, dict) and ev.get("type") == "outputs":
@@ -525,6 +834,8 @@ class DistributedBackend(RuntimeBackend):
                             outputs = {}
 
                     node_outputs[node_id] = outputs
+                    if use_cache:
+                        _cache_save(cache_key, ir_node.node_type, outputs)
                     if result.worker_id:
                         node_workers[node_id] = result.worker_id
                     else:
@@ -556,6 +867,12 @@ class DistributedBackend(RuntimeBackend):
             raise
         finally:
             deregister_active_run(run.run_id)
+            _schedule_run_blob_cleanup(
+                queue,
+                run_id=run_id,
+                job_ids=run_job_ids,
+                input_uploads=input_uploads,
+            )
 
         self.last_node_workers = dict(node_workers)
         try:
@@ -603,7 +920,11 @@ def run_loopback_worker_once(
     from app.core.distributed.models import JobResult
     from app.core.distributed.queue import get_job_queue
     from app.core.distributed.registry import get_worker_registry
-    from app.core.distributed.transfer import get_port_value, put_port_value
+    from app.core.distributed.transfer import (
+        get_port_value,
+        job_output_key,
+        put_port_value_with_digest,
+    )
 
     registry = get_worker_registry()
     worker = registry.get(worker_id)
@@ -637,11 +958,23 @@ def run_loopback_worker_once(
         return True
 
     queue.mark_running(job.job_id)
+    while queue.is_run_paused(job.run_id):
+        if queue.is_cancelled(job.job_id):
+            return True
+        try:
+            queue.renew_lease(job.job_id, worker_id=worker_id)
+        except Exception:
+            pass
+        time.sleep(0.25)
     started = time.monotonic()
     error = None
     outputs: dict[str, Any] = {}
     status = "succeeded"
     output_refs: dict[str, str] = {}
+    output_sha256: dict[str, str] = {}
+    # Fencing: always report the generation we *claimed*, never the queue's
+    # current one (a reclaim bumps it and must reject this late complete).
+    gen = int(job.lease_generation or 0)
     try:
         if queue.is_cancelled(job.job_id):
             status = "cancelled"
@@ -669,7 +1002,11 @@ def run_loopback_worker_once(
             )
 
         for port, value in (outputs or {}).items():
-            output_refs[port] = put_port_value(value)
+            uri, digest = put_port_value_with_digest(
+                value, key=job_output_key(job.job_id, gen, port)
+            )
+            output_refs[port] = uri
+            output_sha256[port] = digest
         if queue.is_cancelled(job.job_id):
             status = "cancelled"
             error = "cancelled by control plane"
@@ -692,18 +1029,17 @@ def run_loopback_worker_once(
             return True
 
     try:
-        # Refresh job for current lease_generation (may have been renewed).
-        latest = queue.get(job.job_id) or job
         queue.complete(
             JobResult(
                 job_id=job.job_id,
                 status=status,  # type: ignore[arg-type]
                 output_refs=output_refs if status == "succeeded" else {},
+                output_sha256=output_sha256 if status == "succeeded" else {},
                 events=[],
                 error=error,
                 worker_id=worker_id,
                 duration_s=time.monotonic() - started,
-                lease_generation=int(latest.lease_generation or 0),
+                lease_generation=gen,
             )
         )
     except ValueError:

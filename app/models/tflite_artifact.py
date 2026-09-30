@@ -6,7 +6,7 @@ Responsibility:   Typed data contract for a TFLite model artifact. Output of
 Owns:             TFLiteArtifact Pydantic model — tflite_path, labels,
                   quantisation, file_size_bytes.
 Public Surface:   TFLiteArtifact
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain quantization logic.
 Dependencies:     pydantic (PortDataType base).
 Reason To Change: TFLiteArtifact schema gains new fields, or quantization

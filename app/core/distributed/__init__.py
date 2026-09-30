@@ -8,7 +8,7 @@ Public Surface:   WorkerInfo, NodeJob, JobResult, WorkerRegistry, JobQueue,
                   resolve_worker, DistributedBackend, get_worker_registry,
                   get_job_queue, get_distributed_store.
 Must NOT:         Import from app.domain or app.api.
-Dependencies:     app.core.distributed.*, app.core.runtime_backend.
+Dependencies:     app.core.distributed.*, app.core.execution.runtime_backend.
 Reason To Change: New distributed public symbols or registration policy.
 """
 from __future__ import annotations
@@ -25,19 +25,19 @@ from app.core.distributed.queue import (
     DEFAULT_LEASE_TTL_S,
     JobQueue,
     get_job_queue,
-    _reset_job_queue,
+    reset_job_queue,
 )
 from app.core.distributed.registry import (
     WorkerRegistry,
     get_worker_registry,
-    _reset_worker_registry,
+    reset_worker_registry,
 )
 from app.core.distributed.store import (
     DiskStateStore,
     MemoryStateStore,
     RedisStateStore,
     get_distributed_store,
-    _reset_distributed_store,
+    reset_distributed_store,
 )
 # Backend registration is lazy via get_backend() / _reset_backend_registry()
 # to avoid import-time lock deadlocks with runtime_backend.
@@ -62,7 +62,7 @@ __all__ = [
     "run_loopback_worker_once",
     "start_loopback_worker_thread",
     "worker_eligible_for_job",
-    "_reset_distributed_store",
-    "_reset_job_queue",
-    "_reset_worker_registry",
+    "reset_distributed_store",
+    "reset_job_queue",
+    "reset_worker_registry",
 ]

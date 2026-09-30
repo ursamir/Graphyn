@@ -59,7 +59,7 @@ def demo_timer_source() -> None:
     """Demo 1: TimerSource — fires every 2 seconds, runs for 6 seconds."""
     print(f"\n{_h('Demo 1 — TimerSource (fires every 2s, runs 6s)')}")
 
-    from app.core.events import TimerSource
+    from app.core.execution.events import TimerSource
 
     tick_count = [0]
     done_event = asyncio.Event()
@@ -99,7 +99,7 @@ def demo_file_watcher() -> None:
 
     from app.core.ir.loader import CURRENT_IR_VERSION
     from app.core.ir.models import GraphIR, IREdge, IRMetadata, IRNode
-    from app.core.runtime_backend import get_backend
+    from app.core.execution.runtime_backend import get_backend
     from app.core.logger import PipelineLogger
 
     # Build a simple pipeline: dataset_ingest → audio_conditioner → segmenter → audio_exporter
@@ -138,7 +138,7 @@ def demo_file_watcher() -> None:
     logger = PipelineLogger()
 
     def _run_pipeline():
-        from app.core.run_manager import RunManager
+        from app.core.runs.run_journal import RunManager
         run_mgr = RunManager()
         run_manager_ref[0] = run_mgr
         try:

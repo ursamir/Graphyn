@@ -39,7 +39,7 @@
 | Ops | `/admin/ops` | Health + MCP chip (stale count) |
 | Artifacts / Agent inbox / Secrets / Access | library/agent/admin | Reachable; no rail violations |
 | Workspace Home | `/workspaces/docker_smoke` | Situation cards OK; **"Project pipelines"** / **"Project settings"** labels |
-| Editor | `/workspaces/docker_smoke/editor` | n8n-like canvas, catalog L, inspector R, execution log; catalog 50 categories |
+| Editor | `/workspaces/docker_smoke/editor` | n8n-like canvas, catalog L, inspector R, execution log; catalog pages full `/nodes` registry |
 | Runs / Models / Ship / Datasets | workspace paths | Strip-only; Ship lineage still labeled Project |
 
 ## Dead ends / empty states

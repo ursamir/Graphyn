@@ -9,11 +9,11 @@ Owns:             AudioSampleHandler (ArtifactTypeHandler impl),
                   register_audio_serializer().
 Public Surface:   register_audio_serializer() — called once at startup from
                   each entry point (API, CLI, MCP).
-Must NOT:         Import from app.core.orchestrator, app.core.executor,
-                  app.core.planner, or any other execution-layer module.
+Must NOT:         Import from app.core.execution.orchestrator, app.core.execution.executor,
+                  app.core.execution.planner, or any other execution-layer module.
                   Must not register itself at import time — only when
                   register_audio_serializer() is explicitly called.
-Dependencies:     app.core.artifact_serializer (interface only — no domain
+Dependencies:     app.core.artifacts.artifact_serializer (interface only — no domain
                   knowledge flows back), app.models.audio_sample, soundfile,
                   numpy, json, hashlib, pathlib.
 Reason To Change: AudioSample schema changes, WAV manifest format evolves,
@@ -221,7 +221,7 @@ def register_audio_serializer() -> None:
 
     Idempotent — safe to call multiple times (re-registers the same handler).
     """
-    from app.core.artifact_serializer import get_serializer_registry
+    from app.core.artifacts.artifact_serializer import get_serializer_registry
     registry = get_serializer_registry()
     handler = AudioSampleHandler()
     registry.register("audio_samples", handler)

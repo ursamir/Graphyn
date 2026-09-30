@@ -152,7 +152,8 @@ class RealtimeInferenceNode(Node):
         """Load model and labels once before the first process() call."""
         self._asr_buffer: list = []   # streaming ASR frame buffer — reset on setup
         model_path = Path(self.config.model_path)
-        if not model_path.exists():
+        # Path("") resolves to "." (always exists) — treat empty as missing.
+        if not str(self.config.model_path or "").strip() or not model_path.exists():
             raise FileNotFoundError(
                 f"RealtimeInferenceNode: model not found: {model_path}"
             )

@@ -154,7 +154,11 @@ def test_local_whisper_mocked_model(installed_cls, tmp_path):
     if hasattr(mod, "_WHISPER_MODELS"):
         mod._WHISPER_MODELS.clear()
 
-    with patch("faster_whisper.WhisperModel", return_value=fake_model):
+    # faster-whisper lives in the plugin's isolated venv, not the host venv, so
+    # inject a stub module rather than patching a (possibly) missing import.
+    import sys
+    fake_fw = SimpleNamespace(WhisperModel=MagicMock(return_value=fake_model))
+    with patch.dict(sys.modules, {"faster_whisper": fake_fw}):
         out = node.process({"input": [sample]})["output"]
     assert out.text.strip() == "hello"
     assert out.metadata.get("provider") == "local_whisper"
@@ -167,6 +171,9 @@ def test_openai_compat_groq_key_fallback(installed_cls, tmp_path, monkeypatch):
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    # ASR-BASE-URL-BINDING-1: an env key is only sent to a node base_url that is
+    # bound to it (provider default) or allowlisted — Groq must be allowlisted.
+    monkeypatch.setenv("GRAPHYN_LLM_BASE_URL_ALLOWLIST", "api.groq.com")
     wav = tmp_path / "clip.wav"
     wav.write_bytes(b"RIFF....WAVEfmt ")
     sample = _sample()
@@ -188,3 +195,44 @@ def test_openai_compat_groq_key_fallback(installed_cls, tmp_path, monkeypatch):
     assert out.text == "hi"
     headers = post.call_args.kwargs.get("headers") or {}
     assert headers.get("Authorization") == "Bearer gsk-test"
+
+
+def test_openai_compat_refuses_key_to_unbound_base_url(installed_cls, tmp_path, monkeypatch):
+    """ASR-BASE-URL-BINDING-1: env OPENAI_API_KEY never goes to an arbitrary host."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("GRAPHYN_LLM_BASE_URL_ALLOWLIST", raising=False)
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFF....WAVEfmt ")
+    sample = _sample()
+    sample.path = str(wav)
+    node = installed_cls(
+        config={"provider": "openai_compat", "base_url": "https://evil.example.com/v1"},
+        seed=0,
+    )
+    with patch("httpx.post") as post:
+        with pytest.raises(RuntimeError, match="base_url"):
+            node.process({"input": [sample]})
+    post.assert_not_called()
+
+
+def test_openai_compat_default_base_uses_bound_endpoint(installed_cls, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-ok")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFF....WAVEfmt ")
+    sample = _sample()
+    sample.path = str(wav)
+    node = installed_cls(config={"provider": "openai_compat"}, seed=0)
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"text": "ok", "language": "en", "words": []}
+    with patch("httpx.post", return_value=mock_resp) as post:
+        out = node.process({"input": [sample]})["output"]
+    assert out.text == "ok"
+    assert post.call_args.args[0] == "https://api.openai.com/v1/audio/transcriptions"
+    assert (post.call_args.kwargs.get("headers") or {}).get("Authorization") == "Bearer sk-ok"

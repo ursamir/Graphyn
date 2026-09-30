@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.example_templates import discover_example_graphs, examples_dir, repo_root
+from app.core.templates.example_templates import discover_example_graphs, examples_dir, repo_root
 from app.core.ir.loader import load_ir
 from app.core.nodes.compat import CompatibilityChecker
 from app.core.plugins.isolated_schema import (
@@ -20,7 +20,7 @@ from app.core.plugins.isolated_schema import (
     config_class_for_spec,
     specs_from_source,
 )
-from app.core.registry_runtime import get_registry
+from app.core.host.registry_runtime import get_registry
 
 
 @lru_cache(maxsize=1)

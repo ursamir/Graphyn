@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["vision", "vision", "stub"]
+tags = ["vision", "vision"]
 
 dependencies = [
     "numpy>=1.24",
@@ -17,6 +17,6 @@ runtime = "inprocess"
 node_types = ["vision_train_val_split"]
 
 [config_schema.vision_train_val_split]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
 split_ratios = { type = "object", title = "Split ratios", default = {}, description = "Split ratios." }
 seed = { type = "integer", title = "Seed", default = 42, description = "Seed." }

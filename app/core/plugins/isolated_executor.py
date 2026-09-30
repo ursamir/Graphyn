@@ -123,17 +123,49 @@ _ALLOWED_NUMPY_MULTIARRAY = frozenset(
 )
 
 
+# Private (``_``-prefixed) names that legitimate pickles need. Everything
+# else starting with ``_`` is refused (``numpy._pytesttester`` etc.).
+_ALLOWED_PRIVATE_NAMES = _ALLOWED_COPYREG | frozenset(
+    {"_reconstruct", "_frombuffer", "_mareconstruct"}
+)
+# numpy callables (non-class) allowed from numpy.* modules.
+_ALLOWED_NUMPY_CALLABLES = _ALLOWED_NUMPY_MULTIARRAY | frozenset({"_frombuffer", "_mareconstruct"})
+# numpy classes with filesystem / URL side effects on construction.
+_DENIED_NUMPY_NAMES = frozenset({"memmap", "DataSource", "load", "save", "savez", "fromfile", "tofile"})
+
+
 class RestrictedUnpickler(pickle.Unpickler):
-    """Unpickler that refuses globals outside a known port/artifact set."""
+    """Unpickler that refuses globals outside a known port/artifact set.
+
+    ``name`` must be a plain identifier: protocol-4 ``STACK_GLOBAL`` accepts
+    dotted names and ``pickle.Unpickler.find_class`` would walk them
+    attribute-by-attribute (``numpy`` + ``_pytesttester.os.getpid`` reaches
+    ``os.getpid``), so any ``.`` is refused outright.
+    """
 
     def find_class(self, module: str, name: str) -> Any:
+        if not isinstance(name, str) or not name or "." in name:
+            raise pickle.UnpicklingError(
+                f"Refusing dotted/invalid global name {module}.{name!r} from isolated worker output"
+            )
         if module.startswith("app.models."):
-            return super().find_class(module, name)
+            if name.startswith("_"):
+                raise pickle.UnpicklingError(f"Refusing private name {module}.{name}")
+            obj = super().find_class(module, name)
+            owner = str(getattr(obj, "__module__", "") or "")
+            if not owner.startswith("app.models.") or not callable(obj):
+                # Re-exported foreign objects (``from os import system``) fail closed.
+                raise pickle.UnpicklingError(
+                    f"Refusing {module}.{name}: not defined under app.models ({owner or '?'})"
+                )
+            return obj
         if module not in _ALLOWED_PICKLE_MODULES:
             raise pickle.UnpicklingError(
                 f"Refusing to unpickle {module}.{name} from isolated worker output "
                 "(module not in the host allowlist)"
             )
+        if name.startswith("_") and name not in _ALLOWED_PRIVATE_NAMES:
+            raise pickle.UnpicklingError(f"Refusing private name {module}.{name}")
         if module == "builtins" and name not in _ALLOWED_BUILTINS:
             raise pickle.UnpicklingError(f"Refusing builtins.{name}")
         if module in {"collections", "collections.abc"} and name not in _ALLOWED_COLLECTIONS:
@@ -147,7 +179,19 @@ class RestrictedUnpickler(pickle.Unpickler):
             raise pickle.UnpicklingError(f"Refusing pathlib.{name}")
         if module.endswith("multiarray") and name not in _ALLOWED_NUMPY_MULTIARRAY:
             raise pickle.UnpicklingError(f"Refusing {module}.{name}")
-        return super().find_class(module, name)
+        if module == "numpy" or module.startswith("numpy."):
+            if name in _DENIED_NUMPY_NAMES:
+                raise pickle.UnpicklingError(f"Refusing {module}.{name}")
+            obj = super().find_class(module, name)
+            if not isinstance(obj, type) and name not in _ALLOWED_NUMPY_CALLABLES:
+                raise pickle.UnpicklingError(
+                    f"Refusing {module}.{name}: only numpy classes / reconstruct helpers"
+                )
+            return obj
+        obj = super().find_class(module, name)
+        if isinstance(obj, type(pickle)):
+            raise pickle.UnpicklingError(f"Refusing module object {module}.{name}")
+        return obj
 
 
 def _is_dynamic_plugin_module(module: str) -> bool:

@@ -7,7 +7,7 @@ Responsibility:   Typed data contract for an ML-ready dataset with train/val/tes
 Owns:             DatasetArtifact Pydantic model — split arrays, labels,
                   input_shape, n_classes, lineage fields.
 Public Surface:   DatasetArtifact
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain dataset-building logic.
 Dependencies:     pydantic (PortDataType base), numpy, typing.
 Reason To Change: DatasetArtifact schema gains new fields, or split/lineage

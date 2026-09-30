@@ -37,14 +37,15 @@ def test_expression_true(installed_cls):
     node = installed_cls(config={"expression": "output['score'] > 5"}, seed=0)
     out = node.process({"input": {"score": 9}})
     assert out["true"]["score"] == 9
-    assert out["false"] is None
+    # Inactive branch is omitted (unproduced), not emitted as None (P1-2).
+    assert "false" not in out
     assert out["output"].matched is True
 
 
 def test_expression_false(installed_cls):
     node = installed_cls(config={"expression": "output['score'] > 5"}, seed=0)
     out = node.process({"input": {"score": 1}})
-    assert out["true"] is None
+    assert "true" not in out
     assert out["false"]["score"] == 1
 
 

@@ -47,7 +47,7 @@
       "src_id": "n0",
       "src_port": "output",
       "dst_id": "n1",
-      "dst_port": "input"
+      "dst_port": "model"
     },
     {
       "src_id": "n1",
@@ -57,6 +57,10 @@
     }
   ],
   "parameters": {
-    "resume_checkpoint": "workspace/artifacts/yolo/last.pt"
+    "resume_checkpoint": {
+      "type": "string",
+      "default": "workspace/artifacts/yolo/last.pt",
+      "description": ""
+    }
   }
 }

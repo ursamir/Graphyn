@@ -1,11 +1,11 @@
-"""Unit tests for app/core/artifact_store.py — Req 20 criteria 1–8."""
+"""Unit tests for app/core/artifacts/artifact_store.py — Req 20 criteria 1–8."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from app.core.artifact_store import (
+from app.core.artifacts.artifact_store import (
     ArtifactNotFoundError,
     ArtifactRecord,
     ArtifactStore,

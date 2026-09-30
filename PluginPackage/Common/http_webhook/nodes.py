@@ -6,11 +6,10 @@ import hmac
 import importlib
 import json
 import logging
-import os
 from typing import Any, ClassVar, Literal
 from pydantic import Field
 
-from app.core.egress import validate_http_egress_url
+from app.core.trust.egress import validate_http_egress_url
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -101,11 +100,9 @@ class HttpWebhookNode(Node):
         hmac_env = (getattr(self.config, "hmac_env", "") or "").strip()
         secret_text = self.config.hmac_secret or ""
         if hmac_env:
-            try:
-                from app.core.secrets import resolve_secret
-                secret_text = resolve_secret(hmac_env) or secret_text
-            except Exception:
-                secret_text = os.environ.get(hmac_env, "").strip() or secret_text
+            # Guarded env fallback (no GRAPHYN_* internals / non-secret env vars).
+            from app.core.trust.secrets import resolve_secret
+            secret_text = resolve_secret(hmac_env) or secret_text
         secret = secret_text.encode("utf-8") if secret_text else b""
         if secret:
             digest = hmac.new(secret, raw, hashlib.sha256).hexdigest()

@@ -1,9 +1,13 @@
 """CitationAttachNode — Attach citations to RagAnswer
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import hashlib
+import json
+import re
 
 import importlib
 import logging
@@ -31,6 +35,96 @@ RetrievalHit = _types.RetrievalHit
 log = logging.getLogger(__name__)
 
 
+def _num_or(value, default):
+    """Config numeric with a real default: only None falls back (0 stays 0)."""
+    return default if value is None or value == "" else value
+
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _text(obj: Any) -> str:
+    if obj is None:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, list):
+        return "\n".join(_text(x) for x in obj)
+    data = _dump(obj)
+    if isinstance(data, dict):
+        for key in ("text", "query", "content", "answer", "user", "path", "value", "final"):
+            if data.get(key):
+                return str(data[key])
+        return json.dumps(data, default=str)
+    return str(obj)
+
+def _as_list(obj: Any) -> list:
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, tuple):
+        return list(obj)
+    return [obj]
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+def _chunk_id(text: str, index: int) -> str:
+    digest = hashlib.sha1(f"{index}:{text}".encode()).hexdigest()[:12]
+    return f"c{index}-{digest}"
+
+def _docs_from_corpus(corpus: Any) -> list[dict[str, Any]]:
+    docs = []
+    for i, item in enumerate(_as_list(corpus)):
+        data = _dump(item)
+        if isinstance(data, str):
+            data = {"text": data}
+        if not isinstance(data, dict):
+            data = {"text": _text(item)}
+        data.setdefault("text", _text(item))
+        data.setdefault("chunk_id", data.get("chunk_id") or _chunk_id(str(data["text"]), i))
+        docs.append(data)
+    return docs
+
+def _citation_attach(config, inputs, types):
+    answer = _text(inputs.get("answer"))
+    hits = _docs_from_corpus(inputs.get("hits"))
+    style = str(_cfg(config, "style", "bracket") or "bracket")
+    min_overlap = int(_num_or(_cfg(config, "min_overlap", 1), 1))
+    answer_toks = set(_tokens(answer))
+    citations = []
+    for doc in hits:
+        overlap = len(answer_toks & set(_tokens(doc["text"])))
+        if overlap >= min_overlap:
+            mark = f"[{doc['chunk_id']}]" if style == "bracket" else doc["chunk_id"]
+            citations.append({"chunk_id": doc["chunk_id"], "mark": mark, "overlap": overlap})
+    cited = answer
+    if citations and style == "bracket":
+        cited = answer + " " + " ".join(c["mark"] for c in citations)
+    return _T(types, "RagAnswer", answer=cited, citations=citations, metadata={"style": style})
+
+
+
 class CitationAttachNode(Node):
     """Attach citations to RagAnswer"""
 
@@ -42,7 +136,7 @@ class CitationAttachNode(Node):
         description="Attach citations to RagAnswer",
         category="Processing",
         version="0.1.0",
-        tags=["rag", "stub"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -60,7 +154,7 @@ class CitationAttachNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         style: str = Field(default='numeric', title="Style", description="Style.")
         min_overlap: float = Field(default=0.2, title="Min overlap", description="Min overlap.")
 
@@ -71,10 +165,17 @@ class CitationAttachNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'rag' / 'citation_attach'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = RagAnswer()
             return {"output": result}
@@ -84,23 +185,8 @@ class CitationAttachNode(Node):
         except ImportError as exc:
             raise ImportError(f"citation_attach: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'rag' / 'citation_attach'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": RagAnswer()}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _citation_attach(self.config, inputs, _types)}

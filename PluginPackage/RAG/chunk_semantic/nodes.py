@@ -1,7 +1,7 @@
 """ChunkSemanticNode — Semantic breakpoint chunker
 
-Default config.stub=True returns empty chunks.
-When stub=False, embeds sentences with sentence-transformers (Wave-1 RAG venv)
+Default config.stub=False chunks the input.
+When stub=False, embeds sentences with sentence-transformers
 and splits on cosine-distance breakpoints.
 """
 from __future__ import annotations
@@ -18,6 +18,16 @@ from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
 
+
+def _force_cpu() -> None:
+    """Stay on CPU when another process owns the GPU. Default on."""
+    import os
+
+    flag = os.environ.get("GRAPHYN_ML_FORCE_CPU", "1").strip().lower()
+    if flag in ("0", "false", "no"):
+        return
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
 try:
     _pkg = __name__.rsplit(".", 1)[0] if "." in __name__ else __name__
     _types = importlib.import_module(f"{_pkg}.types")
@@ -31,6 +41,11 @@ Chunk = _types.Chunk
 RawDocument = _types.RawDocument
 
 log = logging.getLogger(__name__)
+
+
+def _num_or(value, default):
+    """Config numeric with a real default: only None falls back (0 stays 0)."""
+    return default if value is None or value == "" else value
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
@@ -65,7 +80,7 @@ class ChunkSemanticNode(Node):
         description="Semantic breakpoint chunker",
         category="Processing",
         version="0.2.0",
-        tags=["rag", "wave1"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -82,7 +97,7 @@ class ChunkSemanticNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         embedding_model: str = Field(default='sentence-transformers/all-MiniLM-L6-v2', title="Embedding model", description="Embedding model.")
         breakpoint_percentile: float = Field(default=95.0, title="Breakpoint percentile", description="Breakpoint percentile.")
 
@@ -92,26 +107,25 @@ class ChunkSemanticNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         if stub:
             return {"output": []}
         return self._process_real(inputs)
 
     def _process_real(self, inputs: dict):
         try:
-            from app.core.plugins.wave1_runtime import force_cpu_torch_env
-
-            force_cpu_torch_env()
+            _force_cpu()
             from sentence_transformers import SentenceTransformer  # type: ignore
             import numpy as np  # type: ignore
         except ImportError as exc:
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise ImportError(install_hint("rag", ["sentence-transformers>=2.2", "numpy"])) from exc
+            raise ImportError(
+                "sentence-transformers is not installed in this plugin venv. "
+                "Use Plugins → Install optional (venv)."
+            ) from exc
 
         docs = _as_list(inputs.get("input") or inputs.get("documents"))
         model_name = str(getattr(self.config, "embedding_model", None) or "sentence-transformers/all-MiniLM-L6-v2")
-        pct = float(getattr(self.config, "breakpoint_percentile", 95.0) or 95.0)
+        pct = float(_num_or(getattr(self.config, "breakpoint_percentile", 95.0), 95.0))
         model = SentenceTransformer(model_name)
         out: list = []
         chunk_i = 0

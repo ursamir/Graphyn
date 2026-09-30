@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["vision", "yolo", "wave1"]
+tags = ["vision", "yolo"]
 
 dependencies = [
     "numpy>=1.24",
@@ -22,11 +22,11 @@ runtime = "isolated"
 node_types = ["yolo_train"]
 
 [config_schema.yolo_train]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
 task = { type = "string", title = "Task", default = "detect", description = "Task." }
 model = { type = "string", title = "Model", default = "yolov8n.pt", description = "Model." }
 epochs = { type = "integer", title = "Epochs", default = 100, description = "Epochs." }
 imgsz = { type = "integer", title = "Imgsz", default = 640, description = "Imgsz." }
 batch = { type = "integer", title = "Batch", default = 16, description = "Batch." }
-device = { type = "string", title = "Device", default = "auto", description = "Device." }
+device = { type = "string", title = "Device", default = "auto", enum = ["auto", "cpu", "cuda", "mps"], description = "auto lets ultralytics pick (CPU when GRAPHYN_ML_FORCE_CPU is on)." }
 project = { type = "string", title = "Project", default = "workspace/artifacts/models/yolo", description = "Project." }

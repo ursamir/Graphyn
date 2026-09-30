@@ -102,16 +102,11 @@ class SpeakerSeparatorNode(Node):
 
     def _resolve_hf_token(self) -> str:
         """Resolve HF token from auth_token_env / secrets, falling back to deprecated auth_token."""
-        import os
         env_name = (getattr(self.config, "auth_token_env", None) or "HUGGINGFACE_TOKEN").strip() or "HUGGINGFACE_TOKEN"
         token = ""
-        try:
-            from app.core.secrets import resolve_secret
-            token = (resolve_secret(env_name) or "").strip()
-        except Exception:
-            token = ""
-        if not token:
-            token = os.environ.get(env_name, "").strip()
+        # Guarded: auth_token_env is graph-author controlled.
+        from app.core.trust.secrets import resolve_secret
+        token = (resolve_secret(env_name) or "").strip()
         if not token:
             token = (self.config.auth_token or "").strip()
         return token
@@ -217,7 +212,6 @@ class SpeakerSeparatorNode(Node):
 
     def _separate_pyannote(self, sample: AudioSample) -> list[AudioSample]:
         """Diarize using pyannote.audio, then slice audio per speaker segment."""
-        import os
         import torch  # type: ignore
         from pyannote.audio import Pipeline as PyannotePipeline  # type: ignore
 

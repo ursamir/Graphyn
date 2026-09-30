@@ -33,12 +33,12 @@ class TestValidatePipeline:
         with (
             patch("app.core.ir.loader.load_ir", return_value=mock_graph),
             patch(
-                "app.core.workspace_paths.apply_output_rewire",
+                "app.core.paths.workspace_paths.apply_output_rewire",
                 return_value=mock_graph,
             ),
             patch("app.core.ir.secret_policy.assert_no_inline_secrets"),
             patch(
-                "app.core.validation.validate_graph_ir_result",
+                "app.core.execution.validation.validate_graph_ir_result",
                 return_value={
                     "valid": True,
                     "node_count": 0,
@@ -115,7 +115,7 @@ class TestRunStream:
         with (
             patch("app.api.routers.pipelines._build_graph_from_payload", return_value=(mock_graph, None)),
             patch("app.api.routers.pipelines._stamp_graph_project", return_value=(mock_graph, {})),
-            patch("app.core.runtime_backend.get_backend") as gb,
+            patch("app.core.execution.runtime_backend.get_backend") as gb,
         ):
             backend = MagicMock()
             backend.execute.side_effect = _fake_execute
@@ -135,14 +135,14 @@ class TestRunStream:
 class TestTemplates:
     def test_list_templates_returns_list(self, api_client, tmp_path, monkeypatch):
         """GET /api/v1/pipelines/templates returns a list."""
-        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+        with patch("app.api.routers.pipeline_templates._templates_dir", return_value=tmp_path):
             resp = api_client.get("/api/v1/pipelines/templates")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
     def test_create_template(self, api_client, tmp_path):
         """POST /api/v1/pipelines/templates creates a template."""
-        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+        with patch("app.api.routers.pipeline_templates._templates_dir", return_value=tmp_path):
             resp = api_client.post(
                 "/api/v1/pipelines/templates",
                 json={"name": "my-template", "yaml": json.dumps(_VALID_IR)},
@@ -156,7 +156,7 @@ class TestTemplates:
         """GET /api/v1/pipelines/templates/{name} returns the template."""
         # Create the template file first
         (tmp_path / "my-template.graph.json").write_text(json.dumps(_VALID_IR))
-        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+        with patch("app.api.routers.pipeline_templates._templates_dir", return_value=tmp_path):
             resp = api_client.get("/api/v1/pipelines/templates/my-template")
         assert resp.status_code == 200
         body = resp.json()
@@ -164,14 +164,14 @@ class TestTemplates:
 
     def test_get_nonexistent_template_returns_404(self, api_client, tmp_path):
         """GET /api/v1/pipelines/templates/{name} returns 404 for unknown template."""
-        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+        with patch("app.api.routers.pipeline_templates._templates_dir", return_value=tmp_path):
             resp = api_client.get("/api/v1/pipelines/templates/nonexistent")
         assert resp.status_code == 404
 
     def test_list_versions_legacy_flat_returns_200(self, api_client, tmp_path):
         """Legacy flat templates must not 404 on /versions."""
         (tmp_path / "audio-quality-check.graph.json").write_text(json.dumps(_VALID_IR))
-        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+        with patch("app.api.routers.pipeline_templates._templates_dir", return_value=tmp_path):
             resp = api_client.get("/api/v1/pipelines/templates/audio-quality-check/versions")
         assert resp.status_code == 200
         body = resp.json()
@@ -181,7 +181,7 @@ class TestTemplates:
         assert body["latest_version"] is None
 
     def test_list_versions_missing_returns_404(self, api_client, tmp_path):
-        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+        with patch("app.api.routers.pipeline_templates._templates_dir", return_value=tmp_path):
             resp = api_client.get("/api/v1/pipelines/templates/missing/versions")
         assert resp.status_code == 404
 
@@ -195,7 +195,7 @@ class TestTemplates:
 
     def test_sync_examples_writes_templates(self, api_client, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "app.core.example_templates.templates_dir",
+            "app.core.templates.example_templates.templates_dir",
             lambda: tmp_path,
         )
         resp = api_client.post("/api/v1/pipelines/templates/sync-examples")
@@ -207,7 +207,7 @@ class TestTemplates:
     def test_delete_template(self, api_client, tmp_path):
         """DELETE /api/v1/pipelines/templates/{name} deletes the template."""
         (tmp_path / "to-delete.graph.json").write_text(json.dumps(_VALID_IR))
-        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+        with patch("app.api.routers.pipeline_templates._templates_dir", return_value=tmp_path):
             resp = api_client.delete("/api/v1/pipelines/templates/to-delete")
         assert resp.status_code == 200
         body = resp.json()
@@ -215,7 +215,7 @@ class TestTemplates:
 
     def test_delete_nonexistent_template_returns_404(self, api_client, tmp_path):
         """DELETE /api/v1/pipelines/templates/{name} returns 404 for unknown template."""
-        with patch("app.api.routers.pipelines._templates_dir", return_value=tmp_path):
+        with patch("app.api.routers.pipeline_templates._templates_dir", return_value=tmp_path):
             resp = api_client.delete("/api/v1/pipelines/templates/nonexistent")
         assert resp.status_code == 404
 

@@ -1,9 +1,9 @@
-"""Unit tests for app/core/registry_runtime.py — Req 14 criterion 5."""
+"""Unit tests for app/core/host/registry_runtime.py — Req 14 criterion 5."""
 from __future__ import annotations
 
 import pytest
 
-from app.core.registry_runtime import get_registry
+from app.core.host.registry_runtime import get_registry
 
 
 # ── get_registry ──────────────────────────────────────────────────────────────
@@ -15,6 +15,7 @@ def test_get_registry_returns_node_registry():
     assert isinstance(reg, NodeRegistry)
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_is_populated():
     """get_registry() returns a registry with at least one node type registered."""
     reg = get_registry()
@@ -22,36 +23,42 @@ def test_get_registry_is_populated():
     assert len(nodes) > 0
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_contains_audio_conditioner():
     """get_registry() contains the 'audio_conditioner' plugin node."""
     reg = get_registry()
     assert "audio_conditioner" in reg
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_contains_segmenter():
     """get_registry() contains the 'segmenter' plugin node."""
     reg = get_registry()
     assert "segmenter" in reg
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_contains_feature_frontend():
     """get_registry() contains the 'feature_frontend' plugin node."""
     reg = get_registry()
     assert "feature_frontend" in reg
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_contains_dataset_builder():
     """get_registry() contains the 'dataset_builder' plugin node."""
     reg = get_registry()
     assert "dataset_builder" in reg
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_contains_augmentation_pipeline():
     """get_registry() contains the 'augmentation_pipeline' plugin node."""
     reg = get_registry()
     assert "augmentation_pipeline" in reg
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_contains_audio_quality_gate():
     """get_registry() contains the 'audio_quality_gate' plugin node."""
     reg = get_registry()
@@ -67,6 +74,7 @@ def test_get_registry_node_metadata_has_required_fields():
         assert meta.category, f"category is empty for {meta.node_type}"
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_get_class_returns_node_subclass():
     """get_class() returns a Node subclass for a registered node type."""
     from app.core.nodes.base import Node
@@ -82,6 +90,7 @@ def test_get_registry_returns_same_singleton():
     assert reg1 is reg2
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_contains_at_least_18_audio_plugin_nodes():
     """Req 7.19 — registry contains at least 18 Audio plugin node types."""
     reg = get_registry()
@@ -97,6 +106,7 @@ def test_get_registry_contains_at_least_18_audio_plugin_nodes():
     assert not missing, f"Missing audio plugin node types: {missing}"
 
 
+@pytest.mark.requires_plugins
 def test_get_registry_contains_common_plugin_nodes():
     """Registry contains the expected Common plugin node types."""
     reg = get_registry()

@@ -55,6 +55,7 @@ Reason To Change: New environment variables are added, directory layout
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -358,6 +359,10 @@ def _normalize_plugin_source_scheme(source: str) -> str:
     return s
 
 
+_SCP_LIKE_RE = re.compile(r"^(?:[^@/\\\s]+@)?[^/\\\s:]+:")
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:(?:[\\/]|$)")
+
+
 def _looks_like_remote_plugin_source(source: str) -> bool:
     """True when *source* is a URL-like remote (any scheme:// or git+), case-insensitive.
 
@@ -372,6 +377,14 @@ def _looks_like_remote_plugin_source(source: str) -> bool:
         return True
     # scheme://  (http, https, git, ssh, file, mixed-case HTTPS://, …)
     if "://" in s:
+        return True
+    # scp-style git remotes: ``[user@]host:path`` (git treats any colon before
+    # the first slash as ssh). ``git@github.com:evil/x.git`` / ``evil.com:x.git``
+    # must hit the allowlist (and be rejected as unsupported), not pass as local.
+    if _SCP_LIKE_RE.match(s) and not _WINDOWS_DRIVE_RE.match(s):
+        return True
+    # Other transport helper forms (``ext::cmd``, ``fd::``) are never local.
+    if "::" in s.split("/", 1)[0]:
         return True
     return False
 
@@ -603,3 +616,8 @@ def http_egress_allowlist() -> list[str]:
             "check for stray commas."
         )
     return result
+
+# Public names. A leading underscore stays private to this module.
+looks_like_remote_plugin_source = _looks_like_remote_plugin_source
+normalize_plugin_source_scheme = _normalize_plugin_source_scheme
+parse_plugin_source_url = _parse_plugin_source_url

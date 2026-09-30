@@ -2,7 +2,7 @@
 """Unit tests for rewire_graph_outputs."""
 from __future__ import annotations
 
-from app.core.workspace_paths import artifact_slug, rewire_graph_outputs
+from app.core.paths.workspace_paths import artifact_slug, rewire_graph_outputs
 
 
 def _graph(nodes):
@@ -249,7 +249,7 @@ class TestRewireGraphOutputs:
             ]
         )
         out = rewire_graph_outputs(graph, slug="environmental-sounds")
-        from app.core.workspace_paths import _PATH_KEYS
+        from app.core.paths.workspace_paths import _PATH_KEYS
 
         def walk(obj, key=""):
             if isinstance(obj, str):
@@ -297,7 +297,7 @@ class TestScopeOutputsToRun:
                 },
             ]
         )
-        from app.core.workspace_paths import scope_outputs_to_run
+        from app.core.paths.workspace_paths import scope_outputs_to_run
 
         out = scope_outputs_to_run(graph, "abc123")
         cfg0 = out["nodes"][0]["config"]
@@ -332,7 +332,7 @@ class TestScopeOutputsToRun:
                 },
             ]
         )
-        from app.core.workspace_paths import scope_outputs_to_run
+        from app.core.paths.workspace_paths import scope_outputs_to_run
 
         out = scope_outputs_to_run(graph, "abc123")
         assert out["nodes"][0]["config"]["path"] == (
@@ -364,7 +364,7 @@ class TestScopeOutputsToRun:
                 },
             ]
         )
-        from app.core.workspace_paths import scope_outputs_to_run
+        from app.core.paths.workspace_paths import scope_outputs_to_run
 
         out = scope_outputs_to_run(graph, "abc123")
         assert out["nodes"][0]["config"]["output_dir"] == (
@@ -378,7 +378,7 @@ class TestScopeOutputsToRun:
 class TestPublishLatest:
     def test_symlink_points_at_run_dir(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
-        from app.core.workspace_paths import artifact_fs_path, artifact_layout, latest_run_id, publish_latest
+        from app.core.paths.workspace_paths import artifact_fs_path, artifact_layout, latest_run_id, publish_latest
 
         slug, run_id = "speech-commands", "runone"
         layout = artifact_layout(slug, run_id)
@@ -403,9 +403,9 @@ class TestResolveIngestDir:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path / "workspace"))
         (tmp_path / "workspace").mkdir()
-        from app.core.workspace_paths import resolve_ingest_dir
+        from app.core.paths.workspace_paths import resolve_ingest_dir
         # monkeypatch examples_dir
-        import app.core.example_templates as et
+        import app.core.templates.example_templates as et
         monkeypatch.setattr(et, "repo_root", lambda: tmp_path)
         monkeypatch.setattr(et, "examples_dir", lambda: tmp_path / "examples")
         found = resolve_ingest_dir(
@@ -422,18 +422,34 @@ class TestResolveIngestDir:
         empty.mkdir(parents=True)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(ws))
-        import app.core.example_templates as et
-        from app.core.workspace_paths import resolve_ingest_dir
+        import app.core.templates.example_templates as et
+        from app.core.paths.workspace_paths import resolve_ingest_dir
 
         monkeypatch.setattr(et, "repo_root", lambda: tmp_path)
         monkeypatch.setattr(et, "examples_dir", lambda: tmp_path / "examples")
         found = resolve_ingest_dir("workspace/datasets/input/speech-commands/yes")
         assert found == data
 
+    def test_empty_or_cwd_ingest_path_refused(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path / "workspace"))
+        (tmp_path / "workspace").mkdir()
+        (tmp_path / "noise.wav").write_bytes(b"RIFF")
+        from app.core.paths.workspace_paths import ingest_dir_candidates, resolve_ingest_dir
+        import pytest
+
+        assert ingest_dir_candidates("") == []
+        assert ingest_dir_candidates(".") == []
+        assert ingest_dir_candidates("workspace") == []
+        with pytest.raises(FileNotFoundError, match="empty or too broad"):
+            resolve_ingest_dir("")
+        with pytest.raises(FileNotFoundError, match="empty or too broad"):
+            resolve_ingest_dir(".")
+
 
 class TestRewriteGraphPaths:
     def test_rewrite_graph_paths_rewires_ingest_and_outputs(self):
-        from app.core.example_templates import rewrite_graph_paths
+        from app.core.templates.example_templates import rewrite_graph_paths
 
         graph = _graph(
             [
@@ -491,7 +507,7 @@ class TestSeedExampleInputDatasets:
         ws = tmp_path / "workspace"
         ws.mkdir()
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(ws))
-        import app.core.example_templates as et
+        import app.core.templates.example_templates as et
 
         monkeypatch.setattr(et, "examples_dir", lambda: examples)
         seeded = et.seed_example_input_datasets()

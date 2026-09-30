@@ -2,7 +2,7 @@
 """source_run_id / source_artifact_id lineage fields on run payloads."""
 from __future__ import annotations
 
-from app.core.run_project import extract_project_fields_from_payload
+from app.core.runs.run_project import extract_project_fields_from_payload
 
 
 def test_extracts_source_run_and_artifact():

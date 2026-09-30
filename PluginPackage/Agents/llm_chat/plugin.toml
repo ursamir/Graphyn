@@ -20,8 +20,8 @@ node_types = ["llm_chat"]
 credential_kinds = ["openai_compat", "anthropic", "gemini", "ollama"]
 
 [config_schema.llm_chat]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true, return deterministic stub output (no network)." }
-provider = { type = "string", title = "Provider", default = "stub", description = "stub | openai_compat | ollama | anthropic | gemini", enum = ["stub", "openai_compat", "ollama", "anthropic", "gemini"] }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default answers from the local extractive reader." }
+provider = { type = "string", title = "Provider", default = "local", description = "local | openai_compat | ollama | anthropic | gemini", enum = ["local", "stub", "openai_compat", "ollama", "anthropic", "gemini"] }
 model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Chat model id. For ollama, defaults to llama3.2 when left as gpt-*." }
 temperature = { type = "number", title = "Temperature", default = 0.2, description = "Sampling temperature." }
 api_secret_name = { type = "string", title = "API secret name", default = "OPENAI_API_KEY", description = "Secret/env for openai_compat. Unused for stub/ollama." }

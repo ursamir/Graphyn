@@ -138,7 +138,7 @@
       "dst_port": "input"
     },
     {
-      "src_id": "n2",
+      "src_id": "n1",
       "src_port": "output",
       "dst_id": "n3",
       "dst_port": "input"
@@ -153,7 +153,7 @@
       "src_id": "n4",
       "src_port": "output",
       "dst_id": "n5",
-      "dst_port": "input"
+      "dst_port": "model"
     },
     {
       "src_id": "n5",
@@ -162,10 +162,16 @@
       "dst_port": "input"
     },
     {
-      "src_id": "n6",
+      "src_id": "n5",
       "src_port": "output",
       "dst_id": "n7",
       "dst_port": "input"
+    },
+    {
+      "src_id": "n6",
+      "src_port": "output",
+      "dst_id": "n7",
+      "dst_port": "calib"
     },
     {
       "src_id": "n7",
@@ -180,13 +186,13 @@
       "dst_port": "input"
     },
     {
-      "src_id": "n9",
+      "src_id": "n8",
       "src_port": "output",
       "dst_id": "n10",
       "dst_port": "input"
     },
     {
-      "src_id": "n10",
+      "src_id": "n8",
       "src_port": "output",
       "dst_id": "n11",
       "dst_port": "input"
@@ -195,13 +201,35 @@
       "src_id": "n11",
       "src_port": "output",
       "dst_id": "n12",
-      "dst_port": "input"
+      "dst_port": "model"
+    },
+    {
+      "src_id": "n6",
+      "src_port": "output",
+      "dst_id": "n12",
+      "dst_port": "dataset"
     }
   ],
   "parameters": {
-    "target_mcu": "cortex-m4",
-    "quant_mode": "ptq",
-    "export_format": "tflm",
-    "arena_bytes_budget": 256000
+    "target_mcu": {
+      "type": "string",
+      "default": "cortex-m4",
+      "description": ""
+    },
+    "quant_mode": {
+      "type": "string",
+      "default": "ptq",
+      "description": ""
+    },
+    "export_format": {
+      "type": "string",
+      "default": "tflm",
+      "description": ""
+    },
+    "arena_bytes_budget": {
+      "type": "integer",
+      "default": 256000,
+      "description": ""
+    }
   }
 }

@@ -89,7 +89,7 @@ import threading
 from app.core.sdk import Pipeline, PipelineNode
 from app.core.ir.models import GraphIR, IREdge, IRMetadata, IRNode
 from app.core.ir.loader import CURRENT_IR_VERSION
-from app.core.run_manager import RunManager
+from app.core.runs.run_journal import RunManager
 
 # Build a pipeline with an event-triggered node
 graph = GraphIR(
@@ -115,7 +115,7 @@ graph = GraphIR(
 )
 
 # Pipeline.run() supports event_driven=True directly
-from app.core.runtime_backend import get_backend
+from app.core.execution.runtime_backend import get_backend
 
 run_mgr = RunManager()
 

@@ -113,12 +113,12 @@ class PluginRecord(BaseModel, frozen=True):
         """
         from app.core.plugins.manifest import (  # noqa: PLC0415
             PluginManifest,
-            _rewrap_validation_error,
+            rewrap_validation_error,
         )
         try:
             return PluginManifest.model_validate(self.manifest)
         except Exception as exc:
-            _rewrap_validation_error(exc, source=f"<stored record for {self.name!r}>")
+            rewrap_validation_error(exc, source=f"<stored record for {self.name!r}>")
             raise  # unreachable; satisfies type checkers
 
 

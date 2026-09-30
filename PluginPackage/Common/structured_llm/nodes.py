@@ -4,12 +4,11 @@ from __future__ import annotations
 import importlib
 import json
 import logging
-import os
 import re
 from typing import Any, ClassVar, Literal
 from pydantic import Field
 
-from app.core.egress import validate_http_egress_url
+from app.core.trust.egress import validate_http_egress_url
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
@@ -49,26 +48,8 @@ def _text_of(value: Any) -> str:
     return str(value)
 
 
-def _resolve_key(env_key: str) -> str:
-    try:
-        from app.core.secrets import resolve_secret
-        return resolve_secret(env_key)
-    except Exception:
-        return os.environ.get(env_key, "").strip()
-
-
 def _base_looks_like_groq(base: str) -> bool:
     return "groq.com" in (base or "").strip().lower()
-
-
-def _resolve_openai_compat_key(base_url: str) -> str:
-    key = _resolve_key("OPENAI_API_KEY")
-    if key:
-        return key
-    base = (base_url or os.environ.get("OPENAI_BASE_URL") or "").strip()
-    if _base_looks_like_groq(base):
-        return _resolve_key("GROQ_API_KEY")
-    return ""
 
 
 def _schema_default(prop_schema: dict) -> Any:
@@ -255,7 +236,7 @@ class StructuredLlmNode(Node):
             )
         
         if provider == "ollama":
-            from app.core.llm_client import chat_completion
+            from app.core.ml.llm_client import chat_completion
             import json as _json
             model = self.config.model or "llama3.2"
             if str(model).startswith("gpt-"):
@@ -298,29 +279,27 @@ class StructuredLlmNode(Node):
                 f"StructuredLlmNode: unknown provider {provider!r}. "
                 "Use openai_compat, ollama, or local_heuristic."
             )
-        from app.core.credentials.resolve import resolve_llm_credentials
-        from app.core.credentials.errors import NeedsCredentialsError
+        # Same credential precedence + endpoint binding as llm_client.chat_completion:
+        # a resolved key is never sent to a node base_url it is not bound to.
+        from app.core.ml.llm_client import NeedsCredentialsError, resolve_llm_endpoint
+        node_base = (self.config.base_url or "").strip().rstrip("/")
+        if node_base:
+            # Egress policy first (fail before any credential is resolved).
+            validate_http_egress_url(f"{node_base}/chat/completions")
         try:
-            cred = resolve_llm_credentials(
+            endpoint = resolve_llm_endpoint(
                 provider="openai_compat",
-                connection_id=(getattr(self.config, "connection_id", "") or "") or None,
+                base_url=(self.config.base_url or "").strip() or None,
                 api_secret_name="OPENAI_API_KEY",
+                connection_id=(getattr(self.config, "connection_id", "") or "") or None,
             )
         except NeedsCredentialsError as exc:
-            raise RuntimeError(str(exc)) from exc
-        api_key = cred.get("api_key") or _resolve_openai_compat_key(
-            (self.config.base_url or cred.get("base_url") or "")
-        )
-        if not api_key:
             raise RuntimeError(
-                "StructuredLlmNode: provider='openai_compat' requires a connection "
-                "(kind=openai_compat) or secret/env OPENAI_API_KEY (or GROQ_API_KEY). "
-                "For a free local path use provider='local_heuristic'."
-            )
-        # Prefer connection base_url when node config base_url empty
-        if not (self.config.base_url or "").strip() and cred.get("base_url"):
-            self.config.base_url = str(cred["base_url"])
-        data = self._openai_extract(api_key, text, schema)
+                f"StructuredLlmNode: {exc} For a free local path use provider='local_heuristic'."
+            ) from exc
+        api_key = endpoint["api_key"]
+        base = endpoint["base_url"]
+        data = self._openai_extract(api_key, text, schema, base=base)
         return StructuredDocument(
             data=data,
             schema_name=self.config.schema_name,
@@ -329,7 +308,7 @@ class StructuredLlmNode(Node):
             metadata={},
         )
 
-    def _openai_extract(self, api_key: str, text: str, schema: dict) -> dict:
+    def _openai_extract(self, api_key: str, text: str, schema: dict, *, base: str) -> dict:
         try:
             import httpx
         except ImportError as exc:
@@ -337,11 +316,7 @@ class StructuredLlmNode(Node):
                 "StructuredLlmNode: openai_compat requires the 'httpx' package. "
                 "Install httpx (e.g. pip install httpx)."
             ) from exc
-        base = (
-            self.config.base_url
-            or os.environ.get("OPENAI_BASE_URL")
-            or "https://api.openai.com/v1"
-        ).rstrip("/")
+        base = (base or "").rstrip("/")
         url = f"{base}/chat/completions"
         model = self.config.model
         if _base_looks_like_groq(base) and (not model or model.startswith("gpt-")):

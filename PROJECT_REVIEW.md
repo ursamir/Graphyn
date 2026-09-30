@@ -101,7 +101,7 @@
 
 ### F07 — P2 — ASR / structured_llm bypass HTTP egress helper
 
-**Files:** `PluginPackage/Common/asr_transcribe/nodes.py`; `structured_llm/nodes.py`; `app/core/egress.py`  
+**Files:** `PluginPackage/Common/asr_transcribe/nodes.py`; `structured_llm/nodes.py`; `app/core/trust/egress.py`  
 **Problem:** `http_request`/`http_webhook` call `validate_http_egress_url`; ASR/LLM use raw `httpx` — `restricted` mode does not apply (noted in TRUST_MODEL, still a gap).  
 **Fix:** Validate provider URLs via `validate_http_egress_url` before `httpx`.  
 **Verify:** Restricted + private/metadata URL → raise; public OK.
@@ -110,7 +110,7 @@
 
 ### F08 — P1 — Schedule tick not cross-process safe
 
-**Files:** `app/core/schedules.py`; ticker in `app/api/main.py`  
+**Files:** `app/core/pipelines/schedules.py`; ticker in `app/api/main.py`  
 **Problem:** Threading `RLock` + plain `schedules.json` replace — no flock. Multi-worker / concurrent tick can double-fire.  
 **Fix:** Exclusive flock around load→claim due→bump `next_run_at`→save (same pattern as job queue).  
 **Verify:** Two processes tick one due schedule → exactly one run.
@@ -119,7 +119,7 @@
 
 ### F09 — P2 — Corrupt `schedules.json` silently becomes `[]`
 
-**Files:** `app/core/schedules.py` `_load`  
+**Files:** `app/core/pipelines/schedules.py` `_load`  
 **Problem:** Parse failure returns `[]`; later save can wipe real schedules.  
 **Fix:** Fail closed on corrupt file; backup; refuse mutators.  
 **Verify:** Invalid JSON + create schedule must not overwrite with empty+one.
@@ -128,7 +128,7 @@
 
 ### F10 — P1 — In-process cancel is cooperative only (open)
 
-**Files:** `app/core/node_executor.py`; KNOWN_ISSUES `DIST-CANCEL-1`, `DIST-CANCEL-2`  
+**Files:** `app/core/execution/node_executor.py`; KNOWN_ISSUES `DIST-CANCEL-1`, `DIST-CANCEL-2`  
 **Problem:** Cancel observed between retries / before `process`; mid-`process` / mid-yield only killed for isolated subprocesses.  
 **Fix:** Default long GPU/train nodes to `runtime=isolated`; document; optional hard timeout.  
 **Verify:** `venv/bin/pytest unit_test/core/test_node_executor_cancel.py` + stuck sleep test for isolated.
@@ -241,7 +241,7 @@
 
 ### F23 — P3 — `_resolve_capability` still re-exported from orchestrator/pipeline
 
-**Files:** `app/core/orchestrator.py`; `app/core/pipeline.py` `__all__`  
+**Files:** `app/core/execution/orchestrator.py`; `app/core/pipeline.py` `__all__`  
 **Fix:** Deprecate re-export; importers use `registry_runtime` only.  
 **Verify:** `rg 'from app.core.(orchestrator|pipeline) import.*resolve_capability'`.
 
@@ -257,7 +257,7 @@
 ### F25 — P2 — Event-driven demo may not exit promptly
 
 **Tracked:** KNOWN_ISSUES `EVENT-DRIVEN-EXIT-1`  
-**Fix:** Harden `app/core/events.py` close; CI timeout around example 15.  
+**Fix:** Harden `app/core/execution/events.py` close; CI timeout around example 15.  
 **Verify:** Example exits &lt; N s after cancel.
 
 ---

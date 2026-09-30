@@ -25,7 +25,7 @@ MCP stdio (app/mcp/)       ──handlers──────► same core stores
 Compose: graphyn-api :8001 + graphyn-ui :5173 (nginx SPA fallback)
 ```
 
-**ARCH-001 evidence:** `app/core/runtime_backend.py:get_backend` / `RuntimeBackend.execute` — sole execution entry for API/CLI/SDK/MCP.
+**ARCH-001 evidence:** `app/core/execution/runtime_backend.py:get_backend` / `RuntimeBackend.execute` — sole execution entry for API/CLI/SDK/MCP.
 
 ### 1.2 Console SPA (`graphyn-ui/`)
 
@@ -170,8 +170,8 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Schedules + webhooks | 9.2.10 | `system.py` | Confirmed | Idempotency-Key missing | A |
 | Workers + jobs claim/complete | 9.2.11 | `workers.py` + distributed queue | Confirmed | | — |
 | Proposals CRUD/accept/reject | 9.2.12 | `proposals.py` + agentic | Confirmed | Idempotency-Key missing on accept | A |
-| System health/readiness/auth/metrics/cleanup/audit/trace/experiments | 9.2.13 | system/trace/experiments; `ready` + store_corrupt/disk_full | Confirmed | Wave B `app/core/readiness.py` | B |
-| **Ship packages REST** | 9.2.14 | `app/api/routers/ship.py` + `app/core/ship_packages.py` | Confirmed | list/create/get/download/promote/transition; Idempotency-Key on create/promote; 409 invalid_transition | A |
+| System health/readiness/auth/metrics/cleanup/audit/trace/experiments | 9.2.13 | system/trace/experiments; `ready` + store_corrupt/disk_full | Confirmed | Wave B `app/core/host/readiness.py` | B |
+| **Ship packages REST** | 9.2.14 | `app/api/routers/ship.py` + `app/core/mlops/ship_packages.py` | Confirmed | list/create/get/download/promote/transition; Idempotency-Key on create/promote; 409 invalid_transition | A |
 
 **Domain rollup (route-level):** GET/PUT project + run control + Ship packages REST **Confirmed** (Wave A).
 
@@ -180,7 +180,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | ID / cluster | SRS § | Evidence | Status | Notes | Fix pri |
 |---|---|---|---|---|---|
 | Canonical states pending/running/paused/succeeded/failed/cancelled | 13.2 | writers: `pending`→`running`→`succeeded`; reads map `completed`→`succeeded` | Confirmed | Wave A: migrate writes; alias legacy journals on read | A |
-| Current×Action matrix + 409 invalid_transition | RT-SM-001/003 | `app/core/run_status.py` + API + SDK gates | Confirmed | Wave C SDK aligned | A/C |
+| Current×Action matrix + 409 invalid_transition | RT-SM-001/003 | `app/core/runs/run_status.py` + API + SDK gates | Confirmed | Wave C SDK aligned | A/C |
 | Resume failed/cancelled/succeeded = NO | 13.2 locked | enforced via `next_status` → 409 | Confirmed | Wave A batch 1 | A |
 | Cancel durable + forbid artifact commit | RT-CANCEL-* | `ArtifactCommitForbidden` in `run_journal.register_artifact` + unit test | Confirmed | Wave B | B |
 | graph_hash on resume | RT-RESUME-001 | `orchestrator.py` hash check | Confirmed | | — |
@@ -273,7 +273,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Required audited actions | AUD-005 | cancel, rollback, model, plugin, ship, dataset.version_delete | Confirmed | Schema aligned Wave B | B |
 | ProvenanceRecord fields | 22.2 | `provenance.py` + optional plugin_versions/worker/actor/dataset_refs | Confirmed | Wave C optional fields | C |
 | GET /trace | OBS-002 | `trace.py` | Confirmed | | — |
-| Prove capture set completeness | 22.2 | `app/core/prove.py` prove.json on succeeded run + unit test | Confirmed | Unit-tested required fields; live Server-99 still Phase 2 | C |
+| Prove capture set completeness | 22.2 | `app/core/runs/prove.py` prove.json on succeeded run + unit test | Confirmed | Unit-tested required fields; live Server-99 still Phase 2 | C |
 
 ### 3.14 Security — §23
 
@@ -296,7 +296,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 | Cleanup armed | OPS-009 | `POST /system/cleanup` | Confirmed | | — |
 | Stale RUNNING reconcile | NFR-REL-002 | run_cleanup | Confirmed | | — |
 | Backup/restore docs procedure | OPS-001/002 | `docs/OPS_BACKUP_RESTORE.md` | Confirmed | Wave C runbook | C |
-| Shutdown drain SIGTERM | OPS-005/011 | `app/core/shutdown.py` + lifespan drain; 503 draining | Confirmed | Best-effort per worker; grace via GRAPHYN_SHUTDOWN_GRACE_S | C |
+| Shutdown drain SIGTERM | OPS-005/011 | `app/core/host/shutdown.py` + lifespan drain; 503 draining | Confirmed | Best-effort per worker; grace via GRAPHYN_SHUTDOWN_GRACE_S | C |
 | Disk-full 503 | OPS-007 | Not probed | Not probed | | C |
 | Compose SPA fallback | NFR-REL-001 | nginx try_files | Confirmed | | — |
 
@@ -361,7 +361,7 @@ Probes used: router `@router.*` inventory, App rail constants, run_journal statu
 - ✅ CSP meta + Settings/Ops token-in-localStorage honesty (THREAT-001/002).
 - ✅ Backup/restore runbook `docs/OPS_BACKUP_RESTORE.md`; SIGTERM drain (OPS-005/011).
 - ✅ DIST-AUTH / SEC-WORKER product copy on Workers + Ops.
-- ✅ Prove capture set (`app/core/prove.py` + unit test on succeeded run).
+- ✅ Prove capture set (`app/core/runs/prove.py` + unit test on succeeded run).
 - ⏳ Perf TBD-PERF-* measurement (GA gate — not invented).
 - ⏳ Device registry / OTA APIs (needs-API — product TBD).
 - P1 closed (this turn): default-envelope migration; universal 503 store_corrupt on critical reads.

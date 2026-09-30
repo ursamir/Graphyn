@@ -1,25 +1,27 @@
 ---
-description: Keep Kiro steering and docs in sync after code changes
+description: Keep docs (and the remaining Kiro steering) in sync after code changes
 alwaysApply: true
 ---
 
 # Update Protocol
 
-When you modify code, update the matching `.kiro/steering/` file **and** matching `docs/` file before finishing. Change only the affected section — never rewrite whole files.
+When you modify code, update the matching `docs/` file (and, for `graphyn-ui/`, the matching `.kiro/steering/` file) before finishing. Change only the affected section — never rewrite whole files.
+
+Only the two frontend steering files remain in `.kiro/steering/`; the backend steering files (`project-overview`, `node-base`, `node-registry`, `plugin-development`, `plugin-ecosystem`, `pipeline-execution`, `api-*`, `sdk-cli`, `backend-services`, `mcp-server`, `data-models`, `file-header-contracts`, `update-protocol`) were removed in commit `6f0cd7f` — `docs/` is canonical for those areas.
 
 | Code area | Steering | Docs |
 |---|---|---|
-| Top-level / env / entry points | `project-overview.md` | `ARCHITECTURE.md` |
-| Node base / ports / metadata | `node-base.md` | `NODE_SYSTEM.md` |
-| Registry / discovery | `node-registry.md` | `NODE_SYSTEM.md` |
-| Plugins / PluginPackage | `plugin-development.md`, `plugin-ecosystem.md` | `PLUGIN_GUIDE.md` |
-| Orchestrator / IR / executor | `pipeline-execution.md` | `PIPELINE_EXECUTION.md` |
-| API routers | `api-endpoints.md` | `API_REFERENCE.md` |
-| `api/main.py` | `api-structure.md` | `API_REFERENCE.md` |
-| SDK / CLI | `sdk-cli.md` | `SDK_AND_CLI.md`, `USERGUIDE.md` |
-| Runs / artifacts / domain | `backend-services.md` | `BACKEND_CORE.md`, `DOMAIN_SERVICES.md` |
-| MCP | `mcp-server.md` | `MCP_SERVER.md` |
-| Models | `data-models.md` | `DATA_FLOW_AND_WORKSPACE.md` |
+| Top-level / env / entry points | — | `ARCHITECTURE.md`, `GETTING_STARTED.md`, `DEPLOYMENT.md` (env reference) |
+| Node base / ports / metadata / config | — | `PLUGIN_GUIDE.md`, `ARCHITECTURE.md` |
+| Registry / discovery / plugin catalog | — | `PLUGIN_GUIDE.md`, `NODE_CATALOGUE.md` |
+| Plugins / PluginPackage | — | `PLUGIN_GUIDE.md`, `NODE_CATALOGUE.md` |
+| Orchestrator / IR / planner / executor / validation / cache / run lifecycle | — | `PIPELINE_EXECUTION.md` |
+| Distributed backend / workers / queue | — | `DISTRIBUTED_EXECUTION.md` |
+| API routers / `api/main.py` | — | `API_REFERENCE.md` |
+| SDK / CLI | — | `SDK_AND_CLI.md`, `GETTING_STARTED.md` |
+| Runs / artifacts / workspace / domain | — | `DATA_FLOW_AND_WORKSPACE.md`, `PIPELINE_EXECUTION.md` |
+| MCP | — | `MCP_SERVER.md`, `MCP_AGENT_PACK_COVERAGE.md` |
+| Secrets / credentials / auth / egress | — | `TRUST_MODEL.md`, `ops/CREDENTIAL_STORE.md` |
 | graphyn-ui canvas / shell | `frontend-canvas.md` | — |
 | graphyn-ui feature screens | `frontend-features.md` | — |
 

@@ -1,7 +1,7 @@
 """VisionLabelConvertNode — COCO↔YOLO↔VOC label convert
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
 
@@ -29,6 +29,68 @@ ImageSample = _types.ImageSample
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _as_list(obj: Any) -> list:
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, tuple):
+        return list(obj)
+    return [obj]
+
+def _vision_images(obj: Any) -> list[dict]:
+    out = []
+    for item in _as_list(obj):
+        data = _dump(item)
+        if isinstance(data, str):
+            data = {"path": data}
+        if isinstance(data, dict):
+            out.append(data)
+    return out
+
+def _label_convert(config, inputs, types):
+    src = str(_cfg(config, "from_format", "coco") or "coco")
+    dst = str(_cfg(config, "to_format", "yolo") or "yolo")
+    mapping = _cfg(config, "class_map", {}) or {}
+    images = _vision_images(inputs.get("input"))
+    converted = []
+    for im in images:
+        boxes = im.get("boxes") or []
+        new_boxes = []
+        for box in boxes:
+            data = _dump(box) if not isinstance(box, dict) else box
+            label = str(data.get("label") if isinstance(data, dict) else "")
+            label = str(mapping.get(label, label))
+            coords = data.get("box") if isinstance(data, dict) else data
+            if dst == "yolo" and isinstance(coords, list) and len(coords) == 4 and src == "xyxy":
+                x1, y1, x2, y2 = coords
+                coords = [(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1]
+            new_boxes.append({"label": label, "box": coords, "format": dst})
+        converted.append(_T(types, "ImageSample", path=str(im.get("path") or ""), label=im.get("label"), boxes=new_boxes, metadata={"format": dst, "from": src}))
+    return converted
+
+
 
 class VisionLabelConvertNode(Node):
     """COCO↔YOLO↔VOC label convert"""
@@ -41,7 +103,7 @@ class VisionLabelConvertNode(Node):
         description="COCO↔YOLO↔VOC label convert",
         category="Preprocessing",
         version="0.1.0",
-        tags=["vision", "stub"],
+        tags=["vision"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -58,7 +120,7 @@ class VisionLabelConvertNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         from_format: str = Field(default='coco', title="From format", description="From format.")
         to_format: str = Field(default='yolo', title="To format", description="To format.")
         class_map: dict = Field(default_factory=dict)
@@ -70,10 +132,17 @@ class VisionLabelConvertNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'vision' / 'vision_label_convert'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = []
             return {"output": result}
@@ -83,23 +152,8 @@ class VisionLabelConvertNode(Node):
         except ImportError as exc:
             raise ImportError(f"vision_label_convert: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'vision' / 'vision_label_convert'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": []}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _label_convert(self.config, inputs, _types)}

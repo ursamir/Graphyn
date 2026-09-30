@@ -348,7 +348,7 @@ Agents can extend Graphyn without leaving MCP:
 1. **Discover** — `list_packs` / `describe_pack` / `list_nodes` / `get_node_spec`
 2. **Scaffold locally** — create `PluginPackage/<Pack>/<slug>/` with `plugin.toml`, `nodes.py`, optional `types.py` (see structure above). Declare `credential_kinds` when the node needs secrets; expose `connection_id` in config (never embed secrets in Graph IR).
 3. **Install** — `install_plugin` with a path or allowlisted URL; then `list_plugins` / `manage_plugin`
-4. **Prove** — `validate_graph` → `execute_pipeline` (stub backends OK) → `inspect_run`
+4. **Prove** — `validate_graph` → `execute_pipeline` (real node implementations run by default) → `inspect_run`
 5. **Template** — optional: add a marketplace family via `scripts/generate_pipeline_template_catalog.py` + seed under `examples/templates/marketplace/`
 
 **Honesty:** MCU flash / OAuth mail connectors remain needs-api / needs-credentials — do not invent them in a plugin just to look complete.

@@ -9,7 +9,9 @@ Public Surface:   All model classes and type aliases above.
 Must NOT:         Import from app.domain, app.api, orchestrator, or nodes.
 Dependencies:     pydantic, stdlib (datetime, typing), app.core.ir.models
                   (IRPlacement only).
-Reason To Change: Job protocol fields evolve, or worker capability schema grows.
+Reason To Change: Job protocol fields evolve, or worker capability schema grows
+                  (e.g. finished_at / result_consumed_at history markers,
+                  JobResult.output_sha256 integrity map).
 """
 from __future__ import annotations
 
@@ -99,6 +101,10 @@ class NodeJob(BaseModel):
     """Times this job was reclaimed after lease expiry (P1-12)."""
     max_attempts: int = 5
     """Stop requeueing after this many reclaim cycles (P1-12)."""
+    finished_at: datetime | None = None
+    """Set when the job reaches a terminal status (history trim ordering)."""
+    result_consumed_at: datetime | None = None
+    """Set when the control plane has read the result (safe to trim)."""
 
 
 class JobResult(BaseModel):
@@ -115,3 +121,6 @@ class JobResult(BaseModel):
     duration_s: float | None = None
     lease_generation: int | None = None
     """Must match NodeJob.lease_generation when completing a claimed job."""
+    output_sha256: dict[str, str] = Field(default_factory=dict)
+    """Optional ``{port: sha256 hex}`` of each uploaded output blob; the
+    control plane verifies downloaded bytes against it."""

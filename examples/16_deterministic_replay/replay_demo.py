@@ -128,8 +128,8 @@ def replay_from_stored_graph(run_id: str, output_suffix: str) -> tuple[str, str]
             node["config"]["output_dir"] = str(out)
 
     from app.core.ir.loader import load_ir
-    from app.core.runtime_backend import get_backend
-    from app.core.run_manager import RunManager
+    from app.core.execution.runtime_backend import get_backend
+    from app.core.runs.run_journal import RunManager
 
     ir = load_ir(graph_dict)
     run_mgr = RunManager()

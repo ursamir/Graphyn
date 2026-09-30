@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["rag", "hybrid", "stub"]
+tags = ["rag", "hybrid"]
 
 dependencies = [
     "numpy>=1.24",
@@ -17,7 +17,7 @@ runtime = "inprocess"
 node_types = ["hybrid_retrieve"]
 
 [config_schema.hybrid_retrieve]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
 top_k = { type = "integer", title = "Top k", default = 10, description = "Top k." }
 dense_weight = { type = "number", title = "Dense weight", default = 0.5, description = "Dense weight." }
 bm25_weight = { type = "number", title = "Bm25 weight", default = 0.5, description = "Bm25 weight." }

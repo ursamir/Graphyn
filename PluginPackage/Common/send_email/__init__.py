@@ -1,1 +1,4 @@
-from .nodes import SendEmailNode\nfrom .types import EmailReceipt\n\n__all__ = ["SendEmailNode", "EmailReceipt"]\n
+from .nodes import SendEmailNode
+from .types import EmailReceipt
+
+__all__ = ["SendEmailNode", "EmailReceipt"]

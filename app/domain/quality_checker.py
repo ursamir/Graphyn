@@ -8,8 +8,8 @@ Owns:             QualityChecker class, all check implementations
                   (duration_range, sample_rate, clipping, dc_offset, snr,
                   duplicates, outliers, class_imbalance).
 Public Surface:   QualityChecker.run(project, version) → dict
-Must NOT:         Import from app.core.nodes, app.core.orchestrator, or
-                  app.core.executor. Must not register node types.
+Must NOT:         Import from app.core.nodes, app.core.execution.orchestrator, or
+                  app.core.execution.executor. Must not register node types.
 Dependencies:     app.core.config (datasets_output_dir), stdlib (hashlib,
                   json, pathlib), numpy, librosa, soundfile (optional).
 Reason To Change: New quality check type added, or report schema changes.
@@ -26,6 +26,7 @@ import json
 import logging
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -33,10 +34,37 @@ logger = logging.getLogger(__name__)
 
 from app.core.config import project_dir as _project_dir
 
+_SAFE_PROJECT_RE = re.compile(r"^[\w\-]{1,128}$")
+_SAFE_VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
+
+
+def validate_dataset_target(base: Path, project: str, version: str | None = None) -> str | None:
+    """Return an error message when *project* / *version* are unsafe, else None.
+
+    Same rules as ProjectManager._validate_name / the dataset version regex,
+    plus a resolved-under-*base* check (defense in depth).
+    """
+    if not isinstance(project, str) or not _SAFE_PROJECT_RE.fullmatch(project) or project in {".", ".."}:
+        return f"Invalid project name {project!r}"
+    if version is not None and (not isinstance(version, str) or not _SAFE_VERSION_RE.fullmatch(version)):
+        return f"Invalid version {version!r} (expected v<N>[.<N>...])"
+    try:
+        root = Path(base).resolve()
+        target = (Path(base) / project / (version or "")).resolve()
+    except OSError:
+        return "Unresolvable dataset path"
+    if target != root and root not in target.parents:
+        return "Dataset path escapes the datasets/output root"
+    return None
+
+
 class QualityChecker:
     @property
     def BASE(self):
         return _project_dir() / "datasets" / "output"
+
+    def _invalid_target(self, project: str, version: str) -> str | None:
+        return validate_dataset_target(self.BASE, project, version)
 
     # Default SNR threshold in dB below which a sample is flagged
     DEFAULT_SNR_THRESHOLD_DB: float = 10.0
@@ -71,6 +99,12 @@ class QualityChecker:
              "severity": "warning"|"error", "detail": str}
         """
         findings: list[dict] = []
+
+        bad = self._invalid_target(project, version)
+        if bad:
+            # Refuse traversal (``../``) — never mkdir / write outside BASE.
+            logger.warning("QualityChecker: rejected %s", bad)
+            return [self._finding("", "invalid_target", "error", bad)]
 
         project_dir = self.BASE / project
         version_dir = project_dir / version

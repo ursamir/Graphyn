@@ -6,11 +6,18 @@ Responsibility:   Full project lifecycle for audio dataset projects stored
 Owns:             ProjectManager class — create, get, update, delete, clone,
                   list versions, taxonomy, contract, spec, annotations,
                   quality reports, snapshots, curation decisions.
+                  Every project file write is atomic (unique tmp + fsync +
+                  os.replace) and every read-modify-write holds the
+                  per-project lock (``.graphyn.lock``; threads + processes),
+                  so concurrent writers never lose updates and concurrent
+                  readers never see a truncated file.
 Public Surface:   ProjectManager (all methods)
-Must NOT:         Import from app.core.nodes, app.core.orchestrator, or
-                  app.core.executor. Must not register node types.
-Dependencies:     app.core.config (datasets_output_dir), stdlib (csv,
-                  datetime, hashlib, io, json, pathlib, shutil, uuid).
+Must NOT:         Import from app.core.nodes, app.core.execution.orchestrator, or
+                  app.core.execution.executor. Must not register node types.
+Dependencies:     app.core.config (datasets_output_dir),
+                  app.core.pipelines.project_pipelines (resource_lock), stdlib (csv,
+                  datetime, functools, hashlib, io, json, os, pathlib,
+                  shutil, tempfile, uuid).
 Reason To Change: Project schema changes, new project-level operation added,
                   or storage layout changes.
 """
@@ -19,6 +26,7 @@ from __future__ import annotations
 
 import csv
 import datetime
+import functools
 import hashlib
 import io
 import json
@@ -27,11 +35,60 @@ import random
 import re
 import shutil
 import struct
+import tempfile
 import wave
 from pathlib import Path
 from typing import Any
 
 from app.core.config import project_dir as _project_dir
+
+# Per-project lock file (inside the project dir so it moves on rename and
+# disappears on delete). Excluded from snapshots.
+_LOCK_NAME = ".graphyn.lock"
+
+
+def _is_internal_file(name: str) -> bool:
+    """Lock file or an in-flight atomic-write tmp — never user data."""
+    return name == _LOCK_NAME or (name.startswith(".") and name.endswith(".tmp"))
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write via a unique same-dir tmp + fsync + os.replace (readers see old
+    or new content, never a truncated file; concurrent writers never share
+    a tmp name)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        try:
+            os.chmod(tmp_name, 0o644)
+        except OSError:
+            pass
+        os.replace(tmp_name, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _project_locked(fn):
+    """Run a ``(self, name, ...)`` method under the per-project lock."""
+
+    @functools.wraps(fn)
+    def wrapper(self, name, *args, **kwargs):
+        with self._project_lock(name):
+            return fn(self, name, *args, **kwargs)
+
+    return wrapper
+
 
 class ProjectManager:
     @property
@@ -117,9 +174,18 @@ class ProjectManager:
 
     @staticmethod
     def _write_json(path: Path, data: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_text(path, json.dumps(data, indent=2))
+
+    def _project_lock(self, name: str):
+        """Exclusive reentrant lock for one project (validates + requires it).
+
+        Uses ``create_parent=False`` so a project deleted while we waited
+        raises FileNotFoundError instead of being resurrected.
+        """
+        from app.core.pipelines.project_pipelines import resource_lock
+
+        d = self._require_project(name)
+        return resource_lock(d / _LOCK_NAME, create_parent=False)
 
     # ------------------------------------------------------------------ #
     # Project lifecycle                                                    #
@@ -131,7 +197,11 @@ class ProjectManager:
         d = self._project_dir(name)
         if d.exists():
             raise ValueError(f"Project '{name}' already exists")
-        d.mkdir(parents=True, exist_ok=True)
+        d.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            d.mkdir(exist_ok=False)  # atomic: exactly one concurrent create wins
+        except FileExistsError as exc:
+            raise ValueError(f"Project '{name}' already exists") from exc
         now = self._now()
         meta = {
             "name": name,
@@ -142,11 +212,12 @@ class ProjectManager:
         }
         self._write_json(d / "project.json", meta)
         # Seed product-quality empty defaults so Spec/Taxonomy/Contract are not blank.
-        (d / "spec.md").write_text(self.DEFAULT_SPEC_MD, encoding="utf-8")
+        _atomic_write_text(d / "spec.md", self.DEFAULT_SPEC_MD)
         self._write_json(d / "taxonomy.json", list(self.DEFAULT_TAXONOMY))
         self._write_json(d / "contract.json", dict(self.DEFAULT_CONTRACT))
         return meta
 
+    @_project_locked
     def rename(self, name: str, new_name: str) -> dict:
         """Move project directory and update project.json name field."""
         self._validate_name(name)
@@ -189,10 +260,12 @@ class ProjectManager:
             raise ValueError(
                 f"Confirmation string '{confirm}' does not match project name '{name}'"
             )
-        d = self._require_project(name)
-        shutil.rmtree(str(d))
+        with self._project_lock(name):
+            d = self._require_project(name)
+            shutil.rmtree(str(d))
         self._prune_empty_leftovers()
 
+    @_project_locked
     def set_status(self, name: str, status: str) -> dict:
         """Update project status field."""
         valid = {"draft", "in-progress", "ready", "archived"}
@@ -211,6 +284,7 @@ class ProjectManager:
         self._write_json(proj_file, meta)
         return meta
 
+    @_project_locked
     def clone(self, name: str, new_name: str) -> dict:
         """Copy metadata files only (no version subdirs or audio files)."""
         self._validate_name(name)
@@ -266,6 +340,7 @@ class ProjectManager:
         out.setdefault("favorite_pipelines", list(out.get("favorite_pipelines") or []))
         return out
 
+    @_project_locked
     def update(
         self,
         name: str,
@@ -380,6 +455,7 @@ class ProjectManager:
             clean_outputs.append(payload)
         return {"inputs": clean_inputs, "outputs": clean_outputs}
 
+    @_project_locked
     def add_links(
         self,
         name: str,
@@ -421,6 +497,7 @@ class ProjectManager:
             self._write_json(proj_file, meta)
         return current
 
+    @_project_locked
     def remove_links(
         self,
         name: str,
@@ -473,6 +550,7 @@ class ProjectManager:
                 child_path = f"{path}/{node_name}" if path else node_name
                 ProjectManager._validate_taxonomy_siblings(children, child_path)
 
+    @_project_locked
     def set_taxonomy(self, name: str, tree: list[dict]) -> None:
         """Write taxonomy.json; validate sibling-scope uniqueness."""
         self._require_project(name)
@@ -490,6 +568,7 @@ class ProjectManager:
     # Contract                                                             #
     # ------------------------------------------------------------------ #
 
+    @_project_locked
     def set_contract(self, name: str, contract: dict) -> None:
         """Write contract.json; validate min_duration_ms < max_duration_ms."""
         self._require_project(name)
@@ -513,12 +592,13 @@ class ProjectManager:
     # Spec                                                                 #
     # ------------------------------------------------------------------ #
 
+    @_project_locked
     def set_spec(self, name: str, markdown: str) -> None:
         """Write spec.md."""
         self._require_project(name)
         d = self._project_dir(name)
         spec_file = d / "spec.md"
-        spec_file.write_text(markdown, encoding="utf-8")
+        _atomic_write_text(spec_file, markdown)
 
     def get_spec(self, name: str) -> str:
         """Read spec.md; return '' if not found."""
@@ -557,11 +637,9 @@ class ProjectManager:
 
     def _write_annotations_dict(self, name: str, data: dict[str, dict]) -> None:
         path = self._annotations_path(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            for obj in data.values():
-                f.write(json.dumps(obj) + "\n")
+        _atomic_write_text(path, "".join(json.dumps(obj) + "\n" for obj in data.values()))
 
+    @_project_locked
     def add_annotations(self, name: str, annotations: list[dict]) -> None:
         """Append/overwrite to annotations.jsonl (overwrite existing for same sample_path)."""
         self._require_project(name)
@@ -705,6 +783,7 @@ class ProjectManager:
     def _curation_path(self, name: str) -> Path:
         return self._project_dir(name) / "curation_decisions.json"
 
+    @_project_locked
     def add_curation_decision(self, name: str, path: str, decision: str) -> None:
         """Write to curation_decisions.json."""
         self._require_project(name)
@@ -770,6 +849,7 @@ class ProjectManager:
                 versions.append({"version": sub.name, **meta})
         return versions
 
+    @_project_locked
     def restore_version(self, name: str, version: str) -> None:
         """Copy version dir contents back to project root working area.
 
@@ -822,6 +902,7 @@ class ProjectManager:
     def _snapshots_dir(self, name: str) -> Path:
         return self._project_dir(name) / "snapshots"
 
+    @_project_locked
     def create_snapshot(self, name: str, snapshot_name: str) -> None:
         """Copy current working files to snapshots/{snapshot_name}/."""
         d = self._require_project(name)
@@ -833,6 +914,8 @@ class ProjectManager:
         # Copy working files (not version dirs, not snapshots dir itself)
         for item in d.iterdir():
             if item.name == "snapshots":
+                continue
+            if _is_internal_file(item.name):
                 continue
             if self._is_version_dir(item):
                 continue
@@ -856,6 +939,7 @@ class ProjectManager:
                 result.append({"snapshot_name": sub.name})
         return result
 
+    @_project_locked
     def restore_snapshot(self, name: str, snapshot_name: str) -> None:
         """Copy snapshot files back to project root.
 
@@ -875,6 +959,8 @@ class ProjectManager:
         try:
             tmp_dir.mkdir(parents=True, exist_ok=True)
             for item in snap_dir.iterdir():
+                if _is_internal_file(item.name):
+                    continue
                 dst_tmp = tmp_dir / item.name
                 if item.is_file():
                     shutil.copy2(str(item), str(dst_tmp))

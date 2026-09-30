@@ -112,6 +112,9 @@ def test_openai_compat_groq_key_fallback(installed_cls, monkeypatch):
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    # Env-sourced keys are bound to their default endpoint; a node base_url on a
+    # different host must be explicitly allowlisted (LLM base_url binding).
+    monkeypatch.setenv("GRAPHYN_LLM_BASE_URL_ALLOWLIST", "api.groq.com")
     node = installed_cls(
         config={
             "provider": "openai_compat",

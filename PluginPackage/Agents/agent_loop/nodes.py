@@ -1,9 +1,16 @@
-"""AgentLoopNode — Multi-step plan→tool→observe loop
+"""AgentLoopNode — extractive (no-LLM) goal/context loop.
+
+This node does NOT call a model or any tools. ``model``, ``api_secret_name``
+and ``tool_allowlist`` are reserved for a future LLM mode and are ignored.
+Use ``llm_chat`` for model calls.
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import json
+import re
 
 import importlib
 import logging
@@ -29,19 +36,86 @@ AgentResult = _types.AgentResult
 
 log = logging.getLogger(__name__)
 
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _text(obj: Any) -> str:
+    if obj is None:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, list):
+        return "\n".join(_text(x) for x in obj)
+    data = _dump(obj)
+    if isinstance(data, dict):
+        for key in ("text", "query", "content", "answer", "user", "path", "value", "final"):
+            if data.get(key):
+                return str(data[key])
+        return json.dumps(data, default=str)
+    return str(obj)
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+def _agent_loop(config, inputs, types):
+    """Extractive, deterministic loop: scans the context in windows until the
+    goal's terms are covered. No LLM is called and no tools are invoked."""
+    goal = _text(inputs.get("goal") or inputs.get("input"))
+    context = _text(inputs.get("context"))
+    steps_n = max(1, int(config.max_steps))
+    if (config.tool_allowlist or []):
+        log.info("agent_loop: tool_allowlist is ignored in extractive mode (no tools are called)")
+    steps = []
+    working = context
+    for i in range(steps_n):
+        observation = working[:500]
+        if goal and observation and set(_tokens(goal)) <= set(_tokens(observation)):
+            steps.append({"step": i, "action": "finish", "observation": "goal terms covered"})
+            break
+        steps.append({"step": i, "action": "read_context", "observation": observation[:240]})
+        if not working:
+            break
+        working = working[240:]
+    final = goal if not context else f"{goal}\n\nFrom context: {context[:800]}"
+    return _T(
+        types,
+        "AgentResult",
+        final=final.strip(),
+        steps=steps,
+        mode="extractive",
+        metadata={"mode": "extractive", "model": None, "llm_called": False, "tools_called": []},
+    )
+
+
 
 class AgentLoopNode(Node):
-    """Multi-step plan→tool→observe loop"""
+    """Extractive (no-LLM) goal/context loop — see module docstring."""
 
     node_type: ClassVar[str] = "agent_loop"
 
     metadata: ClassVar[NodeMetadata] = NodeMetadata(
         node_type="agent_loop",
         label="Agent Loop",
-        description="Multi-step plan→tool→observe loop",
+        description=(
+            "Extractive agent loop (no LLM, no tool calls): scans context for the goal's "
+            "terms and returns goal + context excerpt. Output mode='extractive'."
+        ),
         category="Agents",
         version="0.1.0",
-        tags=["agents", "stub"],
+        tags=["agents"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -59,11 +133,11 @@ class AgentLoopNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
-        max_steps: int = Field(default=8, title="Max steps", description="Max steps.")
-        model: str = Field(default='gpt-4o-mini', title="Model", description="Model.")
-        api_secret_name: str = Field(default='OPENAI_API_KEY', title="Api secret name", description="Api secret name.")
-        tool_allowlist: list = Field(default_factory=lambda: [])
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
+        max_steps: int = Field(default=8, ge=1, title="Max steps", description="Maximum context windows to scan.")
+        model: str = Field(default="gpt-4o-mini", title="Model", description="Reserved — ignored (extractive mode calls no model).")
+        api_secret_name: str = Field(default="OPENAI_API_KEY", title="Api secret name", description="Reserved — ignored (extractive mode calls no model).")
+        tool_allowlist: list = Field(default_factory=list, title="Tool allowlist", description="Reserved — ignored (extractive mode calls no tools).")
 
     def process(self, inputs=None, **kwargs):
         """Stub-capable process — real backends optional."""
@@ -72,10 +146,17 @@ class AgentLoopNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'agents' / 'agent_loop'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = AgentResult()
             return {"output": result}
@@ -85,23 +166,8 @@ class AgentLoopNode(Node):
         except ImportError as exc:
             raise ImportError(f"agent_loop: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'agents' / 'agent_loop'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": AgentResult()}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _agent_loop(self.config, inputs, _types)}

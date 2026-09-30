@@ -88,12 +88,26 @@ class DatasetVersionerNode(Node):
         version_tag: str = Field(default='v1', title="Version tag", description="Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0). Empty defaults to v1 — hash-style tags are rejected.")
         include_metadata: bool = Field(default=True, title="Include metadata", description="Bundle model metadata / labels JSON with the package (On/Off).")
         create_snapshot: bool = Field(default=False, title="Create Snapshot", description="Enable create snapshot.")
+        overwrite: bool = Field(default=False, title="Overwrite", description="Allow replacing an existing version directory whose content hash differs. Re-running identical data is always allowed.")
 
     # ── SISO process ──────────────────────────────────────────────────────────
 
     _VERSION_RE: ClassVar[re.Pattern[str]] = re.compile(r"^v\d+(\.\d+)*$")
 
     def process(self, dataset):
+        if isinstance(dataset, dict):
+            dataset = (
+                dataset.get("dataset")
+                or dataset.get("input")
+                or dataset.get("output")
+            )
+        if dataset is None or isinstance(dataset, dict):
+            raise ValueError("DatasetVersionerNode: expected a DatasetArtifact input")
+        if getattr(dataset, "metadata", None) is None:
+            try:
+                object.__setattr__(dataset, "metadata", {})
+            except Exception:
+                pass
         result = copy.deepcopy(dataset)
 
         # Compute hash from training data
@@ -110,20 +124,36 @@ class DatasetVersionerNode(Node):
         if project:
             output_dir = f"workspace/datasets/output/{project}"
         out_dir = Path(output_dir) / version
+        pre_existed = out_dir.exists()
+        if pre_existed:
+            if not out_dir.is_dir():
+                raise FileExistsError(f"DatasetVersionerNode: {out_dir} exists and is not a directory")
+            prev_hash = self._existing_hash(out_dir / "lineage.json")
+            overwrite = bool(getattr(self.config, "overwrite", False))
+            if prev_hash != dataset_hash and not overwrite:
+                raise FileExistsError(
+                    f"DatasetVersionerNode: version {version!r} already exists at {out_dir} "
+                    f"with different content (hash {str(prev_hash)[:12] or 'unknown'} != {dataset_hash[:12]}). "
+                    "Bump version_tag or set overwrite=True."
+                )
+        # Never swallow: a failed mkdir must fail the node, not surface later as a write error.
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Write manifest CSV, lineage JSON, and optional snapshot.
-        # Clean up the output directory on any failure to avoid partial state.
+        # Only a directory this run created is removed on failure — never a pre-existing version.
         manifest_path = out_dir / "manifest.csv"
         lineage_path = out_dir / "lineage.json"
         try:
             self._write_manifest(dataset, manifest_path, dataset_hash)
             self._write_lineage(dataset, lineage_path, version, dataset_hash)
+            snapshot_path = out_dir / "dataset.npz"
             if self.config.create_snapshot:
-                snapshot_path = out_dir / "dataset.npz"
                 self._write_snapshot(dataset, snapshot_path)
+            elif pre_existed and snapshot_path.exists():
+                snapshot_path.unlink()  # stale snapshot from the overwritten version
         except Exception:
-            shutil.rmtree(out_dir, ignore_errors=True)
+            if not pre_existed:
+                shutil.rmtree(out_dir, ignore_errors=True)
             raise
 
         result.metadata["versioner"] = {
@@ -155,21 +185,51 @@ class DatasetVersionerNode(Node):
 
     # ── hash ──────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _existing_hash(lineage_path: Path) -> str:
+        try:
+            return str(json.loads(lineage_path.read_text(encoding="utf-8")).get("hash") or "")
+        except (OSError, ValueError, AttributeError):
+            return ""
+
     def _compute_hash(self, dataset) -> str:
-        """SHA256 of concatenated train/val/test arrays + labels."""
+        """SHA256 over a length-prefixed, self-describing encoding of every split.
+
+        Each array contributes its field name, dtype, shape and bytes (all length-
+        prefixed), and each label is length-prefixed, so different datasets cannot
+        collide by shifting bytes between splits/labels.
+        """
         h = hashlib.sha256()
-        for arr in [dataset.X_train, dataset.X_val, dataset.X_test,
-                    dataset.y_train, dataset.y_val, dataset.y_test]:
-            if arr is not None and hasattr(arr, "tobytes"):
-                h.update(arr.tobytes())
-        for label in (dataset.labels or []):
-            h.update(label.encode())
+
+        def put(tag: bytes, payload: bytes) -> None:
+            h.update(tag)
+            h.update(len(payload).to_bytes(8, "big"))
+            h.update(payload)
+
+        put(b"format", b"dataset_versioner/v2")
+        for name in ("X_train", "X_val", "X_test", "y_train", "y_val", "y_test"):
+            arr = getattr(dataset, name, None)
+            put(b"field", name.encode())
+            if arr is None:
+                put(b"none", b"")
+                continue
+            a = np.ascontiguousarray(np.asarray(arr))
+            put(b"dtype", a.dtype.str.encode())
+            put(b"shape", ",".join(str(d) for d in a.shape).encode())
+            put(b"data", a.tobytes())
+        labels = list(getattr(dataset, "labels", None) or [])
+        put(b"labels", str(len(labels)).encode())
+        for label in labels:
+            put(b"label", str(label).encode("utf-8"))
         return h.hexdigest()
 
     # ── manifest ──────────────────────────────────────────────────────────────
 
     def _write_manifest(self, dataset, path: Path, dataset_hash: str) -> None:
-        labels = dataset.labels or []
+        labels = list(getattr(dataset, "labels", None) or [])
+        meta = getattr(dataset, "metadata", None) or {}
+        if not isinstance(meta, dict):
+            meta = {}
         if not labels:
             log.warning(
                 "DatasetVersionerNode: labels list is empty — manifest will use numeric class indices"
@@ -178,14 +238,14 @@ class DatasetVersionerNode(Node):
         idx = 0
 
         # Try to retrieve per-sample source paths from dataset metadata
-        train_paths = dataset.metadata.get("train_paths", [])
-        val_paths   = dataset.metadata.get("val_paths", [])
-        test_paths  = dataset.metadata.get("test_paths", [])
+        train_paths = meta.get("train_paths", [])
+        val_paths   = meta.get("val_paths", [])
+        test_paths  = meta.get("test_paths", [])
 
         for split_name, y_arr, paths_list in [
-            ("train", dataset.y_train, train_paths),
-            ("val",   dataset.y_val,   val_paths),
-            ("test",  dataset.y_test,  test_paths),
+            ("train", getattr(dataset, "y_train", None), train_paths),
+            ("val",   getattr(dataset, "y_val", None),   val_paths),
+            ("test",  getattr(dataset, "y_test", None),  test_paths),
         ]:
             if y_arr is None:
                 continue

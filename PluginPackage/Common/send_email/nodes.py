@@ -115,7 +115,7 @@ class SendEmailNode(Node):
         from_addr = (getattr(self.config, "from_addr", "") or data.get("from") or data.get("from_addr") or "").strip()
         dry_run = bool(getattr(self.config, "dry_run", False))
 
-        from app.core.smtp_notify import send_email
+        from app.core.notify.smtp_notify import send_email
 
         receipt = send_email(
             to=to_list,

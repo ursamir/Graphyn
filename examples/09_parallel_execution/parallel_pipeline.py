@@ -17,7 +17,7 @@ Pipeline shape (fan-out DAG):
   dataset_ingest(up)   ─┬─ audio_conditioner → segmenter → augment → audio_exporter (up)
   dataset_ingest(down) ─┘─ audio_conditioner → segmenter → augment → audio_exporter (down)
 
-In parallel mode, all four branches execute concurrently in Wave 1.
+In parallel mode, all four branches execute concurrently in the first parallel group.
 In sequential mode, they execute one after another.
 
 What this shows:
@@ -94,7 +94,7 @@ def build_parallel_graph() -> GraphIR:
     """Build a fan-out DAG: N independent branches, one per label class.
 
     Wave 0: N dataset_ingest nodes (source nodes — no predecessors)
-    Wave 1: N audio_conditioner nodes
+    First parallel group: N audio_conditioner nodes
     Wave 2: N segmenter nodes
     Wave 3: N augmentation_pipeline nodes
     Wave 4: N audio_exporter nodes (sink nodes)
@@ -179,7 +179,7 @@ class WaveLogger(PipelineLogger):
 
 def run_pipeline(graph: GraphIR, parallel: bool, label: str) -> float:
     """Run the pipeline in the given mode and return wall-clock seconds."""
-    from app.core.runtime_backend import get_backend
+    from app.core.execution.runtime_backend import get_backend
 
     logger = WaveLogger() if parallel else PipelineLogger()
     t0 = time.perf_counter()
@@ -216,7 +216,7 @@ def main() -> None:
     print(f"  Shape: {len(LABELS)} independent branches (fan-out DAG)")
 
     # Show the execution waves
-    from app.core.planner import PipelineGraph, _ir_to_pipeline_config
+    from app.core.execution.planner import PipelineGraph, _ir_to_pipeline_config
     cfg = _ir_to_pipeline_config(graph)
     pg  = PipelineGraph(cfg)
     waves = pg.execution_waves

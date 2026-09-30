@@ -170,7 +170,7 @@ workspace/
 
 Output **ports** are typed values passed to the next node. They are not folders.
 
-Filesystem write destinations are **config keys** (`output_path`, `output_dir`, `export_dir`, `checkpoint_dir`, …). Before `process()`, `NodeExecutor` and the isolated plugin worker call `app.core.write_paths.ensure_node_write_dirs` so every node gets those directories created, jailed under `project_dir()`.
+Filesystem write destinations are **config keys** (`output_path`, `output_dir`, `export_dir`, `checkpoint_dir`, …). Before `process()`, `NodeExecutor` and the isolated plugin worker call `app.core.paths.write_paths.ensure_node_write_dirs` so every node gets those directories created, jailed under `project_dir()`.
 
 Read keys (`path`, `model_path`) are **not** created. Empty ingest folders would look like a successful dataset with zero wavs.
 

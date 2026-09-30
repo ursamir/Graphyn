@@ -5,6 +5,11 @@ not a security sandbox. Do not expose ``python_code`` to untrusted multi-tenant
 graph authors without process/container isolation (Option B — future).
 Network stays off by default (``allow_network=False``); filesystem access
 requires an explicit ``allowed_paths`` allowlist.
+
+Hardening (defense-in-depth): the namespace exposes curated ``json`` / ``math``
+wrappers (never real module objects), ``import`` resolves only to those
+wrappers, and the AST filter rejects any ``_``-prefixed attribute plus
+exec/spawn families and frame/code introspection attributes.
 """
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ import json
 import logging
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from pydantic import Field
 
@@ -51,7 +57,59 @@ _DISALLOWED_ATTRS = frozenset({
     "urlopen", "urlretrieve", "Request", "spawn", "fork",
 })
 
-_ALLOWED_IMPORTS = frozenset({"json", "math", "re", "datetime", "itertools", "functools", "collections", "decimal", "statistics"})
+# Rejected on *any* attribute access (not only calls): process-spawn / exec
+# families and frame / code / traceback introspection that can reach real
+# globals or builtins without dunder names (e.g. ``gen.gi_frame.f_globals``).
+_FORBIDDEN_ANY_ATTRS = frozenset({
+    # process execution / spawning
+    "system", "popen", "Popen", "spawn", "fork", "forkpty",
+    "posix_spawn", "posix_spawnp",
+    "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe",
+    "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe",
+    "startfile", "kill", "killpg",
+    # module escape hatches
+    "modules", "codecs", "builtins", "import_module", "load_module",
+    # frame / code / traceback / generator introspection
+    "gi_frame", "gi_code", "gi_yieldfrom", "gi_suspended",
+    "cr_frame", "cr_code", "cr_await", "cr_origin",
+    "ag_frame", "ag_code", "ag_await",
+    "f_globals", "f_locals", "f_builtins", "f_back", "f_code",
+    "tb_frame", "tb_next", "co_code", "co_consts", "func_globals",
+    "mro",
+})
+
+# Only these module names may be imported, and the import yields a curated
+# namespace wrapper (never the real module object — real modules expose
+# ``json.codecs.sys.modules`` style traversal to ``os``).
+_ALLOWED_IMPORTS = frozenset({"json", "math"})
+
+
+def _safe_json_namespace() -> SimpleNamespace:
+    return SimpleNamespace(
+        loads=json.loads,
+        dumps=json.dumps,
+        JSONDecodeError=json.JSONDecodeError,
+    )
+
+
+_MATH_PUBLIC = tuple(
+    n for n in dir(math)
+    if not n.startswith("_") and (callable(getattr(math, n)) or isinstance(getattr(math, n), (int, float)))
+)
+
+
+def _safe_math_namespace() -> SimpleNamespace:
+    return SimpleNamespace(**{n: getattr(math, n) for n in _MATH_PUBLIC})
+
+
+def _safe_import_factory(modules: dict[str, Any]):
+    def _import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: A002
+        root = str(name or "").split(".")[0]
+        if level or root not in modules or "." in str(name or ""):
+            raise RestrictedCodeError(f"Import of {name!r} is not allowed in python_code.")
+        return modules[root]
+
+    return _import
 
 
 class RestrictedCodeError(RuntimeError):
@@ -70,9 +128,19 @@ def _validate_source(tree: ast.AST, *, allow_network: bool, allowed_paths: list[
                 if not n:
                     continue
                 if n in _DISALLOWED_NAMES or n not in _ALLOWED_IMPORTS:
-                    if n in {"httpx", "requests", "urllib", "aiohttp"} and allow_network:
-                        continue
+                    # allow_network no longer unlocks raw network modules: a real
+                    # module object is an escape hatch (``mod.os`` / ``mod.sys``).
                     raise RestrictedCodeError(f"Import of {n!r} is not allowed in python_code.")
+            if isinstance(node, ast.ImportFrom) and (node.level or "." in (node.module or "")):
+                raise RestrictedCodeError("Relative / dotted imports are not allowed in python_code.")
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name == "*" or alias.name.startswith("_") or alias.name in _FORBIDDEN_ANY_ATTRS:
+                        raise RestrictedCodeError(
+                            f"Import of {alias.name!r} from {node.module!r} is not allowed in python_code."
+                        )
+            if isinstance(node, ast.Import) and any("." in a.name for a in node.names):
+                raise RestrictedCodeError("Dotted imports are not allowed in python_code.")
         if isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name) and func.id in {"eval", "exec", "compile", "__import__"}:
@@ -81,11 +149,22 @@ def _validate_source(tree: ast.AST, *, allow_network: bool, allowed_paths: list[
                 raise RestrictedCodeError("open() is not allowed unless allowed_paths is set.")
             if isinstance(func, ast.Attribute) and func.attr in _DISALLOWED_ATTRS:
                 raise RestrictedCodeError(f"Call to .{func.attr}() is not allowed.")
+            if isinstance(func, ast.Attribute) and func.attr in {"format", "format_map"}:
+                raise RestrictedCodeError(
+                    "str.format()/format_map() is not allowed in python_code "
+                    "(format-string dunder traversal)."
+                )
             if isinstance(func, ast.Attribute) and func.attr == "system":
                 raise RestrictedCodeError("os.system is not allowed.")
         if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
             raise RestrictedCodeError("Dunder attribute access is not allowed in python_code.")
-        if isinstance(node, ast.Name) and node.id in {"__builtins__", "__loader__", "__spec__"}:
+        if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            raise RestrictedCodeError(
+                f"Private attribute access (.{node.attr}) is not allowed in python_code."
+            )
+        if isinstance(node, ast.Attribute) and node.attr in _FORBIDDEN_ANY_ATTRS:
+            raise RestrictedCodeError(f"Attribute .{node.attr} is not allowed in python_code.")
+        if isinstance(node, ast.Name) and node.id in {"__builtins__", "__loader__", "__spec__", "__import__"}:
             raise RestrictedCodeError(f"Name {node.id!r} is not allowed.")
 
 
@@ -141,7 +220,7 @@ class PythonCodeNode(Node):
     class Config(NodeConfig):
         source: str = Field(default='', title="Source", description="Python source for trusted operators. Not a sandbox.")
         allowed_paths: list = Field(default=[], title="Allowed paths", description="Explicit filesystem read allowlist (empty = open() denied).")
-        allow_network: bool = Field(default=False, title="Allow network", description="Permit network-related imports (default Off; still not a sandbox).")
+        allow_network: bool = Field(default=False, title="Allow network", description="Reserved (default Off). Raw network module imports are refused in-process; use an egress-checked HTTP node. Not a sandbox.")
 
     def process(self, inputs):
         source = self.config.source or ""
@@ -155,7 +234,17 @@ class PythonCodeNode(Node):
         except SyntaxError as exc:
             raise RestrictedCodeError(f"Syntax error in python_code: {exc}") from exc
         allowed_paths = [str(p) for p in (self.config.allowed_paths or [])]
-        _validate_source(tree, allow_network=bool(self.config.allow_network), allowed_paths=allowed_paths)
+        allow_network = bool(self.config.allow_network)
+        if allow_network:
+            from app.core.config import http_egress_mode
+
+            if http_egress_mode() == "restricted":
+                raise RestrictedCodeError(
+                    "python_code allow_network=True is refused while "
+                    "GRAPHYN_HTTP_EGRESS_MODE=restricted. Use an egress-checked "
+                    "HTTP node, or set egress mode to trusted."
+                )
+        _validate_source(tree, allow_network=allow_network, allowed_paths=allowed_paths)
 
         safe_builtins = {
             "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
@@ -168,6 +257,9 @@ class PythonCodeNode(Node):
         }
         if allowed_paths:
             safe_builtins["open"] = _safe_open(allowed_paths)
+        safe_json = _safe_json_namespace()
+        safe_math = _safe_math_namespace()
+        safe_builtins["__import__"] = _safe_import_factory({"json": safe_json, "math": safe_math})
 
         ns: dict[str, Any] = {
             "__builtins__": safe_builtins,
@@ -178,8 +270,9 @@ class PythonCodeNode(Node):
                 "allow_network": bool(self.config.allow_network),
             },
             "output": None,
-            "json": json,
-            "math": math,
+            # Curated wrappers only — never inject real module objects.
+            "json": safe_json,
+            "math": safe_math,
         }
         compiled = compile(tree, "<python_code>", "exec")
         exec(compiled, ns, ns)  # noqa: S102 — trusted-operator exec; AST filters are defense-in-depth only

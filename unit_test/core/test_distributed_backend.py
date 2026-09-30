@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.ir.models import GraphIR, IRMetadata, IRNode
-from app.core.runtime_backend import (
+from app.core.execution.runtime_backend import (
     LocalPythonBackend,
     _reset_backend_registry,
     get_backend,
@@ -67,7 +67,7 @@ def test_distributed_backend_no_workers_equals_local(monkeypatch):
     from app.core.ir.models import IRCapabilityMetadata
 
     monkeypatch.setattr(
-        "app.core.registry_runtime.resolve_capability",
+        "app.core.host.registry_runtime.resolve_capability",
         lambda ir_node, registry: IRCapabilityMetadata(requires_gpu=False),
     )
     result = backend.execute(graph)
@@ -98,7 +98,7 @@ def test_distributed_all_local_still_short_circuits(monkeypatch):
 
     monkeypatch.setattr(LocalPythonBackend, "execute", _fake)
     monkeypatch.setattr(
-        "app.core.registry_runtime.resolve_capability",
+        "app.core.host.registry_runtime.resolve_capability",
         lambda ir_node, registry: IRCapabilityMetadata(requires_gpu=False),
     )
     assert DistributedBackend().execute(graph) == {"ok": True}

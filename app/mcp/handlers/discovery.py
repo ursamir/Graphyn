@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.registry_runtime import get_registry
+from app.core.host.registry_runtime import get_registry
 
 # ── Tool schema constants ─────────────────────────────────────────────────────
 

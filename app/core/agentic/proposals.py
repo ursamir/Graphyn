@@ -8,7 +8,7 @@ Owns:             proposals/ store under project_dir, create/list/get/accept/rej
 Public Surface:   create_proposal, list_proposals, get_proposal, accept_proposal,
                   reject_proposal, diff_graphs, proposals_dir.
 Must NOT:         Import from app.api; call an LLM; embed secrets in IR.
-Dependencies:     stdlib, app.core.config.project_dir, app.core.audit.record_audit.
+Dependencies:     stdlib, app.core.config.project_dir, app.core.trust.audit.record_audit.
 Reason To Change: Proposal schema evolves or diff granularity changes.
 """
 from __future__ import annotations
@@ -277,7 +277,7 @@ def create_proposal(
         _write_proposal(path, proposal)
 
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=actor_s,
@@ -353,7 +353,7 @@ def accept_proposal(
         _write_proposal(path, data)
 
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=(actor or "human").strip() or "human",
@@ -392,7 +392,7 @@ def reject_proposal(
         _write_proposal(path, data)
 
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=(actor or "human").strip() or "human",

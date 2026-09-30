@@ -109,6 +109,12 @@ class EmbeddingGeneratorNode(Node):
     # ── SISO process ──────────────────────────────────────────────────────────
 
     def process(self, samples: list[AudioSample]) -> list[EmbeddingVector]:
+        if isinstance(samples, dict):
+            samples = samples.get("input") or samples.get("samples") or samples.get("output") or []
+        if samples is None:
+            samples = []
+        if not isinstance(samples, list):
+            samples = [samples]
         model_key = self.config.model.lower()
         results: list[EmbeddingVector] = []
 

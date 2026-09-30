@@ -20,8 +20,8 @@ node_types = ["rag_generate"]
 credential_kinds = ["openai_compat", "ollama"]
 
 [config_schema.rag_generate]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true, return stub answer (no network)." }
-provider = { type = "string", title = "Provider", default = "stub", description = "stub | openai_compat | ollama", enum = ["stub", "openai_compat", "ollama"] }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default answers from the local extractive reader." }
+provider = { type = "string", title = "Provider", default = "local", description = "local | openai_compat | ollama", enum = ["local", "openai_compat", "ollama"] }
 model = { type = "string", title = "Model", default = "gpt-4o-mini", description = "Chat model id." }
 temperature = { type = "number", title = "Temperature", default = 0.0, description = "Sampling temperature." }
 api_secret_name = { type = "string", title = "API secret name", default = "OPENAI_API_KEY", description = "Secret/env for openai_compat." }

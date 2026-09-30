@@ -98,7 +98,7 @@ Before **Open**: if no `activeProject`, gate modal (“Templates stamp into a pr
 - **Edge:** sticky lineage bar (project + source `run_id`); optional artifact pick on Configure; persist `source_run_id` / `source_artifact_id` on the package run meta; step owns actions (header Artifacts only when package exists); skip-to-download gated on package artifact; failure → Open run / Trace.
 - **Artifacts detail:** keep Trace + Replay; soften Open run / Editor duplication without removing utility
 
-### 4.5 Project pipelines (Wave 1)
+### 4.5 Project pipelines
 
 Durable graphs for a workspace: `workspace/datasets/output/{project}/pipelines/{name}.graph.json`.
 

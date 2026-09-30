@@ -1,4 +1,4 @@
-"""Unit tests for app/core/run_manager.py — Req 5 criteria 8–9, Req 20."""
+"""Unit tests for app/core/runs/run_journal.py — Req 5 criteria 8–9, Req 20."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.run_journal import RunManager
+from app.core.runs.run_journal import RunManager
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ def test_save_graph_ir_computes_graph_hash(run: RunManager):
 
 def test_register_artifact_returns_artifact_record(run: RunManager):
     """Req 20.1 — register_artifact returns an ArtifactRecord."""
-    from app.core.artifact_store import ArtifactRecord
+    from app.core.artifacts.artifact_store import ArtifactRecord
     record = run.register_artifact(
         node_id="node_0",
         node_type="audio_conditioner",
@@ -161,9 +161,13 @@ def test_run_creates_base_path_directory(run: RunManager):
 
 
 def test_run_writes_initial_meta_json(run: RunManager):
-    """RunManager writes meta.json with status='running' on construction."""
+    """RunManager writes meta.json with status='pending' on construction.
+
+    PERS-001 / SRS §13.2: the durable record is ``pending`` until the
+    orchestrator calls ``mark_running()`` when execution actually starts.
+    """
     meta_path = Path(run.base_path) / "meta.json"
     assert meta_path.exists()
     meta = json.loads(meta_path.read_text())
-    assert meta["status"] == "running"
+    assert meta["status"] == "pending"
     assert meta["run_id"] == run.run_id

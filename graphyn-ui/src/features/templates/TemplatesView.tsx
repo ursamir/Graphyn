@@ -7,6 +7,7 @@ import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
 import { MarketplaceBrowse } from './MarketplaceBrowse'
+import { loadMarketplaceCatalog } from './marketplaceCatalog'
 import { humanizeTemplateName, humanNodeLabel } from '../../lib/format'
 
 function isExampleTemplate(name: string): boolean {
@@ -121,6 +122,11 @@ export default function TemplatesView() {
   const [syncing, setSyncing] = React.useState(false)
   const [filter, setFilter] = React.useState<'all' | 'examples' | 'saved' | 'marketplace'>('all')
   const [search, setSearch] = React.useState('')
+  const [marketplaceTotal, setMarketplaceTotal] = React.useState<number | null>(null)
+  const [marketplaceStats, setMarketplaceStats] = React.useState<{
+    matched: number
+    loaded: number
+  } | null>(null)
   /* Facets. Every template declares required_plugins and tags, and the gallery
      used both only as invisible search-blob text — 30 cards in one flat wall
      with no way to narrow to "the ASR ones" short of guessing the right word. */
@@ -138,6 +144,14 @@ export default function TemplatesView() {
   const [projectPick, setProjectPick] = React.useState('')
   const [projectCreate, setProjectCreate] = React.useState('')
   const [projectGateBusy, setProjectGateBusy] = React.useState(false)
+
+  const onMarketplaceStats = React.useCallback(
+    (stats: { matched: number; loaded: number; total: number }) => {
+      setMarketplaceTotal(stats.total)
+      setMarketplaceStats({ matched: stats.matched, loaded: stats.loaded })
+    },
+    [],
+  )
 
   const load = React.useCallback(async () => {
     setError(null)
@@ -173,6 +187,14 @@ export default function TemplatesView() {
   React.useEffect(() => {
     void load()
   }, [load])
+
+  React.useEffect(() => {
+    void loadMarketplaceCatalog()
+      .then((doc) => setMarketplaceTotal(doc.total_templates))
+      .catch(() => {
+        /* MarketplaceBrowse will surface the error when that tab opens */
+      })
+  }, [])
 
   React.useEffect(() => {
     if (!menuFor && !headerMoreOpen) return
@@ -409,6 +431,23 @@ export default function TemplatesView() {
       return humanizeTemplateName(a.name).localeCompare(humanizeTemplateName(b.name))
     })
   const exampleCount = (items ?? []).filter((t) => isExample(t.name)).length
+  const savedCount = (items ?? []).filter((t) => !isExample(t.name)).length
+  const workspaceCount = (items ?? []).length
+  const marketplaceCount = marketplaceTotal ?? 0
+  const allCount = workspaceCount + marketplaceCount
+
+  const shownLabel = (() => {
+    if (filter === 'marketplace') {
+      if (marketplaceStats == null || marketplaceTotal == null) return 'Loading marketplace…'
+      return `${marketplaceStats.loaded} on page · ${marketplaceStats.matched} matched · ${marketplaceTotal} in catalog`
+    }
+    if (items == null) return 'Loading…'
+    if (filter === 'all') {
+      const mkt = marketplaceTotal == null ? '…' : String(marketplaceTotal)
+      return `${filtered.length} workspace · ${mkt} marketplace`
+    }
+    return `${filtered.length} shown`
+  })()
 
   // No top padding on the scroll container: a sticky child's `top: 0` resolves
   // against the scrollport's PADDING box, so `p-6` pinned the filter bar 24px
@@ -424,8 +463,8 @@ export default function TemplatesView() {
         // was the one thing the page never said out loud.
         description={
           activeProject
-            ? `Starter graphs to copy into a workspace. “Open in Editor” copies one into ${activeProject}, where you can edit and run it — the original template is left untouched.`
-            : 'Starter graphs to copy into a workspace. Opening one asks which workspace to copy it into, then loads it in the Editor.'
+            ? `Starter graphs to copy into a workspace. “Open in Editor” copies one into ${activeProject}, where you can edit and run it — the original template is left untouched. Workspace starters + Marketplace catalog share this page.`
+            : 'Starter graphs to copy into a workspace. Opening one asks which workspace to copy it into, then loads it in the Editor. Workspace starters + Marketplace catalog share this page.'
         }
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -535,12 +574,12 @@ export default function TemplatesView() {
           <div className="flex flex-wrap gap-1.5">
             {(
               [
-                ['all', 'All', items?.length ?? 0],
-                ['examples', 'Examples', exampleCount],
-                ['saved', 'Saved', Math.max(0, (items?.length ?? 0) - exampleCount)],
-                ['marketplace', 'Marketplace', null],
+                ['all', 'All', allCount, items != null && marketplaceTotal != null],
+                ['examples', 'Examples', exampleCount, items != null],
+                ['saved', 'Saved', savedCount, items != null],
+                ['marketplace', 'Marketplace', marketplaceCount, marketplaceTotal != null],
               ] as const
-            ).map(([id, label, count]) => (
+            ).map(([id, label, count, ready]) => (
               <button
                 key={id}
                 type="button"
@@ -548,8 +587,7 @@ export default function TemplatesView() {
                 onClick={() => setFilter(id as typeof filter)}
                 data-testid={id === 'marketplace' ? 'templates-tab-marketplace' : undefined}
               >
-                {label}
-                {id !== 'marketplace' && items ? ` ${count}` : ''}
+                {label} {ready ? count : '…'}
               </button>
             ))}
           </div>
@@ -559,6 +597,7 @@ export default function TemplatesView() {
               className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as TemplateSort)}
+              disabled={filter === 'marketplace'}
             >
               {(Object.keys(TEMPLATE_SORT_LABEL) as TemplateSort[]).map((k) => (
                 <option key={k} value={k}>
@@ -567,9 +606,7 @@ export default function TemplatesView() {
               ))}
             </select>
           </label>
-          <span className="ml-auto text-[12px] text-ink-400">
-            {items == null ? 'Loading…' : `${filtered.length} shown`}
-          </span>
+          <span className="ml-auto text-[12px] text-ink-400">{shownLabel}</span>
         </div>
 
         {/* Plugin facets. Every card lists its required plugins; those chips are
@@ -611,10 +648,15 @@ export default function TemplatesView() {
         )}
       </div>
 
-      {filter === 'marketplace' ? <MarketplaceBrowse search={search} /> : null}
+      {filter === 'marketplace' ? (
+        <MarketplaceBrowse search={search} onStats={onMarketplaceStats} />
+      ) : null}
 
       {filter !== 'marketplace' ? (
       <>
+      {filter === 'all' ? (
+        <h2 className="text-sm font-semibold text-ink-800">Workspace starters ({filtered.length})</h2>
+      ) : null}
       {items === null ? (
         <LoadingBlock />
       ) : filtered.length === 0 ? (
@@ -964,6 +1006,15 @@ export default function TemplatesView() {
           })}
         </ul>
       )}
+
+      {filter === 'all' ? (
+        <div className="space-y-3 border-t border-ink-200/80 pt-5">
+          <h2 className="text-sm font-semibold text-ink-800">
+            Marketplace ({marketplaceTotal ?? '…'})
+          </h2>
+          <MarketplaceBrowse search={search} onStats={onMarketplaceStats} />
+        </div>
+      ) : null}
 
       </> ) : null}
 

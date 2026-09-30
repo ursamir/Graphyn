@@ -396,3 +396,6 @@ def _parse_manifest_dict(data: dict[str, Any], source: str) -> PluginManifest:
     except Exception as exc:
         _rewrap_validation_error(exc, source=source)
         raise  # unreachable; satisfies type checkers
+
+# Public names. A leading underscore stays private to this module.
+rewrap_validation_error = _rewrap_validation_error

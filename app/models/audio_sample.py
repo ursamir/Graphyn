@@ -6,7 +6,7 @@ Responsibility:   Domain data type for a single audio clip. Participates in
 Owns:             AudioSample Pydantic model — waveform array, sample rate,
                   label, path, metadata dict.
 Public Surface:   AudioSample
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain pipeline execution logic.
 Dependencies:     pydantic (PortDataType base), stdlib (typing).
 Reason To Change: AudioSample schema gains new fields, or the PortDataType

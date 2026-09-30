@@ -19,7 +19,10 @@ from app.core.credentials.errors import (
     NeedsCredentialsError,
 )
 from app.core.credentials.kinds import get_kind, require_kind
-from app.core.credentials import store as cred_store
+from app.core.credentials.store import (
+    get_default_for_kind,
+    get_payload,
+)
 
 
 def _env_fallback_payload(kind_id: str) -> dict[str, Any]:
@@ -31,7 +34,7 @@ def _env_fallback_payload(kind_id: str) -> dict[str, Any]:
         val = ""
         # Prefer named secret store, then process env (same as secrets.resolve_secret).
         try:
-            from app.core.secrets import resolve_secret
+            from app.core.trust.secrets import resolve_secret
             val = resolve_secret(env_name) or ""
         except Exception:
             val = (os.environ.get(env_name) or "").strip()
@@ -59,13 +62,13 @@ def _env_fallback_payload(kind_id: str) -> dict[str, Any]:
             secret_name = (os.environ.get("GRAPHYN_SMTP_PASSWORD_SECRET") or "").strip()
             if secret_name:
                 try:
-                    from app.core.secrets import resolve_secret
+                    from app.core.trust.secrets import resolve_secret
                     out["password"] = resolve_secret(secret_name) or ""
                 except Exception:
                     out["password"] = (os.environ.get(secret_name) or "").strip()
     if kind_id == "gemini" and not out.get("api_key"):
         try:
-            from app.core.secrets import resolve_secret
+            from app.core.trust.secrets import resolve_secret
             alt = resolve_secret("GOOGLE_API_KEY") or os.environ.get("GOOGLE_API_KEY", "").strip()
         except Exception:
             alt = os.environ.get("GOOGLE_API_KEY", "").strip()
@@ -75,7 +78,7 @@ def _env_fallback_payload(kind_id: str) -> dict[str, Any]:
         base = out.get("base_url") or os.environ.get("OPENAI_BASE_URL") or ""
         if "groq.com" in str(base).lower():
             try:
-                from app.core.secrets import resolve_secret
+                from app.core.trust.secrets import resolve_secret
                 g = resolve_secret("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY", "").strip()
             except Exception:
                 g = os.environ.get("GROQ_API_KEY", "").strip()
@@ -100,7 +103,7 @@ def resolve_connection(
 
     if cid:
         try:
-            kind_found, payload = cred_store.get_payload(cid)
+            kind_found, payload = get_payload(cid)
         except CredentialNotFoundError as exc:
             raise NeedsCredentialsError(
                 f"needs-credentials: connection {cid!r} not found or revoked "
@@ -118,10 +121,10 @@ def resolve_connection(
             "payload": payload,
         }
 
-    default = cred_store.get_default_for_kind(kid)
+    default = get_default_for_kind(kid)
     if default is not None:
         try:
-            _, payload = cred_store.get_payload(default["id"])
+            _, payload = get_payload(default["id"])
         except CredentialNotFoundError:
             payload = None
         else:
@@ -204,11 +207,10 @@ def resolve_llm_credentials(
     source = resolved.get("source") or "none"
 
     if not payload.get("api_key") and api_secret_name and provider != "ollama":
-        try:
-            from app.core.secrets import resolve_secret
-            val = resolve_secret(api_secret_name) or os.environ.get(api_secret_name, "").strip()
-        except Exception:
-            val = os.environ.get(api_secret_name or "", "").strip()
+        # api_secret_name is graph-author controlled: resolve_secret() applies
+        # the env_secret_name_allowed() guard (no GRAPHYN_* / non-secret env).
+        from app.core.trust.secrets import resolve_secret
+        val = resolve_secret(api_secret_name) or ""
         if val:
             payload["api_key"] = val
             source = source if source not in {"none", ""} else "env"

@@ -1,11 +1,11 @@
-"""Unit tests for app/core/events.py — Req 19 criteria 7–11."""
+"""Unit tests for app/core/execution/events.py — Req 19 criteria 7–11."""
 from __future__ import annotations
 
 import asyncio
 
 import pytest
 
-from app.core.events import (
+from app.core.execution.events import (
     EventSource,
     QueueSource,
     TimerSource,

@@ -18,7 +18,7 @@ from pydantic import Field
 
 import numpy as np
 
-from app.core.egress import validate_http_egress_url
+from app.core.trust.egress import validate_http_egress_url
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
@@ -53,11 +53,9 @@ _WHISPER_MODELS: dict[tuple[str, str, str], Any] = {}
 
 
 def _resolve_key(env_key: str) -> str:
-    try:
-        from app.core.secrets import resolve_secret
-        return resolve_secret(env_key)
-    except Exception:
-        return os.environ.get(env_key, "").strip()
+    # Guarded: secret store, then env only for secret-shaped non-GRAPHYN_ names.
+    from app.core.trust.secrets import resolve_secret
+    return resolve_secret(env_key)
 
 
 def _coerce_samples(audio: Any) -> list:
@@ -73,15 +71,35 @@ def _base_looks_like_groq(base: str) -> bool:
     return "groq.com" in b
 
 
-def _resolve_openai_compat_key(base_url: str) -> str:
-    """OPENAI_API_KEY, or GROQ_API_KEY when base_url points at Groq."""
-    key = _resolve_key("OPENAI_API_KEY")
-    if key:
-        return key
-    base = (base_url or os.environ.get("OPENAI_BASE_URL") or "").strip()
-    if _base_looks_like_groq(base):
-        return _resolve_key("GROQ_API_KEY")
-    return ""
+def _resolve_openai_compat_endpoint(base_url: str) -> tuple[str, str]:
+    """Return ``(api_key, base_url)`` for openai_compat with key ↔ base_url binding.
+
+    Same precedence and binding as ``llm_client.chat_completion`` /
+    ``structured_llm``: connection > workspace default > secret/env
+    ``OPENAI_API_KEY`` (``GROQ_API_KEY`` for Groq hosts). A resolved key is
+    never sent to a node-chosen ``base_url`` other than the endpoint bound to
+    its credential unless the host is in ``GRAPHYN_LLM_BASE_URL_ALLOWLIST``
+    (env/secret keys only) — fails closed with RuntimeError.
+    """
+    from app.core.ml.llm_client import NeedsCredentialsError, resolve_llm_endpoint
+
+    node_base = (base_url or "").strip().rstrip("/")
+    if node_base:
+        # Egress policy first (fail before any credential is resolved).
+        validate_http_egress_url(f"{node_base}/audio/transcriptions")
+    try:
+        endpoint = resolve_llm_endpoint(
+            provider="openai_compat",
+            base_url=node_base or None,
+            api_secret_name="OPENAI_API_KEY",
+        )
+    except NeedsCredentialsError as exc:
+        raise RuntimeError(
+            f"AsrTranscribeNode: provider='openai_compat' requires a connection or "
+            f"secret/env OPENAI_API_KEY (or GROQ_API_KEY when base_url is Groq): {exc} "
+            "For a free local path use provider='local_whisper'."
+        ) from exc
+    return str(endpoint["api_key"]), str(endpoint["base_url"]).rstrip("/")
 
 
 class AsrTranscribeNode(Node):
@@ -165,12 +183,11 @@ class AsrTranscribeNode(Node):
                 f"Use {', '.join(_ALL_PROVIDERS)}."
             )
         if provider == "openai_compat":
-            api_key = _resolve_openai_compat_key(self.config.base_url or "")
-            env_hint = "OPENAI_API_KEY (or GROQ_API_KEY when base_url is Groq)"
-        else:
-            env_key = _PROVIDER_ENV[provider]
-            api_key = _resolve_key(env_key)
-            env_hint = env_key
+            api_key, base = _resolve_openai_compat_endpoint(self.config.base_url or "")
+            return self._http_transcribe(provider, api_key, samples, base=base)
+        env_key = _PROVIDER_ENV[provider]
+        api_key = _resolve_key(env_key)
+        env_hint = env_key
         if not api_key:
             raise RuntimeError(
                 f"AsrTranscribeNode: provider={provider!r} requires secret/env "
@@ -248,11 +265,11 @@ class AsrTranscribeNode(Node):
             },
         )
 
-    def _http_transcribe(self, provider: str, api_key: str, samples: list) -> Transcript:
+    def _http_transcribe(self, provider: str, api_key: str, samples: list, *, base: str = "") -> Transcript:
         sample = samples[0]
         path = getattr(sample, "path", "") or ""
         if provider == "openai_compat":
-            return self._openai_compat(api_key, path, sample)
+            return self._openai_compat(api_key, path, sample, base=base)
         if provider == "assemblyai":
             return self._assemblyai(api_key, path)
         return self._deepgram(api_key, path)
@@ -290,12 +307,11 @@ class AsrTranscribeNode(Node):
         resp.raise_for_status()
         return resp.json()
 
-    def _openai_compat(self, api_key: str, path: str, sample) -> Transcript:
-        base = (
-            self.config.base_url
-            or os.environ.get("OPENAI_BASE_URL")
-            or "https://api.openai.com/v1"
-        ).rstrip("/")
+    def _openai_compat(self, api_key: str, path: str, sample, *, base: str = "") -> Transcript:
+        # ``base`` comes from _resolve_openai_compat_endpoint (bound to the key).
+        base = (base or "").rstrip("/")
+        if not base:
+            raise RuntimeError("AsrTranscribeNode: openai_compat endpoint unresolved")
         url = f"{base}/audio/transcriptions"
         headers = {"Authorization": f"Bearer {api_key}"}
         model = self.config.model or ("whisper-large-v3-turbo" if _base_looks_like_groq(base) else "whisper-1")

@@ -1,12 +1,43 @@
 # app/mcp/handlers/data_ops.py
-"""MCP tools for dataset versions (Wave B leftover from Wave A §21.3)."""
+"""MCP tools for dataset versions (Wave B leftover from Wave A §21.3).
+
+project / version arguments are validated (project-name regex, ``v<N>``
+version regex, resolved-under-datasets/output) before any filesystem access.
+"""
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 
 def _err(error_type: str, message: str) -> dict[str, Any]:
     return {"error": True, "error_type": error_type, "message": message}
+
+
+_SAFE_PROJECT_RE = re.compile(r"^[\w\-]{1,128}$")
+_SAFE_VERSION_RE = re.compile(r"^v\d+(\.\d+)*$")
+
+
+def _safe_dataset_path(project: str, version: str | None = None) -> Path:
+    """Resolve datasets_output_dir()/project[/version] or raise ValueError.
+
+    Mirrors ProjectManager._validate_name and the dataset version regex, then
+    checks the resolved path stays under the datasets/output root (no ``../``).
+    """
+    from app.core.config import datasets_output_dir
+
+    if not _SAFE_PROJECT_RE.fullmatch(project or ""):
+        raise ValueError(f"Invalid project name {project!r}")
+    if version is not None and not _SAFE_VERSION_RE.fullmatch(version or ""):
+        raise ValueError(f"Invalid version {version!r} (expected v<N>[.<N>...])")
+    base = datasets_output_dir()
+    path = base / project / version if version is not None else base / project
+    root = base.resolve()
+    resolved = path.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError("Dataset path escapes the datasets/output root")
+    return path
 
 
 def _meta_props() -> dict[str, Any]:
@@ -34,18 +65,19 @@ LIST_DATASET_VERSIONS_SCHEMA = {
 
 
 def list_dataset_versions_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.config import datasets_output_dir
-    from app.core.dataset_versions import read_manifest
-    import re
+    from app.core.mlops.dataset_versions import read_manifest
 
     args = arguments or {}
     project = str(args.get("project") or "").strip()
     if not project:
         return _err("validation_failed", "project is required")
-    root = datasets_output_dir() / project
+    try:
+        root = _safe_dataset_path(project)
+    except ValueError as exc:
+        return _err("validation_failed", str(exc))
     if not root.is_dir():
         return {"project": project, "versions": []}
-    version_re = re.compile(r"^v\d+(\.\d+)*$")
+    version_re = _SAFE_VERSION_RE
     versions = []
     for child in sorted(root.iterdir()):
         if not child.is_dir() or not version_re.match(child.name):
@@ -77,15 +109,17 @@ GET_DATASET_VERSION_SCHEMA = {
 
 def get_dataset_version_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     from datetime import datetime, timezone
-    from app.core.config import datasets_output_dir
-    from app.core.dataset_versions import read_manifest
+    from app.core.mlops.dataset_versions import read_manifest
 
     args = arguments or {}
     project = str(args.get("project") or "").strip()
     version = str(args.get("version") or "").strip()
     if not project or not version:
         return _err("validation_failed", "project and version are required")
-    path = datasets_output_dir() / project / version
+    try:
+        path = _safe_dataset_path(project, version)
+    except ValueError as exc:
+        return _err("validation_failed", str(exc))
     if not path.is_dir():
         return _err("not_found", f"Dataset version {project}/{version} not found")
     man = read_manifest(path, ensure=True, enforce_sha256=True)

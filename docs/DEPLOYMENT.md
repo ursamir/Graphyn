@@ -14,6 +14,8 @@ export GRAPHYN_API_TOKEN=change-me
 
 Put the same token in the UI **Settings** dialog (Bearer) after `docker compose up`.
 
+Unauthenticated dev (token unset): requests whose `Host` is not `localhost` / `*.localhost` / an IP literal / `graphyn-api` get **403** (DNS-rebinding guard). Reaching a tokenless API by LAN hostname needs `GRAPHYN_ALLOWED_HOSTS=gpu-box,…` (or set a token).
+
 Public honesty (no Bearer required): `GET /api/v1/system/auth-status`, `/system/health`, `/system/readiness` — so the console can show **Auth on** / Mode before you paste a token.
 
 ## Docker Compose (API :8001 + UI :5173)
@@ -29,6 +31,12 @@ docker compose up --build -d graphyn-api graphyn-ui
 - `./workspace` is the project dir (`GRAPHYN_PROJECT_DIR`)
 - Pipeline outputs belong in `workspace/artifacts/<name>/runs/<run_id>/` on that bind-mount (not `examples/` inside the image). Successful runs also publish `workspace/artifacts/<name>/latest/` (symlink, or a `latest.json` pointer if the host cannot symlink) so later graphs can consume the production alias.
 
+**UI-only rebuild (do not touch the API):** recreating `graphyn-api` re-runs plugin install/venv boot and routinely takes **15+ minutes**. For `graphyn-ui` changes only:
+
+```bash
+docker compose build graphyn-ui && docker compose up -d --no-deps graphyn-ui
+```
+
 ### Prove the IDE loop (Server-99 / Docker)
 
 After the stack is healthy, run the smoke script (token is never printed):
@@ -41,7 +49,9 @@ chmod +x scripts/docker_ide_loop_smoke.sh
 # GRAPHYN_BASE_URL=http://127.0.0.1:5173 ./scripts/docker_ide_loop_smoke.sh
 ```
 
-Covers: public auth/mode → nodes → project → pipeline PUT → validate → run-async → Trace.
+Covers: public auth/mode → nodes (paginated `{items,total}`) → project
+(paginated `items`; create may return 422 if the project already exists) →
+pipeline PUT → validate → run-async → poll until `succeeded`/`completed` → Trace.
 
 Stop:
 
@@ -99,12 +109,6 @@ Trainer/evaluator still retry on GPU OOM by rebuilding on CPU. Do not run `nvidi
 
 The default **spectral** backend for podcast-leveling uses `scipy` and `noisereduce` (3.x). Those packages are in `setup.py` `install_requires` and mirrored in `requirements.txt`, so the Compose image installs them via the Dockerfile install path above. **Do not** add `torch` or `deepfilternet` to the base image; they remain optional for the DeepFilterNet backend.
 
-## Wave-1 deep runtimes (YOLO / TFLM / RAG)
-
-See [ops/WAVE1_PLUGIN_VENVS.md](./ops/WAVE1_PLUGIN_VENVS.md). Install capability
-venvs with `scripts/install_wave1_plugin_venvs.sh` (CPU torch by default so
-FaceRecognition keeps the GPU).
-
 ## Isolated plugin venvs (trainer / edge-optimizer)
 
 TensorFlow and Keras are **not** in the API image. Isolated plugins install them into per-plugin venvs under `GRAPHYN_HOME` (`/data/graphyn-home/plugins/venvs/<name>/`). Existing volumes that predate this need a one-liner:
@@ -132,6 +136,22 @@ venv/bin/python -m app.cli.main worker start \
   --worker-id server99-gpu --labels gpu --pool gpu-lab
 ```
 
-Full runbook, env vars, cancel/lease, and UI (**Deploy → Workers**): [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md).
+Full runbook, env vars, cancel/lease, and UI (**Deploy → Workers**): [DISTRIBUTED_EXECUTION.md](./DISTRIBUTED_EXECUTION.md). Upgrade the control plane and every worker **together** — the job/worker models reject unknown fields (`extra="forbid"`).
+
+## Environment reference — security & Mode B (2026-09 additions)
+
+| Variable | Default | Where | Purpose |
+|---|---|---|---|
+| `GRAPHYN_SECRET_ENV_ALLOWLIST` | empty | `app/core/trust/secrets.py` | Comma-separated env names that node-selected secret names may read even if not secret-shaped / `GRAPHYN_*` (default: only `*_API_KEY`, `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_DSN`, `*_URL`, `*_URI` not starting with `GRAPHYN_`) |
+| `GRAPHYN_LLM_BASE_URL_ALLOWLIST` | empty | `app/core/ml/llm_client.py` | Comma-separated hosts an env/secret LLM key may be sent to when a node `base_url` differs from the provider default (connections bind to their own `base_url`) |
+| `GRAPHYN_ALLOWED_HOSTS` | empty | `app/api/main.py` | Extra `Host` names accepted while `GRAPHYN_API_TOKEN` is unset; `*` disables the guard |
+| `GRAPHYN_JOB_RESULT_TTL_S` | `3600` | `distributed/queue.py` | Unread job results protected from history trim for this long |
+| `GRAPHYN_JOB_EVENTS_MAX` | `500` | `distributed/queue.py` | Events kept per job (newest) |
+| `GRAPHYN_WORKER_COMPLETE_RETRIES` | `6` | worker CLI | Retries (exp. backoff) for `complete` / blob upload on network errors / 5xx; 4xx is final |
+| `GRAPHYN_DISTRIBUTED_BLOB_GRACE_S` | `30` | `distributed/backend.py` | Delay before run-end transfer-blob cleanup (`0` = immediately) |
+| `GRAPHYN_DISTRIBUTED_KEEP_BLOBS` | unset | `distributed/backend.py` | `1` disables run-end blob cleanup (debugging) |
+| `GRAPHYN_DISTRIBUTED_BLOB_TTL_S` | `86400` | `run_cleanup.py` | `cleanup_workspace` sweep age for `artifacts/distributed_blobs` |
+
+See [TRUST_MODEL.md](./TRUST_MODEL.md) for the security rationale and [DISTRIBUTED_EXECUTION.md § Env reference](./DISTRIBUTED_EXECUTION.md) for the full Mode B list.
 
 Helm / K8s backend remain future (P3) — not shipped.

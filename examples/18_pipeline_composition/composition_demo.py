@@ -184,8 +184,8 @@ def main() -> None:
 
     # ── Run composed pipeline ─────────────────────────────────────────
     print(f"\n{_h('Step 5 — Run composed pipeline')}")
-    from app.core.runtime_backend import get_backend
-    from app.core.run_manager import RunManager
+    from app.core.execution.runtime_backend import get_backend
+    from app.core.runs.run_journal import RunManager
     run_mgr = RunManager()
     get_backend().execute(composed_ir, run_manager=run_mgr, use_cache=False)
     print(f"  {_ok('✓')} Composed pipeline completed")

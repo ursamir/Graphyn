@@ -1,14 +1,16 @@
 """FrameSampleNode — Sample frames fps/every-N/keyframe
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import json
 
 import importlib
 import logging
 from pathlib import Path
-from typing import ClassVar, Any
+from typing import ClassVar, Any, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
@@ -30,6 +32,72 @@ VideoSample = _types.VideoSample
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _text(obj: Any) -> str:
+    if obj is None:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, list):
+        return "\n".join(_text(x) for x in obj)
+    data = _dump(obj)
+    if isinstance(data, dict):
+        for key in ("text", "query", "content", "answer", "user", "path", "value", "final"):
+            if data.get(key):
+                return str(data[key])
+        return json.dumps(data, default=str)
+    return str(obj)
+
+def _frame_sample(config, inputs, types):
+    data = _dump(inputs.get("input"))
+    path = str(data.get("path") or "") if isinstance(data, dict) else _text(inputs.get("input"))
+    out = Path(str(_cfg(config, "output_dir", "workspace/artifacts/video/frames") or "frames"))
+    out.mkdir(parents=True, exist_ok=True)
+    frames = []
+    every = int(_cfg(config, "every_n", 1) or 1)
+    try:
+        import cv2  # type: ignore
+
+        cap = cv2.VideoCapture(path)
+        idx = 0
+        while cap.isOpened() and len(frames) < 30:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if idx % every == 0:
+                dest = out / f"frame_{idx:05d}.jpg"
+                cv2.imwrite(str(dest), frame)
+                frames.append(_T(types, "ImageSample", path=str(dest), metadata={"index": idx}))
+            idx += 1
+        cap.release()
+    except Exception:
+        if path and Path(path).is_file():
+            frames.append(_T(types, "ImageSample", path=path, metadata={"index": 0, "note": "opencv unavailable; source path retained"}))
+    return frames
+
+
 
 class FrameSampleNode(Node):
     """Sample frames fps/every-N/keyframe"""
@@ -42,7 +110,7 @@ class FrameSampleNode(Node):
         description="Sample frames fps/every-N/keyframe",
         category="Processing",
         version="0.1.0",
-        tags=["video", "stub"],
+        tags=["video"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -59,8 +127,8 @@ class FrameSampleNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
-        mode: str = Field(default='fps', title="Mode", description="Mode.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
+        mode: Literal["fps", "every_n", "keyframe"] = Field(default='fps', title="Mode", description="Mode.")
         fps: float = Field(default=1.0, title="Fps", description="Fps.")
         every_n: int = Field(default=30, title="Every n", description="Every n.")
         output_dir: str = Field(default='workspace/datasets/video/frames', title="Output dir", description="Output dir.")
@@ -72,10 +140,17 @@ class FrameSampleNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'video' / 'frame_sample'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = []
             return {"output": result}
@@ -85,23 +160,8 @@ class FrameSampleNode(Node):
         except ImportError as exc:
             raise ImportError(f"frame_sample: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'video' / 'frame_sample'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": []}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _frame_sample(self.config, inputs, _types)}

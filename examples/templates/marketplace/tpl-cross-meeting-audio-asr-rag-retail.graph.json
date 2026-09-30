@@ -3,7 +3,7 @@
   "metadata": {
     "name": "tpl-cross-meeting-audio-asr-rag-retail",
     "seed": 42,
-    "description": "Meeting audio to ASR to RAG \u2014 adapted for retail.",
+    "description": "Meeting audio to ASR to RAG — adapted for retail.",
     "created_at": null,
     "tags": [
       "cross-pack",
@@ -110,19 +110,31 @@
       "src_id": "n4",
       "src_port": "output",
       "dst_id": "n5",
-      "dst_port": "input"
+      "dst_port": "embeddings"
+    },
+    {
+      "src_id": "n3",
+      "src_port": "output",
+      "dst_id": "n5",
+      "dst_port": "chunks"
     },
     {
       "src_id": "n5",
       "src_port": "output",
       "dst_id": "n6",
-      "dst_port": "input"
+      "dst_port": "store"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n6",
+      "dst_port": "query"
     },
     {
       "src_id": "n6",
       "src_port": "output",
       "dst_id": "n7",
-      "dst_port": "input"
+      "dst_port": "prompt"
     }
   ],
   "parameters": {}

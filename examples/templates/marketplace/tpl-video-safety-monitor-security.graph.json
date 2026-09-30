@@ -76,10 +76,10 @@
       "src_id": "n1",
       "src_port": "output",
       "dst_id": "n2",
-      "dst_port": "input"
+      "dst_port": "images"
     },
     {
-      "src_id": "n2",
+      "src_id": "n0",
       "src_port": "output",
       "dst_id": "n3",
       "dst_port": "input"

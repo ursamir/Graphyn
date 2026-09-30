@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["vision", "yolo", "wave1"]
+tags = ["vision", "yolo"]
 
 dependencies = [
     "numpy>=1.24",
@@ -23,7 +23,7 @@ runtime = "isolated"
 node_types = ["yolo_export"]
 
 [config_schema.yolo_export]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
 format = { type = "string", title = "Format", default = "onnx", description = "Format." }
 imgsz = { type = "integer", title = "Imgsz", default = 640, description = "Imgsz." }
 half = { type = "boolean", title = "Half", default = false, description = "Half." }

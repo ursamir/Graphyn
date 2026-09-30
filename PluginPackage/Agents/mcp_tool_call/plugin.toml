@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["agents", "mcp", "stub"]
+tags = ["agents", "mcp"]
 
 dependencies = [
     "numpy>=1.24",
@@ -17,6 +17,9 @@ runtime = "inprocess"
 node_types = ["mcp_tool_call"]
 
 [config_schema.mcp_tool_call]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
-timeout_s = { type = "number", title = "Timeout s", default = 60.0, description = "Timeout s." }
-server = { type = "string", title = "Server", default = "graphyn", description = "Server." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
+timeout_s = { type = "number", title = "Timeout s", default = 60.0, description = "Per-call timeout in seconds (0 = no limit)." }
+server = { type = "string", title = "Server", default = "graphyn", description = "MCP server (only 'graphyn' in-process)." }
+tool_name = { type = "string", title = "Tool name", default = "", description = "Pin the tool; data may not request a different one." }
+tool_allowlist = { type = "array", title = "Tool allowlist", default = [], description = "Tools this node may call. Empty → refuse all." }
+allow_mutating = { type = "boolean", title = "Allow mutating", default = false, description = "Permit state-changing / credential / execution tools (still must be allowlisted)." }

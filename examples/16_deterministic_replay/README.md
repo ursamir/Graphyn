@@ -60,8 +60,8 @@ Every pipeline run stores its `GraphIR` as `workspace/runs/{run_id}/graph.json`.
 ```python
 import json
 from app.core.ir.loader import load_ir
-from app.core.runtime_backend import get_backend
-from app.core.run_manager import RunManager
+from app.core.execution.runtime_backend import get_backend
+from app.core.runs.run_journal import RunManager
 
 # Load the stored graph
 with open(f"workspace/runs/{run_id}/graph.json") as f:

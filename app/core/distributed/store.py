@@ -9,11 +9,14 @@ Responsibility:   Persistence backends for worker registry + job queue so the
 Owns:             DistributedStateStore protocol, MemoryStateStore,
                   DiskStateStore, RedisStateStore, get_distributed_store(),
                   _reset_distributed_store() (tests).
-Public Surface:   All classes/functions above; mutate_queue / mutate_workers for atomic RMW.
+Public Surface:   All classes/functions above; mutate_queue / mutate_workers for
+                  atomic RMW; state_version(kind) change token for caches.
 Must NOT:         Import from app.domain, app.api, or orchestrator.
-Dependencies:     stdlib (json, os, threading, pathlib, fcntl, typing),
+Dependencies:     stdlib (json, os, threading, pathlib, typing),
+                  app.core.persist.file_lock,
                   app.core.config (project_dir, redis_url) — lazy.
-Reason To Change: New store backends, key layout, atomic claim / CAS policy.
+Reason To Change: New store backends, key layout, atomic claim / CAS policy,
+                  or change-token (state_version) semantics for read-through.
 """
 from __future__ import annotations
 
@@ -80,6 +83,14 @@ class DistributedStateStore(ABC):
         """
         ...
 
+    def state_version(self, kind: str) -> Any:
+        """Cheap change token for ``kind`` (``"queue"`` / ``"workers"``).
+
+        Read-only callers (registry/queue caches) reload only when the token
+        changed. ``None`` means "unknown — always read through" (Redis).
+        """
+        return None
+
     @property
     def backend_id(self) -> str:
         return type(self).__name__
@@ -95,8 +106,17 @@ class MemoryStateStore(DistributedStateStore):
             "order": [],
             "results": {},
             "events": {},
+            "paused_runs": [],
         }
         self._lock = threading.RLock()
+        self._versions = {"queue": 0, "workers": 0}
+
+    def _bump(self, kind: str) -> None:
+        self._versions[kind] = self._versions.get(kind, 0) + 1
+
+    def state_version(self, kind: str) -> Any:
+        with self._lock:
+            return self._versions.get(kind, 0)
 
     @property
     def backend_id(self) -> str:
@@ -111,9 +131,11 @@ class MemoryStateStore(DistributedStateStore):
             self._workers = {
                 k: dict(v) if isinstance(v, dict) else v for k, v in (workers or {}).items()
             }
+            self._bump("workers")
 
     def load_queue(self) -> dict[str, Any]:
         with self._lock:
+            paused = self._queue.get("paused_runs")
             return {
                 "jobs": dict(self._queue.get("jobs") or {}),
                 "order": list(self._queue.get("order") or []),
@@ -122,10 +144,12 @@ class MemoryStateStore(DistributedStateStore):
                     k: list(v) if isinstance(v, list) else v
                     for k, v in (self._queue.get("events") or {}).items()
                 },
+                "paused_runs": list(paused) if isinstance(paused, list) else [],
             }
 
     def save_queue(self, snapshot: dict[str, Any]) -> None:
         with self._lock:
+            paused = snapshot.get("paused_runs")
             self._queue = {
                 "jobs": dict(snapshot.get("jobs") or {}),
                 "order": list(snapshot.get("order") or []),
@@ -134,12 +158,15 @@ class MemoryStateStore(DistributedStateStore):
                     k: list(v) if isinstance(v, list) else v
                     for k, v in (snapshot.get("events") or {}).items()
                 },
+                "paused_runs": list(paused) if isinstance(paused, list) else [],
             }
+            self._bump("queue")
 
     def mutate_queue(
         self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
     ) -> T:
         with self._lock:
+            paused = self._queue.get("paused_runs")
             snap = {
                 "jobs": dict(self._queue.get("jobs") or {}),
                 "order": list(self._queue.get("order") or []),
@@ -148,8 +175,10 @@ class MemoryStateStore(DistributedStateStore):
                     k: list(v) if isinstance(v, list) else v
                     for k, v in (self._queue.get("events") or {}).items()
                 },
+                "paused_runs": list(paused) if isinstance(paused, list) else [],
             }
             new_snap, result = mutator(snap)
+            new_paused = new_snap.get("paused_runs")
             self._queue = {
                 "jobs": dict(new_snap.get("jobs") or {}),
                 "order": list(new_snap.get("order") or []),
@@ -158,7 +187,9 @@ class MemoryStateStore(DistributedStateStore):
                     k: list(v) if isinstance(v, list) else v
                     for k, v in (new_snap.get("events") or {}).items()
                 },
+                "paused_runs": list(new_paused) if isinstance(new_paused, list) else [],
             }
+            self._bump("queue")
             return result
 
     def mutate_workers(
@@ -173,6 +204,7 @@ class MemoryStateStore(DistributedStateStore):
                 k: dict(v) if isinstance(v, dict) else v
                 for k, v in (new_snap or {}).items()
             }
+            self._bump("workers")
             return result
 
 
@@ -203,6 +235,18 @@ class DiskStateStore(DistributedStateStore):
     def backend_id(self) -> str:
         return "disk"
 
+    def state_version(self, kind: str) -> Any:
+        """``(inode, mtime_ns, size)`` of the state file — changes on every replace."""
+        workers_path, jobs_path, _, _ = self._paths()
+        path = jobs_path if kind == "queue" else workers_path
+        try:
+            st = path.stat()
+        except FileNotFoundError:
+            return ("missing",)
+        except OSError:
+            return None
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
+
     def _paths(self) -> tuple[Path, Path, Path, Path]:
         base = _distributed_dir(self._root)
         return (
@@ -213,40 +257,42 @@ class DiskStateStore(DistributedStateStore):
         )
 
     def _empty_queue(self) -> dict[str, Any]:
-        return {"jobs": {}, "order": [], "results": {}, "events": {}}
+        return {"jobs": {}, "order": [], "results": {}, "events": {}, "paused_runs": []}
 
     def _normalize_queue(self, data: Any) -> dict[str, Any]:
         if not isinstance(data, dict):
             return self._empty_queue()
+        paused = data.get("paused_runs")
         return {
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), dict) else {},
             "order": data.get("order") if isinstance(data.get("order"), list) else [],
             "results": data.get("results") if isinstance(data.get("results"), dict) else {},
             "events": data.get("events") if isinstance(data.get("events"), dict) else {},
+            "paused_runs": [str(x) for x in paused if str(x).strip()]
+            if isinstance(paused, list)
+            else [],
         }
 
     def _read_json(
         self, path: Path, default: Any, *, fail_closed: bool = False
     ) -> Any:
-        try:
-            import fcntl
-        except ImportError:  # pragma: no cover — non-POSIX
-            fcntl = None  # type: ignore[assignment]
+        from app.core.persist.file_lock import LockUnavailable, acquire, release
 
         if not path.is_file():
             if fail_closed:
                 raise FileNotFoundError(f"DiskStateStore: missing state file {path}")
             return default
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                if fcntl is not None:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            with open(path, "rb") as f:
+                acquire(f, exclusive=False)
                 try:
-                    data = json.load(f)
+                    raw = f.read()
+                    data = json.loads(raw.decode("utf-8")) if raw else None
                 finally:
-                    if fcntl is not None:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    release(f)
             return data if data is not None else default
+        except LockUnavailable:
+            raise
         except FileNotFoundError:
             if fail_closed:
                 raise
@@ -266,13 +312,19 @@ class DiskStateStore(DistributedStateStore):
         ``workers.lock``) for durable RMW. Unique temps prevent concurrent
         writers from colliding on a shared ``workers.json.tmp`` path.
         """
+        self._write_payload(path, self._serialize(data))
+
+    @staticmethod
+    def _serialize(data: Any) -> str:
+        return json.dumps(data, indent=2, default=str, sort_keys=True)
+
+    def _write_payload(self, path: Path, payload: str) -> None:
         import uuid
 
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.parent / (
             f".{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
         )
-        payload = json.dumps(data, indent=2, default=str, sort_keys=True)
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(payload)
@@ -289,26 +341,21 @@ class DiskStateStore(DistributedStateStore):
     def _with_lock_file(
         self, lock_path: Path, exclusive: bool, fn: Callable[[], T]
     ) -> T:
-        """Run ``fn`` while holding an advisory lock file (cross-process)."""
-        try:
-            import fcntl
-        except ImportError:  # pragma: no cover
-            fcntl = None  # type: ignore[assignment]
+        """Run ``fn`` while holding an advisory lock file (cross-process).
+
+        Fails closed when the platform has no lock primitive.
+        """
+        from app.core.persist.file_lock import acquire, release
 
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        # threading lock serializes in-process; flock covers cross-process.
+        # threading lock serializes in-process; file lock covers cross-process.
         with self._lock:
-            with open(lock_path, "a+", encoding="utf-8") as lf:
-                if fcntl is not None:
-                    fcntl.flock(
-                        lf.fileno(),
-                        fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
-                    )
+            with open(lock_path, "a+b") as lf:
+                acquire(lf, exclusive=exclusive)
                 try:
                     return fn()
                 finally:
-                    if fcntl is not None:
-                        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                    release(lf)
 
     def _with_jobs_lock(self, exclusive: bool, fn: Callable[[], T]) -> T:
         """Run ``fn`` while holding the queue lock file (cross-process)."""
@@ -356,35 +403,52 @@ class DiskStateStore(DistributedStateStore):
                     "order": snapshot.get("order") or [],
                     "results": snapshot.get("results") or {},
                     "events": snapshot.get("events") or {},
+                    "paused_runs": list(snapshot.get("paused_runs") or []),
                 },
             )
 
         self._with_jobs_lock(True, _save)
 
+    def _read_raw(self, path: Path) -> bytes | None:
+        """Raw bytes of a state file (caller holds the matching lock)."""
+        try:
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
+
     def mutate_queue(
         self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
     ) -> T:
+        """Locked RMW; skips the rewrite + fsync when the snapshot is unchanged."""
+
         def _mutate() -> T:
             _, jobs_path, _, _ = self._paths()
             # Missing jobs.json is empty queue (first write). fail_closed only
             # when the file exists but is unreadable/corrupt.
-            snap = self._normalize_queue(
-                self._read_json(
-                    jobs_path,
-                    self._empty_queue(),
-                    fail_closed=jobs_path.is_file(),
-                )
-            )
+            raw = self._read_raw(jobs_path)
+            if raw:
+                try:
+                    data = json.loads(raw.decode("utf-8"))
+                except Exception as exc:
+                    raise OSError(
+                        f"DiskStateStore: unreadable state file {jobs_path}: {exc}"
+                    ) from exc
+            else:
+                data = None
+            snap = self._normalize_queue(data if data is not None else self._empty_queue())
             new_snap, result = mutator(snap)
-            self._write_json(
-                jobs_path,
+            payload = self._serialize(
                 {
                     "jobs": new_snap.get("jobs") or {},
                     "order": new_snap.get("order") or [],
                     "results": new_snap.get("results") or {},
                     "events": new_snap.get("events") or {},
-                },
+                    "paused_runs": list(new_snap.get("paused_runs") or []),
+                }
             )
+            if raw is not None and raw.decode("utf-8", errors="replace") == payload:
+                return result  # unchanged — no rewrite / fsync
+            self._write_payload(jobs_path, payload)
             return result
 
         return self._with_jobs_lock(True, _mutate)
@@ -394,10 +458,18 @@ class DiskStateStore(DistributedStateStore):
     ) -> T:
         def _mutate() -> T:
             workers_path, _, _, _ = self._paths()
-            data = self._read_json(workers_path, {})
+            raw = self._read_raw(workers_path)
+            try:
+                data = json.loads(raw.decode("utf-8")) if raw else {}
+            except Exception as exc:
+                log.warning("DiskStateStore: failed to read %s: %s", workers_path, exc)
+                data = {}
             snap = data if isinstance(data, dict) else {}
             new_snap, result = mutator(dict(snap))
-            self._write_json(workers_path, new_snap or {})
+            payload = self._serialize(new_snap or {})
+            if raw is not None and raw.decode("utf-8", errors="replace") == payload:
+                return result
+            self._write_payload(workers_path, payload)
             return result
 
         return self._with_workers_lock(True, _mutate)
@@ -469,7 +541,7 @@ class RedisStateStore(DistributedStateStore):
 
     def load_queue(self) -> dict[str, Any]:
         client = self._redis()
-        empty = {"jobs": {}, "order": [], "results": {}, "events": {}}
+        empty = {"jobs": {}, "order": [], "results": {}, "events": {}, "paused_runs": []}
         if client is None:
             return empty
         try:
@@ -479,11 +551,15 @@ class RedisStateStore(DistributedStateStore):
             data = json.loads(raw)
             if not isinstance(data, dict):
                 return empty
+            paused = data.get("paused_runs")
             return {
                 "jobs": data.get("jobs") if isinstance(data.get("jobs"), dict) else {},
                 "order": data.get("order") if isinstance(data.get("order"), list) else [],
                 "results": data.get("results") if isinstance(data.get("results"), dict) else {},
                 "events": data.get("events") if isinstance(data.get("events"), dict) else {},
+                "paused_runs": [str(x) for x in paused if str(x).strip()]
+                if isinstance(paused, list)
+                else [],
             }
         except Exception as exc:
             log.warning("RedisStateStore.load_queue failed: %s", exc)
@@ -503,6 +579,7 @@ class RedisStateStore(DistributedStateStore):
                             "order": snapshot.get("order") or [],
                             "results": snapshot.get("results") or {},
                             "events": snapshot.get("events") or {},
+                            "paused_runs": list(snapshot.get("paused_runs") or []),
                         },
                         default=str,
                     ),
@@ -512,200 +589,146 @@ class RedisStateStore(DistributedStateStore):
             log.warning("RedisStateStore.save_queue failed: %s", exc)
 
     def _normalize_queue(self, data: Any) -> dict[str, Any]:
-        empty = {"jobs": {}, "order": [], "results": {}, "events": {}}
+        empty = {"jobs": {}, "order": [], "results": {}, "events": {}, "paused_runs": []}
         if not isinstance(data, dict):
             return empty
+        paused = data.get("paused_runs")
         return {
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), dict) else {},
             "order": data.get("order") if isinstance(data.get("order"), list) else [],
             "results": data.get("results") if isinstance(data.get("results"), dict) else {},
             "events": data.get("events") if isinstance(data.get("events"), dict) else {},
+            "paused_runs": [str(x) for x in paused if str(x).strip()]
+            if isinstance(paused, list)
+            else [],
         }
+
+    # Lock is only a fairness hint; correctness comes from WATCH/MULTI CAS, so a
+    # lock that expires mid-mutate can no longer cause a lost update.
+    LOCK_TIMEOUT_S = 30
+    LOCK_BLOCKING_TIMEOUT_S = 10
+    WATCH_RETRIES = 32
+
+    @staticmethod
+    def _encode_queue(snap: dict[str, Any]) -> str:
+        return json.dumps(
+            {
+                "jobs": snap.get("jobs") or {},
+                "order": snap.get("order") or [],
+                "results": snap.get("results") or {},
+                "events": snap.get("events") or {},
+                "paused_runs": list(snap.get("paused_runs") or []),
+            },
+            default=str,
+        )
+
+    def _decode_queue(self, raw: Any) -> dict[str, Any]:
+        return self._normalize_queue(json.loads(raw) if raw else None)
+
+    @staticmethod
+    def _decode_workers(raw: Any) -> dict[str, Any]:
+        snap = json.loads(raw) if raw else {}
+        return dict(snap) if isinstance(snap, dict) else {}
+
+    def _cas_mutate(
+        self,
+        key: str,
+        mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]],
+        *,
+        decode: Callable[[Any], dict[str, Any]],
+        encode: Callable[[dict[str, Any]], str],
+    ) -> T:
+        """Lock (fairness) + WATCH/MULTI (correctness) read-modify-write."""
+        client = self._redis()
+        lock = None
+        acquired = False
+        try:
+            lock = client.lock(
+                key + ":lock",
+                timeout=self.LOCK_TIMEOUT_S,
+                blocking_timeout=self.LOCK_BLOCKING_TIMEOUT_S,
+            )
+            acquired = bool(lock.acquire(blocking=True))
+        except Exception as exc:
+            log.warning(
+                "RedisStateStore: lock acquire failed for %s (WATCH-only CAS): %s",
+                key,
+                exc,
+            )
+            lock = None
+        try:
+            with self._lock:
+                for _ in range(self.WATCH_RETRIES):
+                    pipe = client.pipeline()
+                    try:
+                        pipe.watch(key)
+                        raw = pipe.get(key)
+                        snap = decode(raw)
+                        new_snap, result = mutator(snap)
+                        pipe.multi()
+                        pipe.set(key, encode(new_snap), ex=self.TTL_S)
+                        pipe.execute()
+                        return result
+                    except Exception as exc:
+                        # redis.WatchError → another writer won; retry on fresh data.
+                        if "Watch" in type(exc).__name__:
+                            continue
+                        log.warning("RedisStateStore: mutate %s failed: %s", key, exc)
+                        raise
+                    finally:
+                        reset = getattr(pipe, "reset", None)
+                        if callable(reset):
+                            try:
+                                reset()
+                            except Exception:
+                                pass
+                raise RuntimeError(f"RedisStateStore: exceeded WATCH retries for {key}")
+        finally:
+            if lock is not None and acquired:
+                try:
+                    lock.release()
+                except Exception as exc:
+                    # Typically LockNotOwnedError: the lock expired during a long
+                    # mutate. The write itself was CAS-protected by WATCH.
+                    log.warning(
+                        "RedisStateStore: lock release for %s failed "
+                        "(expired mid-mutate? write was WATCH-protected): %s",
+                        key,
+                        exc,
+                    )
 
     def mutate_queue(
         self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
     ) -> T:
-        """Optimistic CAS via Redis WATCH/MULTI; falls back to process lock."""
+        """WATCH/MULTI CAS (lock only for fairness); preserves ``paused_runs``."""
         client = self._redis()
-        empty = {"jobs": {}, "order": [], "results": {}, "events": {}}
         if client is None:
             # No Redis: mutate in-memory empty snapshot (non-durable).
             with self._lock:
-                new_snap, result = mutator(dict(empty))
+                _new_snap, result = mutator(self._normalize_queue(None))
                 return result
-
-        # Prefer Redis lock for fairness across processes; WATCH as CAS backup.
-        lock = None
-        try:
-            try:
-                lock = client.lock(
-                    self.QUEUE_KEY + ":lock",
-                    timeout=10,
-                    blocking_timeout=10,
-                )
-                acquired = lock.acquire(blocking=True)
-            except Exception as exc:
-                log.warning(
-                    "RedisStateStore.mutate_queue: lock acquire failed "
-                    "(falling back to WATCH): %s",
-                    exc,
-                )
-                acquired = False
-                lock = None
-
-            with self._lock:
-                if acquired:
-                    try:
-                        raw = client.get(self.QUEUE_KEY)
-                        snap = self._normalize_queue(
-                            json.loads(raw) if raw else empty
-                        )
-                        new_snap, result = mutator(snap)
-                        client.set(
-                            self.QUEUE_KEY,
-                            json.dumps(
-                                {
-                                    "jobs": new_snap.get("jobs") or {},
-                                    "order": new_snap.get("order") or [],
-                                    "results": new_snap.get("results") or {},
-                                    "events": new_snap.get("events") or {},
-                                },
-                                default=str,
-                            ),
-                            ex=self.TTL_S,
-                        )
-                        return result
-                    finally:
-                        try:
-                            lock.release()
-                        except Exception:
-                            pass
-
-                # WATCH/MULTI optimistic retry loop
-                for _ in range(32):
-                    try:
-                        pipe = client.pipeline()
-                        pipe.watch(self.QUEUE_KEY)
-                        raw = pipe.get(self.QUEUE_KEY)
-                        snap = self._normalize_queue(
-                            json.loads(raw) if raw else empty
-                        )
-                        new_snap, result = mutator(snap)
-                        pipe.multi()
-                        pipe.set(
-                            self.QUEUE_KEY,
-                            json.dumps(
-                                {
-                                    "jobs": new_snap.get("jobs") or {},
-                                    "order": new_snap.get("order") or [],
-                                    "results": new_snap.get("results") or {},
-                                    "events": new_snap.get("events") or {},
-                                },
-                                default=str,
-                            ),
-                            ex=self.TTL_S,
-                        )
-                        pipe.execute()
-                        return result
-                    except Exception as exc:
-                        # redis.WatchError → retry; other errors abort.
-                        if "Watch" in type(exc).__name__:
-                            continue
-                        log.warning("RedisStateStore.mutate_queue failed: %s", exc)
-                        raise
-                raise RuntimeError(
-                    "RedisStateStore.mutate_queue: exceeded WATCH retries"
-                )
-        except Exception:
-            if lock is not None:
-                try:
-                    lock.release()
-                except Exception:
-                    pass
-            raise
+        return self._cas_mutate(
+            self.QUEUE_KEY,
+            mutator,
+            decode=self._decode_queue,
+            encode=self._encode_queue,
+        )
 
     def mutate_workers(
         self, mutator: Callable[[dict[str, Any]], tuple[dict[str, Any], T]]
     ) -> T:
-        """Optimistic CAS via Redis WATCH/MULTI; falls back to process lock."""
+        """WATCH/MULTI CAS (lock only for fairness)."""
         client = self._redis()
         if client is None:
             with self._lock:
-                new_snap, result = mutator({})
+                _new_snap, result = mutator({})
                 return result
-
-        lock = None
-        try:
-            try:
-                lock = client.lock(
-                    self.WORKERS_KEY + ":lock",
-                    timeout=10,
-                    blocking_timeout=10,
-                )
-                acquired = lock.acquire(blocking=True)
-            except Exception as exc:
-                log.warning(
-                    "RedisStateStore.mutate_workers: lock acquire failed "
-                    "(falling back to WATCH): %s",
-                    exc,
-                )
-                acquired = False
-                lock = None
-
-            with self._lock:
-                if acquired:
-                    try:
-                        raw = client.get(self.WORKERS_KEY)
-                        snap = json.loads(raw) if raw else {}
-                        if not isinstance(snap, dict):
-                            snap = {}
-                        new_snap, result = mutator(dict(snap))
-                        client.set(
-                            self.WORKERS_KEY,
-                            json.dumps(new_snap or {}, default=str),
-                            ex=self.TTL_S,
-                        )
-                        return result
-                    finally:
-                        try:
-                            lock.release()
-                        except Exception:
-                            pass
-
-                for _ in range(32):
-                    try:
-                        pipe = client.pipeline()
-                        pipe.watch(self.WORKERS_KEY)
-                        raw = pipe.get(self.WORKERS_KEY)
-                        snap = json.loads(raw) if raw else {}
-                        if not isinstance(snap, dict):
-                            snap = {}
-                        new_snap, result = mutator(dict(snap))
-                        pipe.multi()
-                        pipe.set(
-                            self.WORKERS_KEY,
-                            json.dumps(new_snap or {}, default=str),
-                            ex=self.TTL_S,
-                        )
-                        pipe.execute()
-                        return result
-                    except Exception as exc:
-                        if "Watch" in type(exc).__name__:
-                            continue
-                        log.warning(
-                            "RedisStateStore.mutate_workers failed: %s", exc
-                        )
-                        raise
-                raise RuntimeError(
-                    "RedisStateStore.mutate_workers: exceeded WATCH retries"
-                )
-        except Exception:
-            if lock is not None:
-                try:
-                    lock.release()
-                except Exception:
-                    pass
-            raise
+        return self._cas_mutate(
+            self.WORKERS_KEY,
+            mutator,
+            decode=self._decode_workers,
+            encode=lambda snap: json.dumps(snap or {}, default=str),
+        )
 
 
 _STORE: DistributedStateStore | None = None
@@ -764,3 +787,6 @@ def _reset_distributed_store(
     with _STORE_LOCK:
         _STORE = store if store is not None else MemoryStateStore()
         return _STORE
+
+# Public names. A leading underscore stays private to this module.
+reset_distributed_store = _reset_distributed_store

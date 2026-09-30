@@ -12,4 +12,4 @@ alwaysApply: false
 - SISO: one `input` + one `output` → `process(self, data)` auto-wrapped.
 - Capability fields on metadata (`cacheable`, `deterministic`, `streaming_support`, …) default safe; set accurately for MCP/schedulers.
 - Register via AutoDiscovery / plugin entry points — do not hand-register in production paths.
-- Detail: `.kiro/steering/node-base.md`, `node-registry.md`, `docs/NODE_SYSTEM.md`.
+- Detail: `docs/PLUGIN_GUIDE.md`, `docs/ARCHITECTURE.md`, `docs/NODE_CATALOGUE.md`.

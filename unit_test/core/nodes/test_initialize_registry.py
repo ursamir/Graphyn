@@ -126,7 +126,7 @@ def test_initialize_registry_loads_temp_plugin_install_dir(
     monkeypatch.delenv("GRAPHYN_PLUGINS_DIR", raising=False)
 
     from app.core.nodes import initialize_registry, registry
-    from app.core.registry_runtime import get_registry
+    from app.core.host.registry_runtime import get_registry
 
     initialize_registry()
     reg = get_registry()

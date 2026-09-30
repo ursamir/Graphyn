@@ -35,7 +35,7 @@ if WORKSPACE_ROOT not in sys.path:
 
 from app.core.ir.loader import CURRENT_IR_VERSION, dump_ir_to_file  # noqa: E402
 from app.core.ir.models import GraphIR, IREdge, IRMetadata, IRNode  # noqa: E402
-from app.core.runtime_backend import get_backend  # noqa: E402
+from app.core.execution.runtime_backend import get_backend  # noqa: E402
 from app.core.plugins.manager import PluginManager  # noqa: E402
 
 # ── Install required plugins ──────────────────────────────────────────────────

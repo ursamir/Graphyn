@@ -13,8 +13,8 @@ Reason To Change: New cross-cutting platform error categories are needed.
 ## Why this file exists
 
 ResumeError was previously defined in app.core.nodes.errors (BC2 — Node
-Contract), but it is raised by app.core.run_journal (BC6 — Observability &
-Storage) and caught by app.core.orchestrator (BC5 — Execution Runtime).
+Contract), but it is raised by app.core.runs.run_journal (BC6 — Observability &
+Storage) and caught by app.core.execution.orchestrator (BC5 — Execution Runtime).
 It has nothing to do with the node contract. Moving it here removes the
 incorrect BC2 ownership and eliminates the implicit cross-context dependency.
 

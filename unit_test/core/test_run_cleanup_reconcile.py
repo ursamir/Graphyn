@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.core.run_cleanup import cleanup_workspace, reconcile_abandoned_runs
+from app.core.runs.run_cleanup import cleanup_workspace, reconcile_abandoned_runs
 
 
 def _write_run(ws: Path, run_id: str, *, status: str, age_hours: float) -> Path:
@@ -68,7 +68,7 @@ def test_reconcile_preserves_run_dir_mtime(tmp_workspace: Path):
 
 
 def test_reconcile_skips_active_registered_run(tmp_workspace: Path):
-    from app.core import run_control
+    import app.core.runs.run_control as run_control
 
     run_dir = _write_run(tmp_workspace, "active-run", status="running", age_hours=5)
 

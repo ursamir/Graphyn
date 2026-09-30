@@ -10,7 +10,7 @@ from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
-from app.core.runtime_backend import LocalPythonBackend, _reset_backend_registry
+from app.core.execution.runtime_backend import LocalPythonBackend, _reset_backend_registry
 
 _PROCESS_COUNTS: dict[str, int] = {}
 
@@ -144,7 +144,7 @@ def test_wave_path_remote_no_local_rematerialize(monkeypatch):
 
     monkeypatch.setattr(LocalPythonBackend, "execute", _spy)
     monkeypatch.setattr(
-        "app.core.registry_runtime.resolve_capability",
+        "app.core.host.registry_runtime.resolve_capability",
         lambda ir_node, registry: (
             IRCapabilityMetadata(requires_gpu=True)
             if ir_node.node_type == "dist_gpu"
@@ -216,7 +216,7 @@ def test_worker_input_refs_end_to_end_in_process(monkeypatch):
 
     _register_test_nodes("dist_gpu")
     monkeypatch.setattr(
-        "app.core.registry_runtime.resolve_capability",
+        "app.core.host.registry_runtime.resolve_capability",
         lambda ir_node, registry: IRCapabilityMetadata(requires_gpu=True),
     )
     get_worker_registry().register(
@@ -265,7 +265,7 @@ def test_fail_closed_when_no_gpu_worker(monkeypatch):
 
     _register_test_nodes("dist_gpu_only")
     monkeypatch.setattr(
-        "app.core.registry_runtime.resolve_capability",
+        "app.core.host.registry_runtime.resolve_capability",
         lambda ir_node, registry: IRCapabilityMetadata(requires_gpu=True),
     )
     graph = GraphIR(

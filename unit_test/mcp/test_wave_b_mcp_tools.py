@@ -27,7 +27,7 @@ def test_wave_b_tools_registered(monkeypatch: pytest.MonkeyPatch):
 def test_upload_and_list_dataset_versions(tmp_workspace, monkeypatch):
     monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
     from app.core.config import datasets_output_dir
-    from app.core.dataset_versions import write_manifest
+    from app.core.mlops.dataset_versions import write_manifest
     from app.mcp.handlers.data_ops import (
         get_dataset_version_handler,
         list_dataset_versions_handler,

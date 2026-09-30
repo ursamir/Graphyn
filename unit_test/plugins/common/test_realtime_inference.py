@@ -53,10 +53,12 @@ def test_metadata(installed_cls):
 # ── construction ─────────────────────────────────────────────────────────────
 
 def test_construct_requires_model_path(installed_cls):
-    """RealtimeInferenceNode requires model_path — construction without it raises."""
-    import pydantic
-    with pytest.raises((pydantic.ValidationError, ValueError, TypeError)):
-        installed_cls(config={}, seed=0)
+    """model_path defaults to "" so Builder drafts construct (commit db3a007);
+    setup() must still fail fast when no model file is configured."""
+    node = installed_cls(config={}, seed=0)
+    assert node.config.model_path == ""
+    with pytest.raises(FileNotFoundError, match="model not found"):
+        node.setup()
 
 
 def test_construct_with_model_path(installed_cls, tmp_path):

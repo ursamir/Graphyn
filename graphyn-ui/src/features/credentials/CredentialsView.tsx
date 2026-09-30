@@ -92,10 +92,25 @@ export default function CredentialsView() {
     }
   }
 
+  /** Soft revoke: the connection stays in the store (auditable) but can no longer be used. */
   const revoke = async (id: string) => {
     try {
-      await apiJson(`/credentials/${encodeURIComponent(id)}?delete=true`, { method: 'DELETE' })
-      pushToast('Credential revoked', 'success')
+      await apiJson(`/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      pushToast('Credential revoked (kept in the store, no longer usable)', 'success')
+      await load()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  /** Hard delete: removes the connection and its encrypted secret permanently. */
+  const deletePermanently = async (id: string) => {
+    try {
+      await apiJson(`/credentials/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        query: { delete: true },
+      })
+      pushToast('Credential permanently deleted', 'success')
       await load()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -224,6 +239,12 @@ export default function CredentialsView() {
                   </button>
                 )}
                 <ConfirmButton label="Revoke" confirmLabel="Confirm revoke" onConfirm={() => void revoke(c.id)} />
+                <ConfirmButton
+                  label="Delete permanently"
+                  confirmLabel="Confirm permanent delete"
+                  danger
+                  onConfirm={() => void deletePermanently(c.id)}
+                />
               </div>
             </li>
           ))}

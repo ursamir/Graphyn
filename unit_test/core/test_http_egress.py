@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from app.core.config import http_egress_allowlist, http_egress_mode
-from app.core.egress import (
+from app.core.trust.egress import (
     HttpEgressError,
     host_on_allowlist,
     is_blocked_ip,
@@ -89,10 +89,10 @@ def test_allowlist_allow_and_deny(restricted: None, monkeypatch: pytest.MonkeyPa
 
     # Public IP for example.com — mock resolution so CI is offline-safe.
     public = [ipaddress.ip_address("93.184.216.34")]
-    with patch("app.core.egress._resolve_ips", return_value=public):
+    with patch("app.core.trust.egress._resolve_ips", return_value=public):
         validate_http_egress_url("https://api.example.com/v1")
 
-    with patch("app.core.egress._resolve_ips", return_value=public):
+    with patch("app.core.trust.egress._resolve_ips", return_value=public):
         with pytest.raises(HttpEgressError, match="ALLOWLIST"):
             validate_http_egress_url("https://evil.com/x")
 
@@ -102,7 +102,7 @@ def test_allowlist_does_not_bypass_private_ip(
 ) -> None:
     monkeypatch.setenv("GRAPHYN_HTTP_EGRESS_ALLOWLIST", "internal.example.com")
     with patch(
-        "app.core.egress._resolve_ips",
+        "app.core.trust.egress._resolve_ips",
         return_value=[ipaddress.ip_address("10.1.2.3")],
     ):
         with pytest.raises(HttpEgressError, match="blocked"):

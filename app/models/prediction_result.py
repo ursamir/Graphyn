@@ -6,7 +6,7 @@ Responsibility:   Typed data contract for inference results from classification
 Owns:             PredictionResult Pydantic model — source_path,
                   predicted_label, probabilities, metadata.
 Public Surface:   PredictionResult
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain inference logic.
 Dependencies:     pydantic (PortDataType base).
 Reason To Change: PredictionResult schema gains new fields, or probability

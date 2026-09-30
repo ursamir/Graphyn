@@ -132,7 +132,7 @@ class IfSwitchNode(Node):
         expr = (self.config.expression or "").strip()
         path = (self.config.jsonpath or "").strip()
         if expr:
-            from app.core.conditions import evaluate_condition
+            from app.core.execution.conditions import evaluate_condition
             matched = bool(evaluate_condition(expr, as_dict))
         elif path:
             matched = _truthy(_jsonpath(payload if payload is not None else as_dict, path))
@@ -149,7 +149,7 @@ class IfSwitchNode(Node):
                 continue
             hit = False
             if cexpr:
-                from app.core.conditions import evaluate_condition
+                from app.core.execution.conditions import evaluate_condition
                 hit = bool(evaluate_condition(cexpr, as_dict))
             if hit:
                 case_hits[name] = payload

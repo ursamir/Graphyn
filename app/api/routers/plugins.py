@@ -481,7 +481,7 @@ def install_plugin_dependencies(
             with _dep_install_jobs_lock:
                 _dep_install_jobs[name] = {
                     "status": "failed",
-                    "error": str(exc),
+                    "error": _safe_exc_detail(exc),
                     "include_optional": include_optional,
                 }
 

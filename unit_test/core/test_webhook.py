@@ -1,4 +1,4 @@
-"""Unit tests for app/core/webhook.py — Req 19 criteria 18–22."""
+"""Unit tests for app/core/notify/webhook.py — Req 19 criteria 18–22."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.core.webhook import WebhookService
+from app.core.notify.webhook import WebhookService
 
 
 @pytest.fixture
@@ -35,7 +35,8 @@ def test_save_writes_webhooks_json(webhook_service: WebhookService, tmp_path: Pa
     config_path = webhook_service.CONFIG_PATH
     assert config_path.exists()
     data = json.loads(config_path.read_text())
-    assert data == {"url": url, "events": events}
+    # resource_version is bumped on every save (optimistic concurrency / If-Match).
+    assert data == {"url": url, "events": events, "resource_version": 1}
 
 
 def test_load_returns_empty_dict_when_file_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -45,7 +46,7 @@ def test_load_returns_empty_dict_when_file_missing(tmp_path: Path, monkeypatch: 
 
     result = svc.load()
 
-    assert result == {"url": "", "events": []}
+    assert result == {"url": "", "events": [], "resource_version": "0", "secret_name": None}
 
 
 # ── notify — no URL configured ────────────────────────────────────────────────
@@ -80,6 +81,6 @@ def test_notify_does_not_call_httpx_when_event_not_subscribed(
     """Req 19.22 — notify('run_done', {}) does not call httpx.post when event not subscribed."""
     webhook_service.save("https://example.com/hook", ["run_failed"])
 
-    with patch("app.core.webhook.threading.Thread") as mock_thread_cls:
+    with patch("app.core.notify.webhook.threading.Thread") as mock_thread_cls:
         webhook_service.notify("run_done", {})
         mock_thread_cls.assert_not_called()

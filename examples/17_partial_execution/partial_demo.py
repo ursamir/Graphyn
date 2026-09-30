@@ -141,9 +141,9 @@ def main() -> None:
     print(f"  {_dim('Re-run only augmentation_pipeline→feature_frontend→dataset_builder→dataset_versioner, injecting pre-computed samples')}")
 
     # First, get the output of trim from the full run (simulate pre-computed data)
-    from app.core.runtime_backend import get_backend
+    from app.core.execution.runtime_backend import get_backend
     from app.core.ir.loader import load_ir, dump_ir
-    from app.core.run_manager import RunManager
+    from app.core.runs.run_journal import RunManager
     from app.models.audio_sample import AudioSample
     import numpy as np
 

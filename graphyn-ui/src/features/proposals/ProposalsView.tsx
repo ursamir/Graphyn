@@ -8,7 +8,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import { apiJson } from '../../api/client'
+import { ApiError, apiJson, configuredActor } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import { emptyGraph } from '../../types/graph'
@@ -326,13 +326,38 @@ export default function ProposalsView() {
     return graph as GraphIR
   }
 
+  /** Never hardcode an actor: send the configured one (Admin → Access), or
+   *  omit it so the server derives it from X-Actor / auth. */
+  const actorBody = (): { actor?: string } => {
+    const actor = configuredActor()
+    return actor ? { actor } : {}
+  }
+
+  /** First slug in `base`, `base-2`, `base-3`… with no existing pipeline, so
+   *  "Accept & save" never silently overwrites an existing draft. */
+  const uniquePipelineSlug = async (project: string, base: string): Promise<string> => {
+    for (let i = 1; i <= 50; i++) {
+      const candidate = i === 1 ? base : `${base}-${i}`
+      try {
+        await apiJson(`/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(candidate)}`, {
+          retries: 0,
+        })
+        // 200 → taken; try the next suffix
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return candidate
+        throw err
+      }
+    }
+    throw new Error(`Could not find a free pipeline name for "${base}" in ${project}`)
+  }
+
   const onAccept = async (andSave: boolean) => {
     if (!detail?.id || busy) return
     setBusy(true)
     try {
       const accepted = await apiJson<ProposalDetail>(`/proposals/${detail.id}/accept`, {
         method: 'POST',
-        body: JSON.stringify({ actor: 'ui' }),
+        body: JSON.stringify(actorBody()),
       })
       const graph = resolveAcceptedGraph(accepted)
       loadGraphIntoBuilder(graph)
@@ -341,12 +366,18 @@ export default function ProposalsView() {
         if (!project) {
           pushToast('Accepted → Editor. Open a workspace to save as a pipeline.', 'info')
         } else {
-          const name = pipelineSlugFromSummary(detail.summary || accepted.summary)
+          const base = pipelineSlugFromSummary(detail.summary || accepted.summary)
+          const name = await uniquePipelineSlug(project, base)
           await apiJson(`/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(name)}`, {
             method: 'PUT',
             body: JSON.stringify(graph),
           })
-          pushToast(`Accepted & saved draft ${project}/${name}`, 'success')
+          pushToast(
+            name === base
+              ? `Accepted & saved draft ${project}/${name}`
+              : `Accepted & saved draft ${project}/${name} ("${base}" already exists — not overwritten)`,
+            'success',
+          )
         }
       } else {
         pushToast('Applied to Editor — review the graph, then Run', 'success')
@@ -365,7 +396,7 @@ export default function ProposalsView() {
     try {
       await apiJson(`/proposals/${detail.id}/reject`, {
         method: 'POST',
-        body: JSON.stringify({ actor: 'ui' }),
+        body: JSON.stringify(actorBody()),
       })
       pushToast('Proposal rejected', 'info')
       void refresh()

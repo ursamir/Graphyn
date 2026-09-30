@@ -381,7 +381,7 @@ venv/bin/python -m app.cli.main run \
 **Wave structure (24 nodes, 6 waves):**
 ```
 Wave 0: dataset_ingest_yes, dataset_ingest_no, dataset_ingest_up, dataset_ingest_down  ← concurrent
-Wave 1: audio_conditioner_yes, audio_conditioner_no, audio_conditioner_up, audio_conditioner_down  ← concurrent
+First parallel group: audio_conditioner_yes, audio_conditioner_no, audio_conditioner_up, audio_conditioner_down  ← concurrent
 Wave 2: segmenter_yes, segmenter_no, segmenter_up, segmenter_down  ← concurrent
 ...
 ```

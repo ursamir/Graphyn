@@ -7,8 +7,8 @@ Owns:             Route definitions for GET /artifacts, GET /artifacts/{id},
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain artifact storage logic — delegate to ArtifactStore
                   and ProvenanceStore.
-Dependencies:     fastapi, app.core.artifact_store, app.core.provenance,
-                  app.core.run_journal, app.core.orchestrator.
+Dependencies:     fastapi, app.core.artifacts.artifact_store, app.core.artifacts.provenance,
+                  app.core.runs.run_journal, app.core.execution.orchestrator.
 Reason To Change: New artifact endpoint added, or replay behaviour changes.
 """
 from __future__ import annotations
@@ -61,8 +61,8 @@ def list_artifacts(
     """
     from app.api.pagination import maybe_envelope, parse_envelope_flag
     from app.api.store_guard import ensure_store_readable, raise_http_store_corrupt
-    from app.core.artifact_store import ArtifactStore
-    from app.core.store_integrity import StoreCorrupt
+    from app.core.artifacts.artifact_store import ArtifactStore
+    from app.core.persist.store_integrity import StoreCorrupt
 
     ensure_store_readable()
     try:
@@ -96,8 +96,8 @@ def get_artifact(artifact_id: str):
     _validate_artifact_id(artifact_id)
 
     from app.api.store_guard import ensure_store_readable, raise_http_store_corrupt
-    from app.core.artifact_store import ArtifactNotFoundError, ArtifactStore
-    from app.core.store_integrity import StoreCorrupt
+    from app.core.artifacts.artifact_store import ArtifactNotFoundError, ArtifactStore
+    from app.core.persist.store_integrity import StoreCorrupt
 
     ensure_store_readable()
     store = ArtifactStore()
@@ -124,7 +124,7 @@ def get_artifact_lineage(artifact_id: str):
     """
     _validate_artifact_id(artifact_id)
 
-    from app.core.provenance import ProvenanceStore
+    from app.core.artifacts.provenance import ProvenanceStore
 
     store = ProvenanceStore()
     return store.get_lineage(artifact_id)
@@ -151,10 +151,10 @@ def replay_artifact(artifact_id: str):
     """
     _validate_artifact_id(artifact_id)
 
-    from app.core.artifact_store import ArtifactNotFoundError, ArtifactStore
+    from app.core.artifacts.artifact_store import ArtifactNotFoundError, ArtifactStore
     from app.core.ir.loader import load_ir_from_file
-    from app.core.run_journal import RunManager
-    from app.core.runtime_backend import get_backend
+    from app.core.runs.run_journal import RunManager
+    from app.core.execution.runtime_backend import get_backend
 
     # Step 1: resolve artifact → provenance → run_id
     artifact_store = ArtifactStore()

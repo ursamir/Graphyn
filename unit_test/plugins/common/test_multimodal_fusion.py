@@ -50,7 +50,7 @@ def installed_cls(tmp_path_factory):
     tmp_dir = tmp_path_factory.mktemp("multimodal_fusion_plugins")
     from app.core.nodes.registry import NodeRegistry
     reg = NodeRegistry()
-    mgr = PluginManager(registry=reg)
+    mgr = PluginManager(registry=reg, base_dir=str(tmp_dir))
     # Install embedding_generator first so EmbeddingVector type is registered
     mgr._plugins_dir = str(tmp_dir)
     mgr.install(EMBEDDING_SOURCE)
@@ -130,7 +130,11 @@ def test_concat_output_exists(installed_cls):
 
 
 def test_concat_output_shape(installed_cls):
-    """Concat fusion output embedding should have the configured output_dim."""
+    """Concat fusion output should have the configured output_dim.
+
+    Output is a ``FeatureArray`` with ``data`` shape ``[1, output_dim]`` (commit
+    a5a984f) so downstream dataset_builder / train nodes type-check.
+    """
     audio_dim = 768
     text_dim = 512
     output_dim = 256
@@ -149,9 +153,9 @@ def test_concat_output_shape(installed_cls):
     )
     result = node.process({"audio": audio_vecs, "text": text_vecs})
     output = result["output"][0]
-    emb = getattr(output, "embedding", output)
-    assert emb.shape == (output_dim,), (
-        f"Expected output shape ({output_dim},), got {emb.shape}"
+    emb = np.asarray(output.data)
+    assert emb.shape == (1, output_dim), (
+        f"Expected output shape (1, {output_dim}), got {emb.shape}"
     )
 
 

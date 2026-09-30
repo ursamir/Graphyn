@@ -128,28 +128,28 @@ A real TCP connect to `example.com` and an 18 MB download from `tfhub.dev` (301s
 ## 5. P1 — Silent wrong results and data loss
 
 ### P1-1 · Condition-false skip is not transitive — descendants execute on `None`
-**`app/core/orchestrator.py:448-469`, `:411-446`** · repro: `examples/12_conditional_branching/pipeline.graph.json`
+**`app/core/execution/orchestrator.py:448-469`, `:411-446`** · repro: `examples/12_conditional_branching/pipeline.graph.json`
 
 A node skipped for `condition_false` is recorded, but nothing marks its *descendants*. They are scheduled normally and receive `None` for the unproduced input, because `None` is indistinguishable from a real `None` output (theme T1).
 
 **Fix:** maintain `skipped: set[str]` alongside `node_outputs`. During input assembly, treat an edge whose `src_id` is in that set exactly like a false condition, and propagate the skip transitively. **Effort: M**
 
 ### P1-2 · `if_switch`'s false branch still runs — example 27 posts a GitHub comment either way
-**`app/core/orchestrator.py:448-477`** · `PluginPackage/Common/if_switch/nodes.py:110-116` · `examples/27_github_triage/pipeline.graph.json`
+**`app/core/execution/orchestrator.py:448-477`** · `PluginPackage/Common/if_switch/nodes.py:110-116` · `examples/27_github_triage/pipeline.graph.json`
 
 Same root cause as P1-1, with an externally visible side effect: the triage example POSTs to GitHub on both branches.
 
 **Fix:** have branch-style nodes *omit* unselected keys from their output dict, and treat `src_port not in node_outputs[src_id]` as unproduced. **Effort: M**
 
 ### P1-3 · Parallel executor evaluates edge conditions but never skips the node
-**`app/core/executor.py:216-245`** vs `orchestrator.py:448-469`
+**`app/core/execution/executor.py:216-245`** vs `orchestrator.py:448-469`
 
 `_run_node` computes the condition and then runs the node anyway, passing `None`.
 
 **Fix:** extract the skip decision from `orchestrator.py:450-469` into a shared helper called by both `_run_node` and the sequential loop; on skip set `node_outputs[node_id] = {}`, emit `logger.node_skip(...)`, return early. **Effort: S**
 
 ### P1-4 · `--parallel` silently ignores `--include-nodes`, `--exclude-nodes`, `--input-overrides` and `--resume`
-**`app/core/orchestrator.py:286,311,354,406,464,742`** · `app/core/executor.py:73,154`
+**`app/core/execution/orchestrator.py:286,311,354,406,464,742`** · `app/core/execution/executor.py:73,154`
 
 `active_nodes`, `completed_nodes` and `input_overrides` are consumed **only** in the sequential loop. `ParallelExecutor.run_wave` and `_run_node` have no such parameters and iterate the full unfiltered wave. The finalizer still writes `{"partial_execution": true, "included_nodes": [...]}` into `meta.json`, so the journal asserts a partial execution that never happened.
 
@@ -158,7 +158,7 @@ Concretely: `graphyn run --parallel --exclude-nodes train` retrains the model, o
 **Fix:** thread all three into `run_wave`/`_run_node` and apply the same passthrough wiring the sequential path uses at `orchestrator.py:360-373`. **Until that lands, raise `ValueError` when `parallel=True` is combined with any of them** rather than producing wrong results. **Effort: M**
 
 ### P1-5 · Cache key collides across completely different datasets
-**`app/core/pipeline_cache.py:145-150, 180-190, 110-114`**
+**`app/core/execution/pipeline_cache.py:145-150, 180-190, 110-114`**
 
 `input_hash()` calls `json.dumps([item.model_dump(mode="json") ...])`; a `FeatureArray` holds a numpy array on an `Any` field, so pydantic raises, the bare `except Exception: pass` swallows it, and the function returns `""`. The comment claims the empty hash "is effectively random, which forces a cache miss" — the opposite is true: `""` is constant, so `compute_key()` reduces to `sha256(node_type + config)` with the input data contributing **nothing**. Verified: two `FeatureArray` lists with different shapes, labels and source paths produced the identical key `be1f1295…`.
 
@@ -167,33 +167,33 @@ Concretely: `graphyn run --parallel --exclude-nodes train` retrains the model, o
 **Fix:** in `input_hash()`, add a branch for Pydantic models carrying arrays — fold `arr.shape`, `arr.dtype.str` and `sha256(arr.tobytes())` into the digest. Separately make the last-resort path at `:190` return `uuid4().hex` instead of `""` so an unhashable input genuinely forces a miss. **Effort: M**
 
 ### P1-6 · `PipelineCache.save()` discards every JSON-only port when any port is registry-serializable
-**`app/core/pipeline_cache.py:355-398, 400-432`** · `app/core/orchestrator.py:490-492`
+**`app/core/execution/pipeline_cache.py:355-398, 400-432`** · `app/core/execution/orchestrator.py:490-492`
 
 The early `return` at `:398` means mixed-type nodes write only the manifest, never `outputs.json`. A subsequent cache hit returns a truncated output dict — downstream nodes receive fewer ports than the node actually produced.
 
 **Fix:** delete the `return` at `:398` so both files are written, and change `load()` to merge both sources instead of short-circuiting on `outputs.json` at `:238-249`. **Effort: M**
 
 ### P1-7 · Cache key omits node seed and node version
-**`app/core/pipeline_cache.py:110-120`** · `app/core/planner.py:230`
+**`app/core/execution/pipeline_cache.py:110-120`** · `app/core/execution/planner.py:230`
 
 Changing a seed or upgrading a plugin returns the old cached output.
 
 **Fix:** hash `graph_obj.get_node(node_id).seed` and `NodeMetadata.version` into `key()`. **Effort: S**
 
 ### P1-8 · Cross-run checkpoint lookup is keyed by `node_id` alone
-**`app/core/checkpoint.py:178-201, 204-254, 256-304`**
+**`app/core/runs/checkpoint.py:178-201, 204-254, 256-304`**
 
 Two unrelated pipelines that share a node id resume from each other's checkpoints.
 
 **Fix:** key the index by graph identity too — `<runs_dir>/checkpoints/<graph_hash>/node_<node_id>/latest_run`. **Effort: M**
 
 ### P1-9 · `_write_checkpoint` drops non-list ports; resume treats the partial checkpoint as complete
-**`app/core/checkpoint.py:110-128`** · `app/core/orchestrator.py:272-287, 361-364`
+**`app/core/runs/checkpoint.py:110-128`** · `app/core/execution/orchestrator.py:272-287, 361-364`
 
 **Fix:** record `"all_ports": sorted(outputs.keys())` in the manifest and have `_load_checkpoint_outputs` return `None` when the checkpointed set ≠ all ports, forcing re-execution. **Effort: S**
 
 ### P1-10 · Event-driven run that failed or was cancelled is stamped `completed` and notified as success
-**`app/core/orchestrator.py:655-660, 606-607, 709-718`**
+**`app/core/execution/orchestrator.py:655-660, 606-607, 709-718`**
 
 **Fix:** track terminal state where `mark_failed` and the cancel-break occur, and at `:710` skip `save_metadata` or pass an explicit `status`. **Effort: S**
 
@@ -214,49 +214,49 @@ Two workers, a 90s node: A claims at t=0; at t≈60 B reclaims and re-executes i
 **Fix:** add `attempts` / `max_attempts` to `NodeJob`; increment in `_reclaim_in_snapshot` and write a terminal `failed` `JobResult` when exceeded. **Effort: M**
 
 ### P1-13 · `DistributedBackend` never finalizes the run journal
-**`app/core/distributed/backend.py:177, 270-283, 467-503`** · `app/core/run_journal.py:70-75`
+**`app/core/distributed/backend.py:177, 270-283, 467-503`** · `app/core/runs/run_journal.py:70-75`
 
 Mode B runs stay `"running"` forever with no `graph.json`, no logs, no artifacts, no `node_stats`. It also silently discards 8 execution parameters on the remote path — including `resume_run_id` and `checkpoint` — and never calls `register_active_run`, so **`POST /runs/{id}/cancel` cannot reach a Mode B run at all**.
 
 **Fix:** mirror the local orchestrator's journal contract in `_execute_with_jobs` — `save_graph_ir` before the wave loop, append `node_stats` per completed job, `register_active_run`/`deregister_active_run`, poll `is_cancelled()`, and finalize status. Raise `NotImplementedError` naming any unsupported parameter instead of dropping it. **Effort: L**
 
 ### P1-14 · A corrupt index is read as empty, then **written back** — permanent lineage loss
-**`app/core/artifact_store.py:225-246`** · **`app/core/provenance.py:157-193`**
+**`app/core/artifacts/artifact_store.py:225-246`** · **`app/core/artifacts/provenance.py:157-193`**
 
 `_load_by_run()` catches a parse failure, warns, returns `[]`; `_append_by_run()` then persists that empty list with one id appended. Every previously registered artifact for that run becomes unreachable through `ArtifactStore.list(run_id=…)` and `find_by_run()`. The per-artifact records survive on disk but nothing can enumerate them.
 
 **Fix:** rename the damaged file to `<name>.json.corrupt.<ts>` before returning `[]`, and rebuild by scanning per-artifact records rather than starting empty. Surface the condition in the trace `warnings`. **Effort: M**
 
 ### P1-15 · A cache hit skips artifact and provenance registration
-**`app/core/orchestrator.py:528-556`** · **`app/core/executor.py:306-333`**
+**`app/core/execution/orchestrator.py:528-556`** · **`app/core/execution/executor.py:306-333`**
 
 Both paths gate the whole provenance block on `if not cache_hit:`. Caching is on by default, so on every re-run the cached nodes register nothing, and downstream nodes get `input_artifact_ids=[]`. This directly breaks the README's Accountability pillar ("trace any artifact back to run, graph, and worker").
 
 **Fix:** move the block out of the `if not cache_hit:` guard in both files — `ArtifactStore.register()` already dedupes by content hash. **Effort: S**
 
 ### P1-16 · Artifact dedup overwrites the original's provenance record
-**`app/core/artifact_store.py:499-523`** · `app/core/run_journal.py:349-377`
+**`app/core/artifacts/artifact_store.py:499-523`** · `app/core/runs/run_journal.py:349-377`
 
 Last-writer-wins on a content-hash collision destroys the first artifact's lineage.
 
 **Fix:** make provenance additive — return a `deduplicated: bool` from `register()` and skip the `provenance.record()` overwrite. **Effort: M**
 
 ### P1-17 · `ArtifactStore` indexes do read-modify-write with no lock
-**`app/core/artifact_store.py:165-170, 189-217, 237-247`**
+**`app/core/artifacts/artifact_store.py:165-170, 189-217, 237-247`**
 
 API, CLI and worker all mutate `index.json` and `by_run/*.json` concurrently with no `flock`. Lost updates.
 
 **Fix:** apply the `schedules.py` `fcntl.flock` pattern around the whole load→mutate→save sequence. **Effort: M**
 
 ### P1-18 · `wait_if_paused()` is only called in the sequential loop
-**`app/core/orchestrator.py:388`** vs `:303-345`, `:602-675`
+**`app/core/execution/orchestrator.py:388`** vs `:303-345`, `:602-675`
 
 Pause is a silent no-op in parallel and event-driven modes.
 
 **Fix:** call `run.wait_if_paused()` in the parallel wave loop next to the existing `is_cancelled` check at `:305`, and at the top of each event iteration. **Effort: S**
 
 ### P1-19 · `ArtifactStore`/`ProvenanceStore` have no retention; run deletion orphans records
-**`app/core/run_cleanup.py:402-427`** · `app/core/artifact_store.py:705-807`
+**`app/core/runs/run_cleanup.py:402-427`** · `app/core/artifacts/artifact_store.py:705-807`
 
 **Fix:** in `delete_run` and the `to_delete` loop, also remove that run's artifact and provenance state. **Effort: M**
 
@@ -289,7 +289,7 @@ The stream is also never aborted on unmount, so a stale stream can overwrite the
 **Fix:** `POST /runs/{id}/cancel` before aborting the reader; add an unmount cleanup that aborts, and only apply results when `abortRef.current === controller`. **Effort: S**
 
 ### P1-24 · `node_stats` is written only at terminal success
-**`app/core/orchestrator.py:566-571, 741-747`** · `app/api/routers/runs.py:327-348`
+**`app/core/execution/orchestrator.py:566-571, 741-747`** · `app/api/routers/runs.py:327-348`
 
 Run progress is `null` for the entire life of every run, and a **failed** run loses all `node_stats` — after which `/trace` reports every node of that run as `completed`.
 
@@ -329,7 +329,7 @@ Run progress is `null` for the entire life of every run, and a **failed** run lo
 
 | # | Finding | Location | Fix |
 |---|---|---|---|
-| P2-1 | `WebhookService._send` resolves DNS **twice** (`_is_private_host` then `gethostbyname` at `:208`), so the validated IP is not the connected IP — the rebinding window the docstring claims to close is open. Rewriting the URL to `https://<ip>/` also breaks TLS verification for every HTTPS webhook (a `Host` header does not set SNI). | `app/core/webhook.py:175-232` | POST the original URL; get rebinding protection from the transport, not URL rewriting. Delete `webhook.py::_is_private_host` and reuse `app.core.egress` helpers (which correctly use `getaddrinfo` and check every address). |
+| P2-1 | `WebhookService._send` resolves DNS **twice** (`_is_private_host` then `gethostbyname` at `:208`), so the validated IP is not the connected IP — the rebinding window the docstring claims to close is open. Rewriting the URL to `https://<ip>/` also breaks TLS verification for every HTTPS webhook (a `Host` header does not set SNI). | `app/core/notify/webhook.py:175-232` | POST the original URL; get rebinding protection from the transport, not URL rewriting. Delete `webhook.py::_is_private_host` and reuse `app.core.trust.egress` helpers (which correctly use `getaddrinfo` and check every address). |
 | P2-2 | `POST /api/v1/ingest/url` downloads arbitrary URLs with no egress validation | `app/api/routers/ingest.py` | Route through `validate_http_egress_url` |
 | P2-3 | Plugin download and index fetch validate redirect hops only *after* httpx issued the request | `app/core/plugins/installer.py`, `index.py` | Validate each hop before issuing it |
 | P2-4 | Static-mount auth raises `HTTPException` inside ASGI middleware → unauthenticated `/files` returns **500, not 401** | `app/api/main.py:248-254, 275-281` | Catch and return `JSONResponse(status_code=exc.status_code, ...)` |
@@ -354,23 +354,23 @@ Run progress is `null` for the entire life of every run, and a **failed** run lo
 | P2-23 | Isolated node stubs downgrade required config fields to optional — host validation passes, worker dies | `app/core/plugins/isolated_schema.py` | Preserve `required` in the generated stub |
 | P2-24 | Upgrading bundled plugin source never takes effect — stale code loads silently after `git pull` | `app/core/plugins/manager.py:648-656` | Compare record version against `PluginPackage/*/plugin.toml`; force `upgrade=True` on drift |
 | P2-25 | One unparseable row in `registry.json` permanently disables that plugin; no version stamp | `app/core/plugins/store.py:75-81` | Add `schema_version`; quarantine bad rows instead of dropping the plugin |
-| P2-26 | With a custom `GRAPHYN_PROJECT_DIR`, `workspace/...` paths are created one level too deep and data lands outside the project dir | `app/core/write_paths.py:78-84` | Prefer `root / Path(*parts[1:])` for `workspace`-prefixed inputs |
+| P2-26 | With a custom `GRAPHYN_PROJECT_DIR`, `workspace/...` paths are created one level too deep and data lands outside the project dir | `app/core/paths/write_paths.py:78-84` | Prefer `root / Path(*parts[1:])` for `workspace`-prefixed inputs |
 | P2-27 | Run detail panel never refreshes when the run finishes — logs/outputs/artifacts frozen at open time | `graphyn-ui/src/features/runs/RunsView.tsx:320-380` | Refetch once on transition to a terminal status |
 | P2-28 | Live run tab **fabricates** node status — labels the last completed node "Current" and paints every node green mid-run | `graphyn-ui/src/features/runs/RunsView.tsx` | Render only backend-supplied status |
 | P2-29 | Plugin install reports success while the background install is still running or already failed | `graphyn-ui/src/features/plugins/PluginsView.tsx` | Report only on terminal status |
 | P2-30 | One failing endpoint blanks the entire Ops page, discarding data that loaded fine | `graphyn-ui/src/features/system/SystemView.tsx` | Per-panel error boundaries |
 | P2-31 | Run log panel renders up to 10,000 unvirtualised rows, two regexes per row per render | `graphyn-ui/src/features/runs/RunsView.tsx` | Virtualise; precompute |
 | P2-32 | Artifact blob download reads the whole file into memory then discards it | `app/api/routers/artifacts.py` | Stream |
-| P2-33 | Graph validation depth differs per interface — REST and MCP report `valid` for graphs that cannot execute | `app/cli/main.py:406-700`, `api/routers/pipelines.py:261-271`, `mcp/handlers/graph.py:394-412` | Extract the CLI's steps 3-7 into `app/core/validation.py::validate_graph_ir(graph, registry)`; call from all three |
+| P2-33 | Graph validation depth differs per interface — REST and MCP report `valid` for graphs that cannot execute | `app/cli/main.py:406-700`, `api/routers/pipelines.py:261-271`, `mcp/handlers/graph.py:394-412` | Extract the CLI's steps 3-7 into `app/core/execution/validation.py::validate_graph_ir(graph, registry)`; call from all three |
 | P2-34 | MCP exposes `accept_proposal` alongside `propose_graph`, so an agent can self-approve graphs its own tool description says a human must approve | `app/mcp/tool_registry.py:158` | Gate behind an explicit human-approval capability |
-| P2-35 | `graph_hash` computed every run but never written to `meta.json` → run-scoped traces report `graph.hash = null` | `app/core/run_journal.py:159-169` | `self._write_meta_field("graph_hash", self._graph_hash)` |
-| P2-36 | Trace reads `duration_ms`/`cache_hit`/`status` from `node_stats`, but executors write only `duration_s` → every node shows a null duration | `app/core/trace.py:270-279`, `executor.py:345-351` | Write all three keys at the source; convert in `trace.py` |
-| P2-37 | Run-scoped `/trace` attributes each input artifact to the node that **consumed** it, not the one that produced it | `app/core/trace.py:300-315` | Resolve each input id's own provenance record |
+| P2-35 | `graph_hash` computed every run but never written to `meta.json` → run-scoped traces report `graph.hash = null` | `app/core/runs/run_journal.py:159-169` | `self._write_meta_field("graph_hash", self._graph_hash)` |
+| P2-36 | Trace reads `duration_ms`/`cache_hit`/`status` from `node_stats`, but executors write only `duration_s` → every node shows a null duration | `app/core/runs/trace.py:270-279`, `executor.py:345-351` | Write all three keys at the source; convert in `trace.py` |
+| P2-37 | Run-scoped `/trace` attributes each input artifact to the node that **consumed** it, not the one that produced it | `app/core/runs/trace.py:300-315` | Resolve each input id's own provenance record |
 | P2-38 | `node_start`/`node_end`/`node_error` carry no `node_id`; `node_index` is topological but the Builder matches it against canvas array position | `app/core/logger.py:117-158` | Add `node_id` to the events; match on it |
-| P2-39 | Event-driven mode runs nodes synchronously on the event loop, starving other sources and delaying cancel | `app/core/orchestrator.py:602-675` | Offload to the executor |
-| P2-40 | Webhook URL — credential-equivalent for Slack/Discord/Teams — is written to WARNING logs on every delivery failure | `app/core/webhook.py:236-240` | Log scheme+host only |
+| P2-39 | Event-driven mode runs nodes synchronously on the event loop, starving other sources and delaying cancel | `app/core/execution/orchestrator.py:602-675` | Offload to the executor |
+| P2-40 | Webhook URL — credential-equivalent for Slack/Discord/Teams — is written to WARNING logs on every delivery failure | `app/core/notify/webhook.py:236-240` | Log scheme+host only |
 | P2-41 | `graphyn migrate` and the whole YAML path bypass `legacy_aliases.py`, so legacy node types are never translated | `app/core/ir/migrate.py:72` | Round-trip through the alias layer |
-| P2-42 | On-disk state has no enforced version stamp: `schema_version` is written but never read; plugin registry/index have none | `app/core/artifact_store.py:144`, `provenance.py:64` | One `STATE_SCHEMA_VERSION`, checked on load |
+| P2-42 | On-disk state has no enforced version stamp: `schema_version` is written but never read; plugin registry/index have none | `app/core/artifacts/artifact_store.py:144`, `provenance.py:64` | One `STATE_SCHEMA_VERSION`, checked on load |
 | P2-43 | `verify_templates.py`'s node-type check is **dead code** — it probes `NodeRegistry` attributes that do not exist | `scripts/verify_templates.py:38-52` | Use `{m.node_type for m in reg.list_nodes()}`; fail loudly |
 | P2-44 | `scripts/e2e_audio_pass_runner.py` cannot run — hardcoded `/workspace/Graphyn` root and token path crash at import | `scripts/e2e_audio_pass_runner.py:13-18` | Derive `ROOT` from `__file__`; read the token from env |
 | P2-45 | No documented setup step creates the `workspace/datasets/input/<pack>/<label>` tree all 53 example graphs ingest from; `examples/19` ingests a filename no setup path produces while the matrix claims COMPLETED | `examples/README.md`, `scripts/heal_e2e_local_data.py:116-119` | Add the heal script to Quick Start; fix the glob |
@@ -378,7 +378,7 @@ Run progress is `null` for the entire life of every run, and a **failed** run lo
 | P2-47 | `heal_e2e_local_data.py` rewrites version-controlled `examples/templates/*.graph.json` in place | `scripts/heal_e2e_local_data.py:126-129` | Only touch the disposable `workspace/configs/templates` copy |
 | P2-48 | `faster-whisper` is required by a test but declared in no installable target — and `check_deps.py` exits 0 anyway | `requirements.txt:37`, `setup.py:22`, `scripts/check_deps.py:127` | Declare it in an extra; make the EXTRA case non-zero exit |
 | P2-49 | `docker-compose` bind-mounts `./plugins` but never sets `GRAPHYN_PLUGINS_DIR` — the mount is inert | `docker-compose.yml:29,36` | Set the env var, or drop the mount |
-| P2-50 | `create_event_source` rejects `'queue'` while its own docstring advertises it | `app/core/events.py:238-265` | Pick one contract |
+| P2-50 | `create_event_source` rejects `'queue'` while its own docstring advertises it | `app/core/execution/events.py:238-265` | Pick one contract |
 
 ---
 
@@ -398,10 +398,10 @@ Run progress is `null` for the entire life of every run, and a **failed** run lo
 | P3-10 | `examples/README.md` advertises 28 examples for 30 directories; feature map omits example 29 | `examples/README.md` |
 | P3-11 | Seven shipped examples bypass `get_backend()` and call `run_pipeline_ir` directly — violating Hard Rule 4 | `examples/{09,12,15,16,17,18,20}/*.py` |
 | P3-12 | `PluginPackage/WakeWord` — **6506 lines that cannot be imported** (`..models.feature_extractor`, `..resources` do not exist); `PluginPackage/Video` is empty | `PluginPackage/WakeWord/__init__.py:3-19` |
-| P3-13 | `orchestrator.run_pipeline_ir_async` is a single **648-line** function — 78% of its 831-line module | `app/core/orchestrator.py:130-777` |
+| P3-13 | `orchestrator.run_pipeline_ir_async` is a single **648-line** function — 78% of its 831-line module | `app/core/execution/orchestrator.py:130-777` |
 | P3-14 | `app/cli/main.py` is a **2160-line** god module hosting the entire distributed worker daemon | `app/cli/main.py` |
 | P3-15 | `app/core/pipeline.py` is a re-export shim with zero importers, and the sole caller of `run_pipeline_from_yaml` | `app/core/pipeline.py` |
-| P3-16 | Six functions across `app/core` have zero callers repo-wide, incl. one whose docstring claims live back-compat callers; `orchestrator._resolve_capability` is a dead alias | `app/core/orchestrator.py:100-109` |
+| P3-16 | Six functions across `app/core` have zero callers repo-wide, incl. one whose docstring claims live back-compat callers; `orchestrator._resolve_capability` is a dead alias | `app/core/execution/orchestrator.py:100-109` |
 | P3-17 | Workers never report `active_jobs`/busy, so least-loaded placement degenerates to alphabetical `worker_id` | `app/cli/main.py:1546-1550` |
 | P3-18 | `jobs.json` is never pruned, and is fully re-serialized + fsynced under a global exclusive lock on every queue op | `app/core/distributed/store.py:250-275` |
 | P3-19 | Three mutually incompatible error-envelope shapes across routers; `/pipelines/validate` omits `detail` entirely | `app/api/routers/pipelines.py:283-316` |

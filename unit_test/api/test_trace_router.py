@@ -21,7 +21,7 @@ def test_trace_returns_assembled_payload(api_client):
         "chain": [{"step": "run", "label": "g", "id": "r1"}],
         "warnings": [],
     }
-    with patch("app.core.trace.assemble_trace", return_value=fake) as mock_asm:
+    with patch("app.core.runs.trace.assemble_trace", return_value=fake) as mock_asm:
         resp = api_client.get("/api/v1/trace?run_id=r1")
     assert resp.status_code == 200
     assert resp.json()["subject"]["id"] == "r1"
@@ -40,7 +40,7 @@ def test_trace_path_artifact(api_client):
         "chain": [],
         "warnings": ["artifact_not_found:a1"],
     }
-    with patch("app.core.trace.assemble_trace", return_value=fake):
+    with patch("app.core.runs.trace.assemble_trace", return_value=fake):
         resp = api_client.get("/api/v1/trace/artifact/a1")
     assert resp.status_code == 200
     assert resp.json()["subject"]["kind"] == "artifact"

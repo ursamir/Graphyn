@@ -70,6 +70,7 @@ def test_validate_no_args_exits_nonzero():
 # Test: validate --graph with valid IR JSON
 # ---------------------------------------------------------------------------
 
+@pytest.mark.requires_plugins
 def test_validate_valid_ir_exits_zero(tmp_path: Path):
     """'validate --graph' with a valid IR JSON exits 0. Req 13."""
     from app.core.ir.loader import CURRENT_IR_VERSION

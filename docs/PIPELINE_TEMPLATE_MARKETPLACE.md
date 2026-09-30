@@ -3,16 +3,17 @@
 > Packs are **product surfaces** that ship **workflow templates** (real graphs + use cases), not only node lists.
 > Machine catalog: [`PIPELINE_TEMPLATE_CATALOG.json`](./PIPELINE_TEMPLATE_CATALOG.json) (generated).
 > Generator (source of truth): `python scripts/generate_pipeline_template_catalog.py`
-> Materializer: `app/core/pipeline_template_materializer.py` / `scripts/materialize_pipeline_template.py`
+> Materializer: `app/core/templates/pipeline_template_materializer.py` / `scripts/materialize_pipeline_template.py`
 
 ## Design rules
 
 1. **Catalog JSON is authoritative** — do not hand-type hundreds of near-duplicates in markdown.
-2. **Materialize on demand** into Graph IR `schema_version` **1.1** (`metadata`, `nodes[{id,node_type,config}]`, `edges[{src_id,src_port,dst_id,dst_port}]`, `parameters`).
+2. **Materialize on demand** into Graph IR `schema_version` **1.1** (`metadata`, `nodes[{id,node_type,config}]`, `edges[{src_id,src_port,dst_id,dst_port}]`, `parameters`). **Out-of-box contract:** materialize always (a) seeds bundled example datasets into `workspace/datasets/input/*` using **relative** symlinks (absolute host paths break inside Docker), (b) rewrites ingest `config.path` onto those real seeds (speech-commands / wake-word / environmental-sounds / doc-rag-ingest / vision-demo / video-demo — never fictional `…/security-kws`), (c) remaps/sanitizes config keys against live node Config (`sample_rate`→`target_sample_rate`, drops extras), (d) sets a small default `dataset_ingest.limit` for smoke-safe Runs, (e) linear edge wiring prefers primary `output` over side-channels like `rejected` when types tie (quality-gate → next node), (f) sets `dataset_builder.fixed_length=100` and caps trainer/yolo/mcu `epochs` for smoke, (g) binds `http_request.url`→`https://httpbin.org/get`, `csv_table.path`→csv seed, `tool_router.tools`→`["echo"]`, stubs `mcp_tool_call` / ship packagers / yolo_train+val when demo seeds are not full detect corpora, and relaxes `eval_gate` empty-transcript checks for non-ASR chains.
 3. **Seed only ~20–40** representative `.graph.json` under `examples/templates/marketplace/` (not all templates).
-4. **Deduplicate** by stable `id` (`tpl-<family>-…`). Reject rename-only variants.
-5. **Honesty**: MCU flash/OTA templates → `status: needs-api` + `honesty_banner` in metadata. Medical/EHR → generic triage/docs only; no clinical claims.
-6. Keep FaceRecognition / unrelated services untouched.
+4. **Console Templates page** loads a slim index at `graphyn-ui/public/marketplace-catalog.json` for browse/filter/pagination; materialize still hits `POST /pipelines/marketplace/materialize`. Regenerate the slim file when the full catalog changes (same fields as the generator summary).
+5. **Deduplicate** by stable `id` (`tpl-<family>-…`). Reject rename-only variants.
+6. **Honesty**: MCU flash/OTA templates → `status: needs-api` + `honesty_banner` in metadata. Medical/EHR → generic triage/docs only; no clinical claims.
+7. Keep FaceRecognition / unrelated services untouched.
 
 ## Taxonomy
 
@@ -82,6 +83,14 @@ python scripts/generate_pipeline_template_catalog.py
 python scripts/generate_pipeline_template_catalog.py --min 950 --seed-graphs 32
 python scripts/materialize_pipeline_template.py tpl-vision-yolo-detect-train-retail-shelf \
   -o /tmp/retail.graph.json
+# Family-sample OOB execute smoke (live API :8001; needs GRAPHYN_API_TOKEN):
+venv/bin/python scripts/smoke_marketplace_templates.py
+# All 3032: materialize+validate only (no execute):
+venv/bin/python scripts/smoke_marketplace_templates.py --all --validate-only
+# Broader execute: N per family/pack:
+venv/bin/python scripts/smoke_marketplace_templates.py --per-family 5 --timeout 420
+# Offline full-catalog validate (no API):
+venv/bin/python scripts/validate_all_marketplace_templates.py
 ```
 
 ## Coverage

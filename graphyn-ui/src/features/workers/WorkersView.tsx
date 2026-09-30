@@ -3,6 +3,7 @@ import { ExternalLink, RefreshCw, Server, X } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { formatLocaleDateTime, formatRelativeTime } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
+import { usePolling } from '../../lib/usePolling'
 import { goView } from '../../routes/nav'
 import {
   ConfirmButton,
@@ -68,6 +69,7 @@ export default function WorkersView() {
   const backendMode = useAppStore((s) => s.backendMode)
   const [workers, setWorkers] = React.useState<WorkerRow[] | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const errorToastShownRef = React.useRef(false)
   const [loading, setLoading] = React.useState(true)
   const [lastRefresh, setLastRefresh] = React.useState<Date | null>(null)
   const [filterLabel, setFilterLabel] = React.useState('')
@@ -89,6 +91,7 @@ export default function WorkersView() {
       })
       setWorkers(Array.isArray(rows) ? rows : [])
       setLastRefresh(new Date())
+      errorToastShownRef.current = false
       try {
         const runs = await apiJson<
           Array<{ run_id: string; status?: string; created_at?: string; graph_name?: string }>
@@ -102,17 +105,18 @@ export default function WorkersView() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
-      pushToast(msg, 'error')
+      // Background poll: toast once per outage, not every 15 s. The inline
+      // error banner keeps showing the current message.
+      if (!errorToastShownRef.current) {
+        errorToastShownRef.current = true
+        pushToast(msg, 'error')
+      }
     } finally {
       setLoading(false)
     }
   }, [pushToast])
 
-  React.useEffect(() => {
-    void refresh()
-    const id = window.setInterval(() => void refresh(), 15_000)
-    return () => window.clearInterval(id)
-  }, [refresh])
+  usePolling(refresh, 15_000, { resetKey: refresh })
 
   React.useEffect(() => {
     if (!selected) return

@@ -111,4 +111,7 @@ class TestValidateSecretPolicy:
         assert resp.status_code == 422
         body = resp.json()
         assert body.get("valid") is False
-        assert "secret" in str(body.get("error", "")).lower() or "Inline" in str(body.get("error", ""))
+        # Validate returns the structured ValidationResult envelope (errors[]).
+        codes = [e.get("code") for e in body.get("errors", [])]
+        assert "VAL-SECRET" in codes
+        assert any("secret" in str(e.get("message", "")).lower() for e in body["errors"])

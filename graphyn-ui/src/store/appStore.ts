@@ -60,16 +60,6 @@ function clearToastTimer(id: string) {
 
 const ACTIVE_PROJECT_KEY = 'graphyn.activeProject'
 
-function readStoredActiveProject(): string | null {
-  try {
-    const v = localStorage.getItem(ACTIVE_PROJECT_KEY)
-    const t = (v || '').trim()
-    return t || null
-  } catch {
-    return null
-  }
-}
-
 function persistActiveProject(name: string | null) {
   try {
     if (name && name.trim()) localStorage.setItem(ACTIVE_PROJECT_KEY, name.trim())
@@ -183,12 +173,18 @@ function panelPathSegment(
   return panel
 }
 
+/** Workspace id from the address bar. localStorage is not a source of truth. */
+function readInitialProject(): string | null {
+  if (typeof window === 'undefined') return null
+  return parsePathname(window.location.pathname, window.location.search).workspaceId ?? null
+}
+
 function readInitialView(): AppView {
   if (typeof window === 'undefined') return 'projects'
   if (window.location.pathname && window.location.pathname !== '/') {
     return parsePathname(window.location.pathname, window.location.search).view
   }
-  return readStoredActiveProject() ? 'builder' : 'projects'
+  return 'projects'
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -333,7 +329,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set({ view: 'projects' })
   },
-  activeProject: readStoredActiveProject(),
+  activeProject: readInitialProject(),
   setActiveProject: (name) => {
     const next = name?.trim() || null
     persistActiveProject(next)

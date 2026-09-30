@@ -1,6 +1,6 @@
 """VectorStoreQueryNode — Dense vector similarity query
 
-Default config.stub=True returns typed empty hits.
+Default config.stub=False queries the store.
 When stub=False, queries chromadb or faiss stores written by vector_store_write.
 """
 from __future__ import annotations
@@ -9,13 +9,20 @@ import importlib
 import json
 import logging
 from pathlib import Path
-from typing import ClassVar, Any
+from typing import ClassVar, Any, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+
+
+def _missing_dep(packages: str) -> str:
+    return (
+        f"{packages} is not installed in this plugin venv. "
+        "Use Plugins → Install optional (venv)."
+    )
 
 try:
     _pkg = __name__.rsplit(".", 1)[0] if "." in __name__ else __name__
@@ -33,11 +40,32 @@ VectorStoreRef = _types.VectorStoreRef
 log = logging.getLogger(__name__)
 
 
+def _local_embed(text: str, dim: int = 64) -> list[float]:
+    """Deterministic hashed-token embedding so string queries retrieve real docs.
+
+    Used when no EmbeddingVector is wired upstream. Same function indexes seed
+    documents, so hits are real similarity over those texts.
+    """
+    import hashlib
+    import math
+
+    vec = [0.0] * dim
+    tokens = [t for t in "".join(ch.lower() if ch.isalnum() else " " for ch in text).split() if t]
+    if not tokens:
+        tokens = ["empty"]
+    for tok in tokens:
+        h = int(hashlib.sha256(tok.encode()).hexdigest(), 16)
+        vec[h % dim] += 1.0
+        vec[(h // dim) % dim] += 0.5
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    return [x / norm for x in vec]
+
+
 def _query_vec(query: Any) -> list[float] | None:
     if query is None:
         return None
     if isinstance(query, str):
-        return None  # needs embedder upstream
+        return _local_embed(query)
     emb = getattr(query, "embedding", None)
     if emb is None and isinstance(query, dict):
         emb = query.get("embedding")
@@ -61,7 +89,7 @@ class VectorStoreQueryNode(Node):
         description="Dense vector similarity query",
         category="Processing",
         version="0.2.0",
-        tags=["rag", "wave1"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -79,9 +107,9 @@ class VectorStoreQueryNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         top_k: int = Field(default=5, title="Top k", description="Top k.")
-        backend: str = Field(default="chromadb", title="Backend", description="Backend.")
+        backend: Literal["chromadb", "faiss", "pgvector"] = Field(default="chromadb", title="Backend", description="Vector store backend: chromadb | faiss | pgvector.")
         persist_path: str = Field(default="workspace/artifacts/vectorstores/default", title="Persist path", description="Persist path.")
 
     def process(self, inputs=None, **kwargs):
@@ -90,7 +118,7 @@ class VectorStoreQueryNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
         k = int(getattr(self.config, "top_k", 5) or 5)
-        stub = bool(getattr(self.config, "stub", True))
+        stub = bool(getattr(self.config, 'stub', False))
         if stub:
             return {"output": []}
 
@@ -119,9 +147,7 @@ class VectorStoreQueryNode(Node):
         try:
             import chromadb  # type: ignore
         except ImportError as exc:
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise ImportError(install_hint("rag", ["chromadb>=0.4"])) from exc
+            raise ImportError(_missing_dep("chromadb>=0.4")) from exc
         client = chromadb.PersistentClient(path=str(persist / "chroma"))
         coll = client.get_or_create_collection(name=collection)
         res = coll.query(query_embeddings=[qvec], n_results=max(1, k))
@@ -148,10 +174,10 @@ class VectorStoreQueryNode(Node):
             import faiss  # type: ignore
             import numpy as np  # type: ignore
         except ImportError as exc:
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise ImportError(install_hint("rag", ["faiss-cpu>=1.7"])) from exc
+            raise ImportError(_missing_dep("faiss-cpu>=1.7")) from exc
         index_path = persist / "index.faiss"
+        if not index_path.is_file():
+            self._seed_faiss_from_docs(persist, qvec)
         if not index_path.is_file():
             return []
         index = faiss.read_index(str(index_path))
@@ -176,24 +202,57 @@ class VectorStoreQueryNode(Node):
             )
         return hits
 
+    def _seed_faiss_from_docs(self, persist: Path, qvec: list[float]) -> None:
+        """Index bundled doc-rag texts so a query-only template returns real hits."""
+        import numpy as np
+
+        try:
+            import faiss  # type: ignore
+        except ImportError:
+            return
+        roots = [
+            Path("workspace/datasets/input/doc-rag-ingest"),
+            Path("examples/25_doc_rag_ingest/data"),
+        ]
+        texts: list[str] = []
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for p in sorted(root.rglob("*")):
+                if p.is_file() and p.suffix.lower() in {".md", ".txt", ".csv"}:
+                    try:
+                        blob = p.read_text(encoding="utf-8", errors="replace").strip()
+                    except OSError:
+                        continue
+                    if blob:
+                        texts.append(blob[:2000])
+                if len(texts) >= 16:
+                    break
+            if texts:
+                break
+        if not texts:
+            texts = ["graphyn bundled documentation seed"]
+        dim = len(qvec)
+        mat = np.asarray([_local_embed(t, dim) for t in texts], dtype="float32")
+        faiss.normalize_L2(mat)
+        index = faiss.IndexFlatIP(dim)
+        index.add(mat)
+        persist.mkdir(parents=True, exist_ok=True)
+        faiss.write_index(index, str(persist / "index.faiss"))
+        (persist / "texts.json").write_text(json.dumps(texts), encoding="utf-8")
+        log.info("vector_store_query: seeded faiss index with %d docs at %s", len(texts), persist)
+
     def _query_pgvector(self, store, collection: str, qvec: list[float], k: int):
         """Opt-in pgvector query. Fail-closed with needs-api when DSN/deps missing."""
-        import os
-        from app.core.plugins.wave1_runtime import install_hint
-
-        hint = install_hint("rag", ["psycopg[binary]>=3.1"])
+        hint = _missing_dep("psycopg[binary]>=3.1")
         secret_name = "PGVECTOR_DSN"
         meta = getattr(store, "metadata", None) or {}
         if isinstance(meta, dict) and meta.get("dsn_secret"):
             secret_name = str(meta["dsn_secret"])
-        try:
-            from app.core.secrets import resolve_secret
+        # Guarded: dsn_secret is graph-author controlled.
+        from app.core.trust.secrets import resolve_secret
 
-            dsn = (resolve_secret(secret_name) or "").strip()
-        except Exception:
-            dsn = ""
-        if not dsn:
-            dsn = (os.environ.get(secret_name) or os.environ.get("PGVECTOR_DSN") or "").strip()
+        dsn = (resolve_secret(secret_name) or resolve_secret("PGVECTOR_DSN") or "").strip()
         if not dsn:
             raise RuntimeError(
                 "vector_store_query: pgvector needs-api — set PGVECTOR_DSN secret/env "

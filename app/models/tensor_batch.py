@@ -7,7 +7,7 @@ Responsibility:   Typed data contract for batches of tensors used between
 Owns:             TensorBatch Pydantic model — data (float32 [N,...]), labels,
                   split, source_ids, metadata.
 Public Surface:   TensorBatch
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain tensor manipulation logic.
 Dependencies:     pydantic (PortDataType base), stdlib (typing).
 Reason To Change: TensorBatch schema gains new fields, or split enum values

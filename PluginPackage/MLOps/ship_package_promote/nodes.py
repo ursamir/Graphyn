@@ -1,7 +1,7 @@
 """ShipPackagePromoteNode — Promote draft→staging→prod
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
 
@@ -29,6 +29,56 @@ ShipPackageRef = _types.ShipPackageRef
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _project_dir() -> Path:
+    from app.core.config import project_dir
+
+    return project_dir()
+
+def _ship_ref(types, record: dict) -> Any:
+    return _T(
+        types,
+        "ShipPackageRef",
+        package_id=str(record.get("package_id") or record.get("id") or ""),
+        path=str(record.get("path") or record.get("dir") or ""),
+        state=str(record.get("status") or record.get("state") or ""),
+        metadata=record,
+    )
+
+def _ship_promote(config, inputs, types):
+    from app.core.mlops.ship_packages import promote_package
+
+    pkg = _dump(inputs.get("package")) or {}
+    package_id = str(pkg.get("package_id") or pkg.get("id") or "")
+    record = promote_package(
+        _project_dir(),
+        package_id,
+        to_env=str(_cfg(config, "to_env", "staging") or "staging"),
+        approve=bool(_cfg(config, "approve", False)),
+    )
+    return _ship_ref(types, record if isinstance(record, dict) else {})
+
+
 
 class ShipPackagePromoteNode(Node):
     """Promote draft→staging→prod"""
@@ -41,7 +91,7 @@ class ShipPackagePromoteNode(Node):
         description="Promote draft→staging→prod",
         category="Ship",
         version="0.1.0",
-        tags=["mlops", "stub"],
+        tags=["mlops"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -58,7 +108,7 @@ class ShipPackagePromoteNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         to_env: str = Field(default='staging', title="To env", description="To env.")
         approve: bool = Field(default=False, title="Approve", description="Approve.")
 
@@ -69,10 +119,17 @@ class ShipPackagePromoteNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'mlops' / 'ship_package_promote'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = ShipPackageRef()
             return {"output": result}
@@ -82,23 +139,8 @@ class ShipPackagePromoteNode(Node):
         except ImportError as exc:
             raise ImportError(f"ship_package_promote: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'mlops' / 'ship_package_promote'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": ShipPackageRef()}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _ship_promote(self.config, inputs, _types)}

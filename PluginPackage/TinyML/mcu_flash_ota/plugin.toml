@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["tinyml", "mcu", "stub"]
+tags = ["tinyml", "mcu"]
 
 dependencies = [
     "numpy>=1.24",
@@ -17,7 +17,7 @@ runtime = "inprocess"
 node_types = ["mcu_flash_ota"]
 
 [config_schema.mcu_flash_ota]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
 transport = { type = "string", title = "Transport", default = "swd", description = "Transport." }
 device_id = { type = "string", title = "Device id", default = "", description = "Device id." }
 dry_run = { type = "boolean", title = "Dry run", default = true, description = "Dry run." }

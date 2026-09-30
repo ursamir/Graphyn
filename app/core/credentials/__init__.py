@@ -1,14 +1,19 @@
 # app/core/credentials/__init__.py
-"""Live Graphyn credential (connection) store.
-
-Credentials belong to the Graphyn platform — graphs/nodes store only
-connection id refs. Runtime resolves id → secret for that step only.
-
-Public surface used by API/MCP/plugins:
-  create_connection, list_connections, get_connection, update_connection,
-  revoke_connection, set_default, resolve_connection, resolve_llm_credentials,
-  register_kind, list_kinds, NeedsCredentialsError
 """
+Bounded Context:  BC6 — Observability & Storage
+Responsibility:   Public API for connection records. Graphs store connection ids;
+                  runtime resolves an id to a secret for one step.
+Owns:             Re-exports of errors, kinds, store, and resolve.
+Public Surface:   create_connection, list_connections, get_connection,
+                  update_connection, revoke_connection, set_default,
+                  resolve_connection, resolve_llm_credentials, register_kind,
+                  list_kinds, NeedsCredentialsError.
+Must NOT:         Return raw secret fields from list/get. Must not import app.api.
+Dependencies:     app.core.credentials.{errors,kinds,store,resolve}
+Reason To Change: A connection operation or kind is added to the public API.
+"""
+from __future__ import annotations
+
 from app.core.credentials.errors import (
     CredentialError,
     CredentialNotFoundError,

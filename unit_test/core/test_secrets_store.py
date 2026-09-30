@@ -6,7 +6,7 @@ import stat
 
 import pytest
 
-from app.core.secrets import (
+from app.core.trust.secrets import (
     SecretError,
     delete_secret,
     get_secret,

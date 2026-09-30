@@ -5,6 +5,7 @@ import {
   apiJson,
   apiUrl,
   getApiToken,
+  parseError,
 } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
@@ -185,6 +186,18 @@ export default function DataView() {
   /** Omit project from search while clearing — prevents stale React state from re-writing query. */
   const skipProjectHashRef = React.useRef(false)
   const appliedUnscopeEpochRef = React.useRef<number | null>(null)
+  // Active ingest stream (EventSource or fetch reader) — closed on unmount so
+  // it stops consuming the server stream and never toasts into another view.
+  const ingestStreamCancelRef = React.useRef<(() => void) | null>(null)
+  const unmountedRef = React.useRef(false)
+  React.useEffect(() => {
+    unmountedRef.current = false
+    return () => {
+      unmountedRef.current = true
+      ingestStreamCancelRef.current?.()
+      ingestStreamCancelRef.current = null
+    }
+  }, [])
   const [loading, setLoading] = React.useState(true)
   const [previewFile, setPreviewFile] = React.useState<{ path: string; kind: 'files' | 'input-files' } | null>(
     null,
@@ -466,8 +479,20 @@ export default function DataView() {
       const fd = new FormData()
       fd.append('file', file)
       try {
-        const res = await apiFetch('/data/inputs/upload', { method: 'POST', body: fd })
-        if (!res.ok) throw new Error(`Upload failed: HTTP ${res.status}`)
+        // Large audio uploads easily exceed the 30 s default timeout.
+        const res = await apiFetch('/data/inputs/upload', {
+          method: 'POST',
+          body: fd,
+          timeoutMs: 60 * 60 * 1000,
+        })
+        if (!res.ok) {
+          const apiErr = await parseError(res, '/data/inputs/upload')
+          throw new Error(
+            res.status === 413
+              ? `Upload failed: file too large for the server/proxy limit (${apiErr.message})`
+              : `Upload failed: ${apiErr.message}`,
+          )
+        }
         const body = await res.json()
         pushToast(`Uploaded ${body.filename ?? file.name}`, 'success')
         await loadSources()
@@ -484,13 +509,17 @@ export default function DataView() {
 
   /** Result of one ingest job's SSE stream — the job "completing" only means
    * it finished running, not that every URL/file succeeded. */
-  type IngestStreamResult = { totalFiles: number; errorCount: number }
+  type IngestStreamResult = { totalFiles: number; errorCount: number; fatalError?: string }
 
   const trackIngestEvent = (raw: string, acc: IngestStreamResult) => {
     try {
-      const data = JSON.parse(raw) as { type?: string; status?: string; total_files?: number }
+      const data = JSON.parse(raw) as { type?: string; status?: string; total_files?: number; message?: string }
       if (data.type === 'summary' && typeof data.total_files === 'number') {
         acc.totalFiles = data.total_files
+      }
+      // type=error is job-fatal: the backend closes the stream without a summary.
+      if (data.type === 'error') {
+        acc.fatalError = typeof data.message === 'string' && data.message ? data.message : 'Ingest job failed'
       }
       if (data.status === 'error' || data.type === 'error') {
         acc.errorCount += 1
@@ -508,6 +537,9 @@ export default function DataView() {
       const res = await apiFetch(path, { timeoutMs: 600000 })
       if (!res.ok || !res.body) throw new Error(`Stream failed: ${res.status}`)
       const reader = res.body.getReader()
+      ingestStreamCancelRef.current = () => {
+        void reader.cancel().catch(() => {})
+      }
       const decoder = new TextDecoder()
       let buf = ''
       while (true) {
@@ -524,26 +556,37 @@ export default function DataView() {
           trackIngestEvent(data, acc)
         }
       }
+      ingestStreamCancelRef.current = null
+      if (unmountedRef.current) throw new Error('unmounted')
       return acc
     }
     await new Promise<void>((resolve, reject) => {
       const es = new EventSource(apiUrl(path))
+      ingestStreamCancelRef.current = () => {
+        es.close()
+        reject(new Error('unmounted'))
+      }
+      const finish = (err?: Error) => {
+        es.close()
+        ingestStreamCancelRef.current = null
+        if (err) reject(err)
+        else resolve()
+      }
       es.onmessage = (ev) => {
         setIngestLog((l) => [...l, ev.data].slice(-100))
         trackIngestEvent(ev.data, acc)
         try {
           const data = JSON.parse(ev.data) as { type?: string }
-          if (data.type === 'summary') {
-            es.close()
-            resolve()
-          }
+          // summary = normal end; error = job-fatal, stream closes with no summary.
+          if (data.type === 'summary' || data.type === 'error') finish()
         } catch {
           /* ignore */
         }
       }
       es.onerror = () => {
-        es.close()
-        reject(new Error('Ingest stream error'))
+        // A close right after a fatal type=error event is expected, not a transport error.
+        if (acc.fatalError) finish()
+        else finish(new Error('Ingest stream error'))
       }
     })
     return acc
@@ -552,7 +595,9 @@ export default function DataView() {
   /** Turn a stream result into the right toast — never claim success when
    * every URL errored or nothing was actually ingested. */
   const pushIngestResultToast = (label: string, result: IngestStreamResult) => {
-    if (result.errorCount > 0 && result.totalFiles === 0) {
+    if (result.fatalError) {
+      pushToast(`${label} failed: ${result.fatalError}`, 'error')
+    } else if (result.errorCount > 0 && result.totalFiles === 0) {
       pushToast(`${label} failed — 0 files ingested, ${result.errorCount} error(s). See log.`, 'error')
     } else if (result.errorCount > 0) {
       pushToast(`${label}: ${result.totalFiles} file(s) ingested, ${result.errorCount} error(s). See log.`, 'error')
@@ -573,6 +618,7 @@ export default function DataView() {
       pushIngestResultToast('URL ingest', result)
       await loadSources()
     } catch (err) {
+      if (unmountedRef.current) return
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
   }
@@ -593,6 +639,7 @@ export default function DataView() {
       pushIngestResultToast('HF ingest', result)
       await loadSources()
     } catch (err) {
+      if (unmountedRef.current) return
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
   }

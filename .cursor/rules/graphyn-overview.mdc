@@ -32,8 +32,8 @@ AI/workflow DAG engine. Brand/package: **graphyn-sdk**. Primary domain: audio ML
 |---|---|
 | Docs index | `docs/README.md` |
 | Architecture | `docs/ARCHITECTURE.md` |
-| Detailed steering | `.kiro/steering/` |
+| Frontend steering | `.kiro/steering/frontend-*.md` (backend steering removed — `docs/` is canonical) |
 | Node catalogue | `docs/NODE_CATALOGUE.md` / `PluginPackage/NODES.md` |
 | Open issues | `docs/KNOWN_ISSUES.md` |
 
-Prefer `docs/` + source over inventing APIs. Deep detail lives in `.kiro/steering/*.md` — read the matching file before large edits in that area.
+Prefer `docs/` + source over inventing APIs. Read the matching `docs/` file (see `update-protocol.mdc` table) before large edits in that area; for `graphyn-ui/` also the `.kiro/steering/frontend-*.md` file.

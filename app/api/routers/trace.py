@@ -4,8 +4,8 @@ Bounded Context:  REST API Layer
 Responsibility:   Unified Trace (backtrack) and thin audit log endpoints.
 Owns:             GET /trace, GET /audit.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
-Must NOT:         Contain storage logic — delegate to app.core.trace / audit.
-Dependencies:     fastapi, app.core.trace, app.core.audit.
+Must NOT:         Contain storage logic — delegate to app.core.runs.trace / audit.
+Dependencies:     fastapi, app.core.runs.trace, app.core.trust.audit.
 Reason To Change: Trace/audit response schema changes or new query modes.
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ def get_trace(
             status_code=400,
             detail="Provide artifact_id and/or run_id query parameters",
         )
-    from app.core.trace import assemble_trace
+    from app.core.runs.trace import assemble_trace
 
     try:
         return assemble_trace(artifact_id=artifact_id, run_id=run_id, node_id=node_id)
@@ -54,6 +54,6 @@ def get_trace_by_path(kind: str, id: str, node_id: Optional[str] = Query(None)):
 @router.get("/audit", summary="List recent audit events")
 def get_audit(limit: int = Query(100, ge=1, le=1000)):
     """Return newest-first append-only audit events (thin seed)."""
-    from app.core.audit import list_audit
+    from app.core.trust.audit import list_audit
 
     return {"events": list_audit(limit=limit), "limit": limit}

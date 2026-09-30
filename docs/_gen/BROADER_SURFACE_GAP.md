@@ -4,7 +4,7 @@
 |-------|-------|
 | **Date** | 2026-09-26 (Asia/Calcutta) |
 | **Branch** | `cursor/usecase-plugins-workflows` |
-| **Scope** | Beyond Wave-1 ML packs: mail, notifications, LLM providers, agents/HITL/schedules/webhooks; note open Auth/audit/ship/datasets P0/P1 only |
+| **Scope** | Beyond the YOLO / TFLM / RAG packs: mail, notifications, LLM providers, agents/HITL/schedules/webhooks; note open Auth/audit/ship/datasets P0/P1 only |
 | **Marks** | DONE · PARTIAL · MISSING · needs-api · needs-credentials |
 
 **Sources scanned:** `docs/REQUIREMENTS_SPEC.md`, `docs/SRS_ALIGNMENT_GAP_MATRIX.md` (+ JSON), `docs/PRODUCT_VISION.md`, `docs/MCP_AGENT_PACK_COVERAGE.md`, `docs/PLUGIN_NODE_PLATFORM_CATALOG.md`, `PluginPackage/{Agents,Common,RAG}/**`, `app/core/{webhook,run_notify,secrets}.py`, MCP tool registry / system router.

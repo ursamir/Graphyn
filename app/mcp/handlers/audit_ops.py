@@ -1,5 +1,9 @@
 # app/mcp/handlers/audit_ops.py
-"""MCP tools for audit list/export (J6 accountability)."""
+"""MCP tools for audit list/export (J6 accountability).
+
+Export always re-serialises events through ``normalize_audit_event`` (which
+redacts webhook URLs) — the raw ``events.jsonl`` is never returned verbatim.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -44,7 +48,7 @@ EXPORT_AUDIT_SCHEMA = {
 
 
 def get_audit_events_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.audit import list_audit
+    from app.core.trust.audit import list_audit
 
     args = arguments or {}
     limit = int(args.get("limit") or 100)
@@ -55,30 +59,32 @@ def get_audit_events_handler(arguments: dict[str, Any] | None = None) -> dict[st
 def export_audit_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     import json
 
-    from app.core.audit import audit_events_path, list_audit
+    from app.core.trust.audit import audit_events_path, normalize_audit_event
 
     args = arguments or {}
     limit = max(1, min(int(args.get("limit") or 1000), 10000))
-    # Prefer raw JSONL file when present and limit covers all; else rebuild.
     path = audit_events_path()
-    if path.is_file() and limit >= 10000:
+    # Always go through normalize_audit_event (redacts webhook URLs etc.);
+    # never return the raw events.jsonl bytes, whatever the limit.
+    events: list[dict[str, Any]] = []
+    if path.is_file():
         try:
-            content = path.read_text(encoding="utf-8")
-            return {
-                "format": "jsonl",
-                "path": str(path),
-                "content": content,
-                "bytes": len(content.encode("utf-8")),
-            }
+            text = path.read_text(encoding="utf-8")
         except Exception as exc:
-            return _err("internal_error", f"Failed to read audit log: {exc}")
-    events = list_audit(limit=limit)
-    # list_audit returns newest first; export chronological (oldest first)
-    lines = [
-        json.dumps(ev, ensure_ascii=False, default=str)
-        for ev in reversed(events)
-        if isinstance(ev, dict)
-    ]
+            return _err("internal_error", f"Failed to read audit log: {type(exc).__name__}")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                events.append(normalize_audit_event(obj))
+    # Chronological (oldest first), most recent *limit* events.
+    events = events[-limit:]
+    lines = [json.dumps(ev, ensure_ascii=False, default=str) for ev in events]
     content = "\n".join(lines) + ("\n" if lines else "")
     return {
         "format": "jsonl",

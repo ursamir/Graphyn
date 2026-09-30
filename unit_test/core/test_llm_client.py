@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.core.llm_client import NeedsCredentialsError, chat_completion
+from app.core.ml.llm_client import NeedsCredentialsError, chat_completion
 
 
 def test_stub():

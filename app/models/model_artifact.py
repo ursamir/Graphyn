@@ -6,7 +6,7 @@ Responsibility:   Typed data contract for a trained model artifact. Produced
 Owns:             ModelArtifact Pydantic model — model_path, labels, history,
                   metrics.
 Public Surface:   ModelArtifact
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain training logic.
 Dependencies:     pydantic (PortDataType base).
 Reason To Change: ModelArtifact schema gains new fields, or metrics schema

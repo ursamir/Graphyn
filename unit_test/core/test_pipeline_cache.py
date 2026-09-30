@@ -1,4 +1,4 @@
-"""Unit tests for app/core/pipeline_cache.py — Req 5 criteria 3–5."""
+"""Unit tests for app/core/execution/pipeline_cache.py — Req 5 criteria 3–5."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from app.core.pipeline_cache import PipelineCache
+from app.core.execution.pipeline_cache import PipelineCache
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

@@ -207,7 +207,7 @@ class CSVWriterNode(Node):
 # ── Register nodes ────────────────────────────────────────────────────────────
 
 def register_csv_nodes() -> None:
-    from app.core.registry_runtime import get_registry
+    from app.core.host.registry_runtime import get_registry
     registry = get_registry()
     for node_type, node_class in [
         ("csv_reader",         CSVReaderNode),

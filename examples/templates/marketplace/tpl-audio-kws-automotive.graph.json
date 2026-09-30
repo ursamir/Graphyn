@@ -131,17 +131,37 @@
       "src_id": "n6",
       "src_port": "output",
       "dst_id": "n7",
-      "dst_port": "input"
+      "dst_port": "model"
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n7",
+      "dst_port": "dataset"
     },
     {
       "src_id": "n7",
       "src_port": "output",
       "dst_id": "n8",
-      "dst_port": "input"
+      "dst_port": "model_artifact"
+    },
+    {
+      "src_id": "n5",
+      "src_port": "output",
+      "dst_id": "n8",
+      "dst_port": "dataset"
     }
   ],
   "parameters": {
-    "dataset_path": "workspace/datasets/input/automotive-kws",
-    "sample_rate": 16000
+    "dataset_path": {
+      "type": "string",
+      "default": "workspace/datasets/input/automotive-kws",
+      "description": ""
+    },
+    "sample_rate": {
+      "type": "integer",
+      "default": 16000,
+      "description": ""
+    }
   }
 }

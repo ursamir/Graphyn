@@ -171,15 +171,22 @@ def list_projects(
 @router.post("")
 def create_project(body: CreateProjectBody, request: Request):
     """POST /projects — create a new project (Idempotency-Key supported)."""
-    from app.api.idempotency import begin_idempotent, complete_idempotent
+    from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
 
     cached = begin_idempotent(
         request, body=body.model_dump(), route="POST /api/v1/projects"
     )
     if cached is not None:
         return cached
-    result = _handle(_pm.create, body.name)
-    complete_idempotent(request, status_code=200, body=result)
+    with idempotency_guard(request):
+        try:
+            result = _handle(_pm.create, body.name)
+        except HTTPException as exc:
+            # Duplicate name is a state conflict (409), not a validation error (422).
+            if exc.status_code == 422 and "already exists" in str(exc.detail):
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            raise
+        complete_idempotent(request, status_code=200, body=result)
     return result
 
 
@@ -406,6 +413,13 @@ def trigger_quality_check(name: str, body: QualityCheckBody):
             )
         version = versions[-1]["version"]
 
+    # Validate name + version before any filesystem access (no ``../`` escape).
+    from app.domain.quality_checker import validate_dataset_target
+
+    bad = validate_dataset_target(_qc.BASE, name, str(version))
+    if bad:
+        raise HTTPException(status_code=422, detail=bad)
+
     contract = _handle(_pm.get_contract, name)
     try:
         findings = _qc.run(name, version, contract or None)
@@ -598,8 +612,8 @@ def export_quality_report(
 @router.get("/{name}/pipelines", summary="List project pipelines")
 def list_project_pipelines(name: str):
     """GET /projects/{name}/pipelines — Graph IR files under pipelines/."""
-    from app.core.pipeline_environments import enrich_pipeline_summary
-    from app.core.project_pipelines import list_pipelines
+    from app.core.pipelines.pipeline_environments import enrich_pipeline_summary
+    from app.core.pipelines.project_pipelines import list_pipelines
 
     project_dir = _handle(_pm._require_project, name)
     return [enrich_pipeline_summary(project_dir, row) for row in list_pipelines(project_dir)]
@@ -607,7 +621,7 @@ def list_project_pipelines(name: str):
 
 @router.get("/{name}/pipelines/{pipeline}/versions", summary="List pipeline versions")
 def list_pipeline_versions(name: str, pipeline: str):
-    from app.core.pipeline_environments import list_versions
+    from app.core.pipelines.pipeline_environments import list_versions
 
     project_dir = _handle(_pm._require_project, name)
     return {"pipeline": pipeline, "versions": list_versions(project_dir, pipeline)}
@@ -618,7 +632,7 @@ def list_pipeline_versions(name: str, pipeline: str):
     summary="Get a published pipeline version",
 )
 def get_pipeline_version(name: str, pipeline: str, version: str):
-    from app.core.pipeline_environments import get_version
+    from app.core.pipelines.pipeline_environments import get_version
 
     project_dir = _handle(_pm._require_project, name)
     return _handle(get_version, project_dir, pipeline, version)
@@ -629,7 +643,7 @@ def get_pipeline_version(name: str, pipeline: str, version: str):
     summary="Get draft/staging/prod environment pointers",
 )
 def get_pipeline_environments(name: str, pipeline: str):
-    from app.core.pipeline_environments import get_environments
+    from app.core.pipelines.pipeline_environments import get_environments
 
     project_dir = _handle(_pm._require_project, name)
     return get_environments(project_dir, pipeline)
@@ -660,7 +674,7 @@ class PipelineRollbackBody(BaseModel):
 def publish_pipeline_version(
     name: str, pipeline: str, request: Request, body: PipelinePublishBody = PipelinePublishBody()
 ):
-    from app.core.pipeline_environments import publish_version
+    from app.core.pipelines.pipeline_environments import publish_version
 
     project_dir = _handle(_pm._require_project, name)
     try:
@@ -682,7 +696,7 @@ def publish_pipeline_version(
 def promote_pipeline_env(
     name: str, pipeline: str, request: Request, body: PipelinePromoteBody
 ):
-    from app.core.pipeline_environments import promote_environment
+    from app.core.pipelines.pipeline_environments import promote_environment
 
     project_dir = _handle(_pm._require_project, name)
     try:
@@ -708,7 +722,7 @@ def promote_pipeline_env(
 def rollback_pipeline_draft(
     name: str, pipeline: str, request: Request, body: PipelineRollbackBody
 ):
-    from app.core.pipeline_environments import rollback_draft_to_version
+    from app.core.pipelines.pipeline_environments import rollback_draft_to_version
 
     project_dir = _handle(_pm._require_project, name)
     try:
@@ -720,7 +734,7 @@ def rollback_pipeline_draft(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -743,8 +757,8 @@ def get_project_pipeline(
     ),
 ):
     """GET /projects/{name}/pipelines/{pipeline} — draft head, or env pointer."""
-    from app.core.pipeline_environments import get_environment_graph
-    from app.core.project_pipelines import get_pipeline
+    from app.core.pipelines.pipeline_environments import get_environment_graph
+    from app.core.pipelines.project_pipelines import get_pipeline
 
     project_dir = _handle(_pm._require_project, name)
     if env and env.strip().lower() != "draft":
@@ -771,7 +785,7 @@ def put_project_pipeline(
     )
     from app.core.errors import VersionConflict
     from app.core.ir.secret_policy import InlineSecretError
-    from app.core.project_pipelines import put_pipeline
+    from app.core.pipelines.project_pipelines import put_pipeline
 
     project_dir = _handle(_pm._require_project, name)
     expected, via_if_match = resolve_expected_version(
@@ -805,7 +819,7 @@ def put_project_pipeline(
 @router.delete("/{name}/pipelines/{pipeline}", summary="Delete a project pipeline")
 def delete_project_pipeline(name: str, pipeline: str):
     """DELETE /projects/{name}/pipelines/{pipeline}."""
-    from app.core.project_pipelines import delete_pipeline
+    from app.core.pipelines.project_pipelines import delete_pipeline
 
     project_dir = _handle(_pm._require_project, name)
     _handle(delete_pipeline, project_dir, pipeline)

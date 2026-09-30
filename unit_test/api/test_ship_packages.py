@@ -11,12 +11,19 @@ import pytest
 @pytest.fixture
 def ship_project(tmp_workspace: Path):
     """Create a dataset project + register a model for ship create."""
-    from app.core.model_registry import register_model
+    from app.core.mlops.model_registry import register_model
     from app.domain.project_manager import ProjectManager
 
     pm = ProjectManager()
     meta = pm.create("ship-demo")
     assert meta["name"] == "ship-demo"
+    # register_model now requires a real, succeeded run with artifacts.
+    run_dir = tmp_workspace / "runs" / "run-ship-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "meta.json").write_text(json.dumps({"run_id": "run-ship-1", "status": "succeeded"}))
+    art = tmp_workspace / "artifacts" / "edge-slug" / "runs" / "run-ship-1"  # artifact_slug()
+    art.mkdir(parents=True)
+    (art / "model.bin").write_bytes(b"x")
     register_model(
         "edge-model",
         run_id="run-ship-1",
@@ -141,7 +148,7 @@ class TestShipPackagesRest:
         assert r.json()["error"]["code"] == "not_found"
 
     def test_core_transition_matrix(self, tmp_workspace, ship_project):
-        from app.core.ship_packages import (
+        from app.core.mlops.ship_packages import (
             InvalidPackageTransition,
             create_package,
             next_status,

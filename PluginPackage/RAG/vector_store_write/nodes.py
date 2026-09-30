@@ -1,7 +1,7 @@
 """VectorStoreWriteNode — Write to faiss/chroma/pgvector
 
-Default config.stub=True returns typed minimal outputs without heavy deps.
-When stub=False, uses chromadb or faiss-cpu from the Wave-1 RAG venv.
+Default config.stub=False runs the real implementation.
+When stub=False, uses chromadb or faiss-cpu from this plugin's venv.
 """
 from __future__ import annotations
 
@@ -9,13 +9,20 @@ import importlib
 import json
 import logging
 from pathlib import Path
-from typing import ClassVar, Any
+from typing import ClassVar, Any, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
 from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
+
+
+def _missing_dep(packages: str) -> str:
+    return (
+        f"{packages} is not installed in this plugin venv. "
+        "Use Plugins → Install optional (venv)."
+    )
 
 try:
     _pkg = __name__.rsplit(".", 1)[0] if "." in __name__ else __name__
@@ -63,7 +70,7 @@ class VectorStoreWriteNode(Node):
         description="Write to faiss/chroma/pgvector",
         category="Output",
         version="0.2.0",
-        tags=["rag", "wave1"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -81,8 +88,8 @@ class VectorStoreWriteNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
-        backend: str = Field(default="chromadb", title="Backend", description="Backend: chromadb|faiss|pgvector.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
+        backend: Literal["chromadb", "faiss", "pgvector"] = Field(default="chromadb", title="Backend", description="Vector store backend: chromadb | faiss | pgvector.")
         persist_path: str = Field(default="workspace/artifacts/vectorstores/default", title="Persist path", description="Persist path.")
         collection: str = Field(default="default", title="Collection", description="Collection.")
         pg_dsn_secret: str = Field(default="PGVECTOR_DSN", title="Pg dsn secret", description="Pg dsn secret.")
@@ -96,7 +103,7 @@ class VectorStoreWriteNode(Node):
         persist.mkdir(parents=True, exist_ok=True)
         backend = str(getattr(self.config, "backend", "chromadb") or "chromadb").lower()
         collection = str(getattr(self.config, "collection", "default") or "default")
-        stub = bool(getattr(self.config, "stub", True))
+        stub = bool(getattr(self.config, 'stub', False))
         embeddings = _as_list(inputs.get("embeddings"))
         chunks = _as_list(inputs.get("chunks"))
 
@@ -122,9 +129,7 @@ class VectorStoreWriteNode(Node):
         try:
             import chromadb  # type: ignore
         except ImportError as exc:
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise ImportError(install_hint("rag", ["chromadb>=0.4"])) from exc
+            raise ImportError(_missing_dep("chromadb>=0.4")) from exc
 
         client = chromadb.PersistentClient(path=str(persist / "chroma"))
         coll = client.get_or_create_collection(name=collection)
@@ -164,9 +169,7 @@ class VectorStoreWriteNode(Node):
             import faiss  # type: ignore
             import numpy as np  # type: ignore
         except ImportError as exc:
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise ImportError(install_hint("rag", ["faiss-cpu>=1.7", "numpy"])) from exc
+            raise ImportError(_missing_dep("faiss-cpu>=1.7, numpy")) from exc
 
         rows = [_vec(item) for item in embeddings]
         rows = [r for r in rows if r]
@@ -200,31 +203,24 @@ class VectorStoreWriteNode(Node):
 
     def _resolve_pg_dsn(self) -> str:
         """Resolve PGVECTOR DSN from named secret or env — never invent one."""
-        import os
 
         secret_name = str(getattr(self.config, "pg_dsn_secret", None) or "PGVECTOR_DSN").strip() or "PGVECTOR_DSN"
-        try:
-            from app.core.secrets import resolve_secret
+        # Guarded: pg_dsn_secret is graph-author controlled.
+        from app.core.trust.secrets import resolve_secret
 
-            dsn = (resolve_secret(secret_name) or "").strip()
-        except Exception:
-            dsn = ""
-        if not dsn:
-            dsn = (os.environ.get(secret_name) or os.environ.get("PGVECTOR_DSN") or "").strip()
+        dsn = (resolve_secret(secret_name) or resolve_secret("PGVECTOR_DSN") or "").strip()
         return dsn
 
     def _write_pgvector(self, persist: Path, collection: str, embeddings: list, chunks: list):
         """Opt-in pgvector backend. Fail-closed with needs-api when DSN/deps/extension missing.
 
-        Default Wave-1 path remains chromadb|faiss. Do not point PGVECTOR_DSN at
+        Default path remains chromadb|faiss. Do not point PGVECTOR_DSN at
         production sentinel Postgres unless it already has the vector extension and
         is intentionally dedicated for Graphyn embeddings.
         """
-        from app.core.plugins.wave1_runtime import install_hint
-
+        hint = _missing_dep("psycopg[binary]>=3.1")
         dsn = self._resolve_pg_dsn()
         secret_name = str(getattr(self.config, "pg_dsn_secret", None) or "PGVECTOR_DSN")
-        hint = install_hint("rag", ["psycopg[binary]>=3.1"])
         if not dsn:
             raise RuntimeError(
                 "vector_store_write: pgvector needs-api — set secret/env "
@@ -305,7 +301,7 @@ class VectorStoreWriteNode(Node):
             raise RuntimeError(
                 "vector_store_write: pgvector needs-api — write failed "
                 f"({type(exc).__name__}: {exc}). Keep backend=chromadb|faiss for "
-                "Wave-1 defaults; use a dedicated vector-enabled DSN when ready. "
+                "Local defaults remain chromadb or faiss; use a dedicated vector-enabled DSN when ready. "
                 + hint
             ) from exc
 

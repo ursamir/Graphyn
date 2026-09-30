@@ -1,9 +1,12 @@
 """PromptAssembleNode — Assemble RAG prompt slots
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import hashlib
+import json
 
 import importlib
 import logging
@@ -30,6 +33,99 @@ RetrievalHit = _types.RetrievalHit
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _text(obj: Any) -> str:
+    if obj is None:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, list):
+        return "\n".join(_text(x) for x in obj)
+    data = _dump(obj)
+    if isinstance(data, dict):
+        for key in ("text", "query", "content", "answer", "user", "path", "value", "final"):
+            if data.get(key):
+                return str(data[key])
+        return json.dumps(data, default=str)
+    return str(obj)
+
+def _as_list(obj: Any) -> list:
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, tuple):
+        return list(obj)
+    return [obj]
+
+def _chunk_id(text: str, index: int) -> str:
+    digest = hashlib.sha1(f"{index}:{text}".encode()).hexdigest()[:12]
+    return f"c{index}-{digest}"
+
+def _docs_from_corpus(corpus: Any) -> list[dict[str, Any]]:
+    docs = []
+    for i, item in enumerate(_as_list(corpus)):
+        data = _dump(item)
+        if isinstance(data, str):
+            data = {"text": data}
+        if not isinstance(data, dict):
+            data = {"text": _text(item)}
+        data.setdefault("text", _text(item))
+        data.setdefault("chunk_id", data.get("chunk_id") or _chunk_id(str(data["text"]), i))
+        docs.append(data)
+    return docs
+
+def _prompt_assemble(config, inputs, types):
+    query = _text(inputs.get("query"))
+    hits = _docs_from_corpus(inputs.get("hits"))
+    system = str(_cfg(config, "system_template", "Answer using only the context.") or "")
+    tmpl = str(_cfg(config, "context_template", "{text}") or "{text}")
+    max_chars = int(_cfg(config, "max_context_chars", 4000) or 4000)
+    blocks = []
+    used = 0
+    for doc in hits:
+        try:
+            block = tmpl.format(**{**doc, "text": doc.get("text", "")})
+        except Exception:
+            block = str(doc.get("text") or "")
+        if used + len(block) > max_chars:
+            break
+        blocks.append(block)
+        used += len(block)
+    context = "\n\n".join(blocks)
+    user = f"{query}\n\nContext:\n{context}".strip()
+    return _T(
+        types,
+        "AssembledPrompt",
+        system=system,
+        user=user,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+        metadata={"n_hits": len(blocks)},
+    )
+
+
 
 class PromptAssembleNode(Node):
     """Assemble RAG prompt slots"""
@@ -42,7 +138,7 @@ class PromptAssembleNode(Node):
         description="Assemble RAG prompt slots",
         category="Processing",
         version="0.1.0",
-        tags=["rag", "stub"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -60,7 +156,7 @@ class PromptAssembleNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         system_template: str = Field(default='', title="System template", description="System template.")
         context_template: str = Field(default='', title="Context template", description="Context template.")
         max_context_chars: int = Field(default=8000, title="Max context chars", description="Max context chars.")
@@ -72,10 +168,17 @@ class PromptAssembleNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'rag' / 'prompt_assemble'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = AssembledPrompt()
             return {"output": result}
@@ -85,23 +188,8 @@ class PromptAssembleNode(Node):
         except ImportError as exc:
             raise ImportError(f"prompt_assemble: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'rag' / 'prompt_assemble'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": AssembledPrompt()}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _prompt_assemble(self.config, inputs, _types)}

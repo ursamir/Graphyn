@@ -25,7 +25,7 @@ Start here: **[Getting Started](./GETTING_STARTED.md)** (Mode A single-machine v
 | [NODE_CATALOGUE.md](./NODE_CATALOGUE.md) | Built-in plugin nodes (ports and config) |
 | [API_REFERENCE.md](./API_REFERENCE.md) | REST /api/v1/ |
 | [SDK_AND_CLI.md](./SDK_AND_CLI.md) | Python SDK and CLI |
-| [MCP_SERVER.md](./MCP_SERVER.md) | MCP tools (29) and auth |
+| [MCP_SERVER.md](./MCP_SERVER.md) | MCP tools (77; +`accept_proposal` with `GRAPHYN_MCP_HUMAN_APPROVAL=1`) and auth |
 | [DATA_FLOW_AND_WORKSPACE.md](./DATA_FLOW_AND_WORKSPACE.md) | Port types, workspace layout, artifacts |
 | [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) | Current limitations |
 | [UI_NORTH_STAR.md](./UI_NORTH_STAR.md) | Path routes + production foundation + journeys J1–J6 + Phase 0–D |

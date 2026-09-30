@@ -43,7 +43,15 @@
     }
   ],
   "parameters": {
-    "phrase": "hey graphyn",
-    "language": "en"
+    "phrase": {
+      "type": "string",
+      "default": "hey graphyn",
+      "description": ""
+    },
+    "language": {
+      "type": "string",
+      "default": "en",
+      "description": ""
+    }
   }
 }

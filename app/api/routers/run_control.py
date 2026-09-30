@@ -9,8 +9,8 @@ Owns:             Route definitions for POST /runs/{run_id}/pause,
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run control logic beyond transition gating —
                   delegate signals to get_active_run() / RunManager.
-Dependencies:     fastapi, app.core.run_control, app.core.run_status,
-                  app.core.config.
+Dependencies:     fastapi, app.core.runs.run_control, app.core.runs.run_status,
+                  app.core.config, app.core.runs.run_journal (durable cancel marker).
 Reason To Change: Transition matrix or run_id validation changes.
 
 Illegal transitions → 409 error.code=invalid_transition (RT-SM-001).
@@ -23,8 +23,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.api.actor import resolve_actor
 from app.core.config import runs_dir as _runs_dir
-from app.core.run_control import get_active_run, is_active_on_another_worker
-from app.core.run_status import (
+from app.core.runs.run_control import get_active_run, is_active_on_another_worker
+from app.core.runs.run_status import (
     InvalidTransition,
     TERMINAL_STATUSES,
     load_durable_status,
@@ -176,29 +176,42 @@ def cancel_run(run_id: str, request: Request):
             return {"run_id": run_id, "status": "cancelled", "idempotent": True}
         # pending/running on disk but no active process: still mark cancelled
         if status in ("pending", "running", "paused"):
+            # Durable cancel marker first: an executor that has not started
+            # yet (queued) or runs in another process polls it and refuses to
+            # start / stops between nodes. It is never rewritten, so a racing
+            # meta.json read-modify-write cannot lose the cancel.
             try:
-                from app.core.run_journal import RunManager
+                from app.core.runs.run_journal import write_cancel_marker
 
-                # Best-effort: write cancelled into existing meta
-                meta_path = _run_dir(run_id) / "meta.json"
-                if meta_path.exists():
-                    import json
-                    from datetime import datetime, timezone
-
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    meta["status"] = "cancelled"
-                    meta["duration_s"] = meta.get("duration_s") or 0
-                    meta["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    tmp = str(meta_path) + ".tmp"
-                    with open(tmp, "w", encoding="utf-8") as f:
-                        json.dump(meta, f, indent=2)
-                    import os
-
-                    os.replace(tmp, meta_path)
+                write_cancel_marker(str(_run_dir(run_id)))
             except Exception:
                 pass
             try:
-                from app.core.audit import record_audit
+                # Best-effort: write cancelled into existing meta (only while
+                # still non-terminal — never clobber succeeded/failed).
+                meta_path = _run_dir(run_id) / "meta.json"
+                if meta_path.exists():
+                    import json
+                    import os
+                    import tempfile
+                    from datetime import datetime, timezone
+
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    current = normalize_status(meta.get("status"))
+                    if current not in TERMINAL_STATUSES:
+                        meta["status"] = "cancelled"
+                        meta["duration_s"] = meta.get("duration_s") or 0
+                        meta["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        fd, tmp = tempfile.mkstemp(
+                            prefix=".meta.", suffix=".tmp", dir=str(meta_path.parent)
+                        )
+                        with os.fdopen(fd, "w", encoding="utf-8") as f:
+                            json.dump(meta, f, indent=2)
+                        os.replace(tmp, meta_path)
+            except Exception:
+                pass
+            try:
+                from app.core.trust.audit import record_audit
 
                 record_audit(
                     actor=resolve_actor(request),
@@ -221,7 +234,7 @@ def cancel_run(run_id: str, request: Request):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to cancel run: {exc}") from exc
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),

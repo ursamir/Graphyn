@@ -284,7 +284,10 @@ class PluginManager:
                 if install_path.exists():
                     shutil.rmtree(install_path, ignore_errors=True)
                 plugins_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(str(resolved_dir), str(install_path))
+                from app.core.plugins.installer import reject_tree_symlinks
+
+                reject_tree_symlinks(resolved_dir)
+                shutil.copytree(str(resolved_dir), str(install_path), symlinks=False)
 
             except Exception:
                 # If copy failed during an upgrade, restore the backup so the old
@@ -310,11 +313,16 @@ class PluginManager:
             try:
                 # Step 7 — load the plugin (validates compat, deps, registers nodes)
                 node_types = self._loader.load(install_path)
+                # Never persist / log URL userinfo (``https://user:TOKEN@host``);
+                # the real *source* was only needed for the fetch above.
+                from app.core.plugins.installer import redact_url_userinfo
+
+                safe_source = redact_url_userinfo(source) if isinstance(source, str) else source
                 log.info(
                     "Installed plugin '%s' v%s from '%s' — registered node types: %s",
                     manifest.name,
                     manifest.version,
-                    source,
+                    safe_source,
                     node_types,
                 )
 
@@ -322,7 +330,7 @@ class PluginManager:
                 record = PluginRecord(
                     name=manifest.name,
                     version=manifest.version,
-                    source=source,
+                    source=safe_source,
                     install_path=str(install_path.resolve()),
                     enabled=True,
                     installed_at=datetime.now(UTC).isoformat(),

@@ -201,8 +201,8 @@ def run_pipeline_from_yaml(
 
     Prefer ``get_backend().execute(graph)`` with GraphIR.
     """
-    from app.core.runtime_backend import get_backend
-    from app.core.run_manager import RunManager
+    from app.core.execution.runtime_backend import get_backend
+    from app.core.runs.run_journal import RunManager
 
     warnings.warn(
         "run_pipeline() with a YAML config path is deprecated. "

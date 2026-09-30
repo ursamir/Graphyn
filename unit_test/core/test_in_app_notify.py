@@ -1,8 +1,8 @@
 """Tests for in-app notification store + run_notify sink."""
 from __future__ import annotations
 
-from app.core.in_app_notify import append_notification, list_notifications, mark_read
-from app.core.run_notify import notify_run_terminal
+from app.core.notify.in_app_notify import append_notification, list_notifications, mark_read
+from app.core.runs.run_notify import notify_run_terminal
 
 
 def test_append_list_mark(tmp_path, monkeypatch):
@@ -33,7 +33,7 @@ def test_run_notify_writes_in_app(tmp_path, monkeypatch):
         def notify(self, event, payload):
             pass
 
-    monkeypatch.setattr("app.core.webhook.WebhookService", FakeWH)
+    monkeypatch.setattr("app.core.notify.webhook.WebhookService", FakeWH)
     notify_run_terminal("completed", "run-xyz", graph_name="g", project="p")
     listed = list_notifications()
     assert listed["total"] == 1

@@ -1,7 +1,7 @@
 """Marketplace catalog search helper (shared REST/MCP)."""
 from __future__ import annotations
 
-from app.core.pipeline_template_materializer import search_marketplace_templates
+from app.core.templates.pipeline_template_materializer import search_marketplace_templates
 
 
 def test_search_marketplace_templates_basic():

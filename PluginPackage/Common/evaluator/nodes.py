@@ -415,6 +415,14 @@ class EvaluatorNode(Node):
         dataset = inputs["dataset"]
 
         # ── Load model ────────────────────────────────────────────────────────
+        model_path = str(getattr(artifact, "model_path", "") or "").strip()
+        if not model_path or model_path in {".", "/", "./"}:
+            # Fail loudly: returning a metrics={"error": ...} artifact would let the run
+            # finish green on a model that was never evaluated.
+            raise ValueError(
+                f"EvaluatorNode: no usable model_path ({model_path!r}) on the input ModelArtifact "
+                "— wire a trainer (or a loaded model) upstream of evaluate"
+            )
         log.info("EvaluatorNode: loading model from: %s", artifact.model_path)
         model = self._load_model(artifact)
         self._model = model  # store for teardown

@@ -217,12 +217,12 @@ def _rebuild_graph_with_ids_triggers_conditions(
         if event_trigger is None:
             event_trigger = ir_node.event_trigger
         cfg = ir_node.config
-        from app.core.ir.models import _deep_unfreeze
-        cfg = _deep_unfreeze(cfg)
+        from app.core.ir.models import deep_unfreeze
+        cfg = deep_unfreeze(cfg)
         if not isinstance(cfg, dict):
             cfg = dict(cfg) if cfg else {}
         if event_trigger is not None:
-            event_trigger = _deep_unfreeze(event_trigger)
+            event_trigger = deep_unfreeze(event_trigger)
         new_nodes.append(
             IRNode(
                 id=new_id,
@@ -291,7 +291,7 @@ def generate_graph_handler(arguments: dict[str, Any]) -> Any:
         if isinstance(value, (list, tuple)):
             return [_to_plain_jsonable(v) for v in value]
         return value
-    from app.core.registry_runtime import get_registry
+    from app.core.host.registry_runtime import get_registry
     from app.core.sdk import Pipeline, PipelineNode
 
     registry = get_registry()
@@ -414,8 +414,8 @@ def validate_graph_handler(arguments: dict[str, Any]) -> Any:
         from app.core.ir.secret_policy import assert_no_inline_secrets
 
         assert_no_inline_secrets(graph)
-        from app.core.registry_runtime import get_registry
-        from app.core.validation import validate_graph_ir
+        from app.core.host.registry_runtime import get_registry
+        from app.core.execution.validation import validate_graph_ir
 
         deep_errors = validate_graph_ir(graph, get_registry())
         if deep_errors:
@@ -479,7 +479,7 @@ def get_graph_capability_summary_handler(arguments: dict[str, Any]) -> Any:
     """
     from app.core.ir.loader import load_ir
     from app.core.ir.models import IRCapabilityMetadata
-    from app.core.registry_runtime import get_registry
+    from app.core.host.registry_runtime import get_registry
 
     graph_dict = arguments.get("graph")
     if not graph_dict:

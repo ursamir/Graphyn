@@ -138,7 +138,7 @@ def phase1_run_with_checkpoint() -> str:
 
     def _cancel_watcher():
         """Poll for checkpoints and cancel after cancel_after nodes complete."""
-        from app.core.run_manager import get_active_run
+        from app.core.runs.run_control import get_active_run
         deadline = time.time() + 120
         while time.time() < deadline:
             time.sleep(0.3)

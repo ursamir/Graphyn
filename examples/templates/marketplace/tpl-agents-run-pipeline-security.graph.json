@@ -36,7 +36,33 @@
     {
       "id": "n2",
       "node_type": "tool_router",
-      "config": {},
+      "config": {
+        "tools": [
+          {
+            "name": "execute_pipeline",
+            "keywords": [
+              "run pipeline",
+              "execute pipeline",
+              "run"
+            ]
+          },
+          {
+            "name": "inspect_run",
+            "keywords": [
+              "run status",
+              "inspect run",
+              "status"
+            ]
+          },
+          {
+            "name": "list_pipelines",
+            "keywords": [
+              "list pipelines"
+            ]
+          }
+        ],
+        "strict": true
+      },
       "label": "tool_router",
       "capability_metadata": null,
       "event_trigger": null
@@ -44,7 +70,14 @@
     {
       "id": "n3",
       "node_type": "mcp_tool_call",
-      "config": {},
+      "config": {
+        "tool_allowlist": [
+          "execute_pipeline",
+          "inspect_run",
+          "list_pipelines"
+        ],
+        "allow_mutating": true
+      },
       "label": "mcp_tool_call",
       "capability_metadata": null,
       "event_trigger": null
@@ -85,6 +118,10 @@
     }
   ],
   "parameters": {
-    "approval_required": false
+    "approval_required": {
+      "type": "boolean",
+      "default": false,
+      "description": ""
+    }
   }
 }

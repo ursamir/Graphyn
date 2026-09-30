@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.write_paths import WRITE_CONFIG_KEYS, ensure_node_write_dirs, ensure_write_destination
+from app.core.paths.write_paths import WRITE_CONFIG_KEYS, ensure_node_write_dirs, ensure_write_destination
 
 
 @pytest.fixture

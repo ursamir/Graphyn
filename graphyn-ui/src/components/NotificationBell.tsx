@@ -3,6 +3,7 @@ import { Bell } from 'lucide-react'
 import clsx from 'clsx'
 import { apiJson } from '../api/client'
 import { useAppStore } from '../store/appStore'
+import { usePolling } from '../lib/usePolling'
 
 type NotificationItem = {
   id: string
@@ -64,13 +65,7 @@ export function NotificationBell() {
     }
   }, [])
 
-  React.useEffect(() => {
-    void load()
-    const id = window.setInterval(() => {
-      void load()
-    }, 45_000)
-    return () => window.clearInterval(id)
-  }, [load])
+  usePolling(load, 45_000, { resetKey: load })
 
   React.useEffect(() => {
     if (!open) return

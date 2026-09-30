@@ -320,11 +320,13 @@ class DependencyChecker:
 
     @staticmethod
     def _check_requirement_urls(requirements: list[str]) -> None:
-        """When GRAPHYN_PLUGIN_ALLOWED_SOURCES is set, reject PEP 508 URLs off-list."""
-        from app.core.config import plugin_allowed_sources, plugin_source_is_allowed
+        """Reject PEP 508 URL requirements that fail the plugin source policy.
 
-        if not plugin_allowed_sources():
-            return
+        ``plugin_source_is_allowed`` already fail-closes when auth is required
+        and the allowlist is empty, so this check must not skip that case.
+        """
+        from app.core.config import plugin_source_is_allowed
+
         for dep in requirements:
             try:
                 req = Requirement(dep)

@@ -8,9 +8,10 @@ Owns:             Routes under /workers, /jobs, and /artifacts/blob.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py.
 Must NOT:         Contain scheduling policy — delegate to
                   app.core.distributed.*.
-Dependencies:     fastapi, pydantic, app.core.distributed.*, app.core.config,
-                  stdlib (pathlib, hashlib).
-Reason To Change: New worker/job endpoints, or artifact transfer protocol.
+Dependencies:     fastapi, starlette.concurrency, pydantic,
+                  app.core.distributed.*, app.core.config, stdlib (pathlib, hashlib).
+Reason To Change: New worker/job endpoints, heartbeat protocol (active_job_ids),
+                  or artifact transfer protocol (blob key authz / integrity).
 """
 from __future__ import annotations
 
@@ -23,12 +24,14 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.core.distributed.models import (
     JobResult,
     NodeJob,
     WorkerInfo,
     WorkerResources,
+    WorkerStatus,
 )
 from app.core.distributed.queue import get_job_queue
 from app.core.distributed.registry import get_worker_registry
@@ -51,8 +54,15 @@ def _validate_worker_id(worker_id: str) -> None:
 
 class HeartbeatBody(BaseModel):
     resources: WorkerResources | None = None
-    status: str | None = None
+    status: WorkerStatus | None = None
     active_jobs: int | None = None
+    active_job_ids: list[str] | None = Field(
+        None,
+        description=(
+            "Jobs this worker instance is actively running. When present only "
+            "these leases are renewed; omitted = legacy renew-all (deprecated)."
+        ),
+    )
 
 
 class ClaimBody(BaseModel):
@@ -66,13 +76,43 @@ class JobEventsBody(BaseModel):
 # ── Workers ───────────────────────────────────────────────────────────────────
 
 
+def _split_ids(raw: Optional[str]) -> list[str]:
+    return [x.strip() for x in (raw or "").split(",") if x.strip()]
+
+
 @router.post("/workers/register", summary="Register or refresh a worker")
-def register_worker(info: WorkerInfo):
-    """Register / refresh a worker in the durable registry (disk/Redis)."""
+def register_worker(
+    info: WorkerInfo,
+    active_job_ids: Optional[str] = Query(
+        None,
+        description=(
+            "Comma-separated jobs this instance is still running (re-register "
+            "after a 404). Every other job claimed under this worker_id is "
+            "requeued with a bumped lease_generation."
+        ),
+    ),
+):
+    """Register a worker instance in the durable registry (disk/Redis).
+
+    Registration always means *a new worker instance*: jobs previously
+    claimed under the same ``worker_id`` (e.g. before a crash/restart) are
+    released back to the queue unless listed in ``active_job_ids``.
+    """
     _validate_worker_id(info.worker_id)
     stored = get_worker_registry().register(info)
+    released: list[str] = []
     try:
-        from app.core.audit import record_audit
+        released = get_job_queue().release_jobs_for_worker(
+            info.worker_id, keep_job_ids=_split_ids(active_job_ids)
+        )
+    except Exception as exc:
+        log.warning(
+            "workers.register: releasing stale claims for %s failed: %s",
+            info.worker_id,
+            exc,
+        )
+    try:
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor="worker",
@@ -90,7 +130,10 @@ def register_worker(info: WorkerInfo):
             info.worker_id,
             exc,
         )
-    return stored.model_dump(mode="json")
+    out = stored.model_dump(mode="json")
+    if released:
+        out["released_job_ids"] = released
+    return out
 
 
 @router.post("/workers/{worker_id}/heartbeat", summary="Worker heartbeat")
@@ -105,9 +148,16 @@ def worker_heartbeat(worker_id: str, body: HeartbeatBody = HeartbeatBody()):
         )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Unknown worker {worker_id}")
-    # Heartbeat renews leases for jobs claimed by this worker (P2).
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    # Heartbeat renews leases: only ``active_job_ids`` when sent (v2), else
+    # every job claimed by this worker id (legacy, logs a deprecation).
     try:
-        get_job_queue().renew_leases_for_worker(worker_id)
+        queue = get_job_queue()
+        if body.active_job_ids is None:
+            queue.renew_leases_for_worker(worker_id)
+        else:
+            queue.renew_leases_for_worker(worker_id, active_job_ids=body.active_job_ids)
     except Exception as exc:
         log.warning(
             "workers.heartbeat: lease renew failed for worker %s: %s",
@@ -190,24 +240,21 @@ def get_job(
     job_id: str,
     worker_id: Optional[str] = Query(
         None,
-        description="When set and matches job.claimed_by, renews the job lease (P1-11).",
+        description=(
+            "Accepted for compatibility; ignored. GET is read-only and never "
+            "renews leases — workers renew via heartbeat active_job_ids."
+        ),
     ),
 ):
     queue = get_job_queue()
     job = queue.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown job {job_id}")
-    if worker_id and job.claimed_by == worker_id and job.status in ("claimed", "running"):
-        try:
-            renewed = queue.renew_lease(job_id, worker_id=worker_id)
-            if renewed is not None:
-                job = renewed
-        except Exception as exc:
-            log.warning("get_job: lease renew failed for %s worker %s: %s", job_id, worker_id, exc)
     result = queue.get_result(job_id)
     return {
         "job": job.model_dump(mode="json"),
         "result": result.model_dump(mode="json") if result else None,
+        "run_paused": queue.is_run_paused(str(job.run_id or "")),
     }
 
 
@@ -218,20 +265,73 @@ _MAX_BLOB_UPLOAD_BYTES = 100 * 1024 * 1024
 _BLOB_CHUNK_BYTES = 1024 * 1024
 
 
+def _authorize_blob_key(key: Optional[str], worker_id: Optional[str]) -> None:
+    """Enforce explicit-key rules for blob uploads (raises HTTPException).
+
+    * omitted key → content-addressed ``sha256/…`` (always allowed);
+    * ``sha256/…`` explicit keys are rejected (server derives them);
+    * ``jobs/<job_id>/g<gen>/<port>`` requires ``worker_id`` to hold the
+      job's *current* claim at exactly that generation;
+    * any other explicit key is rejected.
+    """
+    from app.core.distributed.transfer import parse_job_output_key
+
+    if not key:
+        return
+    k = key.lstrip("/")
+    if not _BLOB_KEY_RE.match(k) or ".." in k.split("/"):
+        raise HTTPException(status_code=400, detail="Invalid blob key")
+    if k.startswith("sha256/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Explicit sha256/ keys are not allowed; omit key for content addressing",
+        )
+    parsed = parse_job_output_key(k)
+    if parsed is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Explicit blob keys must be jobs/<job_id>/g<generation>/<port>",
+        )
+    job_seg, gen = parsed
+    if not worker_id:
+        raise HTTPException(
+            status_code=403, detail="worker_id is required for jobs/ blob keys"
+        )
+    job = get_job_queue().get(job_seg)
+    if (
+        job is None
+        or job.status not in ("claimed", "running")
+        or job.claimed_by != worker_id
+        or int(job.lease_generation or 0) != gen
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Worker {worker_id!r} does not hold job {job_seg!r} at "
+                f"generation g{gen}"
+            ),
+        )
+
+
 @router.post("/artifacts/blob", summary="Upload an artifact blob")
 async def put_artifact_blob(
     request: Request,
-    key: Optional[str] = Query(None, description="Optional explicit key"),
+    key: Optional[str] = Query(None, description="Optional explicit key (jobs/… only)"),
+    worker_id: Optional[str] = Query(
+        None, description="Uploading worker (required for jobs/<job>/g<gen>/ keys)"
+    ),
 ):
-    """Store raw bytes; returns ``artifact://local/{key}``.
+    """Store raw bytes (write-once); returns ``artifact://local/{key}`` + sha256.
 
-    If ``key`` is omitted, a sha256 content-addressed key is used.
-    Delegates to :mod:`app.core.distributed.transfer` so control and
-    in-process workers share one store layout.
+    If ``key`` is omitted, a sha256 content-addressed key is used. Explicit
+    keys follow :func:`_authorize_blob_key`. Existing blobs are never
+    overwritten (identical bytes → idempotent 200, different → 409).
+    Hashing and disk writes run in a threadpool, off the event loop.
     """
-    from app.core.artifact_uri import parse_artifact_uri
-    from app.core.distributed.transfer import put_blob
+    from app.core.artifacts.artifact_uri import parse_artifact_uri
+    from app.core.distributed.transfer import put_blob_with_digest
 
+    worker_id = worker_id or request.headers.get("x-graphyn-worker-id") or None
     content_length = request.headers.get("content-length")
     if content_length:
         try:
@@ -239,8 +339,8 @@ async def put_artifact_blob(
                 raise HTTPException(status_code=413, detail="Upload too large")
         except ValueError:
             pass
+    await run_in_threadpool(_authorize_blob_key, key, worker_id)
 
-    hasher = hashlib.sha256()
     chunks: list[bytes] = []
     total = 0
     async for chunk in request.stream():
@@ -249,23 +349,31 @@ async def put_artifact_blob(
         total += len(chunk)
         if total > _MAX_BLOB_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="Upload too large")
-        hasher.update(chunk)
         chunks.append(chunk)
-    body = b"".join(chunks)
-    if not body:
+    if not total:
         raise HTTPException(status_code=400, detail="Empty body")
+
+    def _store() -> tuple[str, str, int]:
+        body = b"".join(chunks)
+        # Re-check the claim right before writing (lease may have moved).
+        _authorize_blob_key(key, worker_id)
+        uri, digest = put_blob_with_digest(body, key=key)
+        return uri, digest, len(body)
+
     try:
-        uri = put_blob(body, key=key)
+        uri, digest, size = await run_in_threadpool(_store)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     parsed = parse_artifact_uri(uri)
-    digest = hasher.hexdigest()
-    return {"uri": uri, "key": parsed.key, "sha256": digest, "bytes": len(body)}
+    return {"uri": uri, "key": parsed.key, "sha256": digest, "bytes": size}
 
 
 @router.get("/artifacts/blob/{key:path}", summary="Download an artifact blob")
 def get_artifact_blob(key: str):
-    from app.core.distributed.transfer import blob_root
+    """Serve a blob; ``sha256/`` keys are verified before serving (409 on mismatch)."""
+    from app.core.distributed.transfer import sha256_from_key, blob_root
 
     key = (key or "").lstrip("/")
     if not key or not _BLOB_KEY_RE.match(key) or ".." in key.split("/"):
@@ -273,4 +381,14 @@ def get_artifact_blob(key: str):
     path = blob_root() / key
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Blob not found")
+    expected = sha256_from_key(key)
+    if expected:
+        hasher = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(_BLOB_CHUNK_BYTES), b""):
+                hasher.update(chunk)
+        actual = hasher.hexdigest()
+        if not actual.startswith(expected):
+            log.error("get_artifact_blob: corrupt blob %s (sha256 %s)", key, actual)
+            raise HTTPException(status_code=409, detail="Blob content hash mismatch")
     return FileResponse(path, filename=path.name)

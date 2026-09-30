@@ -6,7 +6,7 @@ Owns:             load_ir(), load_ir_from_file(), dump_ir(), dump_ir_to_file(),
 Public Surface:   load_ir(dict) -> GraphIR, load_ir_from_file(path) -> GraphIR,
                   dump_ir(GraphIR) -> dict, dump_ir_to_file(GraphIR, path),
                   CURRENT_IR_VERSION, IRVersionError.
-Must NOT:         Import from app.core.nodes, app.core.orchestrator,
+Must NOT:         Import from app.core.nodes, app.core.execution.orchestrator,
                   app.core.sdk, app.domain, or app.api.
                   Must remain pure — only pydantic, json, and stdlib.
 Dependencies:     pydantic, stdlib (json, os, tempfile, warnings, pathlib),

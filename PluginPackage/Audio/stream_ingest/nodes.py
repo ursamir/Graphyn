@@ -6,7 +6,10 @@ and file-based streaming (librosa) for testing without hardware.
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 from typing import ClassVar, Literal, Optional
+from urllib.parse import urlsplit, urlunsplit
 from pydantic import Field
 
 import numpy as np
@@ -19,6 +22,60 @@ from app.models.audio_sample import AudioSample
 
 log = logging.getLogger(__name__)
 
+# ffmpeg input protocols allowed per URL scheme for source=rtp/rtsp. Anything
+# else (file:, http:, concat:, subfile:, pipe: ...) is rejected before ffmpeg
+# runs, and -protocol_whitelist stops ffmpeg from following nested protocols.
+_STREAM_PROTOCOL_WHITELIST = {
+    "rtp": "rtp,udp",
+    "udp": "udp",
+    "rtsp": "rtsp,rtp,udp,tcp",
+    "srt": "srt,udp",
+}
+
+
+def _redact_url(url: str) -> str:
+    """Strip ``user:pass@`` credentials from a URL (kept as ``***@``)."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<invalid-url>"
+    if "@" not in parts.netloc:
+        return url
+    host = parts.netloc.rsplit("@", 1)[1]
+    return urlunsplit((parts.scheme, f"***@{host}", parts.path, parts.query, parts.fragment))
+
+
+def _redact_text(text: str, url: str) -> str:
+    """Remove the raw URL and its userinfo from free text (e.g. ffmpeg stderr)."""
+    safe = _redact_url(url)
+    out = text.replace(url, safe)
+    try:
+        netloc = urlsplit(url).netloc
+    except ValueError:
+        return out
+    if "@" in netloc:
+        userinfo = netloc.rsplit("@", 1)[0]
+        if userinfo:
+            out = out.replace(userinfo + "@", "***@")
+    return out
+
+
+def _validate_stream_url(url: str) -> str:
+    """Return the lowercase scheme or raise ValueError for disallowed URLs."""
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        raise ValueError(f"StreamIngestNode: invalid stream_url {_redact_url(url)!r}") from exc
+    scheme = (parts.scheme or "").lower()
+    if scheme not in _STREAM_PROTOCOL_WHITELIST:
+        raise ValueError(
+            f"StreamIngestNode: stream_url scheme {scheme or '(none)'!r} not allowed; "
+            f"use one of: {', '.join(sorted(_STREAM_PROTOCOL_WHITELIST))}://"
+        )
+    if not parts.hostname:
+        raise ValueError(f"StreamIngestNode: stream_url {_redact_url(url)!r} has no host")
+    return scheme
+
 
 class StreamIngestNode(Node):
     """Real-time streaming audio ingestion from microphone, WebSocket, and file streams.
@@ -30,12 +87,16 @@ class StreamIngestNode(Node):
                          chunks of raw float32 PCM bytes (requires ``websockets``)
         "file_stream"  — stream a local audio file in ``chunk_ms`` chunks via
                          librosa; useful for testing without hardware
+        "rtp" / "rtsp" — decode ``stream_url`` (rtp/rtsp/srt/udp schemes only)
+                         via ffmpeg for ``duration_s`` seconds (0 = until EOS);
+                         credentials in the URL are redacted from outputs
 
     Config:
         source (str): ingestion backend (default "microphone")
         device_id (int|None): microphone device index; None = OS default input
         websocket_url (str): WebSocket URL for source="websocket"
         file_path (str): local audio file path for source="file_stream"
+        stream_url (str): rtp/rtsp/srt/udp URL for source="rtp"/"rtsp"
         chunk_ms (int): chunk size in milliseconds (default 100)
         sample_rate (int): target sample rate in Hz (default 16000)
         channels (int): number of capture channels (default 1)
@@ -71,10 +132,15 @@ class StreamIngestNode(Node):
     }
 
     class Config(NodeConfig):
-        source: Literal["microphone", "websocket", "file_stream"] = Field(
+        source: Literal["microphone", "websocket", "file_stream", "rtp", "rtsp"] = Field(
             default="microphone",
             title="Source",
-            description="Ingestion backend. One of: microphone, websocket, file_stream.",
+            description="Ingestion backend. One of: microphone, websocket, file_stream, rtp, rtsp.",
+        )
+        stream_url: str = Field(
+            default="",
+            title="Stream URL",
+            description="rtp://, rtsp://, srt:// or udp:// URL when source is rtp or rtsp. Decoded with ffmpeg; credentials are redacted from outputs.",
         )
         device_id: Optional[int] = Field(
             default=None,
@@ -108,14 +174,11 @@ class StreamIngestNode(Node):
         elif source == "file_stream":
             chunks = self._stream_file()
         elif source in ("rtp", "rtsp"):
-            raise NotImplementedError(
-                f"StreamIngestNode: source='{source}' (RTP/RTSP) is not yet implemented. "
-                "Use source='file_stream' for testing or source='websocket' for live streams."
-            )
+            chunks = self._capture_rtp_rtsp()
         else:
             raise ValueError(
                 f"StreamIngestNode: unknown source '{source}'. "
-                "Choose from: microphone, websocket, file_stream"
+                "Choose from: microphone, websocket, file_stream, rtp, rtsp"
             )
 
         return {"output": chunks}
@@ -259,6 +322,91 @@ class StreamIngestNode(Node):
                 },
             ))
 
+        return chunks
+
+    def _capture_rtp_rtsp(self) -> list[AudioSample]:
+        """Pull ``duration_s`` of PCM (0 = until EOS) from an RTP/RTSP/SRT/UDP URL via ffmpeg."""
+        url = (self.config.stream_url or "").strip()
+        if not url:
+            raise ValueError(
+                "StreamIngestNode: 'stream_url' must be set when source is rtp or rtsp"
+            )
+        scheme = _validate_stream_url(url)
+        safe_url = _redact_url(url)
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError(
+                "StreamIngestNode: ffmpeg is required for source='rtp'/'rtsp'. "
+                "Install ffmpeg and ensure it is on PATH."
+            )
+        sr = int(self.config.sample_rate)
+        channels = max(1, int(self.config.channels))
+        duration = float(self.config.duration_s or 0.0)
+        cmd = [
+            ffmpeg,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-protocol_whitelist",
+            _STREAM_PROTOCOL_WHITELIST[scheme],
+            "-i",
+            url,
+        ]
+        if duration > 0:  # duration_s=0 means "until EOS": no -t limit
+            cmd += ["-t", str(duration)]
+        cmd += [
+            "-ac",
+            str(channels),
+            "-ar",
+            str(sr),
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "pipe:1",
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=max(15.0, duration + 10.0) if duration > 0 else None,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"StreamIngestNode: ffmpeg timed out reading {safe_url}"
+            ) from None
+        if proc.returncode != 0:
+            err = _redact_text(proc.stderr.decode("utf-8", errors="replace"), url)[-400:]
+            raise RuntimeError(f"StreamIngestNode: ffmpeg failed for {safe_url}: {err}")
+        data = np.frombuffer(proc.stdout[: len(proc.stdout) // 4 * 4], dtype=np.float32)
+        if channels > 1:
+            frames = len(data) // channels
+            data = data[: frames * channels].reshape(frames, channels).mean(axis=1)
+        chunk_samples = max(1, int(sr * self.config.chunk_ms / 1000))
+        chunks: list[AudioSample] = []
+        # Include the trailing partial chunk (live streams rarely end on a boundary).
+        for i in range(0, len(data), chunk_samples):
+            chunk = data[i : i + chunk_samples]
+            chunks.append(
+                AudioSample(
+                    path=safe_url,
+                    sample_rate=sr,
+                    data=chunk.astype(np.float32),
+                    label=self.config.label,
+                    metadata={
+                        "source": self.config.source,
+                        "stream_url": safe_url,
+                        "chunk_index": len(chunks),
+                        "start_s": i / sr,
+                        "end_s": (i + len(chunk)) / sr,
+                        "partial": len(chunk) < chunk_samples,
+                    },
+                )
+            )
+        if not chunks:
+            raise RuntimeError(f"StreamIngestNode: ffmpeg returned no audio from {safe_url}")
         return chunks
 
     # ── websocket backend ─────────────────────────────────────────────────────

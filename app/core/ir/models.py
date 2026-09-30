@@ -5,7 +5,7 @@ Responsibility:   Define the canonical, versioned, immutable data model for
 Owns:             GraphIR, IRNode, IREdge, IRMetadata, IRParameter,
                   IRCapabilityMetadata, IRPlacement — all frozen Pydantic models.
 Public Surface:   All model classes above.
-Must NOT:         Import from app.core.nodes, app.core.orchestrator,
+Must NOT:         Import from app.core.nodes, app.core.execution.orchestrator,
                   app.core.sdk, app.domain, or app.api.
                   Must remain pure — only pydantic and stdlib.
 Dependencies:     pydantic, stdlib (re, copy, types).
@@ -357,3 +357,6 @@ class GraphIR(BaseModel):
                 )
 
         return self
+
+# Public names. A leading underscore stays private to this module.
+deep_unfreeze = _deep_unfreeze

@@ -29,6 +29,6 @@ Record of what was removed in the deep-clean (UI: Workspace-only chrome, drop ha
 
 - Removed console **Admin → Secrets** (`SecretsView`, `/admin/secrets` nav, Cmd-K, jump key remapped to Credentials).
 - Removed REST `/api/v1/secrets` and MCP `secrets_list` / `secrets_set`.
-- Kept `app/core/secrets.py` + CLI `graphyn secrets` for **ops env bootstrap** only (documented in `docs/ops/CREDENTIAL_STORE.md`).
+- Kept `app/core/trust/secrets.py` + CLI `graphyn secrets` for **ops env bootstrap** only (documented in `docs/ops/CREDENTIAL_STORE.md`).
 - Bookmarks to `/admin/secrets` canonicalize to `/admin/credentials`.
 - See `docs/_gen/LEGACY_REMOVAL_AND_QUALITY.md`.

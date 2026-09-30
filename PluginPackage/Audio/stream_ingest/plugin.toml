@@ -22,7 +22,8 @@ optional_dependencies = [
 node_types = ["stream_ingest"]
 
 [config_schema.stream_ingest]
-source = { type = "string", title = "Source", default = "microphone", description = "Ingestion backend. One of: microphone, websocket, file_stream.", enum = ["microphone", "websocket", "file_stream"], ui = { group = "Basic" } }
+source = { type = "string", title = "Source", default = "microphone", description = "Ingestion backend. One of: microphone, websocket, file_stream, rtp, rtsp.", enum = ["microphone", "websocket", "file_stream", "rtp", "rtsp"], ui = { group = "Basic" } }
+stream_url = { type = "string", title = "Stream URL", default = "", description = "rtp://, rtsp://, srt:// or udp:// URL when source is rtp or rtsp. Decoded with ffmpeg; credentials are redacted from outputs.", ui = { group = "Basic" } }
 device_id = { type = "integer", title = "Device ID", description = "Microphone device index for source=microphone. Empty/null/omit = OS default input (sounddevice device=None). Integer >=0 = sounddevice.query_devices() index; fails clearly if missing or not an input device.", ui = { group = "Basic" } }
 websocket_url = { type = "string", title = "WebSocket URL", default = "", description = "ws:// or wss:// URL when source is a websocket stream.", ui = { group = "Basic" } }
 file_path = { type = "string", title = "File Path", default = "", description = "Path under workspace/datasets/input (or another workspace path).", ui = { group = "Basic" } }

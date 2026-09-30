@@ -4,13 +4,13 @@ from __future__ import annotations
 import pytest
 
 from app.core.nodes.errors import PipelineGraphError
-from app.core.planner import (
+from app.core.execution.planner import (
     EdgeSpec,
     NodeSpec,
     PipelineConfig,
     PipelineGraph,
 )
-from app.core.validation import validate_pipeline
+from app.core.execution.validation import validate_pipeline
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -35,6 +35,7 @@ def _make_linear_config(*node_types: str) -> PipelineConfig:
 
 # ── Topological order ─────────────────────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_execution_order_contains_every_node_exactly_once():
     """Req 4.5 — execution_order contains every node exactly once."""
     cfg = _make_linear_config("audio_conditioner", "segmenter")
@@ -44,6 +45,7 @@ def test_execution_order_contains_every_node_exactly_once():
     assert set(order) == {"audio_conditioner_0", "segmenter_1"}
 
 
+@pytest.mark.requires_plugins
 def test_execution_order_single_node():
     """Single-node pipeline: execution_order has exactly one entry."""
     cfg = _make_linear_config("audio_conditioner")
@@ -52,6 +54,7 @@ def test_execution_order_single_node():
     assert order == ["audio_conditioner_0"]
 
 
+@pytest.mark.requires_plugins
 def test_execution_order_respects_dependency():
     """Req 4.6 — for edge A→B, A appears before B in execution_order."""
     cfg = _make_linear_config("audio_conditioner", "segmenter")
@@ -60,6 +63,7 @@ def test_execution_order_respects_dependency():
     assert order.index("audio_conditioner_0") < order.index("segmenter_1")
 
 
+@pytest.mark.requires_plugins
 def test_execution_order_three_nodes_linear():
     """Three-node linear pipeline: all nodes present, order respected."""
     cfg = _make_linear_config("audio_conditioner", "segmenter", "audio_conditioner")
@@ -76,6 +80,7 @@ def test_execution_order_three_nodes_linear():
 
 # ── Cycle detection ───────────────────────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_cycle_raises_pipeline_graph_error():
     """Req 4.7 — a cycle in the graph raises PipelineGraphError."""
     nodes = [
@@ -94,6 +99,7 @@ def test_cycle_raises_pipeline_graph_error():
 
 # ── validate_pipeline ─────────────────────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_validate_pipeline_accepts_valid_config():
     """Req 4.9 — validate_pipeline returns validated node list for valid config."""
     from app.core.nodes import registry
@@ -126,6 +132,7 @@ def test_validate_pipeline_raises_for_unknown_node_type():
         validate_pipeline(config, registry)
 
 
+@pytest.mark.requires_plugins
 def test_validate_pipeline_raises_for_invalid_node_config():
     """validate_pipeline raises ValueError for invalid node config."""
     from app.core.nodes import registry
@@ -148,15 +155,21 @@ def test_validate_pipeline_raises_for_missing_pipeline_section():
         validate_pipeline({"not_pipeline": {}}, registry)
 
 
-def test_validate_pipeline_raises_for_missing_seed():
-    """validate_pipeline raises ValueError when seed is missing."""
+@pytest.mark.requires_plugins
+def test_validate_pipeline_seed_optional_but_must_be_int():
+    """``pipeline.seed`` is optional (defaults downstream) but must be an int.
+
+    Seed became optional in commit d725b7f; only a non-integer seed is rejected.
+    """
     from app.core.nodes import registry
     config = {
         "pipeline": {
             "nodes": [{"type": "audio_conditioner", "config": {}}],
         }
     }
-    with pytest.raises(ValueError):
+    validate_pipeline(config, registry)
+    config["pipeline"]["seed"] = "not-an-int"
+    with pytest.raises(ValueError, match="seed"):
         validate_pipeline(config, registry)
 
 
@@ -173,6 +186,7 @@ def test_validate_pipeline_raises_for_empty_nodes():
         validate_pipeline(config, registry)
 
 
+@pytest.mark.requires_plugins
 def test_validate_pipeline_two_valid_nodes():
     """validate_pipeline returns two entries for a two-node config."""
     from app.core.nodes import registry

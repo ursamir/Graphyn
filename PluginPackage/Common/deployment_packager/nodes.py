@@ -187,7 +187,10 @@ class DeploymentPackagerNode(Node):
     def process(self, artifact: DeploymentArtifact) -> DeploymentArtifact:
         target = self.config.target
         out_dir = Path(self.config.output_path)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
 
         model_path = Path(artifact.artifact_path) if artifact.artifact_path else None
         labels = getattr(artifact, "labels", None) or []

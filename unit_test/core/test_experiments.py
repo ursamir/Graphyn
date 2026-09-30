@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.core.experiments import (
+from app.core.mlops.experiments import (
     compare_runs,
     get_experiment,
     list_experiments,

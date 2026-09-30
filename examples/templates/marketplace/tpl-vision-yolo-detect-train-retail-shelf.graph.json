@@ -113,7 +113,7 @@
       "dst_port": "input"
     },
     {
-      "src_id": "n2",
+      "src_id": "n1",
       "src_port": "output",
       "dst_id": "n3",
       "dst_port": "input"
@@ -125,7 +125,7 @@
       "dst_port": "input"
     },
     {
-      "src_id": "n4",
+      "src_id": "n1",
       "src_port": "output",
       "dst_id": "n5",
       "dst_port": "input"
@@ -134,19 +134,25 @@
       "src_id": "n5",
       "src_port": "output",
       "dst_id": "n6",
-      "dst_port": "input"
+      "dst_port": "images"
     },
     {
-      "src_id": "n6",
+      "src_id": "n4",
       "src_port": "output",
       "dst_id": "n7",
-      "dst_port": "input"
+      "dst_port": "dataset"
     },
     {
       "src_id": "n7",
       "src_port": "output",
       "dst_id": "n8",
-      "dst_port": "input"
+      "dst_port": "model"
+    },
+    {
+      "src_id": "n4",
+      "src_port": "output",
+      "dst_id": "n8",
+      "dst_port": "dataset"
     },
     {
       "src_id": "n8",
@@ -156,8 +162,20 @@
     }
   ],
   "parameters": {
-    "task": "detect",
-    "imgsz": 640,
-    "epochs": 100
+    "task": {
+      "type": "string",
+      "default": "detect",
+      "description": ""
+    },
+    "imgsz": {
+      "type": "integer",
+      "default": 640,
+      "description": ""
+    },
+    "epochs": {
+      "type": "integer",
+      "default": 100,
+      "description": ""
+    }
   }
 }

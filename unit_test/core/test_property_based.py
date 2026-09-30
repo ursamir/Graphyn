@@ -12,7 +12,7 @@ from hypothesis import strategies as st
 
 from app.core.nodes.compat import CompatibilityChecker
 from app.core.nodes.retry import RetryPolicy
-from app.core.pipeline_cache import PipelineCache
+from app.core.execution.pipeline_cache import PipelineCache
 
 
 # ── 1. Cache key determinism (Req 16 criterion 1) ────────────────────────────
@@ -116,7 +116,7 @@ def test_node_config_round_trip(target_sr, mono, normalize):
     # Install audio_conditioner to get its Config class
     with tempfile.TemporaryDirectory() as tmp:
         reg = NodeRegistry()
-        mgr = PluginManager(registry=reg)
+        mgr = PluginManager(registry=reg, base_dir=tmp)
         mgr._plugins_dir = tmp
         mgr.install("PluginPackage/Audio/audio_conditioner/")
         cls = reg.get_class("audio_conditioner")
@@ -180,7 +180,7 @@ def test_audio_conditioner_normalization_bound(n, make_audio_sample):
 
     with tempfile.TemporaryDirectory() as tmp:
         reg = NodeRegistry()
-        mgr = PluginManager(registry=reg)
+        mgr = PluginManager(registry=reg, base_dir=tmp)
         mgr._plugins_dir = tmp
         mgr.install("PluginPackage/Audio/audio_conditioner/")
         cls = reg.get_class("audio_conditioner")
@@ -195,11 +195,12 @@ def test_audio_conditioner_normalization_bound(n, make_audio_sample):
 
 # ── 7. PipelineGraph completeness (Req 16 criterion 7) ───────────────────────
 
+@pytest.mark.requires_plugins
 @given(n_nodes=st.integers(min_value=1, max_value=6))
 @settings(max_examples=100)
 def test_pipeline_graph_completeness(n_nodes):
     """Req 16.7 — execution_order contains every node exactly once for valid acyclic graphs."""
-    from app.core.planner import EdgeSpec, NodeSpec, PipelineConfig, PipelineGraph
+    from app.core.execution.planner import EdgeSpec, NodeSpec, PipelineConfig, PipelineGraph
 
     nodes = [
         NodeSpec(node_id=f"n{i}", node_type="audio_conditioner", config={})

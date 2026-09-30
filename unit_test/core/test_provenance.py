@@ -1,4 +1,4 @@
-"""Unit tests for app/core/provenance.py — Req 20 criteria 9–14."""
+"""Unit tests for app/core/artifacts/provenance.py — Req 20 criteria 9–14."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.provenance import ProvenanceRecord, ProvenanceStore
+from app.core.artifacts.provenance import ProvenanceRecord, ProvenanceStore
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

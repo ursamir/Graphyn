@@ -45,7 +45,7 @@ class CredentialUpdateBody(BaseModel):
 
 def _audit(request: Request, action: str, resource_id: str, meta: dict | None = None) -> None:
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.artifact_uri import (
+from app.core.artifacts.artifact_uri import (
     LOCAL_STORE_ID,
     ArtifactURIError,
     build_artifact_uri,

@@ -68,7 +68,7 @@ def demo_sdk_control() -> None:
     print(f"\n{_h('Demo A — SDK Runtime Control (no HTTP server needed)')}")
 
     from app.core.sdk import Pipeline, PipelineNode
-    from app.core.run_manager import get_active_run
+    from app.core.runs.run_control import get_active_run
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

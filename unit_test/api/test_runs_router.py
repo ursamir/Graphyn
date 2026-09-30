@@ -96,8 +96,8 @@ class TestRunDebugReport:
 
         with (
             patch("app.api.routers.runs._get_runs_root", return_value=runs_dir),
-            patch("app.core.artifact_store.ArtifactStore", return_value=_DummyArtifactStore()),
-            patch("app.core.provenance.ProvenanceStore", return_value=_DummyProvenanceStore()),
+            patch("app.core.artifacts.artifact_store.ArtifactStore", return_value=_DummyArtifactStore()),
+            patch("app.core.artifacts.provenance.ProvenanceStore", return_value=_DummyProvenanceStore()),
         ):
             resp = api_client.get("/api/v1/runs/abc123/debug-report")
 
@@ -262,7 +262,7 @@ class TestDeleteRun:
         assert resp.status_code == 409
 
     def test_delete_retargets_latest(self, api_client, tmp_workspace):
-        from app.core.workspace_paths import latest_run_id, publish_latest
+        from app.core.paths.workspace_paths import latest_run_id, publish_latest
 
         for rid in ("older", "newer"):
             d = tmp_workspace / "runs" / rid

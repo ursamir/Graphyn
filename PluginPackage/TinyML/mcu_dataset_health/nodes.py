@@ -1,9 +1,10 @@
 """McuDatasetHealthNode — MCU dataset class balance health
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+from collections import Counter
 
 import importlib
 import logging
@@ -32,6 +33,62 @@ McuSample = _types.McuSample
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _as_list(obj: Any) -> list:
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, tuple):
+        return list(obj)
+    return [obj]
+
+def _mcu_health(config, inputs, types):
+    items = _as_list(inputs.get("input"))
+    labels = []
+    for item in items:
+        data = _dump(item)
+        if isinstance(data, dict):
+            labels.append(str(data.get("label") or "unknown"))
+    counts = Counter(labels)
+    min_per = int(_cfg(config, "min_per_class", 1) or 1)
+    ratio = float(_cfg(config, "max_imbalance_ratio", 10) or 10)
+    under = [k for k, v in counts.items() if v < min_per]
+    vals = list(counts.values()) or [1]
+    imbalance = (max(vals) / min(vals)) if min(vals) else 0
+    ok = not under and imbalance <= ratio
+    issues = [f"under-min:{k}" for k in under]
+    if imbalance > ratio:
+        issues.append(f"imbalance:{imbalance:.2f}")
+    return _T(
+        types,
+        "DatasetHealthReport",
+        ok=not issues,
+        issues=issues,
+        stats={"counts": dict(counts), "imbalance": imbalance, "n": len(items)},
+    )
+
+
 
 class McuDatasetHealthNode(Node):
     """MCU dataset class balance health"""
@@ -44,7 +101,7 @@ class McuDatasetHealthNode(Node):
         description="MCU dataset class balance health",
         category="Quality",
         version="0.1.0",
-        tags=["tinyml", "stub"],
+        tags=["tinyml"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -61,7 +118,7 @@ class McuDatasetHealthNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         min_per_class: int = Field(default=50, title="Min per class", description="Min per class.")
         max_imbalance_ratio: float = Field(default=5.0, title="Max imbalance ratio", description="Max imbalance ratio.")
 
@@ -72,10 +129,17 @@ class McuDatasetHealthNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'tinyml' / 'mcu_dataset_health'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = DatasetHealthReport()
             return {"output": result}
@@ -85,23 +149,8 @@ class McuDatasetHealthNode(Node):
         except ImportError as exc:
             raise ImportError(f"mcu_dataset_health: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'tinyml' / 'mcu_dataset_health'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": DatasetHealthReport()}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _mcu_health(self.config, inputs, _types)}

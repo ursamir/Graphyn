@@ -51,8 +51,8 @@ OPTIMIZE_EXECUTION_SCHEMA = {
 def optimize_execution_handler(arguments: dict[str, Any]) -> Any:
     """Analyse a GraphIR and return execution optimization recommendations."""
     from app.core.ir.loader import load_ir
-    from app.core.planner import PipelineGraph, _ir_to_pipeline_config
-    from app.core.registry_runtime import get_registry, resolve_capability as _resolve_capability
+    from app.core.execution.planner import PipelineGraph, ir_to_pipeline_config
+    from app.core.host.registry_runtime import get_registry, resolve_capability as _resolve_capability
 
     graph_dict = arguments.get("graph")
     if not graph_dict:
@@ -76,7 +76,7 @@ def optimize_execution_handler(arguments: dict[str, Any]) -> Any:
 
     # ── Build execution waves ─────────────────────────────────────────────────
     try:
-        pipeline_cfg = _ir_to_pipeline_config(graph)
+        pipeline_cfg = ir_to_pipeline_config(graph)
         graph_obj = PipelineGraph(pipeline_cfg)
         waves = graph_obj.execution_waves
     except Exception as exc:

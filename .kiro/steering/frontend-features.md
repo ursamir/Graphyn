@@ -4,6 +4,11 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 
 **Nav labels (2026-09-16):** Workspace strip: Home · Editor · Runs · Models · Ship · Datasets. Library & admin: Templates · Agent inbox (always) · Artifacts · Plugins · Workers · Secrets · Ops · Access. Global Library also lists Models + Artifacts.
 
+**Client / polling contracts (2026-09-30):**
+- `apiFetch` forwards the caller's `AbortSignal` for the whole response lifetime (headers **and** body streaming); `timeoutMs` covers the headers phase only; a caller-aborted request is never retried. `parseError` / `configuredActor` are exported from `api/client.ts`.
+- Background polls use `lib/usePolling.ts` (in-flight skip + pause while `document.hidden`, catch-up on visible): Runs status (2 s) + Live tab (3 s), Workers (15 s), NotificationBell (45 s), App pending-proposals badge (60 s). Poll failures toast once per outage.
+- `graphyn-ui/nginx.conf` `/api/`: `proxy_buffering off` (NDJSON/SSE), `proxy_read_timeout 3600s`; server `client_max_body_size 2g`.
+
 **Path routes:** `src/routes/paths.ts`, `viewMap.ts`, `nav.ts` (`goView` / `replacePathSearch` / `onPathChange`). Hash is one-way legacy redirect only (`HashRedirect` + `legacyHash.ts`) — views must not write `#/...`.
 
 ## Models (`ModelsView`)
@@ -22,6 +27,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Pipeline **Rollback** near promote (POST `.../pipelines/{name}/rollback` with required `version`).
 - **Always-on** strip: schedules filtered by `project`; `last_error` shown; else count + CTA to Ops.
 - `open(name)` failure: keep selection, clear Home payload, show ErrorBanner (no empty-home pretend-success).
+- `open(name)` has a request-sequence guard (`openSeqRef`): a slower open(A) never paints A's data under B. Spec / taxonomy / contract fall back to empty **only on 404**; other errors show inline and disable that tab's Save (also disabled while loading or when the editor holds another workspace's content).
 
 ## Builder (`BuilderView`)
 
@@ -35,10 +41,14 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - `actionError`: **View outputs** / Retry only for run failures (or last run succeeded); not for validate / missing-path errors.
 - Success toast **View outputs** → Runs → Run outputs; fail → Open failed run / logs.
 - Catalog empty: auth / API offline / no plugins (distinct CTAs). Narrow viewport honesty banner.
+- Catalog load (`App.refreshCatalog`) pages `GET /nodes` via `fetchAllPages` (API default `limit=50`; max page 500) so “All categories (N)” matches the full registry, not the first page.
+- **Run stream:** exec status matches events by `node_id` only; backend `node_index` is the *execution-order* index, so the index fallback (events without `node_id`) maps through a client topological order, never the canvas array index. Terminal = `type=done` (success) or `type=error`; a stream ending without either shows “Stream disconnected — checking run status” and polls `/runs/{id}/status` to a terminal state. Only the current run (`abortRef.current === controller`) may clear `isRunning` / write run state. The `lastRunId` hydrate on mount is skipped when the run's `graph_name` differs from the canvas or it references node ids not on the canvas.
+- Catalog rows whose config schema has `stub.default === true` show a **stub** badge. Proposed-pack nodes default `stub` to false, so they do not carry that badge.
 
 ## Runs (`RunsView`) — unified observe
 
 - Page title **Runs**; hub for History, Live, **Run outputs**, Lineage, Compare (not separate Lineage tab).
+- Opening a run does **not** call `setActiveProject`. The address bar is the workspace; a run whose metadata names another workspace stays a detail selection.
 - Top tabs: **History | Live | Compare** — shared `ViewShell` / `RunsChrome`; list|detail via app `MasterDetail` (`graphyn.layout.master`, synced with Compare / Models / Artifacts).
 - History: status + free-text filters; optional metric name + min (client-side on loaded runs); status/promote alias use `FieldSelect`.
 - History/Live run cards use stacked flex (title+badge / meta row) — not viewport `sm:` grids — so narrow master panes (~320px) do not crush names over badges.
@@ -56,6 +66,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Terminal runs hide progress / “Current node”; Focus is not auto-seeded from last node (avoids empty Outputs).
 - Tab **Summary**: compact count strip + timing (+ errors when present). No duplicate tab CTAs, no raw JSON dump.
 - Detail: **Logs** | **Run outputs** | **Lineage** | **Summary** | **Checkpoints**. Nested outputs splitter: `graphyn.layout.nested`.
+- `open(id)` / status poll / `refetchRunDetail` / `loadRunModels` drop results when the selection changed (`selectedRef` + `openSeqRef`). When the polled status turns terminal, detail (logs / outputs / artifacts) is refetched.
 - Lineage: detail-only (stack is parent); no duplicate node list / Raw JSON / Graph cards / Editor CTA.
 - Failed/cancelled: compact inline banner. Succeeded: **Promote model** → single panel (alias + register).
 
@@ -76,7 +87,9 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Input labels with `accessible: false` (external symlink) are never auto-selected; options marked “external (blocked)”; failed browse clears selection and never shows Upload-as-primary while an error banner is up.
 - Quiet amber note when blocked labels exist and nothing is selected; Compose defaults `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1`.
 - Outputs invalid-path recovery clears selection and avoids re-seeding from `/workspaces/:id/datasets` path id.
-- Ingest: EventSource or authed fetch on `GET /ingest/{url|huggingface}/{job_id}/stream` → progress log.
+- Ingest: EventSource or authed fetch on `GET /ingest/{url|huggingface}/{job_id}/stream` → progress log. A `type:error` event is job-fatal (stream closes with no summary) — the toast shows its message. The stream is closed / reader cancelled on unmount.
+- Upload (`POST /data/inputs/upload`) uses a 1 h `timeoutMs` and surfaces the backend detail via `parseError` (413 → “too large for server/proxy limit”).
+- `FileViewer` checks the 3 MB text/JSON preview cap against the `size` prop and `Content-Length` **before** downloading the body; Download failures toast.
 - Empty upload copy domain-agnostic (“Upload files or ingest URLs…”).
 
 ## Trace (`TraceView`)
@@ -94,7 +107,9 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 ## Templates (`TemplatesView`)
 
 - Page title **Templates** (not “New from template”); starters that stamp GraphIR into a workspace.
-- Text search + All / Examples / Saved pills.
+- Unified pills with honest counts: **All** = workspace + marketplace totals; **Examples** / **Saved** from `/pipelines/templates`; **Marketplace** from `public/marketplace-catalog.json` (~3032).
+- Marketplace browse is client-side filter + pagination (48/page); **Open in Editor** still `POST /pipelines/marketplace/materialize`. “N shown” reflects the active tab (not a stale workspace-only count).
+- **OOB materialize:** API seeds bundled datasets, rewrites ingest onto `workspace/datasets/input/speech-commands` (etc.), remaps config aliases, strips forbidden keys — reopen Marketplace templates after materializer fixes.
 - Header: Refresh quiet; Sync examples + Save from Builder under More overflow.
 - Card primary: **Open** (project gate); version select on card; delete in kebab.
 - Gate modal: “Templates stamp into a project” → create/select → Editor.
@@ -110,7 +125,8 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Filter chips + search (actor / summary / id); **actor chips** on list + detail.
 - When search filters out `selectedId`, snap to first visible row (or clear).
 - Detail: structural diff; side-by-side base/proposed JSON when `base_graph` + graph present.
-- Accept → Editor; **Accept then save…** PUTs draft under `activeProject` using summary slug.
+- Accept → Editor; **Accept then save…** PUTs draft under `activeProject` using summary slug — first free slug (`slug`, `slug-2`, …) via `GET .../pipelines/{slug}` 404, never silently overwriting.
+- Accept/Reject bodies never hardcode an actor: configured `graphyn.actor` if set, else omitted (server derives from `X-Actor`/auth).
 - Disabled **Partial apply (coming)** checkbox (API not supported).
 - Accept toast confirms load into Editor; Accept/Reject remain primary mutations.
 
@@ -144,12 +160,17 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Optional install is per-package: one bad wheel (e.g. `tflite-runtime` when TensorFlow is already present) must not block others (`torch`). UI shows concrete pip ERROR lines.
 - Tabs Installed (default) | Install / Search; status filter; one dep CTA per row; empty → Install tab.
 - Per-plugin one-line install errors (no duplicate toast walls).
+- Remote install poll (`GET /plugins/{name}`): job stub has `status: installing|failed`; the finished PluginRecord has **no** `status`, so installed = record with `version`/`installed_at` (upgrade: `installed_at` differs from pre-install baseline). In-flight guard, 10 min cap, 3× 404 → error.
 
 ## Workers (`WorkersView`)
 
 - Page title **Worker fleet**; PageHeader Mode B hint only when distributed. Empty = Mode B + copyable `graphyn worker start`.
 - Tabs: **Workers | Queue**. Queue explains no list-all `/jobs` API + Mode A/B copy; recent runs as proxy.
 - Detail drawer: labels/pools display-only (no PATCH); **Deregister** ConfirmButton → `DELETE /workers/{id}`.
+
+## Credentials (`CredentialsView`)
+
+- **Revoke** = soft revoke (`DELETE /credentials/{id}`); separate danger **Delete permanently** ConfirmButton uses `?delete=true`.
 
 ## Secrets (`SecretsView`)
 

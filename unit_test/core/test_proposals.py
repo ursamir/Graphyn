@@ -12,7 +12,7 @@ from app.core.agentic.proposals import (
     list_proposals,
     reject_proposal,
 )
-from app.core.audit import list_audit
+from app.core.trust.audit import list_audit
 
 
 def _graph(nodes, edges=None, name="demo"):

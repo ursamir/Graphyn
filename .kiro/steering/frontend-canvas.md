@@ -55,7 +55,9 @@ Templates · **Agent inbox** · Artifacts · **Library · Plugins** · **Ship** 
 
 **Shell:** desktop nav is a resizable `SplitPane` (`graphyn.layout.nav`); collapse persists (`graphyn.layout.navOpen`). List/detail screens (Runs, Models, Artifacts, Agent inbox, Compare) use `MasterDetail` — not page-local fixed grids.
 
-**Viewport containment:** `html/body/#root` use `max-height: 100dvh; overflow: hidden`. App shell + body row + `main` are `min-h-0 overflow-hidden` so pages never grow past the window; scroll lives inside panes. Rebuild UI only: `docker compose build graphyn-ui && docker compose up -d --no-deps graphyn-ui` (never recreate API for UI changes).
+**Viewport containment:** `html/body/#root` use `max-height: 100dvh; overflow: hidden`. App shell + body row + `main` are `min-h-0 overflow-hidden` so pages never grow past the window; scroll lives inside panes.
+
+**Docker — UI changes only:** `docker compose build graphyn-ui && docker compose up -d --no-deps graphyn-ui`. Never `compose up` / recreate `graphyn-api` for frontend work — full plugin reinstall is **15+ minutes**.
 ## Command palette / keyboard help
 
 Primary jumps: Home, Editor, Runs, Datasets, Artifacts, Templates, Library · Plugins, Ship (Package|Devices), Worker fleet, Ops.

@@ -162,7 +162,7 @@ Two of this report's highest-severity findings were re-verified directly against
 
 **Features (as coded — all currently unreachable, see below):** recent-runs picker, artifact/run ID paste, hop-chain visualization, per-hop actions (Open run, Artifacts, Trace this, Editor, Workers), lineage-inputs list, raw JSON view.
 
-**Backend mapping:** `GET /trace` (`trace.py:20-40`) — shapes match `app/core/trace.py:138-337`'s `assemble_trace` exactly. Not the problem.
+**Backend mapping:** `GET /trace` (`trace.py:20-40`) — shapes match `app/core/runs/trace.py:138-337`'s `assemble_trace` exactly. Not the problem.
 
 **UI feedback:**
 - **[P1] This entire page is dead code — there is no way for a user to reach it.** Independently re-verified: `routes/parsePath.ts` never returns `{view: 'trace'}` for any recognized path (`grep -n "'trace'"` → zero hits); `appStore.ts:223-246`'s `openTrace()` sets `view: 'trace'` only in the fallback branch reached when **neither** `runId` nor `artifactId` is passed — but every one of the 8 real call sites (`App.tsx` ×2, `CommandPalette.tsx`, `ModelsView.tsx`, `ArtifactsView.tsx`, `ProjectsView.tsx`, `EdgeWizardView.tsx` ×2) passes a `runId`, which routes to `view: 'runs'` with the lineage panel instead. `App.tsx:63-99`'s sidebar has no Trace/Lineage entry at all — a comment there confirms this is deliberate: "Lineage / Compare live under Runs." **Net effect:** 660 lines of a fully built page are shipped and labeled live in `VIEW_LABEL`/`NAV_HINTS`, but functionally superseded by `RunLineagePanel` and never rendered for any real user action.
@@ -326,7 +326,7 @@ The one rough edge it doesn't touch is the dict-shaped-error gap above, which pr
 | Request/Approve prod | `POST /models/{name}/{request-prod,approve-prod}` | `models.py:71-92` | yes for the call itself — see UI feedback |
 
 **UI feedback:**
-- **[P1] "Approve prod" renders unconditionally whenever the stage loop reaches `'prod'`, regardless of whether anything is pending approval.** Independently re-verified: `ModelsView.tsx:268-278` guards the button on nothing but `stage === 'prod'` — no check on `entry`, no check on a pending flag. The backend's actual pending state (`pending_prod: {run_id, slug, requested_at, requested_by}`, `app/core/model_registry.py:170-175`) is a **sibling field of `stages`**, not nested inside `stages.prod` the way the frontend's own type declares (`ModelRow.stages: Record<string, {..., pending_prod?: boolean}>`, `ModelsView.tsx:13`) — and `detail.pending_prod` is never read anywhere in the file. **Consequence:** any model with only a staging stage and no prod request ever made still shows an active "Approve prod" button; clicking it always fails with the backend's `ValueError("No pending_prod to approve")` (422), with no visual cue it will fail.
+- **[P1] "Approve prod" renders unconditionally whenever the stage loop reaches `'prod'`, regardless of whether anything is pending approval.** Independently re-verified: `ModelsView.tsx:268-278` guards the button on nothing but `stage === 'prod'` — no check on `entry`, no check on a pending flag. The backend's actual pending state (`pending_prod: {run_id, slug, requested_at, requested_by}`, `app/core/mlops/model_registry.py:170-175`) is a **sibling field of `stages`**, not nested inside `stages.prod` the way the frontend's own type declares (`ModelRow.stages: Record<string, {..., pending_prod?: boolean}>`, `ModelsView.tsx:13`) — and `detail.pending_prod` is never read anywhere in the file. **Consequence:** any model with only a staging stage and no prod request ever made still shows an active "Approve prod" button; clicking it always fails with the backend's `ValueError("No pending_prod to approve")` (422), with no visual cue it will fail.
 
 **Backend feedback:** none — the backend contract is fine; the mismatch is entirely the frontend's read of `pending_prod`'s location.
 
@@ -351,7 +351,7 @@ The one rough edge it doesn't touch is the dict-shaped-error gap above, which pr
 | Register model | `POST /models` | `models.py:54-68` | yes |
 
 **UI feedback:**
-- **[P1] `findCopyablePath()` never checks the field the backend actually returns.** Independently re-verified against the current working tree: `ArtifactsView.tsx:50-63` only checks keys `'model_path'`/`'path'` (recursing into nested objects). The real `ArtifactRecord` field is `data_path` (`app/core/artifact_store.py:147`), a **top-level string** — not nested under anything the recursive search descends into. **Consequence:** for ordinary node-output artifacts (the common case), `path` is always `null`, so the **Download button, Copy-path button, and image preview never appear**. `RunsView.tsx:59,78,158` and `RunLineagePanel.tsx` both correctly check `data_path` first — this page is the outlier.
+- **[P1] `findCopyablePath()` never checks the field the backend actually returns.** Independently re-verified against the current working tree: `ArtifactsView.tsx:50-63` only checks keys `'model_path'`/`'path'` (recursing into nested objects). The real `ArtifactRecord` field is `data_path` (`app/core/artifacts/artifact_store.py:147`), a **top-level string** — not nested under anything the recursive search descends into. **Consequence:** for ordinary node-output artifacts (the common case), `path` is always `null`, so the **Download button, Copy-path button, and image preview never appear**. `RunsView.tsx:59,78,158` and `RunLineagePanel.tsx` both correctly check `data_path` first — this page is the outlier.
 - [P2] `load()` (`ArtifactsView.tsx:149-176`) never passes `limit`/`offset` to `GET /artifacts` (server default `limit=100`, `artifacts.py:54`), and there is no pagination control anywhere in the file. Any project with >100 artifacts silently shows only the newest 100.
 
 **Backend feedback:** none — `artifacts.py` is correct and already supports pagination the UI doesn't use.
@@ -375,7 +375,7 @@ The one rough edge it doesn't touch is the dict-shaped-error gap above, which pr
 | Registry models | `GET /models` | `models.py:35-39` | yes |
 | Path probes | `GET /outputs/file` | `outputs.py:40-54` | yes |
 | Source artifacts/runs | `GET /artifacts?run_id=`, `GET /runs?project=` | `artifacts.py:49-66`, `runs.py:153-222` | yes |
-| Package run | `POST /pipelines/run-async` | `pipelines.py:439-503` | yes — `source_run_id`/`source_artifact_id`/`project` explicitly supported for this wizard (`app/core/run_project.py:81-91`) |
+| Package run | `POST /pipelines/run-async` | `pipelines.py:439-503` | yes — `source_run_id`/`source_artifact_id`/`project` explicitly supported for this wizard (`app/core/runs/run_project.py:81-91`) |
 | Poll status/artifacts | `GET /runs/{id}[/status]`, `GET /artifacts?run_id=` | `runs.py:227-263, 312-349`; `artifacts.py:49-66` | yes |
 | Download | `GET /outputs/file` | `outputs.py:40-54` | yes |
 | Promote | `POST /runs/{id}/promote` | `runs.py:441-491` | yes |

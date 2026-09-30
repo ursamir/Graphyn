@@ -4,8 +4,10 @@ Bounded Context:  Application Layer — MCP Interface
 Responsibility:   MCP server startup, stdio transport loop, and tool dispatch.
                   Thin shell — all business logic lives in handlers/ and core.
 Owns:             _server (Server instance), _TOOLS registry, _register(),
-                  handle_list_tools(), handle_call_tool(), _startup(), main().
+                  get_tool(), handle_list_tools(), handle_call_tool(),
+                  _startup(), main().
 Public Surface:   main() — entry point for `graphyn mcp` and `python -m app.mcp.server`.
+                  get_tool(name) — look up a registered tool handler dict.
 Must NOT:         Contain business logic. Each handler must stay ≤ ~30 lines.
                   Must log to stderr only (stdout is JSON-RPC transport).
 Dependencies:     mcp (server, types), app.mcp.auth, app.mcp.tool_registry,
@@ -69,6 +71,15 @@ def _register(
     }
 
 
+def get_tool(name: str) -> dict[str, Any] | None:
+    """Return the registered tool dict for *name*, registering the catalog if empty."""
+    if not _TOOLS:
+        from app.mcp.tool_registry import register_all_tools
+
+        register_all_tools(_register)
+    return _TOOLS.get(name)
+
+
 # ── MCP protocol handlers ──────────────────────────────────────────────────────
 
 @_server.list_tools()
@@ -84,17 +95,36 @@ async def handle_list_tools() -> list[types.Tool]:
     ]
 
 
+def _is_error_payload(result: Any) -> bool:
+    """Handlers signal failure with an ``{"error": True, ...}`` envelope."""
+    return isinstance(result, dict) and result.get("error") is True
+
+
+def _tool_result(payload: Any, *, is_error: bool) -> types.CallToolResult:
+    """Wrap a JSON payload as a CallToolResult with an explicit ``isError``."""
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=json.dumps(payload, default=_json_fallback))],
+        isError=is_error,
+    )
+
+
 @_server.call_tool()
 async def handle_call_tool(
     name: str,
     arguments: dict[str, Any],
-) -> list[types.TextContent]:
-    """Dispatch a tool invocation (Req 1.4, 1.7, 1.9, 1.11)."""
+) -> types.CallToolResult:
+    """Dispatch a tool invocation (Req 1.4, 1.7, 1.9, 1.11).
+
+    Every failure — auth, unknown tool, handler exception, or a handler's
+    ``{"error": True}`` envelope — is returned with ``isError=True`` so MCP
+    clients / agents can distinguish it from a successful result. The JSON
+    body is unchanged.
+    """
     # ── Auth check ─────────────────────────────────────────────────────────────
     auth_error = check_auth(arguments)
     if auth_error is not None:
         log.info("tool=%s outcome=unauthorized", name)
-        return [types.TextContent(type="text", text=json.dumps(auth_error))]
+        return _tool_result(auth_error, is_error=True)
 
     # ── Unknown tool ───────────────────────────────────────────────────────────
     if name not in _TOOLS:
@@ -105,7 +135,7 @@ async def handle_call_tool(
             "available_tools": sorted(_TOOLS.keys()),
         }
         log.info("tool=%s outcome=unknown_tool", name)
-        return [types.TextContent(type="text", text=json.dumps(error))]
+        return _tool_result(error, is_error=True)
 
     # ── Dispatch ───────────────────────────────────────────────────────────────
     handler = _TOOLS[name]["handler"]
@@ -113,16 +143,23 @@ async def handle_call_tool(
         result = await asyncio.get_running_loop().run_in_executor(
             _HANDLER_EXECUTOR, lambda: handler(arguments)
         )
-        log.info("tool=%s outcome=success", name)
-        return [types.TextContent(type="text", text=json.dumps(result, default=_json_fallback))]
     except Exception as exc:
         error = {
             "error": True,
             "error_type": type(exc).__name__,
             "message": str(exc),
         }
-        log.info("tool=%s outcome=error error_type=%s", name, type(exc).__name__)
-        return [types.TextContent(type="text", text=json.dumps(error))]
+        log.info("tool=%s outcome=exception error_type=%s", name, type(exc).__name__)
+        return _tool_result(error, is_error=True)
+    if _is_error_payload(result):
+        log.info(
+            "tool=%s outcome=error error_type=%s",
+            name,
+            result.get("error_type") or "error",
+        )
+        return _tool_result(result, is_error=True)
+    log.info("tool=%s outcome=success", name)
+    return _tool_result(result, is_error=False)
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────

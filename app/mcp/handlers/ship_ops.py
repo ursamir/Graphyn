@@ -1,5 +1,5 @@
 # app/mcp/handlers/ship_ops.py
-"""MCP tools for ship packages (J4) — wrap app.core.ship_packages."""
+"""MCP tools for ship packages (J4) — wrap app.core.mlops.ship_packages."""
 from __future__ import annotations
 
 from typing import Any
@@ -111,7 +111,7 @@ PROMOTE_SHIP_PACKAGE_SCHEMA = {
 
 
 def list_ship_packages_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.ship_packages import list_packages
+    from app.core.mlops.ship_packages import list_packages
 
     args = arguments or {}
     try:
@@ -128,7 +128,7 @@ def list_ship_packages_handler(arguments: dict[str, Any] | None = None) -> dict[
 
 
 def get_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.ship_packages import get_package
+    from app.core.mlops.ship_packages import get_package
 
     args = arguments or {}
     try:
@@ -141,7 +141,7 @@ def get_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict[st
 
 
 def create_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.ship_packages import InvalidPackageTransition, create_package
+    from app.core.mlops.ship_packages import InvalidPackageTransition, create_package
 
     args = arguments or {}
     target = args.get("target")
@@ -173,7 +173,7 @@ def create_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict
 
 
 def download_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.ship_packages import download_package_path
+    from app.core.mlops.ship_packages import download_package_path
 
     args = arguments or {}
     try:
@@ -197,7 +197,7 @@ def download_ship_package_handler(arguments: dict[str, Any] | None = None) -> di
 
 
 def promote_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.ship_packages import InvalidPackageTransition, promote_package
+    from app.core.mlops.ship_packages import InvalidPackageTransition, promote_package
 
     args = arguments or {}
     try:

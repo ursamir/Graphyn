@@ -8,7 +8,7 @@ Owns:             DeploymentArtifact Pydantic model — artifact_path,
                   model_format, target_hardware, quantization, labels,
                   benchmark results, metadata.
 Public Surface:   DeploymentArtifact
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain packaging logic.
 Dependencies:     pydantic (PortDataType base), stdlib (typing).
 Reason To Change: DeploymentArtifact schema gains new fields, new hardware

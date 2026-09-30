@@ -1,9 +1,11 @@
 """RagFsConnectorNode — Filesystem docs connector
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import json
 
 import importlib
 import logging
@@ -29,6 +31,42 @@ RawDocument = _types.RawDocument
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _fs_connector(config, inputs, types):
+    root = Path(str(_cfg(config, "path", ".") or "."))
+    recursive = bool(_cfg(config, "recursive", True))
+    exts = _cfg(config, "extensions", [".txt", ".md", ".json"]) or [".txt", ".md"]
+    exts = {str(e).lower() if str(e).startswith(".") else f".{e}" for e in exts}
+    files = root.rglob("*") if recursive else root.glob("*")
+    docs = []
+    if root.is_file():
+        files = [root]
+    for path in files:
+        if not path.is_file() or path.suffix.lower() not in exts:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        docs.append(_T(types, "RawDocument", path=str(path), text=text, metadata={"bytes": path.stat().st_size}))
+    return docs
+
+
 
 class RagFsConnectorNode(Node):
     """Filesystem docs connector"""
@@ -41,7 +79,7 @@ class RagFsConnectorNode(Node):
         description="Filesystem docs connector",
         category="Input",
         version="0.1.0",
-        tags=["rag", "stub"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -56,7 +94,7 @@ class RagFsConnectorNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         path: str = Field(default='', title="Path", description="Path.")
         recursive: bool = Field(default=True, title="Recursive", description="Recursive.")
         extensions: list = Field(default_factory=list)
@@ -68,10 +106,17 @@ class RagFsConnectorNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'rag' / 'rag_fs_connector'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = []
             return {"output": result}
@@ -81,23 +126,8 @@ class RagFsConnectorNode(Node):
         except ImportError as exc:
             raise ImportError(f"rag_fs_connector: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'rag' / 'rag_fs_connector'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": []}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _fs_connector(self.config, inputs, _types)}

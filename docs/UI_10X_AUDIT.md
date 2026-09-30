@@ -15,7 +15,7 @@ Deep UX audit of the Graphyn console (`graphyn-ui`) against project-first IA. Fi
 | Naming: **File registry** | `VIEW_LABEL.artifacts` said “File registry” next to Data library | Confused with Data library / Outputs |
 | Spec / Taxonomy overload on Overview | Overview packs Spec tabs, taxonomy, pipelines, linked data | Cognitive load; Apple-style declutter needed later |
 
-## Wave 1 (this PR) — nav / naming / CTA
+## First pass (this PR) — nav / naming / CTA
 
 **Goal:** One name for the canvas (**Editor**), project strip includes Lineage + Compare, empty states show one primary (+ optional secondary).
 

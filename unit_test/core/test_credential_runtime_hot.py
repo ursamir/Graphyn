@@ -4,8 +4,8 @@ from __future__ import annotations
 import pytest
 
 from app.core.credentials import create_connection, resolve_connection
-from app.core.llm_client import NeedsCredentialsError, chat_completion
-from app.core.smtp_notify import send_email
+from app.core.ml.llm_client import NeedsCredentialsError, chat_completion
+from app.core.notify.smtp_notify import send_email
 
 
 @pytest.fixture

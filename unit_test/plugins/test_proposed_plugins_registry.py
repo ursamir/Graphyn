@@ -22,17 +22,23 @@ def new_packs_registry(tmp_path_factory):
     mgr = PluginManager(registry=reg, base_dir=str(tmp))
     mgr._plugins_dir = str(tmp)
     installed = []
+    failures: list[str] = []
     with patch.object(PluginVenvManager, "ensure", return_value=Path("/tmp/fake-venv/bin/python")):
         for pack in NEW_PACKS:
             root = PLUGIN_ROOT / pack
             if not root.is_dir():
                 continue
             for toml in sorted(root.rglob("plugin.toml")):
+                src = str(toml.parent) + "/"
                 try:
-                    mgr.install(str(toml.parent) + "/")
+                    mgr.install(src)
                     installed.append(toml.parent.name)
-                except Exception:
-                    continue
+                except Exception as exc:
+                    failures.append(f"{toml.parent.name}: {type(exc).__name__}: {exc}")
+    if failures:
+        raise AssertionError(
+            "proposed plugin install failures:\n" + "\n".join(failures)
+        )
     return reg, installed
 
 
@@ -69,10 +75,15 @@ def test_key_nodes_registered(node_type, new_packs_registry):
     "node_type",
     ["yolo_train", "tflm_quantize", "rag_generate", "text_embed", "vector_store_write", "mcu_window"],
 )
-def test_stub_process(node_type, new_packs_registry):
+def test_stub_process(node_type, new_packs_registry, tmp_path):
+    from unit_test.plugins._helpers import materialize_isolated_class
+
     reg, _ = new_packs_registry
-    cls = reg.get_class(node_type)
-    node = cls(config={"stub": True})
+    cls = materialize_isolated_class(reg.get_class(node_type))
+    cfg: dict = {"stub": True}
+    if node_type == "yolo_train":
+        cfg["project"] = str(tmp_path / "yolo")
+    node = cls(config=cfg)
     out = node.process({})
     assert isinstance(out, dict) and out
 

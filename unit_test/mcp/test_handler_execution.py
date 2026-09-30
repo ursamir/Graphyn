@@ -30,13 +30,14 @@ def _valid_graph():
 
 class TestExecutePipeline:
     def test_valid_graph_returns_run_id(self):
-        """Valid graph returns run_id and status=started."""
+        """Valid graph returns run_id and status=pending (REST run-async vocabulary)."""
         graph = _valid_graph()
         # patch_threads autouse fixture already patches ThreadPoolExecutor.submit
         result = execute_pipeline_handler({"graph": graph})
         assert "run_id" in result
         assert result["run_id"]
-        assert result.get("status") == "started"
+        assert result.get("status") == "pending"
+        assert result.get("accepted") is True
 
     def test_invalid_graph_returns_valid_false(self):
         """Invalid graph returns valid=False with errors."""

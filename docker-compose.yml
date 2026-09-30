@@ -34,19 +34,15 @@ services:
       GRAPHYN_PROJECT_DIR: /app/workspace
       GRAPHYN_PLUGINS_DIR: /app/plugins
       GRAPHYN_AUTO_INSTALL_PLUGINS: "1"
-      # Bind-mounted workspace often uses host symlinks under datasets/input.
-      GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS: ${GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS:-1}
+      # Dataset symlink escape stays on unless the operator opts in.
+      # Set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 only when a bind-mounted
+      # workspace intentionally uses host symlinks under datasets/input.
+      GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS: ${GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS:-0}
       # API binds immediately; plugins load in a background thread.
       # Isolated ML plugins (trainer, …) install TensorFlow/Keras into their
       # venvs at load by default. Set GRAPHYN_ISOLATED_BOOT_HEAVY=0 to defer.
       GRAPHYN_ISOLATED_BOOT_HEAVY: ${GRAPHYN_ISOLATED_BOOT_HEAVY:-1}
-      # Wave-1 capability venvs (host install script → volume / bind).
-      # Prefer CPU torch when FaceRecognition holds the GPU.
-      GRAPHYN_WAVE1_FORCE_CPU: ${GRAPHYN_WAVE1_FORCE_CPU:-1}
-      GRAPHYN_WAVE1_VENVS_ROOT: ${GRAPHYN_WAVE1_VENVS_ROOT:-}
-      GRAPHYN_WAVE1_VENV_VISION: ${GRAPHYN_WAVE1_VENV_VISION:-}
-      GRAPHYN_WAVE1_VENV_TINYML: ${GRAPHYN_WAVE1_VENV_TINYML:-}
-      GRAPHYN_WAVE1_VENV_RAG: ${GRAPHYN_WAVE1_VENV_RAG:-}
+      GRAPHYN_ML_FORCE_CPU: ${GRAPHYN_ML_FORCE_CPU:-1}
       GRAPHYN_ISOLATED_INSTALL_TORCH: ${GRAPHYN_ISOLATED_INSTALL_TORCH:-0}
       GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL: ${GRAPHYN_ISOLATED_INSTALL_ALL_OPTIONAL:-0}
       CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-}

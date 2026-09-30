@@ -81,7 +81,7 @@ def main() -> None:
     print(f"\n{_h('Step 3 — Load plugin and use in pipeline')}")
     manager.load_enabled_plugins()
 
-    from app.core.registry_runtime import get_registry
+    from app.core.host.registry_runtime import get_registry
     registry = get_registry()
 
     if "text_stats" in registry:

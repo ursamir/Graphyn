@@ -1,6 +1,8 @@
 """LlmChatNode — multi-turn chat via stub / openai_compat / ollama."""
 from __future__ import annotations
 
+import json
+
 import importlib
 import logging
 from typing import Any, ClassVar, Literal
@@ -24,6 +26,37 @@ except (ImportError, ModuleNotFoundError):
 ChatMessage = _types.ChatMessage
 
 log = logging.getLogger(__name__)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _text(obj: Any) -> str:
+    if obj is None:
+        return ""
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    if isinstance(obj, list):
+        return "\n".join(_text(x) for x in obj)
+    data = _dump(obj)
+    if isinstance(data, dict):
+        for key in ("text", "query", "content", "answer", "user", "path", "value", "final"):
+            if data.get(key):
+                return str(data[key])
+        return json.dumps(data, default=str)
+    return str(obj)
+
+def _local_answer(prompt: Any) -> str:
+    text = _text(prompt)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    context = [ln for ln in lines if not ln.lower().startswith("question") and len(ln) > 40]
+    if context:
+        return context[0][:1200]
+    return text[:1200]
+
 
 
 def _normalize_messages(raw: Any) -> list[dict[str, str]]:
@@ -105,17 +138,17 @@ class LlmChatNode(Node):
 
     class Config(NodeConfig):
         stub: bool = Field(
-            default=True,
+            default=False,
             title="Stub mode",
-            description="When true, return a deterministic stub ChatMessage (no network).",
+            description="Opt-in placeholder. Default answers from the local extractive reader.",
         )
-        provider: Literal["stub", "openai_compat", "ollama", "anthropic", "gemini"] = Field(
-            default="stub",
+        provider: Literal["local", "stub", "openai_compat", "ollama", "anthropic", "gemini"] = Field(
+            default="local",
             title="Provider",
-            description="stub | openai_compat | ollama | anthropic | gemini",
+            description="local | openai_compat | ollama | anthropic | gemini",
         )
         model: str = Field(default="gpt-4o-mini", title="Model", description="Chat model id.")
-        temperature: float = Field(default=0.2, title="Temperature", description="Sampling temperature.")
+        temperature: float = Field(default=0.2, ge=0, title="Temperature", description="Sampling temperature (0 allowed).")
         api_secret_name: str = Field(
             default="OPENAI_API_KEY",
             title="API secret name",
@@ -131,7 +164,7 @@ class LlmChatNode(Node):
             title="System prompt",
             description="Optional system message prepended when not already present.",
         )
-        timeout_s: float = Field(default=60.0, title="Timeout (s)", description="HTTP timeout.")
+        timeout_s: float = Field(default=60.0, gt=0, title="Timeout (s)", description="HTTP timeout.")
         connection_id: str = Field(
             default="",
             title="Credential connection id",
@@ -144,15 +177,20 @@ class LlmChatNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, "stub", True))
-        provider = (getattr(self.config, "provider", None) or "stub").strip().lower()
-        if stub or provider == "stub":
+        stub = bool(getattr(self.config, "stub", False))
+        provider = (getattr(self.config, "provider", None) or "local").strip().lower()
+        if stub:
             return {
                 "output": ChatMessage(
                     role="assistant",
                     content="[stub] llm_chat — set stub=False and provider=openai_compat|ollama|anthropic|gemini to call a model.",
                 )
             }
+        if provider in ("local", "stub", ""):
+            raw = inputs.get("messages")
+            if raw is None:
+                raw = inputs.get("input")
+            return {"output": ChatMessage(role="assistant", content=_local_answer(raw))}
 
         raw = inputs.get("messages")
         if raw is None:
@@ -164,18 +202,18 @@ class LlmChatNode(Node):
         if not messages:
             messages = [{"role": "user", "content": ""}]
 
-        from app.core.llm_client import NeedsCredentialsError, chat_completion
+        from app.core.ml.llm_client import NeedsCredentialsError, chat_completion
 
         try:
             result = chat_completion(
                 messages=messages,
                 provider=provider,
                 model=getattr(self.config, "model", None) or "gpt-4o-mini",
-                temperature=float(getattr(self.config, "temperature", 0.2) or 0.0),
+                temperature=float(self.config.temperature),
                 base_url=(getattr(self.config, "base_url", "") or "") or None,
                 api_secret_name=getattr(self.config, "api_secret_name", None) or "OPENAI_API_KEY",
                 connection_id=(getattr(self.config, "connection_id", "") or "") or None,
-                timeout_s=float(getattr(self.config, "timeout_s", 60.0) or 60.0),
+                timeout_s=float(self.config.timeout_s),
             )
         except NeedsCredentialsError:
             raise

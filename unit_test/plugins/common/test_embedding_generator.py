@@ -61,12 +61,14 @@ def test_construct(installed_cls):
 
 # ── smoke process ─────────────────────────────────────────────────────────────
 
+@pytest.mark.heavy
 def test_process_smoke(installed_cls, make_audio_sample):
     """Smoke test: EmbeddingGeneratorNode.process() with wav2vec2 model."""
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
 
     node = installed_cls(config={"model": "wav2vec2", "normalize": True}, seed=0)
+    node.setup()  # NodeExecutor calls setup() before process().
     sample = make_audio_sample(sr=16000, n=16000)
     result = node.process({"input": [sample]})
     assert "output" in result
@@ -75,6 +77,7 @@ def test_process_smoke(installed_cls, make_audio_sample):
 
 # ── Req 10.5: embedding dimension consistency ─────────────────────────────────
 
+@pytest.mark.heavy
 def test_embedding_dimension_consistency(installed_cls, make_audio_sample):
     """Req 10.5 — all embeddings from the same model have the same shape.
 
@@ -84,6 +87,7 @@ def test_embedding_dimension_consistency(installed_cls, make_audio_sample):
     transformers = pytest.importorskip("transformers")
 
     node = installed_cls(config={"model": "wav2vec2", "normalize": True}, seed=0)
+    node.setup()  # NodeExecutor calls setup() before process().
 
     # Create multiple samples with different lengths
     samples = [
@@ -104,12 +108,14 @@ def test_embedding_dimension_consistency(installed_cls, make_audio_sample):
     )
 
 
+@pytest.mark.heavy
 def test_embedding_is_normalized(installed_cls, make_audio_sample):
     """With normalize=True, embedding L2 norm should be ~1.0."""
     torch = pytest.importorskip("torch")
     transformers = pytest.importorskip("transformers")
 
     node = installed_cls(config={"model": "wav2vec2", "normalize": True}, seed=0)
+    node.setup()  # NodeExecutor calls setup() before process().
     sample = make_audio_sample(sr=16000, n=16000)
     result = node.process({"input": [sample]})
 

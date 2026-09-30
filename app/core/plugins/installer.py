@@ -57,6 +57,28 @@ _VERSION_SPEC_RE = re.compile(
 
 
 
+def reject_tree_symlinks(root: Path) -> None:
+    """Raise PluginInstallError if *root* contains a symlink or hardlink-like link.
+
+    ``shutil.copytree(..., symlinks=False)`` follows links and would copy
+    arbitrary files the link points at. Archives already reject symlink members;
+    git and directory sources must do the same before the install copy.
+    """
+    import os
+
+    root = Path(root)
+    if root.is_symlink():
+        raise PluginInstallError(f"Plugin path {root} is a symlink; refusing to install.")
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(dirpath)
+        for name in list(dirnames) + list(filenames):
+            path = base / name
+            if path.is_symlink():
+                raise PluginInstallError(
+                    f"Plugin tree contains a symlink ({path}); refusing to install."
+                )
+
+
 def _zip_member_is_symlink(member: zipfile.ZipInfo) -> bool:
     """Return True if *member* is a Unix symlink (ZIP has no first-class links)."""
     is_symlink_fn = getattr(member, "is_symlink", None)
@@ -65,6 +87,27 @@ def _zip_member_is_symlink(member: zipfile.ZipInfo) -> bool:
     mode = member.external_attr >> 16
     return stat.S_ISLNK(mode) if mode else False
 
+
+
+def _git_protocol_config(clone_url: str) -> list[str]:
+    """``git -c`` flags restricting transports to the source's own scheme.
+
+    Remote http/https/git URLs may only use that protocol; local paths (the
+    only case that is not remote-looking) may only use ``file``. Redirects are
+    never followed.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        scheme = (urlsplit(clone_url).scheme or "").lower()
+    except ValueError:
+        scheme = ""
+    allowed = scheme if scheme in {"http", "https", "git"} else "file"
+    return [
+        "-c", "protocol.allow=never",
+        "-c", f"protocol.{allowed}.allow=always",
+        "-c", "http.followRedirects=false",
+    ]
 
 
 def redact_url_userinfo(url: str) -> str:
@@ -182,14 +225,14 @@ class PluginInstaller:
         # before fetching. Normalize scheme case so HTTPS:// / GIT+… cannot
         # skip the gate. Unsupported schemes (ssh://, file://, …) are rejected.
         from app.core.config import (  # noqa: PLC0415
-            _looks_like_remote_plugin_source,
-            _normalize_plugin_source_scheme,
-            _parse_plugin_source_url,
+            looks_like_remote_plugin_source,
+            normalize_plugin_source_scheme,
+            parse_plugin_source_url,
         )
 
-        if _looks_like_remote_plugin_source(source):
-            source = _normalize_plugin_source_scheme(source)
-            if _parse_plugin_source_url(source) is None:
+        if looks_like_remote_plugin_source(source):
+            source = normalize_plugin_source_scheme(source)
+            if parse_plugin_source_url(source) is None:
                 raise PluginInstallError(
                     f"Unsupported plugin source scheme in {redact_url_userinfo(source)!r}. "
                     "Allowed remote schemes: http://, https://, git://, and git+http(s)://."
@@ -291,7 +334,11 @@ class PluginInstaller:
             result = subprocess.run(
                 # G4-23 fix: use "--" before the URL to prevent git from
                 # interpreting a crafted URL like "--upload-pack=cmd" as a flag.
-                ["git", "clone", "--depth", "1", "--", clone_url, str(tmpdir)],
+                # Transport lockdown: only the scheme that passed the allowlist
+                # may be used (no ext::/ssh/file hops via submodule-like tricks),
+                # and HTTP redirects are not followed (a redirect could leave
+                # the allowlisted host).
+                ["git", *_git_protocol_config(clone_url), "clone", "--depth", "1", "--", clone_url, str(tmpdir)],
                 capture_output=True,
                 text=True,
                 timeout=120,  # prevent indefinite hang on slow/unresponsive servers
@@ -302,6 +349,7 @@ class PluginInstaller:
                     f"git stderr:\n{result.stderr.strip()}"
                 )
             manifest_dir = self._find_manifest_dir(tmpdir)
+            reject_tree_symlinks(manifest_dir)
             # Attach the root tmpdir so manager.py can always clean it up,
             # regardless of how many levels deep the manifest was found.
             manifest_dir._installer_tmpdir = tmpdir  # type: ignore[attr-defined]

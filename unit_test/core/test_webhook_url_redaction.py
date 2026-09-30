@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pytest
 
-from app.core.audit import list_audit, record_audit
-from app.core.egress import redact_webhook_url_for_api
-from app.core.webhook import WebhookService
+from app.core.trust.audit import list_audit, record_audit
+from app.core.trust.egress import redact_webhook_url_for_api
+from app.core.notify.webhook import WebhookService
 
 
 SECRET_URL = "https://hooks.example.com/hooks/very-secret-token-xyz?sig=abc"
@@ -28,7 +28,7 @@ def test_redact_webhook_url_for_api_strips_query_and_userinfo() -> None:
 def test_public_config_redacts_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
     svc = WebhookService()
-    with patch("app.core.webhook.validate_webhook_target_url"):
+    with patch("app.core.notify.webhook.validate_webhook_target_url"):
         svc.save(SECRET_URL, ["run_done"])
     # Disk still has the real URL for delivery
     raw = json.loads(svc.CONFIG_PATH.read_text())
@@ -46,7 +46,7 @@ def test_rotation_clears_old_secret_from_public_view(
     monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
     svc = WebhookService()
     new_url = "https://hooks.example.com/hooks/rotated-other"
-    with patch("app.core.webhook.validate_webhook_target_url"):
+    with patch("app.core.notify.webhook.validate_webhook_target_url"):
         svc.save(SECRET_URL, ["run_done"])
         svc.save(new_url, ["run_done"])
     pub = svc.public_config()

@@ -7,21 +7,17 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["agents", "memory", "stub"]
+tags = ["agents", "memory"]
 
 dependencies = [
     "numpy>=1.24",
-]
-
-optional_dependencies = [
-    "faiss-cpu>=1.7",
 ]
 
 runtime = "inprocess"
 node_types = ["memory_store"]
 
 [config_schema.memory_store]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
-backend = { type = "string", title = "Backend", default = "json", description = "Backend." }
-persist_path = { type = "string", title = "Persist path", default = "workspace/artifacts/agent_memory", description = "Persist path." }
-namespace = { type = "string", title = "Namespace", default = "default", description = "Namespace." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
+backend = { type = "string", title = "Backend", default = "json", enum = ["json", "memory"], description = "json: locked, atomically-written JSON file; memory: process-local (not persisted)." }
+persist_path = { type = "string", title = "Persist path", default = "workspace/artifacts/agent_memory", description = "*.json file, or a directory that will hold memory.json." }
+namespace = { type = "string", title = "Namespace", default = "default", description = "Key namespace inside the store." }

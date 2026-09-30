@@ -80,16 +80,22 @@
       "dst_port": "input"
     },
     {
-      "src_id": "n2",
+      "src_id": "n1",
       "src_port": "output",
       "dst_id": "n3",
-      "dst_port": "input"
+      "dst_port": "dataset"
     },
     {
       "src_id": "n3",
       "src_port": "output",
       "dst_id": "n4",
-      "dst_port": "input"
+      "dst_port": "model"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n4",
+      "dst_port": "dataset"
     },
     {
       "src_id": "n4",
@@ -99,7 +105,15 @@
     }
   ],
   "parameters": {
-    "n_trials": 20,
-    "task": "detect"
+    "n_trials": {
+      "type": "integer",
+      "default": 20,
+      "description": ""
+    },
+    "task": {
+      "type": "string",
+      "default": "detect",
+      "description": ""
+    }
   }
 }

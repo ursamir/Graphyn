@@ -1,9 +1,11 @@
 """VideoExporterNode — Export clips/annotated video
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import json
 
 import importlib
 import logging
@@ -30,6 +32,36 @@ VideoSample = _types.VideoSample
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _out_path(config: Any, default_name: str) -> Path:
+    raw = _cfg(config, "output_path") or _cfg(config, "output_dir") or _cfg(config, "persist_path")
+    path = Path(str(raw or f"workspace/artifacts/proposed/{default_name}"))
+    if path.suffix:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+def _video_export(config, inputs, types):
+    dest = _out_path(config, "video_export")
+    folder = dest if dest.is_dir() else dest.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    manifest = folder / "export.json"
+    manifest.write_text(json.dumps({"input": _dump(inputs.get("input")), "overlays": _dump(inputs.get("overlays")), "draw_boxes": bool(_cfg(config, "draw_boxes", False))}, default=str), encoding="utf-8")
+    return {"path": str(manifest)}
+
+
 
 class VideoExporterNode(Node):
     """Export clips/annotated video"""
@@ -42,7 +74,7 @@ class VideoExporterNode(Node):
         description="Export clips/annotated video",
         category="Output",
         version="0.1.0",
-        tags=["video", "stub"],
+        tags=["video"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -60,7 +92,7 @@ class VideoExporterNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         output_dir: str = Field(default='workspace/datasets/output/video', title="Output dir", description="Output dir.")
         draw_boxes: bool = Field(default=False, title="Draw boxes", description="Draw boxes.")
 
@@ -71,10 +103,17 @@ class VideoExporterNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'video' / 'video_exporter'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = []
             return {"output": result}
@@ -84,23 +123,8 @@ class VideoExporterNode(Node):
         except ImportError as exc:
             raise ImportError(f"video_exporter: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'video' / 'video_exporter'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": []}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _video_export(self.config, inputs, _types)}

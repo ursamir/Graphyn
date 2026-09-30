@@ -14,6 +14,7 @@ def test_pipeline_node_unknown_type_raises_value_error():
         PipelineNode("this_node_type_does_not_exist_xyz")
 
 
+@pytest.mark.requires_plugins
 def test_pipeline_node_invalid_config_raises_value_error():
     """Req 5.2 — PipelineNode with invalid config raises ValueError."""
     with pytest.raises(ValueError, match="Invalid config"):
@@ -21,12 +22,14 @@ def test_pipeline_node_invalid_config_raises_value_error():
         PipelineNode("audio_conditioner", {"target_sample_rate": "not_an_int"})
 
 
+@pytest.mark.requires_plugins
 def test_pipeline_node_valid_type_and_config_constructs():
     """PipelineNode with valid type and default config constructs without error."""
     node = PipelineNode("audio_conditioner", {})
     assert node.node_type == "audio_conditioner"
 
 
+@pytest.mark.requires_plugins
 def test_pipeline_node_valid_config_with_fields():
     """PipelineNode with valid explicit config constructs without error."""
     node = PipelineNode("audio_conditioner", {"target_sample_rate": 8000, "mono": False})
@@ -106,6 +109,7 @@ def test_artifact_collection_lineage_returns_dict(collection: ArtifactCollection
 
 # ── Pipeline.subscribe ────────────────────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_pipeline_subscribe_returns_callable():
     """Req 5.11 — subscribe() returns an unsubscribe callable."""
     node = PipelineNode("audio_conditioner", {})
@@ -114,6 +118,7 @@ def test_pipeline_subscribe_returns_callable():
     assert callable(unsubscribe)
 
 
+@pytest.mark.requires_plugins
 def test_pipeline_subscribe_unsubscribe_removes_callback():
     """Req 5.11 — calling the unsubscribe callable removes the callback."""
     node = PipelineNode("audio_conditioner", {})
@@ -125,6 +130,7 @@ def test_pipeline_subscribe_unsubscribe_removes_callback():
     assert len(pipeline._subscribers) == 0
 
 
+@pytest.mark.requires_plugins
 def test_pipeline_subscribe_multiple_callbacks():
     """Multiple callbacks can be subscribed independently."""
     node = PipelineNode("audio_conditioner", {})
@@ -140,6 +146,7 @@ def test_pipeline_subscribe_multiple_callbacks():
     assert len(pipeline._subscribers) == 0
 
 
+@pytest.mark.requires_plugins
 def test_pipeline_explicit_edge_negative_index_raises():
     """Negative edge indices must not silently wrap (P3-24)."""
     nodes = [PipelineNode("audio_conditioner", {}), PipelineNode("audio_conditioner", {})]
@@ -147,6 +154,7 @@ def test_pipeline_explicit_edge_negative_index_raises():
         Pipeline(nodes, edges=[(-1, "output", 1, "input")])
 
 
+@pytest.mark.requires_plugins
 def test_pipeline_to_yaml_config_preserves_edges(tmp_path):
     """Branched IR must round-trip edges in YAML config (P3-20)."""
     n0 = PipelineNode("audio_conditioner", {})
@@ -158,6 +166,7 @@ def test_pipeline_to_yaml_config_preserves_edges(tmp_path):
     assert "edges:" in text
 
 
+@pytest.mark.requires_plugins
 def test_pipeline_subscribe_unsubscribe_is_idempotent():
     """Calling unsubscribe twice does not raise."""
     node = PipelineNode("audio_conditioner", {})

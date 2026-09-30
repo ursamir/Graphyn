@@ -115,7 +115,7 @@ From `NodeMetadata`: `requires_gpu`, `supports_cpu`, `supports_edge`, `determini
 ### 2.6 Secret / credential pattern
 
 - Store: `GRAPHYN_HOME/secrets` via `graphyn secrets set NAME` / API `/api/v1/secrets` (names only on list).
-- Resolve: `app.core.secrets.resolve_secret(name)` → store then process env.
+- Resolve: `app.core.trust.secrets.resolve_secret(name)` → store then process env.
 - Node configs take **secret names** (e.g. `api_secret_name`, `auth_env`) — **never** hardcoded API keys.
 - Exemplars: `structured_llm`, `asr_transcribe`, `http_request.auth_env`, `speaker_separator` HF token.
 - vs n8n: n8n separates Credentials vs Parameters vs Execute; Graphyn keeps **typed ports + Config** and references Graphyn secrets for credentials.
@@ -202,7 +202,7 @@ Concrete, implementable change list (do not break FaceRecognition or audio DS-CN
 
 - Keep `architecture ∈ {ds_cnn, mobilenet, simple_cnn}` and Keras audio path **unchanged** as defaults.
 - **Design choice:** primary YOLO/TinyML train lives in **new packs** (`Vision/yolo_train`, `TinyML/mcu_train`); `trainer` does not pull `ultralytics` into its isolated venv by default.
-- Optional later: adapter hook `framework: keras|pytorch|ultralytics` only if a single Common graph must stay — not Wave 1 default.
+- Optional later: adapter hook `framework: keras|pytorch|ultralytics` only if a single Common graph must stay — not the default.
 
 ### 4.2 `edge_optimizer` / `deployment_packager`
 
@@ -856,7 +856,7 @@ Each entry: ID, `node_type`, pack path, category, purpose, status, ports, config
 - **Outputs:** `output: EmailReceipt`
 - **Config:** `to:str=`, `subject:str=Graphyn notification`, `body_template:str=`, `from_addr:str=`, `dry_run:bool=false`
 - **Runtime deps:** stdlib; `GRAPHYN_SMTP_*` env (`GRAPHYN_SMTP_DRY_RUN=1` skips dial)
-- **Notes:** Uses `app.core.smtp_notify.send_email`. Live send needs `GRAPHYN_SMTP_HOST` + From.
+- **Notes:** Uses `app.core.notify.smtp_notify.send_email`. Live send needs `GRAPHYN_SMTP_HOST` + From.
 
 
 #### N050 — `mcu_dataset_ingest` (Proposed)
@@ -2156,7 +2156,7 @@ Each entry: ID, `node_type`, pack path, category, purpose, status, ports, config
 
 | Wave | Scope |
 |---|---|
-| **Wave 1** | Interface alterations (§4); RAG pack; Vision YOLO train/val/predict/export |
+| **First delivery** | Interface alterations (§4); RAG pack; Vision YOLO train/val/predict/export |
 | **Wave 2** | TinyML TFLM/CMSIS path; ExecuTorch `.pte`; Vela needs-tool |
 | **Wave 3** | Video pack fill; Agents; WakeWord `plugin.toml` promotion |
 | **Wave 4** | Device flash/OTA + on-device metrics when Devices APIs exist; keep `dry_run` / needs-API until then |
@@ -2210,7 +2210,7 @@ Declare in owning plugin `types.py` (list before `nodes.py` in `entry_points`):
 - **ExecuTorch / TOSA:** `.pte` export; Arm TOSA backend path.
 - **YOLO:** Ultralytics train/val/predict/export (`onnx`, `engine`, `coreml`, `openvino`, `tflite`, `ncnn`, `rknn`); `imgsz` / `half` / `int8` / `nms=True`.
 - **RAG:** ingest→chunk→embed→store; query→retrieve→(hybrid/BM25)→rerank→prompt→generate→eval; LlamaIndex/LangChain patterns on Graphyn typed ports.
-- **Ship:** `app/api/routers/ship.py` + `app.core.ship_packages` status machine.
+- **Ship:** `app/api/routers/ship.py` + `app.core.mlops.ship_packages` status machine.
 
 ---
 

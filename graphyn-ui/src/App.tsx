@@ -23,7 +23,7 @@ import {
   Shield,
 } from 'lucide-react'
 import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
-import { unwrapList } from './api/unwrapList'
+import { fetchAllPages } from './api/unwrapList'
 import { useAppStore, type AppView } from './store/appStore'
 import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
@@ -54,6 +54,7 @@ import { paths } from './routes/paths'
 import { pathForView } from './routes/viewMap'
 import { navigatePath, parsePathname, panelToFocus, stripLegacyAppHash } from './routes/parsePath'
 import { JUMP_KEYS } from './routes/nav'
+import { usePolling } from './lib/usePolling'
 
 type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }
 type NavGroup = { title: string; items: NavItem[] }
@@ -429,7 +430,10 @@ export default function App() {
 
   const refreshCatalog = React.useCallback(async () => {
     try {
-      const nodes = unwrapList<NodeCatalogEntry>(await apiJson('/nodes'))
+      // GET /nodes defaults to limit=50; page through so Editor shows the full registry.
+      const nodes = await fetchAllPages<NodeCatalogEntry>((offset, limit) =>
+        apiJson('/nodes', { query: { limit, offset } }),
+      )
       setCatalog(nodes)
       setBootError(null, null)
     } catch (err) {
@@ -463,25 +467,20 @@ export default function App() {
     void refreshCatalog()
   }, [refreshCatalog, setRefreshCatalog])
 
-  React.useEffect(() => {
-    let cancelled = false
-    const loadPending = async () => {
+  // Pending-proposal badge. usePolling skips overlapping ticks and pauses
+  // while the tab is hidden; resetKey re-runs it after boot status changes.
+  usePolling(
+    async () => {
       try {
         const data = await apiJson<{ proposals: unknown[] }>('/proposals?status=pending')
-        if (!cancelled) {
-          setPendingProposalCount(Array.isArray(data?.proposals) ? data.proposals.length : 0)
-        }
+        setPendingProposalCount(Array.isArray(data?.proposals) ? data.proposals.length : 0)
       } catch {
         /* quiet — badge is optional */
       }
-    }
-    void loadPending()
-    const t = window.setInterval(() => void loadPending(), 60000)
-    return () => {
-      cancelled = true
-      window.clearInterval(t)
-    }
-  }, [setPendingProposalCount, bootStatus])
+    },
+    60_000,
+    { resetKey: bootStatus },
+  )
 
   /** Path ↔ store sync (HTML5 History). */
   React.useEffect(() => {

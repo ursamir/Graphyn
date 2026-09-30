@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.core.node_executor import NodeExecutor
+from app.core.execution.node_executor import NodeExecutor
 from app.core.nodes.retry import RetryPolicy
 
 

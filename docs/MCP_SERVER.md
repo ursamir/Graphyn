@@ -25,7 +25,7 @@ python -m app.mcp.server
 
 ```
 app/mcp/
-├── server.py          # startup, stdio loop, tool dispatch
+├── server.py          # startup, stdio loop, tool dispatch, get_tool()
 ├── auth.py            # check_auth() — Bearer token middleware
 ├── tool_registry.py   # register_all_tools() — ~77 tools
 ├── handlers/
@@ -39,7 +39,9 @@ app/mcp/
     ├── optimization.py # optimize_execution
     ├── plugins.py      # install_plugin, list_plugins, manage_plugin
     ├── credentials.py  # list/create/get/update/revoke_credential
-    └── proposals.py    # propose_graph, list/get/accept/reject_proposal
+    ├── proposals.py    # propose_graph, list/get/accept/reject_proposal
+    └── journey/        # pipelines, runs, templates, models, schedules,
+                        #   readiness, catalog, notifications (one file each)
 ```
 
 ---
@@ -52,7 +54,7 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 
 ## Tool inventory (see MCP_AGENT_PACK_COVERAGE for full list)
 
-> Historical “29 tools” table below is **partial** — journey/ship/audit/credentials/notifications tools were added later. Count tools via `rg 'register\("' app/mcp/tool_registry.py | wc -l`.
+> **77 tools** are registered by default (78 `register("` calls in `app/mcp/tool_registry.py`; `accept_proposal` is registered only when `GRAPHYN_MCP_HUMAN_APPROVAL=1`). The historical “29 tools” table below is **partial** — journey/ship/audit/credentials/notifications tools were added later; full list in [MCP_AGENT_PACK_COVERAGE.md](./MCP_AGENT_PACK_COVERAGE.md).
 
 ### Core tools (original set)
 
@@ -95,7 +97,7 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 
 ## Intentional omissions
 
-Schedules, worker pool management, and document ingest are **REST-only** (see `API_REFERENCE.md`). They are not exposed as MCP tools — agents should call the HTTP API for those surfaces.
+Schedules (`list_schedules`, `upsert_schedule`, `enable_schedule`, `delete_schedule`, `run_schedule_now`) and worker/job observe (`list_workers`, `list_jobs`) are MCP tools as well as REST. Document ingest remains REST-oriented; see `API_REFERENCE.md` for the HTTP routes.
 
 ---
 
@@ -171,9 +173,11 @@ Returns the schema for all NDJSON event types emitted during execution. No argum
 
 Execute a pipeline. Returns `run_id` within 500ms; execution proceeds asynchronously in a background thread. If the background thread raises an unhandled exception, the run is marked failed in `meta.json`.
 
-**Arguments:** `graph` (required), `use_cache` (default `true`), `streaming` (default `false`).
+Before execution the graph goes through the same shared preparation as REST `/pipelines/run*`, the SDK and the CLI (`app/core/execution/graph_prepare.py`): workspace path rewire (`examples/**/data` → `workspace/datasets/input/<slug>/…`, outputs → `workspace/artifacts/<slug>/…`), project / version_tag stamping, inline-secret refusal, and deep validation (VAL-003 — error findings refuse the run). A `run.start` audit event is recorded (`actor` argument, default `mcp`).
 
-**Returns:** `{"run_id": "...", "status": "started"}` or `{"valid": false, "errors": [...]}`
+**Arguments:** `graph` (required), `use_cache` (default `true`), `streaming` (default `false`), optional `project`, `version_tag`, `actor`.
+
+**Returns:** `{"run_id": "...", "status": "pending", "accepted": true}` (same `pending` vocabulary as REST `run-async`; `accepted` replaces the legacy `status: "started"` ack) or `{"valid": false, "errors": [...], "error": true, "error_type": "ir_validation_error"}` / `{"error_type": "inline_secret_error"}`
 
 ---
 
@@ -314,11 +318,21 @@ optional `actor`; `reject_proposal` also accepts `reason`.
 
 ## Error Contract
 
-All handlers return structured JSON — never raw exceptions.
+All handlers return structured JSON — never raw exceptions. Every failure is
+returned as a `CallToolResult` with **`isError: true`**: auth failures,
+unknown tools, handler exceptions (`{"error": true, "error_type": "<ExceptionClass>", "message": …}`),
+and handler `{"error": true, …}` envelopes. Successful results carry
+`isError: false`. The server log line is `outcome=success|error|exception|unauthorized|unknown_tool`.
+
+`list_runs` uses the shared run lister (`app/core/runs/run_listing.py`) — same
+order as REST `GET /runs` and `graphyn runs list` (`created_at` desc,
+`run_id` tiebreak), project filter with graph.json inference, and the
+PERS-020 store guard (`error_type: store_corrupt`).
 
 | `error_type` | Trigger |
 |---|---|
 | `unknown_tool` | Unregistered tool |
+| `store_corrupt` | PERS-020 readiness reports a corrupt critical index (`list_runs`) |
 | `unauthorized` | Bad/missing auth token |
 | `unknown_node_type` | Node not in registry |
 | `invalid_filter_key` | Unknown capability key |

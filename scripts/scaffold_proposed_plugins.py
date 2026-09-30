@@ -768,7 +768,7 @@ def render_nodes_py(
         f'"""{cls} — {purpose}',
         "",
         "Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.",
-        "Default config.stub=True returns typed minimal outputs without heavy deps.",
+        "Default config.stub=False runs the real implementation; stub=True returns placeholders.",
         '"""',
         "from __future__ import annotations",
         "",
@@ -866,8 +866,8 @@ def render_nodes_py(
     # Config
     lines.append("    class Config(NodeConfig):")
     lines.append(
-        '        stub: bool = Field(default=True, title="Stub mode", '
-        'description="When true, return typed minimal outputs without heavy ML deps.")'
+        '        stub: bool = Field(default=False, title="Stub mode", '
+        'description="Opt-in placeholder. Default runs the real implementation.")'
     )
     for f in config_fields:
         if f["name"] == "stub":
@@ -956,34 +956,10 @@ def render_nodes_py(
         )
         lines.append("")
         lines.append("    def _process_real(self, inputs: dict):")
-        lines.append('        """Override point for richer backends; default = stub path."""')
-        lines.append("        # Keep default identical to stub so unit tests stay offline.")
-        lines.append("        prev = self.config.stub")
-        lines.append("        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None")
-        lines.append("        try:")
-        lines.append("            self.config.stub = True  # type: ignore[misc]")
-        lines.append("        except Exception:")
-        lines.append("            pass")
-        lines.append("        try:")
-        lines.append("            # Re-enter stub branch")
-        lines.append("            out_dir = Path('workspace/artifacts') / '" + pack_name.lower() + f"' / '{nt}'")
-        lines.append("            out_dir.mkdir(parents=True, exist_ok=True)")
-        lines.append("            _out = out_dir / 'stub'")
-        if len(out_ports) <= 1:
-            p = out_ports[0] if out_ports else {"name": "output", "raw_type": "Any"}
-            ret = stub_return_expr(p.get("raw_type", "Any"), all_local)
-            lines.append(f"            return {{\"{p['name']}\": {ret}}}")
-        else:
-            lines.append("            return {")
-            for p in out_ports:
-                ret = stub_return_expr(p.get("raw_type", "Any"), all_local)
-                lines.append(f'                "{p["name"]}": {ret},')
-            lines.append("            }")
-        lines.append("        finally:")
-        lines.append("            try:")
-        lines.append("                self.config.stub = prev  # type: ignore[misc]")
-        lines.append("            except Exception:")
-        lines.append("                pass")
+        lines.append('        """Implement this node\'s real algorithm here."""')
+        lines.append(
+            f'        raise NotImplementedError("{nt}: real backend must be implemented in nodes.py")'
+        )
 
     lines.append("")
     return "\n".join(lines)

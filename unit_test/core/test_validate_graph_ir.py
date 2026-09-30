@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from app.core.ir.loader import load_ir
-from app.core.registry_runtime import get_registry
-from app.core.validation import validate_graph_ir
+from app.core.host.registry_runtime import get_registry
+from app.core.execution.validation import validate_graph_ir
 
 
 def test_validate_graph_ir_unknown_node():

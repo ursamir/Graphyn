@@ -1,9 +1,9 @@
-"""Unit tests for app/core/conditions.py — Req 19 criteria 1–6."""
+"""Unit tests for app/core/execution/conditions.py — Req 19 criteria 1–6."""
 from __future__ import annotations
 
 import pytest
 
-from app.core.conditions import ConditionEvaluationError, evaluate_condition
+from app.core.execution.conditions import ConditionEvaluationError, evaluate_condition
 
 
 # ── Passing / failing conditions ──────────────────────────────────────────────

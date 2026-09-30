@@ -3889,6 +3889,8 @@ Mode A empty Workers UI **shall not** present as error. Placement IR ignored wit
 | VAL-PLACE | Invalid placement (unknown mode, worker pin without id, min_vram negative) | error | |
 | VAL-CONFIG | Config fails node JSON Schema / Pydantic | error | field_errors |
 | VAL-COND | Condition expression fails AST whitelist / parse | error | |
+| VAL-CARDINALITY | >1 edge into a `cardinality="single"` input port | error (warning when branches look mutually exclusive: conditional edge / multi-port router upstream) | implemented `_validate_port_fan_in` |
+| VAL-UNCONNECTED-INPUT | Required input port has no incoming edge | warning | runtime `input_overrides` may feed it |
 | VAL-UNK-TYPE | `node_type` not in registry | error | |
 | VAL-SECRET | Secret-shaped non-empty values in config | error | fail closed |
 | VAL-MIGRATE | `schema_version` major unsupported | error | |

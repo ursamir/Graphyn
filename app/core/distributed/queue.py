@@ -4,14 +4,17 @@ Bounded Context:  BC5 — Execution Runtime
 Responsibility:   Thread-safe node-job queue with claim by worker eligibility,
                   lease TTL + reclaim, cancel signaling, and durable store.
 Owns:             JobQueue (enqueue, claim, complete, get, cancel, events,
-                  reclaim_expired_leases, renew_lease).
+                  reclaim_expired_leases, renew_lease, renew_leases_for_worker,
+                  release_jobs_for_worker, ack_result, active_blob_refs),
+                  terminal-history trim (finished_at / unread-result TTL).
 Public Surface:   JobQueue, get_job_queue(), _reset_job_queue() (tests),
                   DEFAULT_LEASE_TTL_S.
 Must NOT:         Import from app.domain, app.api, or orchestrator.
 Dependencies:     stdlib (threading, datetime, uuid), app.core.distributed.models,
                   app.core.distributed.placement (eligibility),
                   app.core.distributed.store (lazy; mutate_queue for CAS claim).
-Reason To Change: Lease/TTL reclaim, atomic cross-process claim, or cancel fan-out.
+Reason To Change: Lease/TTL reclaim, atomic cross-process claim, cancel fan-out,
+                  heartbeat renew scope, history retention, or cache read-through.
 """
 from __future__ import annotations
 
@@ -56,30 +59,136 @@ _TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 _MAX_PERSISTED_TERMINAL_JOBS = int(os.environ.get("GRAPHYN_JOB_HISTORY_MAX", "500") or "500")
 
 
-def _trim_terminal_jobs_snapshot(snap: dict[str, Any]) -> dict[str, Any]:
-    """Drop oldest terminal jobs when the persisted queue grows without bound (P3-18)."""
+def _job_result_ttl_s() -> float:
+    try:
+        return float(os.environ.get("GRAPHYN_JOB_RESULT_TTL_S", "3600") or "3600")
+    except ValueError:
+        return 3600.0
+
+
+def _max_events_per_job() -> int:
+    try:
+        return max(1, int(os.environ.get("GRAPHYN_JOB_EVENTS_MAX", "500") or "500"))
+    except ValueError:
+        return 500
+
+
+def _cap_events(bucket: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only the newest ``GRAPHYN_JOB_EVENTS_MAX`` events for a job."""
+    cap = _max_events_per_job()
+    if len(bucket) > cap:
+        return bucket[-cap:]
+    return bucket
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _as_aware(value)
+    try:
+        return _as_aware(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
+def _trim_terminal_jobs_snapshot(
+    snap: dict[str, Any],
+    *,
+    keep: frozenset[str] | set[str] = frozenset(),
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Drop the oldest terminal jobs when history exceeds GRAPHYN_JOB_HISTORY_MAX.
+
+    Ordering is by ``finished_at`` (fallback ``created_at``), never by job id.
+    Never trimmed:
+
+    * ids in ``keep`` (e.g. the job being completed right now);
+    * jobs whose result has not been consumed by the control plane yet
+      (``result_consumed_at`` unset) and finished less than
+      ``GRAPHYN_JOB_RESULT_TTL_S`` (default 3600s) ago.
+
+    History can therefore temporarily exceed the cap while unread results wait.
+    """
     jobs = dict(snap.get("jobs") or {})
     if not jobs:
         return snap
-    terminal_ids = sorted(
-        jid
+    results_in = snap.get("results") or {}
+    terminal = [
+        (jid, payload)
         for jid, payload in jobs.items()
-        if isinstance(payload, dict)
-        and payload.get("status") in _TERMINAL_JOB_STATUSES
-    )
-    excess = len(terminal_ids) - _MAX_PERSISTED_TERMINAL_JOBS
+        if isinstance(payload, dict) and payload.get("status") in _TERMINAL_JOB_STATUSES
+    ]
+    excess = len(terminal) - _MAX_PERSISTED_TERMINAL_JOBS
     if excess <= 0:
         return snap
-    drop = set(terminal_ids[:excess])
+    now = _as_aware(now) or _utcnow()
+    ttl = _job_result_ttl_s()
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    candidates: list[tuple[datetime, str]] = []
+    for jid, payload in terminal:
+        if jid in keep:
+            continue
+        finished = (
+            _parse_dt(payload.get("finished_at"))
+            or _parse_dt(payload.get("created_at"))
+            or epoch
+        )
+        consumed = payload.get("result_consumed_at") is not None
+        if (
+            jid in results_in
+            and not consumed
+            and (now - finished).total_seconds() < ttl
+        ):
+            continue  # unread result — keep until acked or TTL
+        candidates.append((finished, jid))
+    candidates.sort()
+    drop = {jid for _finished, jid in candidates[:excess]}
+    if not drop:
+        return snap
     for jid in drop:
         jobs.pop(jid, None)
-    results = dict(snap.get("results") or {})
+    results = dict(results_in)
     events = dict(snap.get("events") or {})
     for jid in drop:
         results.pop(jid, None)
         events.pop(jid, None)
     order = [j for j in (snap.get("order") or []) if j not in drop]
-    return {**snap, "jobs": jobs, "results": results, "events": events, "order": order}
+    return _keep_pause(snap, jobs=jobs, results=results, events=events, order=order)
+
+
+def _keep_pause(snap: dict[str, Any], **updates: Any) -> dict[str, Any]:
+    """Rebuild a queue snapshot without dropping ``paused_runs``."""
+    paused = snap.get("paused_runs")
+    out: dict[str, Any] = {
+        "jobs": snap.get("jobs") or {},
+        "order": list(snap.get("order") or []),
+        "results": snap.get("results") or {},
+        "events": snap.get("events") or {},
+        "paused_runs": list(paused) if isinstance(paused, list) else [],
+    }
+    out.update(updates)
+    return out
+
+
+def _paused_run_ids(snap_or_ids: Any) -> set[str]:
+    if isinstance(snap_or_ids, dict):
+        raw = snap_or_ids.get("paused_runs") or []
+    else:
+        raw = snap_or_ids or []
+    return {str(x) for x in raw if str(x).strip()}
+
+
+def _tombstone_rejected_outputs(result: JobResult, *, reason: str) -> None:
+    refs = [str(u) for u in (result.output_refs or {}).values() if u]
+    if not refs:
+        return
+    try:
+        from app.core.distributed.transfer import tombstone_blobs
+
+        tombstone_blobs(refs, reason=reason)
+    except Exception as exc:
+        log.warning("JobQueue: failed to tombstone rejected blobs: %s", exc)
 
 
 def _utcnow() -> datetime:
@@ -113,7 +222,11 @@ class JobQueue:
         self._results: dict[str, JobResult] = {}
         self._events: dict[str, list[dict[str, Any]]] = {}
         self._waiters: dict[str, threading.Event] = {}
+        self._paused_runs: set[str] = set()
         self._store = store
+        # Last store version token applied to the local cache (None = unknown).
+        self._seen_version: Any = None
+        self._warned_legacy_heartbeat: set[str] = set()
         if load_persisted and store is not None:
             self._hydrate_from_store()
 
@@ -172,12 +285,41 @@ class JobQueue:
         except Exception as exc:
             log.warning("JobQueue: persist failed: %s", exc)
 
+    def _reload_unlocked(self) -> None:
+        """Reload the local cache from the durable store (records version)."""
+        assert self._store is not None
+        try:
+            token = self._store.state_version("queue")
+        except Exception:
+            token = None
+        self._apply_queue_snapshot_unlocked(self._store.load_queue())
+        self._seen_version = token
+
+    def _refresh_if_stale_unlocked(self) -> None:
+        """Read-through for read-only accessors (multi-process control planes).
+
+        Disk/memory stores expose a cheap version token; the cache is reloaded
+        only when it changed. Redis (token ``None``) is always read-through.
+        """
+        if self._store is None:
+            return
+        try:
+            token = self._store.state_version("queue")
+        except Exception:
+            token = None
+        if token is not None and token == self._seen_version:
+            return
+        try:
+            self._reload_unlocked()
+        except Exception as exc:
+            log.warning("JobQueue: read-through refresh failed: %s", exc)
+
     def _durable_mutate(self, mutator):
         """Apply ``mutator(snap) -> (new_snap, result)`` under store lock; refresh."""
         assert self._store is not None
         result = self._store.mutate_queue(mutator)
         try:
-            self._apply_queue_snapshot_unlocked(self._store.load_queue())
+            self._reload_unlocked()
         except Exception as exc:
             log.warning("JobQueue: durable refresh failed: %s", exc)
         return result
@@ -213,12 +355,13 @@ class JobQueue:
                     if job_id not in order:
                         order.append(job_id)
                     events.setdefault(job_id, [])
-                    new_snap = {
-                        "jobs": jobs,
-                        "order": order,
-                        "results": dict(snap.get("results") or {}),
-                        "events": events,
-                    }
+                    new_snap = _keep_pause(
+                        snap,
+                        jobs=jobs,
+                        order=order,
+                        results=dict(snap.get("results") or {}),
+                        events=events,
+                    )
                     return new_snap, stored
 
                 stored = self._durable_mutate(mut)
@@ -246,17 +389,93 @@ class JobQueue:
 
     def get(self, job_id: str) -> NodeJob | None:
         with self._lock:
+            self._refresh_if_stale_unlocked()
             return self._jobs.get(job_id)
 
     def get_result(self, job_id: str) -> JobResult | None:
         with self._lock:
+            self._refresh_if_stale_unlocked()
             return self._results.get(job_id)
+
+    def ack_result(self, job_id: str) -> bool:
+        """Mark a job's result as consumed by the control plane.
+
+        Unconsumed results are protected from history trimming (until
+        ``GRAPHYN_JOB_RESULT_TTL_S``). Returns True when a marker was set.
+        """
+        with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    jobs = dict(snap.get("jobs") or {})
+                    payload = jobs.get(job_id)
+                    if not isinstance(payload, dict):
+                        return snap, False
+                    if payload.get("result_consumed_at") is not None:
+                        return snap, False
+                    if job_id not in (snap.get("results") or {}):
+                        return snap, False
+                    jobs[job_id] = {
+                        **payload,
+                        "result_consumed_at": _plain_jsonable(_utcnow()),
+                    }
+                    return _keep_pause(snap, jobs=jobs), True
+
+                return bool(self._durable_mutate(mut))
+            job = self._jobs.get(job_id)
+            if job is None or job.result_consumed_at is not None:
+                return False
+            self._jobs[job_id] = job.model_copy(
+                update={"result_consumed_at": _utcnow()}
+            )
+            return True
 
     def is_cancelled(self, job_id: str) -> bool:
         """True if the job is marked cancelled (control-plane signal)."""
         with self._lock:
+            self._refresh_if_stale_unlocked()
             job = self._jobs.get(job_id)
             return job is not None and job.status == "cancelled"
+
+    def set_run_paused(self, run_id: str, paused: bool) -> None:
+        """Hold or release claims for every job belonging to ``run_id``.
+
+        Already-running ``process()`` calls are not interrupted; workers must
+        poll :meth:`is_run_paused` before starting the next node and renew the
+        lease while they wait. Cancel remains the hard stop.
+        """
+        rid = str(run_id or "").strip()
+        if not rid:
+            return
+        with self._lock:
+            if self._store is not None:
+                def mut(snap: dict[str, Any]):
+                    held = _paused_run_ids(snap)
+                    if paused:
+                        held.add(rid)
+                    else:
+                        held.discard(rid)
+                    new_snap = _keep_pause(snap, paused_runs=sorted(held))
+                    return new_snap, None
+
+                self._durable_mutate(mut)
+                return
+            if paused:
+                self._paused_runs.add(rid)
+            else:
+                self._paused_runs.discard(rid)
+
+    def is_run_paused(self, run_id: str) -> bool:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return False
+        with self._lock:
+            if self._store is not None:
+                try:
+                    snap = self._store.load_queue()
+                except Exception:
+                    snap = {}
+                return rid in _paused_run_ids(snap)
+            return rid in self._paused_runs
 
     def has_active_jobs_for_run(self, run_id: str) -> bool:
         """True if any pending/claimed/running job belongs to ``run_id``."""
@@ -264,6 +483,7 @@ class JobQueue:
         if not rid:
             return False
         with self._lock:
+            self._refresh_if_stale_unlocked()
             for job in self._jobs.values():
                 if str(job.run_id or "") == rid and job.status in (
                     "pending",
@@ -273,6 +493,28 @@ class JobQueue:
                     return True
         return False
 
+
+    def active_blob_refs(
+        self, *, exclude_run_id: str | None = None
+    ) -> tuple[set[str], set[str]]:
+        """``(input_ref_uris, job_ids)`` of non-terminal jobs (blob GC guard).
+
+        Jobs of ``exclude_run_id`` are ignored (the run being cleaned up).
+        """
+        uris: set[str] = set()
+        job_ids: set[str] = set()
+        with self._lock:
+            self._refresh_if_stale_unlocked()
+            for jid, job in self._jobs.items():
+                if job.status in _TERMINAL_JOB_STATUSES:
+                    continue
+                if exclude_run_id is not None and str(job.run_id or "") == exclude_run_id:
+                    continue
+                job_ids.add(jid)
+                for ref in (job.input_refs or {}).values():
+                    if isinstance(ref, str):
+                        uris.add(ref)
+        return uris, job_ids
 
     def _sync_from_store_unlocked(self, *, job_id: str | None = None) -> None:
         """Merge durable store snapshot into in-memory state (cross-process).
@@ -363,6 +605,7 @@ class JobQueue:
                 jid: _plain_jsonable(r.model_dump(mode="python")) for jid, r in self._results.items()
             },
             "events": {jid: list(evs) for jid, evs in self._events.items()},
+            "paused_runs": sorted(self._paused_runs),
         }
 
     def _apply_queue_snapshot_unlocked(self, snap: dict[str, Any]) -> None:
@@ -392,6 +635,7 @@ class JobQueue:
         self._order = order
         self._results = new_results
         self._events = new_events
+        self._paused_runs = _paused_run_ids(snap)
         for jid in self._jobs:
             self._waiters.setdefault(jid, threading.Event())
             if jid in self._results:
@@ -454,6 +698,7 @@ class JobQueue:
                         "claimed_at": None,
                         "lease_expires_at": None,
                         "attempts": next_attempts,
+                        "finished_at": now,
                     }
                 )
                 jobs_raw[jid] = _plain_jsonable(failed.model_dump(mode="python"))
@@ -541,12 +786,13 @@ class JobQueue:
             )
         if not changed:
             return snap
-        return {
-            "jobs": jobs_raw,
-            "order": order,
-            "results": results_raw,
-            "events": dict(snap.get("events") or {}),
-        }
+        return _keep_pause(
+            snap,
+            jobs=jobs_raw,
+            order=order,
+            results=results_raw,
+            events=dict(snap.get("events") or {}),
+        )
 
     def _claim_in_snapshot(
         self, snap: dict[str, Any], worker: WorkerInfo
@@ -573,6 +819,8 @@ class JobQueue:
                 continue
             if job.status != "pending":
                 continue
+            if str(job.run_id or "") in _paused_run_ids(snap):
+                continue
             if not _plugins_allow(worker, job.node_type):
                 continue
             if not worker_eligible_for_job(worker, job):
@@ -589,12 +837,13 @@ class JobQueue:
             )
             jobs_raw[job_id] = _plain_jsonable(claimed.model_dump(mode="python"))
             order = [jid for jid in order if jid != job_id]
-            new_snap = {
-                "jobs": jobs_raw,
-                "order": order,
-                "results": dict(snap.get("results") or {}),
-                "events": dict(snap.get("events") or {}),
-            }
+            new_snap = _keep_pause(
+                snap,
+                jobs=jobs_raw,
+                order=order,
+                results=dict(snap.get("results") or {}),
+                events=dict(snap.get("events") or {}),
+            )
             return new_snap, claimed
         return snap, None
 
@@ -618,7 +867,7 @@ class JobQueue:
                 )
                 # Refresh local cache from durable truth after CAS.
                 try:
-                    self._apply_queue_snapshot_unlocked(self._store.load_queue())
+                    self._reload_unlocked()
                 except Exception as exc:
                     log.warning("JobQueue: post-claim refresh failed: %s", exc)
                     if claimed is not None:
@@ -631,6 +880,8 @@ class JobQueue:
             for job_id in list(self._order):
                 job = self._jobs.get(job_id)
                 if job is None or job.status != "pending":
+                    continue
+                if str(job.run_id or "") in self._paused_runs:
                     continue
                 # Hard refuse: advertised plugins must include node_type.
                 if not _plugins_allow(worker, job.node_type):
@@ -703,8 +954,32 @@ class JobQueue:
             self._persist_unlocked()
             return updated
 
-    def renew_leases_for_worker(self, worker_id: str) -> int:
-        """Renew leases for all non-terminal jobs claimed by ``worker_id``."""
+    def renew_leases_for_worker(
+        self,
+        worker_id: str,
+        active_job_ids: "list[str] | tuple[str, ...] | set[str] | None" = None,
+    ) -> int:
+        """Renew leases for jobs claimed by ``worker_id``.
+
+        When ``active_job_ids`` is given (heartbeat protocol v2), only those
+        jobs are renewed — a job the worker no longer reports (e.g. it
+        restarted and lost it) is left to expire and be reclaimed. ``None``
+        keeps the legacy "renew every claimed job" behaviour (deprecated).
+        """
+        wanted: set[str] | None = (
+            None if active_job_ids is None else {str(j) for j in active_job_ids}
+        )
+        if wanted is None and worker_id not in self._warned_legacy_heartbeat:
+            self._warned_legacy_heartbeat.add(worker_id)
+            log.warning(
+                "JobQueue: heartbeat from worker %s without active_job_ids — "
+                "renewing every job it claimed (deprecated; upgrade the worker)",
+                worker_id,
+            )
+
+        def _wanted(jid: str) -> bool:
+            return wanted is None or jid in wanted
+
         with self._lock:
             if self._store is not None:
                 def mut(snap: dict[str, Any]):
@@ -712,6 +987,8 @@ class JobQueue:
                     count = 0
                     expiry = _utcnow() + timedelta(seconds=self._lease_ttl_s)
                     for jid, payload in list(jobs.items()):
+                        if not _wanted(jid):
+                            continue
                         try:
                             job = NodeJob.model_validate(payload)
                         except Exception as exc:
@@ -740,6 +1017,8 @@ class JobQueue:
             now = _utcnow()
             expiry = now + timedelta(seconds=self._lease_ttl_s)
             for jid, job in list(self._jobs.items()):
+                if not _wanted(jid):
+                    continue
                 if job.claimed_by != worker_id:
                     continue
                 if job.status not in ("claimed", "running"):
@@ -749,6 +1028,125 @@ class JobQueue:
             if count:
                 self._persist_unlocked()
             return count
+
+    @staticmethod
+    def _release_worker_in_snapshot(
+        snap: dict[str, Any],
+        worker_id: str,
+        keep: set[str],
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Requeue (bump generation) jobs claimed by ``worker_id`` not in ``keep``."""
+        jobs_raw = dict(snap.get("jobs") or {})
+        order = list(snap.get("order") or [])
+        results_raw = dict(snap.get("results") or {})
+        released: list[str] = []
+        now = _utcnow()
+        for jid, payload in list(jobs_raw.items()):
+            if jid in keep:
+                continue
+            try:
+                job = NodeJob.model_validate(payload)
+            except Exception:
+                continue
+            if job.claimed_by != worker_id or job.status not in ("claimed", "running"):
+                continue
+            next_attempts = int(job.attempts or 0) + 1
+            max_attempts = int(job.max_attempts or 5)
+            if next_attempts > max_attempts:
+                failed = job.model_copy(
+                    update={
+                        "status": "failed",
+                        "claimed_by": None,
+                        "claimed_at": None,
+                        "lease_expires_at": None,
+                        "attempts": next_attempts,
+                        "lease_generation": int(job.lease_generation or 0) + 1,
+                        "finished_at": now,
+                    }
+                )
+                jobs_raw[jid] = _plain_jsonable(failed.model_dump(mode="python"))
+                order = [j for j in order if j != jid]
+                results_raw[jid] = _plain_jsonable(JobResult(
+                    job_id=jid,
+                    status="failed",
+                    error=(
+                        f"exceeded max_attempts ({max_attempts}) after worker "
+                        f"{worker_id} re-registered"
+                    ),
+                    worker_id=worker_id,
+                ).model_dump(mode="python"))
+                released.append(jid)
+                continue
+            update: dict[str, Any] = {
+                "status": "pending",
+                "claimed_by": None,
+                "claimed_at": None,
+                "lease_expires_at": None,
+                "lease_generation": int(job.lease_generation or 0) + 1,
+                "attempts": next_attempts,
+            }
+            widened = widen_placement_after_reclaim(
+                job.placement,
+                tags=list(job.tags or []),
+                require_gpu=bool(job.require_gpu),
+                min_vram_mib=job.min_vram_mib,
+                pool=job.pool,
+            )
+            if widened is not job.placement:
+                update["placement"] = widened
+            jobs_raw[jid] = _plain_jsonable(
+                job.model_copy(update=update).model_dump(mode="python")
+            )
+            if jid not in order:
+                order.append(jid)
+            released.append(jid)
+        if not released:
+            return snap, []
+        return (
+            _keep_pause(snap, jobs=jobs_raw, order=order, results=results_raw),
+            released,
+        )
+
+    def release_jobs_for_worker(
+        self,
+        worker_id: str,
+        *,
+        keep_job_ids: "list[str] | tuple[str, ...] | set[str] | None" = None,
+    ) -> list[str]:
+        """Requeue every job claimed by ``worker_id`` (new worker instance).
+
+        Called when a worker (re-)registers: a restarted process with the same
+        id cannot still be running the old claims, so they are requeued with
+        a bumped ``lease_generation`` (fencing any late complete from the dead
+        instance). ``keep_job_ids`` lists jobs the registering instance is
+        still actively running (re-register after a control-plane 404).
+        Returns released job ids.
+        """
+        keep = {str(j) for j in (keep_job_ids or [])}
+        with self._lock:
+            if self._store is not None:
+                released = self._durable_mutate(
+                    lambda snap: self._release_worker_in_snapshot(snap, worker_id, keep)
+                )
+            else:
+                snap = self._queue_snapshot_unlocked()
+                new_snap, released = self._release_worker_in_snapshot(
+                    snap, worker_id, keep
+                )
+                if released:
+                    self._apply_queue_snapshot_unlocked(new_snap)
+            for jid in released:
+                job = self._jobs.get(jid)
+                if job is not None and job.status == "failed":
+                    self._waiters.setdefault(jid, threading.Event()).set()
+            if released:
+                log.info(
+                    "JobQueue: worker %s re-registered — released %s stale claim(s): %s",
+                    worker_id,
+                    len(released),
+                    released,
+                )
+            return list(released or [])
 
     def reclaim_expired_leases(self, *, now: datetime | None = None) -> list[str]:
         """Requeue claimed/running jobs whose lease has expired. Returns job ids.
@@ -927,13 +1325,24 @@ class JobQueue:
                         result.lease_generation is None
                         or int(result.lease_generation) != expected_gen
                     ):
+                        _tombstone_rejected_outputs(
+                            result,
+                            reason=(
+                                f"lease_generation mismatch job={result.job_id} "
+                                f"result={result.lease_generation!r} expected={expected_gen}"
+                            ),
+                        )
                         raise ValueError(
                             f"Job {result.job_id} lease_generation mismatch: "
                             f"result={result.lease_generation!r} expected={expected_gen}"
                         )
                     status: JobStatus = result.status  # type: ignore[assignment]
                     updated = job.model_copy(
-                        update={"status": status, "lease_expires_at": None}
+                        update={
+                            "status": status,
+                            "lease_expires_at": None,
+                            "finished_at": _utcnow(),
+                        }
                     )
                     jobs[result.job_id] = _plain_jsonable(updated.model_dump(mode="python"))
                     results = dict(snap.get("results") or {})
@@ -945,15 +1354,21 @@ class JobQueue:
                     if result.events:
                         bucket = list(evmap.get(result.job_id) or [])
                         bucket.extend(result.events)
-                        evmap[result.job_id] = bucket
+                        evmap[result.job_id] = _cap_events(bucket)
                     order = [j for j in (snap.get("order") or []) if j != result.job_id]
-                    new_snap = {
-                        "jobs": jobs,
-                        "order": order,
-                        "results": results,
-                        "events": evmap,
-                    }
-                    return _trim_terminal_jobs_snapshot(new_snap), updated
+                    new_snap = _keep_pause(
+                        snap,
+                        jobs=jobs,
+                        order=order,
+                        results=results,
+                        events=evmap,
+                    )
+                    return (
+                        _trim_terminal_jobs_snapshot(
+                            new_snap, keep=frozenset({result.job_id})
+                        ),
+                        updated,
+                    )
 
                 updated = self._durable_mutate(mut)
                 evt = self._waiters.get(result.job_id)
@@ -982,18 +1397,31 @@ class JobQueue:
                 )
             expected_gen = int(job.lease_generation or 0)
             if result.lease_generation is None or int(result.lease_generation) != expected_gen:
+                _tombstone_rejected_outputs(
+                    result,
+                    reason=(
+                        f"lease_generation mismatch job={result.job_id} "
+                        f"result={result.lease_generation!r} expected={expected_gen}"
+                    ),
+                )
                 raise ValueError(
                     f"Job {result.job_id} lease_generation mismatch: "
                     f"result={result.lease_generation!r} expected={expected_gen}"
                 )
             status: JobStatus = result.status  # type: ignore[assignment]
             updated = job.model_copy(
-                update={"status": status, "lease_expires_at": None}
+                update={
+                    "status": status,
+                    "lease_expires_at": None,
+                    "finished_at": _utcnow(),
+                }
             )
             self._jobs[result.job_id] = updated
             self._results[result.job_id] = result
             if result.events:
-                self._events.setdefault(result.job_id, []).extend(result.events)
+                bucket = self._events.setdefault(result.job_id, [])
+                bucket.extend(result.events)
+                self._events[result.job_id] = _cap_events(bucket)
             evt = self._waiters.get(result.job_id)
             if evt is not None:
                 evt.set()
@@ -1016,7 +1444,11 @@ class JobQueue:
                     if job.status in ("succeeded", "failed", "cancelled"):
                         return snap, job
                     updated = job.model_copy(
-                        update={"status": "cancelled", "lease_expires_at": None}
+                        update={
+                            "status": "cancelled",
+                            "lease_expires_at": None,
+                            "finished_at": _utcnow(),
+                        }
                     )
                     jobs[job_id] = _plain_jsonable(updated.model_dump(mode="python"))
                     order = [j for j in (snap.get("order") or []) if j != job_id]
@@ -1027,13 +1459,17 @@ class JobQueue:
                         error="cancelled by control plane",
                         worker_id=job.claimed_by,
                     ).model_dump(mode="python"))
-                    new_snap = {
-                        "jobs": jobs,
-                        "order": order,
-                        "results": results,
-                        "events": dict(snap.get("events") or {}),
-                    }
-                    return new_snap, updated
+                    new_snap = _keep_pause(
+                        snap,
+                        jobs=jobs,
+                        order=order,
+                        results=results,
+                        events=dict(snap.get("events") or {}),
+                    )
+                    return (
+                        _trim_terminal_jobs_snapshot(new_snap, keep=frozenset({job_id})),
+                        updated,
+                    )
 
                 updated = self._durable_mutate(mut)
                 self._waiters.setdefault(job_id, threading.Event()).set()
@@ -1045,7 +1481,11 @@ class JobQueue:
             if job.status in ("succeeded", "failed", "cancelled"):
                 return job
             updated = job.model_copy(
-                update={"status": "cancelled", "lease_expires_at": None}
+                update={
+                    "status": "cancelled",
+                    "lease_expires_at": None,
+                    "finished_at": _utcnow(),
+                }
             )
             self._jobs[job_id] = updated
             if job_id in self._order:
@@ -1076,6 +1516,7 @@ class JobQueue:
                     }
                     bucket = list(evmap.get(job_id) or [])
                     bucket.extend(events)
+                    bucket = _cap_events(bucket)
                     evmap[job_id] = bucket
                     try:
                         job = NodeJob.model_validate(jobs[job_id])
@@ -1093,12 +1534,13 @@ class JobQueue:
                                 + timedelta(seconds=self._lease_ttl_s),
                             }
                         ).model_dump(mode="python"))
-                    new_snap = {
-                        "jobs": jobs,
-                        "order": list(snap.get("order") or []),
-                        "results": dict(snap.get("results") or {}),
-                        "events": evmap,
-                    }
+                    new_snap = _keep_pause(
+                        snap,
+                        jobs=jobs,
+                        order=list(snap.get("order") or []),
+                        results=dict(snap.get("results") or {}),
+                        events=evmap,
+                    )
                     return new_snap, len(bucket)
 
                 return self._durable_mutate(mut)
@@ -1107,6 +1549,8 @@ class JobQueue:
                 raise KeyError(job_id)
             bucket = self._events.setdefault(job_id, [])
             bucket.extend(events)
+            bucket = _cap_events(bucket)
+            self._events[job_id] = bucket
             # Events from the claiming worker also renew the lease.
             job = self._jobs.get(job_id)
             if job is not None and job.status in ("claimed", "running"):
@@ -1162,6 +1606,7 @@ class JobQueue:
 
     def pending_count(self) -> int:
         with self._lock:
+            self._refresh_if_stale_unlocked()
             return sum(1 for jid in self._order if self._jobs.get(jid) is not None)
 
     def clear(self) -> None:
@@ -1173,6 +1618,7 @@ class JobQueue:
                         "order": [],
                         "results": {},
                         "events": {},
+                        "paused_runs": [],
                     }, None
 
                 self._durable_mutate(mut)
@@ -1188,6 +1634,7 @@ class JobQueue:
             self._results.clear()
             self._events.clear()
             self._waiters.clear()
+            self._paused_runs.clear()
             self._persist_unlocked()
 
 
@@ -1241,3 +1688,6 @@ def _reset_job_queue(
             store=store, load_persisted=False, lease_ttl_s=lease_ttl_s
         )
         return _QUEUE
+
+# Public names. A leading underscore stays private to this module.
+reset_job_queue = _reset_job_queue

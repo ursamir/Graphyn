@@ -8,7 +8,7 @@ Owns:             IngestionJob model, _jobs store (in-process + Redis),
                   IngestionService (start_url_job, start_hf_job, get_job,
                   stream_job), background worker threads.
 Public Surface:   IngestionService, IngestionJob, SUPPORTED_EXTENSIONS
-Must NOT:         Import from app.core.nodes or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes or app.core.execution.orchestrator.
                   Must not register node types.
 Dependencies:     app.core.config (datasets_input_dir, redis_url),
                   stdlib (threading, time, uuid, pathlib, re),
@@ -260,7 +260,7 @@ class IngestionService:
         label_distribution: dict[str, int] = {}
 
         for url in urls:
-            from app.core.egress import HttpEgressError, validate_http_egress_url
+            from app.core.trust.egress import HttpEgressError, validate_http_egress_url
 
             try:
                 validate_http_egress_url(url)
@@ -313,8 +313,31 @@ class IngestionService:
             # 500 MB is a generous upper bound for a single audio file.
             _MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024  # 500 MB
             try:
-                with httpx.Client(follow_redirects=True, timeout=60.0) as client:
-                    with client.stream("GET", url) as response:
+                from urllib.parse import urljoin
+
+                current = url
+                with httpx.Client(follow_redirects=False, timeout=60.0) as client:
+                    response_cm = None
+                    for _hop in range(8):
+                        validate_http_egress_url(current)
+                        response_cm = client.stream("GET", current)
+                        response = response_cm.__enter__()
+                        if response.status_code in (301, 302, 303, 307, 308):
+                            location = response.headers.get("location")
+                            response_cm.__exit__(None, None, None)
+                            response_cm = None
+                            if not location:
+                                raise ValueError(
+                                    f"HTTP redirect from {current!r} missing Location"
+                                )
+                            current = urljoin(current, location)
+                            continue
+                        break
+                    else:
+                        if response_cm is not None:
+                            response_cm.__exit__(None, None, None)
+                        raise ValueError(f"Too many redirects while downloading {url!r}")
+                    try:
                         response.raise_for_status()
                         total_bytes = 0
                         size_exceeded = False
@@ -325,6 +348,9 @@ class IngestionService:
                                     size_exceeded = True
                                     break
                                 out_f.write(chunk)
+                    finally:
+                        if response_cm is not None:
+                            response_cm.__exit__(None, None, None)
                         # Unlink and raise outside the `with open` block so the
                         # file handle is fully closed before unlink (safe on all
                         # platforms, including Windows).

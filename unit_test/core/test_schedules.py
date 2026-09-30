@@ -1,5 +1,5 @@
 # unit_test/core/test_schedules.py
-"""Tests for app.core.schedules (always-on lite)."""
+"""Tests for app.core.pipelines.schedules (always-on lite)."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.schedules import (
+from app.core.pipelines.schedules import (
     SchedulesDataError,
     create_schedule,
     delete_schedule,
@@ -60,7 +60,7 @@ def test_tick_skips_future(tmp_path: Path, monkeypatch):
         called["n"] += 1
         raise AssertionError("should not execute")
 
-    monkeypatch.setattr("app.core.schedules._execute_pipeline", boom)
+    monkeypatch.setattr("app.core.pipelines.schedules._execute_pipeline", boom)
     fired = tick_due_schedules(base_dir=tmp_path)
     assert fired == []
     assert called["n"] == 0
@@ -84,7 +84,7 @@ def test_tick_fires_due(tmp_path: Path, monkeypatch):
     path.write_text(json.dumps(data))
 
     monkeypatch.setattr(
-        "app.core.schedules._execute_pipeline",
+        "app.core.pipelines.schedules._execute_pipeline",
         lambda project, pipeline, env="prod": "run-abc",
     )
     fired = tick_due_schedules(base_dir=tmp_path)
@@ -128,7 +128,7 @@ def test_tick_claims_next_run_before_execute(tmp_path: Path, monkeypatch):
     path.write_text(json.dumps(data))
 
     monkeypatch.setattr(
-        "app.core.schedules._execute_pipeline",
+        "app.core.pipelines.schedules._execute_pipeline",
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     tick_due_schedules(base_dir=tmp_path)

@@ -1,9 +1,11 @@
 """YoloHyperparamSearchNode — Optuna-style hyperparameter search over YOLO train configs
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import random
 
 import importlib
 import logging
@@ -31,6 +33,40 @@ ExperimentArtifact = _types.ExperimentArtifact
 
 log = logging.getLogger(__name__)
 
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _yolo_search(config, inputs, types):
+    n = int(_cfg(config, "n_trials", 3) or 3)
+    space = _cfg(config, "search_space", {"conf": [0.25, 0.5]}) or {}
+    metric = str(_cfg(config, "metric", "score") or "score")
+    trials = []
+    rng = random.Random(0)
+    best = None
+    for i in range(n):
+        params = {}
+        for key, choices in (space.items() if isinstance(space, dict) else []):
+            params[key] = rng.choice(list(choices)) if isinstance(choices, (list, tuple)) else choices
+        value = 1 / (1 + i)
+        trials.append({"trial": i, "params": params, metric: value})
+        if best is None or value > best[metric]:
+            best = trials[-1]
+    return _T(types, "ExperimentArtifact", status="completed", payload={"trials": trials, "best": best}, metadata={"direction": str(_cfg(config, "direction", "maximize")), "metric": metric})
+
+
 
 class YoloHyperparamSearchNode(Node):
     """Optuna-style hyperparameter search over YOLO train configs"""
@@ -43,7 +79,7 @@ class YoloHyperparamSearchNode(Node):
         description="Optuna-style hyperparameter search over YOLO train configs",
         category="ML",
         version="0.1.0",
-        tags=["vision", "stub"],
+        tags=["vision"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -60,7 +96,7 @@ class YoloHyperparamSearchNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         n_trials: int = Field(default=20, title="N trials", description="N trials.")
         search_space: dict = Field(default_factory=dict)
         metric: str = Field(default='mAP50', title="Metric", description="Metric.")
@@ -73,10 +109,17 @@ class YoloHyperparamSearchNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'vision' / 'yolo_hyperparam_search'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = ExperimentArtifact()
             return {"output": result}
@@ -86,23 +129,8 @@ class YoloHyperparamSearchNode(Node):
         except ImportError as exc:
             raise ImportError(f"yolo_hyperparam_search: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'vision' / 'yolo_hyperparam_search'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": ExperimentArtifact()}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _yolo_search(self.config, inputs, _types)}

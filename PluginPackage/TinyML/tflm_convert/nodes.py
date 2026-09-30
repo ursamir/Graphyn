@@ -1,6 +1,6 @@
 """TflmConvertNode — Convert→.tflite micro + CMSIS-NN metadata
 
-Default config.stub=True writes a placeholder DeploymentArtifact.
+Default config.stub=False runs conversion.
 When stub=False, converts SavedModel/Keras/.tflite via TensorFlow Lite.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ class TflmConvertNode(Node):
         description="Convert→.tflite micro + CMSIS-NN metadata",
         category="ML",
         version="0.2.0",
-        tags=["tinyml", "wave1"],
+        tags=["tinyml"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -52,7 +52,7 @@ class TflmConvertNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         cmsis_nn: bool = Field(default=True, title="Cmsis nn", description="Cmsis nn.")
         optimize_for: str = Field(default="cortex_m55", title="Optimize for", description="Optimize for.")
         output_path: str = Field(default="workspace/artifacts/optimized/tflite_micro", title="Output path", description="Output path.")
@@ -63,9 +63,12 @@ class TflmConvertNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, "stub", True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path(getattr(self.config, "output_path", None) or "workspace/artifacts/optimized/tflite_micro")
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         if stub:
             _out = out_dir / "stub"
             _out.mkdir(parents=True, exist_ok=True)
@@ -79,9 +82,10 @@ class TflmConvertNode(Node):
         try:
             return self._process_real(inputs, out_dir)
         except ImportError as exc:
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise ImportError(install_hint("tinyml", ["tensorflow>=2.13"])) from exc
+            raise ImportError(
+                "tensorflow is not installed in this plugin venv. "
+                "Use Plugins → Install optional (venv)."
+            ) from exc
 
     def _process_real(self, inputs: dict, out_dir: Path):
         import tensorflow as tf  # type: ignore

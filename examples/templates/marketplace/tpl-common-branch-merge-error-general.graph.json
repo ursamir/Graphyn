@@ -74,13 +74,13 @@
       "src_id": "n1",
       "src_port": "output",
       "dst_id": "n3",
-      "dst_port": "input_a"
+      "dst_port": "a"
     },
     {
       "src_id": "n2",
       "src_port": "output",
       "dst_id": "n3",
-      "dst_port": "input_b"
+      "dst_port": "b"
     },
     {
       "src_id": "n3",

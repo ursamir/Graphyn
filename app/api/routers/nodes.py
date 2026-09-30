@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.nodes.errors import NodeNotFoundError
-from app.core.registry_runtime import get_registry
+from app.core.host.registry_runtime import get_registry
 
 router = APIRouter(tags=["nodes"])
 

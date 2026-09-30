@@ -1,14 +1,16 @@
 """GuardrailFilterNode — PII/jailbreak/toxicity guardrails
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import re
 
 import importlib
 import logging
 from pathlib import Path
-from typing import ClassVar, Any
+from typing import ClassVar, Any, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
@@ -29,6 +31,118 @@ GuardrailHit = _types.GuardrailHit
 
 log = logging.getLogger(__name__)
 
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+
+DEFAULT_POLICIES = ("pii", "secret")
+VALID_ACTIONS = ("block", "redact", "flag")
+REDACTION = "[redacted]"
+
+# All rules are compiled with the SAME flags for detection and redaction.
+RULES: dict[str, re.Pattern[str]] = {
+    "pii": re.compile(
+        r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"          # email
+        r"|\b\d{3}-\d{2}-\d{4}\b",                       # US SSN
+        re.I,
+    ),
+    "secret": re.compile(
+        r"\bsk-[A-Za-z0-9_-]{12,}"                        # OpenAI/Anthropic-style keys
+        r"|\bAKIA[0-9A-Z]{16}\b"                          # AWS access key id
+        r"|\bgh[pousr]_[A-Za-z0-9]{20,}"                   # GitHub tokens
+        r"|\bxox[abpr]-[A-Za-z0-9-]{10,}"                  # Slack tokens
+        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
+        re.I,
+    ),
+    "profanity": re.compile(r"\b(damn|hell)\b", re.I),
+    "jailbreak": re.compile(
+        r"\bignore (?:all |any )?(?:previous|prior|above) (?:instructions|prompts)\b"
+        r"|\bdisregard (?:the |your )?(?:system|previous) (?:prompt|instructions)\b",
+        re.I,
+    ),
+}
+
+
+def _iter_strings(obj: Any):
+    """Yield every string reachable in *obj* (dicts, lists, tuples, models)."""
+    obj = _dump(obj)
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, bytes):
+        yield obj.decode("utf-8", errors="replace")
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str):
+                yield k
+            yield from _iter_strings(v)
+    elif isinstance(obj, (list, tuple, set)):
+        for item in obj:
+            yield from _iter_strings(item)
+
+
+def _redact(obj: Any, patterns: list[re.Pattern[str]]) -> Any:
+    """Return a copy of *obj* with every active pattern redacted, preserving structure."""
+    if hasattr(obj, "model_dump") and hasattr(type(obj), "model_validate"):
+        data = _redact(obj.model_dump(), patterns)
+        try:
+            return type(obj).model_validate(data)
+        except Exception:
+            return data
+    if isinstance(obj, str):
+        for pat in patterns:
+            obj = pat.sub(REDACTION, obj)
+        return obj
+    if isinstance(obj, bytes):
+        return _redact(obj.decode("utf-8", errors="replace"), patterns)
+    if isinstance(obj, dict):
+        return {(_redact(k, patterns) if isinstance(k, str) else k): _redact(v, patterns) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact(x, patterns) for x in obj]
+    if isinstance(obj, tuple):
+        return tuple(_redact(x, patterns) for x in obj)
+    return obj
+
+
+def _guardrail(config, inputs, types) -> dict:
+    payload = inputs.get("input")
+    policies = [str(p) for p in (config.policies or [])] or list(DEFAULT_POLICIES)
+    unknown = [p for p in policies if p not in RULES]
+    if unknown:
+        raise ValueError(f"guardrail_filter: unknown policies {unknown}; known: {sorted(RULES)}")
+    action = str(config.action or "")
+    if action not in VALID_ACTIONS:
+        log.warning("guardrail_filter: unknown action %r — failing closed (block)", action)
+        action = "block"
+
+    strings = list(_iter_strings(payload))
+    hits = []
+    active: list[re.Pattern[str]] = []
+    for policy in policies:
+        pat = RULES[policy]
+        count = sum(len(pat.findall(s)) for s in strings)
+        if count:
+            active.append(pat)
+            hits.append(_T(types, "GuardrailHit", rule=policy, severity=action, score=float(count)))
+
+    if hits and action == "block":
+        raise RuntimeError(
+            "guardrail_filter blocked input: " + ",".join(getattr(h, "rule", "rule") for h in hits)
+        )
+    output = _redact(payload, active) if hits and action == "redact" else payload
+    return {"output": output, "violations": hits}
+
+
 
 class GuardrailFilterNode(Node):
     """PII/jailbreak/toxicity guardrails"""
@@ -41,7 +155,7 @@ class GuardrailFilterNode(Node):
         description="PII/jailbreak/toxicity guardrails",
         category="Quality",
         version="0.1.0",
-        tags=["agents", "stub"],
+        tags=["agents"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -59,9 +173,17 @@ class GuardrailFilterNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
-        policies: list = Field(default_factory=list)
-        action: str = Field(default='block', title="Action", description="Action.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
+        policies: list = Field(
+            default_factory=lambda: list(DEFAULT_POLICIES),
+            title="Policies",
+            description="Rules to apply: pii, secret, profanity, jailbreak. Empty → pii+secret.",
+        )
+        action: Literal["block", "redact", "flag"] = Field(
+            default="block",
+            title="Action",
+            description="block (raise), redact (mask matches, keep structure) or flag (pass through + violations).",
+        )
 
     def process(self, inputs=None, **kwargs):
         """Stub-capable process — real backends optional."""
@@ -70,10 +192,17 @@ class GuardrailFilterNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'agents' / 'guardrail_filter'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = {
                 "output": None,
@@ -86,26 +215,8 @@ class GuardrailFilterNode(Node):
         except ImportError as exc:
             raise ImportError(f"guardrail_filter: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'agents' / 'guardrail_filter'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {
-                "output": None,
-                "violations": [],
-            }
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return _guardrail(self.config, inputs, _types)

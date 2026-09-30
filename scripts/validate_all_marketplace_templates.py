@@ -17,13 +17,13 @@ sys.path.insert(0, str(REPO))
 def main() -> int:
     from app.core.ir.loader import load_ir
     from app.core.nodes.registry import NodeRegistry
-    from app.core.pipeline_template_materializer import (
+    from app.core.templates.pipeline_template_materializer import (
         load_marketplace_catalog,
         materialize_template_entry,
     )
     from app.core.plugins.manager import PluginManager
     from app.core.plugins.venv_manager import PluginVenvManager
-    from app.core.validation import validate_graph_ir
+    from app.core.execution.validation import validate_graph_ir
 
     plugins_root = Path(os.environ.get("GRAPHYN_PLUGINS_DIR") or (REPO / "PluginPackage"))
     reg = NodeRegistry()
@@ -53,7 +53,7 @@ def main() -> int:
     for entry in templates:
         tid = entry.get("id")
         try:
-            graph_dict = materialize_template_entry(entry)
+            graph_dict = materialize_template_entry(entry, registry=reg)
             graph = load_ir(graph_dict)
             errors = validate_graph_ir(graph, reg)
             if errors:

@@ -5,7 +5,7 @@ Responsibility:   Domain-agnostic base type for pipeline data samples.
                   Subclass for new domains (TextSample, ImageSample, etc.).
 Owns:             DataSample Pydantic model — id, source, metadata dict.
 Public Surface:   DataSample
-Must NOT:         Import from app.core.nodes.registry or app.core.orchestrator.
+Must NOT:         Import from app.core.nodes.registry or app.core.execution.orchestrator.
                   Must not contain pipeline execution logic.
 Dependencies:     pydantic (PortDataType base), stdlib (typing).
 Reason To Change: DataSample schema gains new fields, or the PortDataType

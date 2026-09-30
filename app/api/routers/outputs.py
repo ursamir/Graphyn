@@ -5,7 +5,7 @@ Responsibility:   Authenticated, path-jailed download of pipeline output files.
 Owns:             GET /outputs/file
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api.main
 Must NOT:         Serve paths outside the download jail.
-Dependencies:     fastapi, app.core.run_outputs.
+Dependencies:     fastapi, app.core.runs.run_outputs.
 Reason To Change: Download policy or allowed file types change.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from app.core.run_outputs import OutputPathError, resolve_download_path
+from app.core.runs.run_outputs import OutputPathError, resolve_download_path
 
 router = APIRouter(prefix="/outputs", tags=["outputs"])
 

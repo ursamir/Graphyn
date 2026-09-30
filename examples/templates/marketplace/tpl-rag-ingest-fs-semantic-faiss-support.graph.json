@@ -79,7 +79,13 @@
       "src_id": "n2",
       "src_port": "output",
       "dst_id": "n3",
-      "dst_port": "input"
+      "dst_port": "embeddings"
+    },
+    {
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "chunks"
     },
     {
       "src_id": "n3",
@@ -89,8 +95,20 @@
     }
   ],
   "parameters": {
-    "vector_backend": "faiss",
-    "source": "fs",
-    "chunker": "semantic"
+    "vector_backend": {
+      "type": "string",
+      "default": "faiss",
+      "description": ""
+    },
+    "source": {
+      "type": "string",
+      "default": "fs",
+      "description": ""
+    },
+    "chunker": {
+      "type": "string",
+      "default": "semantic",
+      "description": ""
+    }
   }
 }

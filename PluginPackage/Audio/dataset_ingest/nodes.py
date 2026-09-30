@@ -113,7 +113,15 @@ class DatasetIngestNode(Node):
             )
 
         if source_type == "filesystem":
-            samples = self._load_filesystem(self.config.path)
+            path = (self.config.path or "").strip()
+            if not path:
+                raise ValueError(
+                    "DatasetIngestNode: config.path is required for filesystem ingest. "
+                    "Empty path previously resolved to the process CWD and could load "
+                    "the entire workspace into RAM. Set path to e.g. "
+                    "workspace/datasets/input/<dataset-name>."
+                )
+            samples = self._load_filesystem(path)
         elif source_type == "huggingface":
             samples = self._load_huggingface()
         elif source_type == "s3":
@@ -147,7 +155,7 @@ class DatasetIngestNode(Node):
                             loaded from the flat directory.
         """
         try:
-            from app.core.workspace_paths import resolve_ingest_dir
+            from app.core.paths.workspace_paths import resolve_ingest_dir
 
             root_path = resolve_ingest_dir(path)
         except FileNotFoundError as exc:

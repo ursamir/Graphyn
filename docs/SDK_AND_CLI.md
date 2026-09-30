@@ -61,6 +61,17 @@ class Pipeline:
 
 Converts the pipeline to a `GraphIR` and calls `get_backend().execute()`. Returns the outputs dict of the final node.
 
+Before execution the SDK (and therefore the CLI) applies the same shared
+preparation as REST `/pipelines/run*` and MCP `execute_pipeline`
+(`app/core/graph_prepare.prepare_graph`): workspace path rewire
+(`examples/**/data` → `workspace/datasets/input/<slug>/…`, example outputs →
+`workspace/artifacts/<slug>/…`), project / version_tag stamping from graph
+metadata, inline-secret refusal, and deep validation. A graph with
+error-severity findings (VAL-003, e.g. `VAL-UNK-TYPE`, `VAL-CONFIG`) raises
+`GraphPrepareError` (a `ValueError`; `.code`, `.errors`, `.warnings`) before
+any run journal entry is created. A `run.start` audit event is recorded
+(actor `sdk`; `cli` or `--actor`/`GRAPHYN_ACTOR` from the CLI).
+
 ```python
 result = pipeline.run()
 ```
@@ -181,8 +192,11 @@ The SDK always produces the linear format (no `edges` key). To use the DAG forma
 
 ## CLI
 
-**File:** `app/cli/main.py`  
-**Entry point:** `venv/bin/python -m app.cli.main` or `graphyn` (if installed via `setup.py`)
+**Entry:** `app/cli/main.py` (`venv/bin/python -m app.cli.main` or `graphyn`). Parser and startup stay in `main.py`. Subcommand bodies live in `app/cli/cmd_graph.py`, `cmd_runs.py`, `cmd_artifacts.py`, `cmd_plugins.py`, `cmd_secrets.py`, `cmd_mcp.py`, and `cmd_worker.py`. Shared helpers are `app/cli/support.py`.
+
+Remote catalog: `graphyn --api-url http://host:8001 nodes [--category C]` pages
+through `GET /api/v1/nodes` (`limit=500`, following `next_offset`) so the full
+catalog is printed, not only the endpoint's default first page of 50.
 
 ```
 usage: graphyn COMMAND
@@ -248,7 +262,7 @@ Pipeline complete in 1.23s — 42 samples produced.
 
 Exits with code `0` on success, `1` on failure.
 
-If `--seed` is provided, the config is patched in-memory (a temp file is written) and the original file is not modified.
+If `--seed` is provided, only `metadata.seed` is overridden in memory (`project`, `version_tag`, `ui` and all other metadata are preserved); the original file is not modified.
 
 ---
 
@@ -295,7 +309,7 @@ Exits with code `0` on success, `1` on failure.
 
 ### `graphyn runs list`
 
-Print a table of recent pipeline runs, newest first.
+Print a table of recent pipeline runs, newest first (`created_at` desc, `run_id` tiebreak — the shared `app/core/runs/run_listing.py` order also used by REST `GET /runs` and MCP `list_runs`).
 
 ```
 usage: graphyn runs list
@@ -665,7 +679,7 @@ GRAPHYN_API_TOKEN=secret graphyn mcp   # with auth
 python -m app.mcp.server               # equivalent direct invocation
 ```
 
-The server starts in-process, sharing the already-populated `NodeRegistry` singleton. All 29 MCP tools are registered at startup. See [MCP_SERVER.md](./MCP_SERVER.md) for the full tool reference.
+The server starts in-process, sharing the already-populated `NodeRegistry` singleton. All 77 MCP tools are registered at startup (78 with `accept_proposal` when `GRAPHYN_MCP_HUMAN_APPROVAL=1`). See [MCP_SERVER.md](./MCP_SERVER.md) for the full tool reference.
 
 ---
 
@@ -705,3 +719,5 @@ Both the SDK and CLI respect:
 |---|---|---|
 | `GRAPHYN_PROJECT_DIR` | `"workspace"` | Root workspace directory for runs, datasets, cache |
 | `GRAPHYN_PLUGINS_DIR` | `"plugins"` | Plugin directory scanned by AutoDiscovery |
+
+Security / Mode B env (`GRAPHYN_SECRET_ENV_ALLOWLIST`, `GRAPHYN_LLM_BASE_URL_ALLOWLIST`, `GRAPHYN_ALLOWED_HOSTS`, `GRAPHYN_JOB_*`, `GRAPHYN_DISTRIBUTED_*`, `GRAPHYN_WORKER_COMPLETE_RETRIES`): see [DEPLOYMENT.md § Environment reference](./DEPLOYMENT.md#environment-reference--security--mode-b-2026-09-additions).

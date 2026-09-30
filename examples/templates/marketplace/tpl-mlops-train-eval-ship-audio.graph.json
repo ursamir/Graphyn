@@ -79,7 +79,13 @@
       "src_id": "n0",
       "src_port": "output",
       "dst_id": "n1",
-      "dst_port": "input"
+      "dst_port": "model_artifact"
+    },
+    {
+      "src_id": "n0",
+      "src_port": "output",
+      "dst_id": "n1",
+      "dst_port": "dataset"
     },
     {
       "src_id": "n1",
@@ -88,28 +94,34 @@
       "dst_port": "input"
     },
     {
-      "src_id": "n2",
+      "src_id": "n1",
       "src_port": "output",
       "dst_id": "n3",
-      "dst_port": "input"
+      "dst_port": "model"
     },
     {
-      "src_id": "n3",
+      "src_id": "n1",
+      "src_port": "output",
+      "dst_id": "n3",
+      "dst_port": "eval"
+    },
+    {
+      "src_id": "n1",
       "src_port": "output",
       "dst_id": "n4",
       "dst_port": "input"
     },
     {
-      "src_id": "n4",
+      "src_id": "n2",
       "src_port": "output",
       "dst_id": "n5",
-      "dst_port": "input"
+      "dst_port": "deployment"
     },
     {
       "src_id": "n5",
       "src_port": "output",
       "dst_id": "n6",
-      "dst_port": "input"
+      "dst_port": "package"
     }
   ],
   "parameters": {}

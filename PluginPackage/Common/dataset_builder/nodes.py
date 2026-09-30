@@ -145,14 +145,19 @@ class DatasetBuilderNode(Node):
             if fixed_length > 0:
                 arr = self._pad_or_truncate(arr, fixed_length)
             frames.append(arr)
-        # Guard: when fixed_length==0, all frames must have the same shape
+        # When fixed_length==0, auto-pad to the longest time axis so variable-
+        # duration clips (marketplace OOB templates) still form a batch.
         if fixed_length == 0:
             shapes = {arr.shape for arr in frames}
             if len(shapes) > 1:
-                raise ValueError(
-                    f"DatasetBuilderNode: variable-length features detected {shapes}. "
-                    "Set fixed_length > 0 to enable automatic padding/truncation."
+                max_t = max(arr.shape[0] for arr in frames)
+                log.info(
+                    "DatasetBuilderNode: variable-length features %s — "
+                    "auto-padding/truncating time axis to fixed_length=%d",
+                    shapes,
+                    max_t,
                 )
+                frames = [self._pad_or_truncate(arr, max_t) for arr in frames]
         X = np.stack(frames)                    # [N, T, F]
         X = X[..., np.newaxis].astype(np.float32)  # [N, T, F, 1]
         y = np.array(

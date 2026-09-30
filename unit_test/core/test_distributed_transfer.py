@@ -52,7 +52,7 @@ def test_safe_path_rejects_escape(tmp_path, monkeypatch):
 
 def test_put_get_nested_content_addressed_key(tmp_path, monkeypatch):
     """Nested sha256/ab/cd/... keys round-trip via put_blob/get_blob."""
-    from app.core.artifact_uri import local_content_key
+    from app.core.artifacts.artifact_uri import local_content_key
     from app.core.distributed.transfer import get_blob, http_get_blob, put_blob
     from urllib.parse import quote as url_quote
 
@@ -97,7 +97,7 @@ def test_put_get_nested_content_addressed_key(tmp_path, monkeypatch):
 
 
 def test_get_blob_rejects_sha256_mismatch(tmp_path, monkeypatch):
-    from app.core.artifact_uri import local_content_key
+    from app.core.artifacts.artifact_uri import local_content_key
     from app.core.distributed import transfer as tr
 
     monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path / "workspace"))

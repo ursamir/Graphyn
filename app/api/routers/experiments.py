@@ -4,8 +4,8 @@ Bounded Context:  REST API Layer
 Responsibility:   MLflow-shaped experiment list / detail / compare endpoints.
 Owns:             GET /experiments, GET /experiments/compare, GET /experiments/{name}.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
-Must NOT:         Contain aggregation logic — delegate to app.core.experiments.
-Dependencies:     fastapi, app.core.experiments.
+Must NOT:         Contain aggregation logic — delegate to app.core.mlops.experiments.
+Dependencies:     fastapi, app.core.mlops.experiments.
 Reason To Change: Experiment board response schema changes.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ def list_experiments_endpoint(
     ),
 ):
     """Aggregate experiments from run dirs (experiment.json or meta+metrics)."""
-    from app.core.experiments import list_experiments
+    from app.core.mlops.experiments import list_experiments
 
     return list_experiments(project=project)
 
@@ -36,7 +36,7 @@ def compare_experiments(
     ),
 ):
     """Return aligned param/metric keys plus per-run rows for a comparison table."""
-    from app.core.experiments import compare_runs
+    from app.core.mlops.experiments import compare_runs
 
     ids = [part.strip() for part in run_ids.split(",") if part.strip()]
     if not ids:
@@ -49,7 +49,7 @@ def compare_experiments(
 @router.get("/{name}", summary="Get one experiment by name")
 def get_experiment_endpoint(name: str):
     """Return a single experiment block ``{experiment_name, runs}``."""
-    from app.core.experiments import get_experiment
+    from app.core.mlops.experiments import get_experiment
 
     block = get_experiment(name)
     if block is None:

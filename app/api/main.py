@@ -17,6 +17,10 @@ All endpoint logic lives in routers under app/api/routers/.
 Authenticated routes are served under /api/v1/.
 Unauthenticated GET / and GET /health exist so operators hitting :8001
 are not met with a bare 404.
+
+DNS-rebinding guard: while GRAPHYN_API_TOKEN is unset, requests whose Host is
+not localhost / *.localhost / an IP literal / graphyn-api (compose) /
+GRAPHYN_ALLOWED_HOSTS (comma-separated, ``*`` disables) get 403.
 """
 from __future__ import annotations
 
@@ -114,7 +118,7 @@ async def _lifespan(_app: FastAPI):
         def _schedule_ticker_loop() -> None:
             while not _ticker_stop.wait(60):
                 try:
-                    from app.core.schedules import try_tick_due_schedules
+                    from app.core.pipelines.schedules import try_tick_due_schedules
 
                     fired = try_tick_due_schedules()
                     if fired:
@@ -132,7 +136,7 @@ async def _lifespan(_app: FastAPI):
 
     # OPS-005 / OPS-011: graceful SIGTERM drain — refuse new runs, wait/cancel in-flight.
     try:
-        from app.core.shutdown import drain_active_runs
+        from app.core.host.shutdown import drain_active_runs
 
         drain_active_runs()
     except Exception as exc:
@@ -350,6 +354,73 @@ async def _request_metrics(request: Request, call_next):
         route_path = getattr(route, "path", None) or request.url.path
         record_request(route_path, request.method, status_code, duration_s)
 
+# ── DNS-rebinding guard (unauthenticated dev only) ───────────────────────────
+# When GRAPHYN_API_TOKEN is unset the API trusts every caller, so a malicious
+# web page could rebind its own DNS name to 127.0.0.1 and drive the API from
+# the victim's browser. Rebinding always arrives with the attacker's *DNS name*
+# in Host, so we accept only loopback names, IP literals (a rebinding page can
+# never present one), the compose service name, and GRAPHYN_ALLOWED_HOSTS.
+_DEFAULT_ALLOWED_HOSTS = frozenset({"localhost", "graphyn-api", "testserver"})
+
+
+def _allowed_hosts_env() -> frozenset[str]:
+    raw = os.environ.get("GRAPHYN_ALLOWED_HOSTS", "") or ""
+    return frozenset(h.strip().lower().rstrip(".") for h in raw.split(",") if h.strip())
+
+
+def _host_header_name(raw: str) -> str:
+    host = (raw or "").strip().lower()
+    if host.startswith("["):
+        end = host.find("]")
+        return host[1:end] if end > 0 else host
+    if host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    return host.rstrip(".")
+
+
+def host_header_allowed(raw_host: str) -> bool:
+    """True if *raw_host* (Host header) is acceptable for unauthenticated dev."""
+    import ipaddress
+
+    host = _host_header_name(raw_host)
+    if not host:
+        return False
+    extra = _allowed_hosts_env()
+    if "*" in extra:
+        return True
+    if host in _DEFAULT_ALLOWED_HOSTS or host.endswith(".localhost") or host in extra:
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+@app.middleware("http")
+async def _host_check(request: Request, call_next):
+    """Reject non-loopback Host headers while the API is unauthenticated."""
+    if not api_token() and request.scope.get("type") == "http":
+        if not host_header_allowed(request.headers.get("host", "")):
+            from app.api.errors import error_body, get_or_set_request_id
+
+            rid = get_or_set_request_id(request)
+            msg = (
+                "Host header not allowed while GRAPHYN_API_TOKEN is unset "
+                "(DNS-rebinding guard). Use localhost / an IP address, set "
+                "GRAPHYN_API_TOKEN, or list the host in GRAPHYN_ALLOWED_HOSTS."
+            )
+            return JSONResponse(
+                status_code=403,
+                content=error_body(
+                    code="forbidden", message=msg, request_id=rid, status_code=403,
+                    legacy_detail=msg,
+                ),
+                headers={"X-Request-Id": rid},
+            )
+    return await call_next(request)
+
+
 # ── Static file mounts ────────────────────────────────────────────────────────
 # NEW-8: Paths are resolved at startup time from GRAPHYN_PROJECT_DIR.
 # GRAPHYN_PROJECT_DIR MUST be set before importing this module (e.g. before
@@ -367,7 +438,7 @@ _RUNS_ROOT.mkdir(parents=True, exist_ok=True)
 
 # One-shot abandoned-run reconcile at API import/startup (also available via
 # POST /system/cleanup). Skipped under pytest / GRAPHYN_SKIP_STARTUP_RECONCILE.
-# See app.core.run_cleanup.reconcile_abandoned_runs.
+# See app.core.runs.run_cleanup.reconcile_abandoned_runs.
 import sys as _sys
 
 _skip_startup_reconcile = (
@@ -377,7 +448,7 @@ _skip_startup_reconcile = (
 )
 if not _skip_startup_reconcile:
     try:
-        from app.core.run_cleanup import reconcile_abandoned_runs as _reconcile_abandoned
+        from app.core.runs.run_cleanup import reconcile_abandoned_runs as _reconcile_abandoned
 
         _reconcile_result = _reconcile_abandoned()
         if _reconcile_result.get("reconciled"):

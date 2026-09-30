@@ -11,8 +11,8 @@ import pytest
 class TestProveCapture:
     def test_succeeded_run_writes_required_prove_fields(self, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
-        from app.core.prove import REQUIRED_PROVE_FIELDS, load_prove_capture, required_fields_present
-        from app.core.run_journal import RunManager
+        from app.core.runs.prove import REQUIRED_PROVE_FIELDS, load_prove_capture, required_fields_present
+        from app.core.runs.run_journal import RunManager
 
         runs = tmp_workspace / "runs"
         runs.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,7 @@ class TestProveCapture:
         assert isinstance(data["node_implementation_versions"], dict)
 
     def test_provenance_optional_fields_roundtrip(self, tmp_workspace):
-        from app.core.provenance import ProvenanceStore
+        from app.core.artifacts.provenance import ProvenanceStore
 
         store = ProvenanceStore(base_dir=str(tmp_workspace))
         rec = store.record(
@@ -74,7 +74,7 @@ class TestProveCapture:
 class TestShutdownDrain:
     def test_is_draining_refuses_new_async_run(self, api_client, monkeypatch, tmp_workspace):
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_workspace))
-        from app.core.shutdown import begin_drain, reset_drain_for_tests
+        from app.core.host.shutdown import begin_drain, reset_drain_for_tests
 
         reset_drain_for_tests()
         begin_drain()
@@ -98,7 +98,7 @@ class TestShutdownDrain:
 
     def test_drain_active_runs_summary(self, tmp_workspace, monkeypatch):
         monkeypatch.setenv("GRAPHYN_SHUTDOWN_GRACE_S", "0")
-        from app.core.shutdown import drain_active_runs, reset_drain_for_tests
+        from app.core.host.shutdown import drain_active_runs, reset_drain_for_tests
 
         reset_drain_for_tests()
         summary = drain_active_runs(grace_seconds=0)
@@ -112,7 +112,7 @@ class TestStoreCorruptHelper:
         # Only monkeypatch — nested unittest.mock.patch + monkeypatch can restore the
         # mock *after* patch teardown and leak into later tests.
         monkeypatch.setattr(
-            "app.core.store_integrity.readiness_store_corrupt",
+            "app.core.persist.store_integrity.readiness_store_corrupt",
             lambda: True,
         )
         resp = api_client.get("/api/v1/artifacts")
@@ -123,7 +123,7 @@ class TestStoreCorruptHelper:
 
 class TestSdkPauseResume:
     def test_pause_without_run_raises_invalid_transition(self):
-        from app.core.run_status import InvalidTransition
+        from app.core.runs.run_status import InvalidTransition
         from app.core.sdk import Pipeline
 
         p = Pipeline([], name="sdk-wave-c")
@@ -131,7 +131,7 @@ class TestSdkPauseResume:
             p.pause()
 
     def test_resume_without_run_raises_invalid_transition(self):
-        from app.core.run_status import InvalidTransition
+        from app.core.runs.run_status import InvalidTransition
         from app.core.sdk import Pipeline
 
         p = Pipeline([], name="sdk-wave-c-2")
@@ -155,7 +155,7 @@ class TestPaginationDefaultOn:
 
     def test_projects_default_envelope_and_escape(self, api_client, monkeypatch):
         monkeypatch.setattr(
-            "app.core.store_integrity.readiness_store_corrupt",
+            "app.core.persist.store_integrity.readiness_store_corrupt",
             lambda: False,
         )
         env = api_client.get("/api/v1/projects")
@@ -171,7 +171,7 @@ class TestPaginationDefaultOn:
 class TestStoreCorruptUniversal:
     def test_projects_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
         monkeypatch.setattr(
-            "app.core.store_integrity.readiness_store_corrupt",
+            "app.core.persist.store_integrity.readiness_store_corrupt",
             lambda: True,
         )
         resp = api_client.get("/api/v1/projects")
@@ -180,7 +180,7 @@ class TestStoreCorruptUniversal:
 
     def test_runs_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
         monkeypatch.setattr(
-            "app.core.store_integrity.readiness_store_corrupt",
+            "app.core.persist.store_integrity.readiness_store_corrupt",
             lambda: True,
         )
         resp = api_client.get("/api/v1/runs")
@@ -189,7 +189,7 @@ class TestStoreCorruptUniversal:
 
     def test_models_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
         monkeypatch.setattr(
-            "app.core.store_integrity.readiness_store_corrupt",
+            "app.core.persist.store_integrity.readiness_store_corrupt",
             lambda: True,
         )
         resp = api_client.get("/api/v1/models")
@@ -198,7 +198,7 @@ class TestStoreCorruptUniversal:
 
     def test_plugins_list_503_when_readiness_corrupt(self, api_client, monkeypatch):
         monkeypatch.setattr(
-            "app.core.store_integrity.readiness_store_corrupt",
+            "app.core.persist.store_integrity.readiness_store_corrupt",
             lambda: True,
         )
         resp = api_client.get("/api/v1/plugins")

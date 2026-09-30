@@ -63,7 +63,7 @@
       "src_id": "n0",
       "src_port": "output",
       "dst_id": "n1",
-      "dst_port": "input"
+      "dst_port": "metrics"
     },
     {
       "src_id": "n1",
@@ -73,9 +73,9 @@
     },
     {
       "src_id": "n2",
-      "src_port": "output",
+      "src_port": "approved",
       "dst_id": "n3",
-      "dst_port": "input"
+      "dst_port": "package"
     },
     {
       "src_id": "n3",
@@ -85,6 +85,10 @@
     }
   ],
   "parameters": {
-    "require_human_approval": true
+    "require_human_approval": {
+      "type": "boolean",
+      "default": true,
+      "description": ""
+    }
   }
 }

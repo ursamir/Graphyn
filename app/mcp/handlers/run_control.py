@@ -14,7 +14,7 @@ Dependencies:     BC6 (run_control.get_active_run — module-level import),
 Reason To Change: run_control tool schemas change, or new control operations
                   are added (e.g. step, restart).
 """
-from app.core.run_control import get_active_run
+from app.core.runs.run_control import get_active_run
 from app.core.config import runs_dir as _runs_dir
 
 PAUSE_RUN_DESCRIPTION = "Pause an active pipeline run after the current node completes."

@@ -75,7 +75,7 @@ class TestListRunOutputs:
             ]
         }
         (run_dir / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
-        with patch("app.core.artifact_store.ArtifactStore") as store_cls:
+        with patch("app.core.artifacts.artifact_store.ArtifactStore") as store_cls:
             store_cls.return_value.list.return_value = []
             resp = api_client.get(f"/api/v1/runs/{run_id}/outputs")
         assert resp.status_code == 200
@@ -93,7 +93,7 @@ class TestListRunOutputs:
         (run_dir / "graph.json").write_text("{}", encoding="utf-8")
         metrics = run_dir / "metrics.json"
         metrics.write_text('{"ok": true}', encoding="utf-8")
-        with patch("app.core.artifact_store.ArtifactStore") as store_cls:
+        with patch("app.core.artifacts.artifact_store.ArtifactStore") as store_cls:
             store_cls.return_value.list.return_value = []
             resp = api_client.get(f"/api/v1/runs/{run_id}/outputs/zip")
         assert resp.status_code == 200
@@ -121,7 +121,7 @@ class TestOutputDirAndCsv:
             ]
         }
         (run_dir / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
-        with patch("app.core.artifact_store.ArtifactStore") as store_cls:
+        with patch("app.core.artifacts.artifact_store.ArtifactStore") as store_cls:
             store_cls.return_value.list.return_value = []
             resp = api_client.get(f"/api/v1/runs/{run_id}/outputs")
         assert resp.status_code == 200
@@ -140,7 +140,7 @@ class TestOutputDirAndCsv:
 
     def test_examples_output_stays_inside_jail(self, api_client, tmp_path, monkeypatch):
         _isolate_jail(tmp_path, monkeypatch)
-        from app.core.example_templates import examples_dir
+        from app.core.templates.example_templates import examples_dir
 
         out_dir = examples_dir() / "01_wake_word" / "output"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -194,7 +194,7 @@ class TestListRunOutputsScoped:
             ],
         }
         (run_dir / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
-        with patch("app.core.artifact_store.ArtifactStore") as store_cls:
+        with patch("app.core.artifacts.artifact_store.ArtifactStore") as store_cls:
             store_cls.return_value.list.return_value = []
             resp = api_client.get(f"/api/v1/runs/{run_id}/outputs")
         assert resp.status_code == 200

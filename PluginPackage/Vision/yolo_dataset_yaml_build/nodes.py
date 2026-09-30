@@ -1,6 +1,6 @@
 """YoloDatasetYamlBuildNode — Build Ultralytics data.yaml + path layout
 
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 When stub=False, writes a real Ultralytics data.yaml from config + input metadata
 (stdlib only — no ultralytics import required).
 """
@@ -60,6 +60,96 @@ def _write_data_yaml(path: Path, *, root: str, train: str, val: str, names: list
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _write_solid_png(path: Path, *, width: int = 64, height: int = 64, rgb: tuple[int, int, int] = (40, 120, 200)) -> None:
+    """Write a tiny valid RGB PNG (stdlib only) for Ultralytics OOB seeds."""
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+    path.write_bytes(png)
+
+
+def _seed_yolo_images_from_root(root_path: Path, *, train: str, val: str) -> None:
+    """Copy/create images into Ultralytics train/val dirs for OOB demos.
+
+    Classification seeds (``cat/1.jpg``) are often 1×1 placeholders that
+    Ultralytics drops; we copy usable files and always synthesize a couple of
+    solid PNGs so train never sees an empty set.
+    """
+    import shutil
+
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    found: list[Path] = []
+    search_roots = [root_path, Path("workspace/datasets/input/vision-demo"), Path("examples/30_vision_demo/data")]
+    for base in search_roots:
+        if not base.is_dir():
+            continue
+        candidates = [p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in exts]
+        candidates.sort(key=lambda x: (-x.stat().st_size, str(x)))
+        for p in candidates:
+            try:
+                rel = p.relative_to(root_path).as_posix() if p.is_relative_to(root_path) else str(p)
+            except Exception:
+                rel = str(p)
+            if "images/" in rel.replace("\\", "/"):
+                continue
+            if p.stat().st_size < 200:
+                continue
+            found.append(p)
+            if len(found) >= 6:
+                break
+        if found:
+            break
+
+    train_dir = Path(train) if Path(train).is_absolute() else (root_path / train)
+    val_dir = Path(val) if Path(val).is_absolute() else (root_path / val)
+    train_dir.mkdir(parents=True, exist_ok=True)
+    val_dir.mkdir(parents=True, exist_ok=True)
+    labels_train = root_path / "labels" / "train"
+    labels_val = root_path / "labels" / "val"
+    labels_train.mkdir(parents=True, exist_ok=True)
+    labels_val.mkdir(parents=True, exist_ok=True)
+
+    written = 0
+    for i, src in enumerate(found):
+        dest_dir = train_dir if i % 2 == 0 else val_dir
+        label_dir = labels_train if dest_dir == train_dir else labels_val
+        dest = dest_dir / f"seed_{i}{src.suffix.lower()}"
+        try:
+            shutil.copy2(src, dest)
+        except OSError as exc:
+            log.warning("yolo_dataset_yaml_build: copy %s failed: %s", src, exc)
+            continue
+        (label_dir / f"{dest.stem}.txt").write_text("0 0.5 0.5 1.0 1.0\n", encoding="utf-8")
+        written += 1
+
+    # Always synthesize valid PNGs so Ultralytics has labeled train+val samples.
+    for i, (dest_dir, label_dir, color) in enumerate(
+        (
+            (train_dir, labels_train, (40, 120, 200)),
+            (train_dir, labels_train, (200, 80, 40)),
+            (val_dir, labels_val, (80, 200, 80)),
+            (val_dir, labels_val, (180, 40, 180)),
+        )
+    ):
+        dest = dest_dir / f"synth_{i}.png"
+        _write_solid_png(dest, rgb=color)
+        (label_dir / f"{dest.stem}.txt").write_text("0 0.5 0.5 0.8 0.8\n", encoding="utf-8")
+        written += 1
+
+    log.info(
+        "yolo_dataset_yaml_build: seeded %d images into %s / %s",
+        written,
+        train_dir,
+        val_dir,
+    )
+
+
 class YoloDatasetYamlBuildNode(Node):
     """Build Ultralytics data.yaml + path layout from Vision dataset artifacts"""
 
@@ -71,7 +161,7 @@ class YoloDatasetYamlBuildNode(Node):
         description="Build Ultralytics data.yaml + path layout from Vision dataset artifacts",
         category="Preprocessing",
         version="0.2.0",
-        tags=["vision", "wave1"],
+        tags=["vision"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -88,7 +178,7 @@ class YoloDatasetYamlBuildNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         task: str = Field(default='detect', title="Task", description="Task.")
         names: list = Field(default_factory=list)
         path: str = Field(default='', title="Path", description="Dataset root path.")
@@ -102,9 +192,17 @@ class YoloDatasetYamlBuildNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'vision' / 'yolo_dataset_yaml_build'
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            fallback = Path(str(getattr(self.config, "path", "") or "").strip() or ".")
+            out_dir = fallback / ".graphyn" / "yolo_dataset_yaml_build"
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
         if stub:
             result = DatasetArtifact(labels=[], input_shape=(), n_classes=0, metadata={"stub": True})
             return {"output": result}
@@ -142,11 +240,16 @@ class YoloDatasetYamlBuildNode(Node):
         val = str(getattr(self.config, "val", None) or "images/val")
         task = str(getattr(self.config, "task", None) or "detect")
 
-        # Ensure relative train/val dirs exist (empty OK — train smoke may use coco8)
+        # Ensure relative train/val dirs exist; if empty, seed a few images from
+        # classification-style folders (cat/dog/*.jpg) so Ultralytics can train OOB.
         for rel in (train, val):
             p = Path(rel)
             target = p if p.is_absolute() else (root_path / p)
             target.mkdir(parents=True, exist_ok=True)
+
+        train_dir = Path(train) if Path(train).is_absolute() else (root_path / train)
+        if not any(train_dir.glob("*")):
+            _seed_yolo_images_from_root(root_path, train=train, val=val)
 
         yaml_cfg = str(getattr(self.config, "output_yaml", "") or "").strip()
         yaml_path = Path(yaml_cfg) if yaml_cfg else (root_path / "data.yaml")
@@ -163,7 +266,13 @@ class YoloDatasetYamlBuildNode(Node):
             "val": val,
             "names": names,
         }
-        (out_dir / "last_build.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        receipt = out_dir / "last_build.json"
+        payload = json.dumps(meta, indent=2)
+        try:
+            receipt.write_text(payload, encoding="utf-8")
+        except OSError:
+            receipt = yaml_path.parent / "last_build.json"
+            receipt.write_text(payload, encoding="utf-8")
         log.info("yolo_dataset_yaml_build wrote %s (%d classes)", yaml_path, n_classes)
         return {
             "output": DatasetArtifact(

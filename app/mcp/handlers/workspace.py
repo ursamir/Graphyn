@@ -7,7 +7,7 @@ Owns:             list_experiments / get_trace / list_projects / list_data_input
                   handlers + schemas.
 Public Surface:   *_handler, *_DESCRIPTION, *_SCHEMA
 Must NOT:         Import app.domain; must not mutate workspace.
-Dependencies:     app.core.experiments, app.core.trace, app.core.config.
+Dependencies:     app.core.mlops.experiments, app.core.runs.trace, app.core.config.
 Reason To Change: New observe tools or response schema changes.
 """
 from __future__ import annotations
@@ -89,7 +89,7 @@ LIST_DATA_INPUTS_SCHEMA = {
 
 
 def list_experiments_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.experiments import list_experiments
+    from app.core.mlops.experiments import list_experiments
 
     args = arguments or {}
     project = args.get("project") if isinstance(args.get("project"), str) else None
@@ -99,7 +99,7 @@ def list_experiments_handler(arguments: dict[str, Any] | None = None) -> dict[st
 
 
 def get_trace_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-    from app.core.trace import assemble_trace
+    from app.core.runs.trace import assemble_trace
 
     args = arguments or {}
     run_id = args.get("run_id") if isinstance(args.get("run_id"), str) else None

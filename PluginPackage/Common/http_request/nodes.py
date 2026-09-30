@@ -4,13 +4,12 @@ from __future__ import annotations
 import importlib
 import json
 import logging
-import os
 import time
 from typing import Any, ClassVar, Literal
 from pydantic import Field
 from urllib.parse import urlencode
 
-from app.core.egress import validate_http_egress_url
+from app.core.trust.egress import validate_http_egress_url
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -114,11 +113,9 @@ class HttpRequestNode(Node):
                 f"HttpRequestNode: unknown provider {provider!r}. Use provider='http'."
             )
         if auth_env:
-            try:
-                from app.core.secrets import resolve_secret
-                token = resolve_secret(auth_env)
-            except Exception:
-                token = os.environ.get(auth_env, "").strip()
+            # Guarded env fallback (no GRAPHYN_* internals / non-secret env vars).
+            from app.core.trust.secrets import resolve_secret
+            token = resolve_secret(auth_env)
             if not token:
                 raise RuntimeError(
                     f"HttpRequestNode: auth_env={auth_env!r} is set but secret/env "

@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["rag", "multimodal", "stub"]
+tags = ["rag", "multimodal"]
 
 dependencies = [
     "numpy>=1.24",
@@ -21,6 +21,6 @@ runtime = "inprocess"
 node_types = ["multimodal_caption_embed"]
 
 [config_schema.multimodal_caption_embed]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
 caption_model = { type = "string", title = "Caption model", default = "blip", description = "Caption model." }
 embed_model = { type = "string", title = "Embed model", default = "sentence-transformers/all-MiniLM-L6-v2", description = "Embed model." }

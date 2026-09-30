@@ -112,7 +112,7 @@ Example:
 
 | Worker style | How |
 |---|---|
-| **Full-capability** | Install Audio + Common; broad labels; can claim most node types |
+| **Full-capability** | Install all bundled packs (`PluginPackage/*/*/plugin.toml`); broad labels; can claim most node types |
 | **Specialized** | Install only needed plugins; labels like gpu and pool like gpu-lab; only matching jobs claimed |
 
 Check Deploy → Workers in the console. Demo: examples/29_distributed_placement/pipeline.graph.json with GRAPHYN_BACKEND=distributed.

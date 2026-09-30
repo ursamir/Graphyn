@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -148,48 +147,21 @@ def inspect_run_handler(arguments: dict[str, Any]) -> Any:
     if run_id is None:
         if not _RUNS_DIR.exists():
             return {"runs": []}
+        # Shared lister (created_at desc, run_id tiebreak; per-entry errors
+        # never empty the list) — same order as REST / CLI / list_runs.
+        from app.core.runs.run_listing import list_runs
 
-        runs = []
-        for run_dir in _RUNS_DIR.iterdir():
-            if not run_dir.is_dir():
-                continue
-            meta_path = run_dir / "meta.json"
-            if not meta_path.exists():
-                continue
-            try:
-                with meta_path.open("r") as f:
-                    meta = json.load(f)
-                runs.append({
-                    "run_id": meta.get("run_id", run_dir.name),
-                    "status": meta.get("status", "unknown"),
-                    "created_at": meta.get("created_at"),
-                    "duration_s": meta.get("duration_s"),
-                    "num_nodes": meta.get("num_nodes", 0),
-                })
-            except Exception:
-                # Req 5.11: never raise; return partial info for unreadable runs.
-                runs.append({
-                    "run_id": run_dir.name,
-                    "status": "unknown",
-                    "created_at": None,
-                    "duration_s": None,
-                    "num_nodes": 0,
-                })
-
-        # Req 5.1: sort newest-first by created_at.
-        # Parse ISO 8601 timestamps before comparing so that mixed "Z" and
-        # "+00:00" suffixes (both valid UTC representations) sort correctly.
-        # String comparison would place "Z" after "+" lexicographically,
-        # producing wrong order when the two suffix styles are mixed.
-        def _parse_ts(ts: str | None) -> datetime:
-            if not ts:
-                return datetime.min.replace(tzinfo=timezone.utc)
-            try:
-                return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except ValueError:
-                return datetime.min.replace(tzinfo=timezone.utc)
-
-        runs.sort(key=lambda r: _parse_ts(r.get("created_at")), reverse=True)
+        page = list_runs(_RUNS_DIR, limit=None, include_unreadable=True)
+        runs = [
+            {
+                "run_id": meta.get("run_id", run_dir.name),
+                "status": meta.get("status", "unknown"),
+                "created_at": meta.get("created_at"),
+                "duration_s": meta.get("duration_s"),
+                "num_nodes": meta.get("num_nodes", 0),
+            }
+            for run_dir, meta in page.rows
+        ]
         return {"runs": runs}
 
     # ── Single run inspection ──────────────────────────────────────────────────
@@ -347,3 +319,6 @@ def inspect_run_handler(arguments: dict[str, Any]) -> Any:
             "message": str(exc),
             "artifact": "meta.json",
         }
+
+# Public names. A leading underscore stays private to this module.
+safe_run_dir = _safe_run_dir

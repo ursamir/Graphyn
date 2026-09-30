@@ -1,0 +1,6 @@
+# Temporary override: reload API code without reinstalling every plugin venv.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.noreinstall.yml up -d --no-deps graphyn-api
+services:
+  graphyn-api:
+    environment:
+      GRAPHYN_AUTO_INSTALL_PLUGINS: "0"

@@ -1,6 +1,6 @@
 """Bm25IndexBuildNode — Build BM25 sparse index for hybrid retrieval
 
-Default config.stub=True returns typed minimal outputs.
+Default config.stub=False builds the index.
 When stub=False, builds a pure-Python Okapi BM25 index (no rank_bm25 required)
 and persists corpus + tokenized docs for hybrid_retrieve.
 """
@@ -13,7 +13,7 @@ import math
 import re
 from collections import Counter
 from pathlib import Path
-from typing import ClassVar, Any
+from typing import ClassVar, Any, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
@@ -34,6 +34,11 @@ Chunk = _types.Chunk
 SparseIndexRef = _types.SparseIndexRef
 
 log = logging.getLogger(__name__)
+
+
+def _num_or(value, default):
+    """Config numeric with a real default: only None falls back (0 stays 0)."""
+    return default if value is None or value == "" else value
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
@@ -72,7 +77,7 @@ class Bm25IndexBuildNode(Node):
         description="Build BM25 sparse index for hybrid retrieval",
         category="Index",
         version="0.2.0",
-        tags=["rag", "wave1"],
+        tags=["rag"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -89,8 +94,8 @@ class Bm25IndexBuildNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
-        backend: str = Field(default='rank_bm25', title="Backend", description="Backend: pure_python|rank_bm25.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
+        backend: Literal["rank_bm25", "pure_python"] = Field(default="rank_bm25", title="Backend", description="rank_bm25 (library) or pure_python BM25.")
         k1: float = Field(default=1.5, title="K1", description="K1.")
         b: float = Field(default=0.75, title="B", description="B.")
         persist_path: str = Field(default='workspace/artifacts/sparse/bm25', title="Persist path", description="Persist path.")
@@ -101,9 +106,12 @@ class Bm25IndexBuildNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path(getattr(self.config, "persist_path", None) or "workspace/artifacts/sparse/bm25")
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         if stub:
             return {"output": SparseIndexRef(path=str(out_dir), backend="bm25", metadata={"stub": True})}
         return self._process_real(inputs, out_dir)
@@ -117,8 +125,8 @@ class Bm25IndexBuildNode(Node):
             texts.append(text)
             ids.append(cid or f"chunk-{i}")
 
-        k1 = float(getattr(self.config, "k1", 1.5) or 1.5)
-        b = float(getattr(self.config, "b", 0.75) or 0.75)
+        k1 = float(_num_or(getattr(self.config, "k1", 1.5), 1.5))
+        b = float(_num_or(getattr(self.config, "b", 0.75), 0.75))
         backend = str(getattr(self.config, "backend", "rank_bm25") or "rank_bm25").lower()
 
         tokenized = [_tokenize(t) for t in texts]

@@ -24,6 +24,6 @@ from __future__ import annotations  # AFTER docstring
 
 Exempt: empty/`#`-only `__init__.py`, tiny `__main__.py`. Logic-bearing `__init__.py` must have a contract.
 
-BC names: BC1 Graph Language, BC2 Node Contract, BC3 Node Catalog, BC4 Execution Planner, BC5 Execution Runtime, BC6 Observability & Storage; plus Domain / API / CLI / MCP labels as in `.kiro/steering/file-header-contracts.md`.
+BC names: BC1 Graph Language, BC2 Node Contract, BC3 Node Catalog, BC4 Execution Planner, BC5 Execution Runtime, BC6 Observability & Storage; plus Domain / API / CLI / MCP labels (see the bounded-context table in `AGENTS.md` and `docs/ARCHITECTURE.md`).
 
 `Must NOT` must name forbidden imports (e.g. no `app.domain` from platform storage).

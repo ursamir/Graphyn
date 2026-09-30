@@ -289,7 +289,7 @@ def list_output_datasets(
 @router.get("/outputs/{project}/{version}", summary="Get an output dataset")
 def get_output_dataset(project: str, version: str):
     """Return dataset version detail with files + content_hash (DATA-VER-002)."""
-    from app.core.dataset_versions import read_manifest
+    from app.core.mlops.dataset_versions import read_manifest
 
     output_root = _output_root()
     dataset_path = _safe_child(output_root, project, version)
@@ -361,7 +361,7 @@ def delete_output_dataset(
     """
     import shutil
     from app.api.actor import resolve_actor
-    from app.core.dataset_versions import find_references
+    from app.core.mlops.dataset_versions import find_references
 
     output_root = _output_root()
     dataset_path = _safe_child(output_root, project, version)
@@ -389,7 +389,7 @@ def delete_output_dataset(
     except OSError:
         pass
     try:
-        from app.core.audit import record_audit
+        from app.core.trust.audit import record_audit
 
         record_audit(
             actor=resolve_actor(request),
@@ -556,7 +556,7 @@ def merge_datasets(body: MergeRequest):
         writer.writeheader()
         writer.writerows(label_rows)
 
-    from app.core.dataset_versions import write_manifest
+    from app.core.mlops.dataset_versions import write_manifest
 
     man = write_manifest(target_dir)
     return {

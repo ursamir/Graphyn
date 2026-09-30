@@ -1,14 +1,14 @@
 """YoloPredictNode — YOLO predict images/video
 
-Default config.stub=True returns empty detections.
-When stub=False, runs ultralytics YOLO.predict (Wave-1 vision venv).
+Default config.stub=False runs detection.
+When stub=False, runs ultralytics YOLO.predict.
 """
 from __future__ import annotations
 
 import importlib
 import logging
 from pathlib import Path
-from typing import ClassVar, Any
+from typing import ClassVar, Any, Literal
 from pydantic import Field
 
 from app.core.nodes.base import Node
@@ -17,6 +17,17 @@ from app.core.nodes.metadata import NodeMetadata
 from app.core.nodes.ports import InputPort, OutputPort
 
 from app.models.model_artifact import ModelArtifact
+
+
+def _force_cpu() -> None:
+    """Stay on CPU when another process owns the GPU. Default on."""
+    import os
+
+    flag = os.environ.get("GRAPHYN_ML_FORCE_CPU", "1").strip().lower()
+    if flag in ("0", "false", "no"):
+        return
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+    os.environ.setdefault("ULTRALYTICS_OFFLINE", "1")
 
 try:
     _pkg = __name__.rsplit(".", 1)[0] if "." in __name__ else __name__
@@ -31,6 +42,11 @@ DetectionResult = _types.DetectionResult
 ImageSample = _types.ImageSample
 
 log = logging.getLogger(__name__)
+
+
+def _num_or(value, default):
+    """Config numeric with a real default: only None falls back (0 stays 0)."""
+    return default if value is None or value == "" else value
 
 
 def _image_sources(raw: Any) -> list[str]:
@@ -59,7 +75,7 @@ class YoloPredictNode(Node):
         description="YOLO predict images/video",
         category="Inference",
         version="0.2.0",
-        tags=["vision", "wave1"],
+        tags=["vision"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -77,13 +93,13 @@ class YoloPredictNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         task: str = Field(default="detect", title="Task", description="Task.")
         imgsz: int = Field(default=640, title="Imgsz", description="Imgsz.")
         conf: float = Field(default=0.25, title="Conf", description="Conf.")
         iou: float = Field(default=0.7, title="Iou", description="Iou.")
         max_det: int = Field(default=300, title="Max det", description="Max det.")
-        device: str = Field(default="cpu", title="Device", description="Prefer cpu when GPU is contested.")
+        device: Literal["cpu", "auto", "cuda", "mps"] = Field(default="cpu", title="Device", description="Prefer cpu when GPU is contested; auto lets ultralytics pick.")
 
     def process(self, inputs=None, **kwargs):
         if inputs is None:
@@ -91,23 +107,25 @@ class YoloPredictNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, "stub", True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path("workspace/artifacts") / "vision" / "yolo_predict"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         if stub:
             return {"output": []}
         return self._process_real(inputs, out_dir)
 
     def _process_real(self, inputs: dict, out_dir: Path):
         try:
-            from app.core.plugins.wave1_runtime import force_cpu_torch_env
-
-            force_cpu_torch_env()
+            _force_cpu()
             from ultralytics import YOLO  # type: ignore
         except ImportError as exc:
-            from app.core.plugins.wave1_runtime import install_hint
-
-            raise ImportError(install_hint("vision", ["ultralytics>=8.0", "torch>=2.0"])) from exc
+            raise ImportError(
+                "ultralytics is not installed in this plugin venv. "
+                "Use Plugins → Install optional (venv)."
+            ) from exc
 
         model_in = inputs.get("model") or inputs.get("input")
         weights = None
@@ -129,10 +147,10 @@ class YoloPredictNode(Node):
         results = model.predict(
             source=sources,
             imgsz=int(getattr(self.config, "imgsz", 640) or 640),
-            conf=float(getattr(self.config, "conf", 0.25) or 0.25),
-            iou=float(getattr(self.config, "iou", 0.7) or 0.7),
+            conf=float(_num_or(getattr(self.config, "conf", 0.25), 0.25)),
+            iou=float(_num_or(getattr(self.config, "iou", 0.7), 0.7)),
             max_det=int(getattr(self.config, "max_det", 300) or 300),
-            device=device,
+            device=None if device == "auto" else device,
             project=str(out_dir),
             exist_ok=True,
             verbose=False,

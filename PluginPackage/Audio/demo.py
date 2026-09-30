@@ -37,7 +37,7 @@ EXAMPLE_DIR = Path(__file__).parent
 INPUT_DIR = EXAMPLE_DIR / "input"
 
 from app.core.plugins.manager import PluginManager
-from app.core.registry_runtime import get_registry
+from app.core.host.registry_runtime import get_registry
 from app.core.sdk import Pipeline, PipelineNode
 
 

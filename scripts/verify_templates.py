@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.core.example_templates import templates_dir  # noqa: E402
+from app.core.templates.example_templates import templates_dir  # noqa: E402
 from app.core.ir.loader import load_ir  # noqa: E402
 
 
@@ -17,7 +17,7 @@ def main() -> int:
     registered: set[str] = set()
     try:
         from app.core.nodes import initialize_registry
-        from app.core.registry_runtime import get_registry
+        from app.core.host.registry_runtime import get_registry
 
         initialize_registry()
         reg = get_registry()

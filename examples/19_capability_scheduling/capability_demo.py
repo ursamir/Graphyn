@@ -70,7 +70,7 @@ EXAMPLE_DIR = Path(__file__).parent
 
 
 def main() -> None:
-    from app.core.registry_runtime import get_registry
+    from app.core.host.registry_runtime import get_registry
     from app.core.ir.loader import CURRENT_IR_VERSION, dump_ir
     from app.core.ir.models import GraphIR, IREdge, IRMetadata, IRNode, IRCapabilityMetadata
 

@@ -61,7 +61,7 @@ echo "${READY}" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("ba
 
 echo "== 3) Nodes catalog (Bearer) =="
 NODES="$(api GET /api/v1/nodes)"
-echo "${NODES}" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d,list) and len(d)>0, d; print("nodes=", len(d))'
+echo "${NODES}" | python3 -c 'import json,sys; d=json.load(sys.stdin); items=d.get("items", d) if isinstance(d, dict) else d; assert isinstance(items,list) and len(items)>0, d; total=d.get("total", len(items)) if isinstance(d, dict) else len(items); print("nodes=", total)'
 
 echo "== 4) Project create/open =="
 # create may 409 if exists — ignore
@@ -70,10 +70,11 @@ PROJ_CODE="$(curl -sS -o /tmp/graphyn_smoke_proj.json -w "%{http_code}" -X POST 
   -H "Content-Type: application/json" \
   -H "X-Actor: docker-smoke" \
   -d "{\"name\":\"${PROJECT}\"}" "${BASE}/api/v1/projects" || true)"
-if [[ "${PROJ_CODE}" != "200" && "${PROJ_CODE}" != "201" && "${PROJ_CODE}" != "409" && "${PROJ_CODE}" != "400" ]]; then
+# 409/400/422 = already exists (API returns validation_failed with that message)
+if [[ "${PROJ_CODE}" != "200" && "${PROJ_CODE}" != "201" && "${PROJ_CODE}" != "409" && "${PROJ_CODE}" != "400" && "${PROJ_CODE}" != "422" ]]; then
   echo "WARN: project create HTTP ${PROJ_CODE} (continuing if project exists)" >&2
 fi
-api GET "/api/v1/projects" | python3 -c "import json,sys; d=json.load(sys.stdin); names=[(p.get('name') if isinstance(p,dict) else p) for p in (d if isinstance(d,list) else d.get('projects',[]))]; assert '${PROJECT}' in names, names; print('project ok')"
+api GET "/api/v1/projects?limit=200" | python3 -c "import json,sys; d=json.load(sys.stdin); items=d if isinstance(d,list) else (d.get('items') or d.get('projects') or []); names=[(p.get('name') if isinstance(p,dict) else p) for p in items]; assert '${PROJECT}' in names, names; print('project ok')"
 
 GRAPH="$(python3 - <<'PY'
 import json
@@ -114,11 +115,11 @@ except Exception:
  print("unknown")' 2>/dev/null || echo unknown)"
   echo "  status=${STATUS}"
   case "${STATUS}" in
-    completed|failed|cancelled|success|error) break ;;
+    completed|failed|cancelled|success|succeeded|error) break ;;
   esac
   sleep 1
 done
-if [[ "${STATUS}" != "completed" && "${STATUS}" != "success" ]]; then
+if [[ "${STATUS}" != "completed" && "${STATUS}" != "success" && "${STATUS}" != "succeeded" ]]; then
   echo "FAIL: run did not complete (status=${STATUS})" >&2
   api GET "/api/v1/runs/${RUN_ID}" >/tmp/graphyn_smoke_run.json || true
   python3 -c 'import json; print(json.load(open("/tmp/graphyn_smoke_run.json")) )' 2>/dev/null | head -c 2000 >&2 || true

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import app.core.tf_runtime as tf_runtime
+import app.core.ml.tf_runtime as tf_runtime
 
 
 class _FakeGPU:

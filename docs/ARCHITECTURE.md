@@ -23,20 +23,22 @@
 
 ## 1. System Layers
 
+A package's public names are the ones without a leading underscore, exported from its `__init__.py` (`__all__`) or from the submodule that owns them. Callers outside a module import those public names. A leading underscore is private to the file that defines it. Interface packages (`app.api`, `app.cli`, `app.mcp`) do not import each other.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │  INTERFACE LAYER                                                    │
 │                                                                     │
 │  app/api/          app/core/sdk.py    app/cli/      app/mcp/        │
 │  FastAPI REST       Pipeline class    argparse CLI  stdio JSON-RPC  │
-│  17 routers         PipelineNode      CLI + worker  29 tools        │
+│  18 routers         PipelineNode      CLI + worker  77 tools (+1)   │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │ intended: get_backend().execute()
                                │ (see docs/KNOWN_ISSUES for exceptions)
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  BACKEND ABSTRACTION LAYER                                          │
 │                                                                     │
-│  app/core/runtime_backend.py                                        │
+│  app/core/execution/runtime_backend.py                                        │
 │  ├── RuntimeBackend (ABC)     canonical execution entry point       │
 │  ├── LocalPythonBackend       default — delegates to orchestrator   │
 │  ├── DistributedBackend       GRAPHYN_BACKEND=distributed (see      │
@@ -48,23 +50,23 @@
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  EXECUTION LAYER                                                    │
 │                                                                     │
-│  app/core/orchestrator.py                                           │
+│  app/core/execution/orchestrator.py                                           │
 │  ├── run_pipeline_ir()        synchronous shim                      │
 │  └── run_pipeline_ir_async()  async implementation                  │
 │                                                                     │
-│  app/core/planner.py                                                │
+│  app/core/execution/planner.py                                                │
 │  ├── PipelineGraph            DAG builder + topo sort + waves       │
 │  └── _ir_to_pipeline_config() IR → PipelineConfig conversion        │
 │                                                                     │
-│  app/core/node_executor.py                                          │
+│  app/core/execution/node_executor.py                                          │
 │  └── NodeExecutor             per-node lifecycle driver + retry     │
-│  app/core/write_paths.py      mkdir jailed write dirs before process│
+│  app/core/paths/write_paths.py      mkdir jailed write dirs before process│
 │                                                                     │
-│  app/core/executor.py                                               │
+│  app/core/execution/executor.py                                               │
 │  └── ParallelExecutor         wave-based asyncio + ThreadPool       │
 │                                                                     │
-│  app/core/conditions.py       safe condition expression evaluator   │
-│  app/core/events.py           FileWatcher / Timer / Queue sources   │
+│  app/core/execution/conditions.py       safe condition expression evaluator   │
+│  app/core/execution/events.py           FileWatcher / Timer / Queue sources   │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -81,7 +83,7 @@
 │  app/core/nodes/catalogue.py  TypeCatalogue (FQN → type)            │
 │  app/core/nodes/compat.py     CompatibilityChecker                  │
 │  app/core/nodes/errors.py     Exception hierarchy                   │
-│  app/core/registry_runtime.py get_registry(), resolve_capability()  │
+│  app/core/host/registry_runtime.py get_registry(), resolve_capability()  │
 │                                                                     │
 │  PluginPackage/Audio/         19 audio plugin nodes                 │
 │  PluginPackage/Common/        29 common plugin nodes                │
@@ -99,23 +101,23 @@
 ┌──────────────────────────────▼──────────────────────────────────────┐
 │  BACKEND SERVICES LAYER                                             │
 │                                                                     │
-│  app/core/run_journal.py      RunManager: run dir + persistence     │
-│  app/core/run_control.py      Active run registry (in-proc/Redis)   │
-│  app/core/run_manager.py      Re-export shim (backward compat only) │
+│  app/core/runs/               Run journal, control, listing, checkpoints │
+│  app/core/runs/run_journal.py RunManager: run dir + persistence     │
+│  app/core/runs/run_control.py Active run registry (in-proc/Redis)   │
 │  app/core/distributed/        Workers, job queue, durable store,    │
 │                               placement, blob transfer (≠ run_control)│
-│  app/core/trace.py            Unified backtrack Trace payload       │
-│  app/core/audit.py            Append-only audit/events.jsonl        │
+│  app/core/runs/trace.py            Unified backtrack Trace payload       │
+│  app/core/trust/audit.py            Append-only audit/events.jsonl        │
 │  app/core/agentic/            Graph proposals (propose/accept)      │
-│  app/core/experiments.py      Experiment list/compare aggregation   │
+│  app/core/mlops/experiments.py      Experiment list/compare aggregation   │
 │  app/core/logger.py           PipelineLogger: structured events     │
-│  app/core/pipeline_cache.py   PipelineCache: SHA-256 keyed          │
-│  app/core/artifact_store.py   ArtifactStore: content-addressed      │
-│  app/core/artifact_serializer.py  ArtifactSerializerRegistry:       │
+│  app/core/execution/pipeline_cache.py   PipelineCache: SHA-256 keyed          │
+│  app/core/artifacts/artifact_store.py   ArtifactStore: content-addressed      │
+│  app/core/artifacts/artifact_serializer.py  ArtifactSerializerRegistry:       │
 │                               pluggable type handler interface       │
-│  app/core/checkpoint.py       Per-node checkpoint read/write        │
-│  app/core/provenance.py       ProvenanceStore: lineage tracking     │
-│  app/core/webhook.py          Outbound webhook delivery             │
+│  app/core/runs/checkpoint.py       Per-node checkpoint read/write        │
+│  app/core/artifacts/provenance.py       ProvenanceStore: lineage tracking     │
+│  app/core/notify/webhook.py          Outbound webhook delivery             │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────────┐
@@ -506,7 +508,7 @@ get_backend().execute(graph, ...)
 | Run IDs | ASCII alphanumeric only (regex validated) |
 | Upload filenames | Replaced with timestamped names |
 | Artifact IDs | `^[A-Za-z0-9_-]+$` |
-| Condition expressions | AST whitelist: comparisons, boolean ops, `len()`, `output["key"]` only |
+| Condition expressions | AST whitelist: comparisons, boolean ops, arithmetic, `len()`, `output["key"]` only; max 500 chars; `*` and `%` are numeric-only (no string/list repetition or printf formatting) with an integer-size guard; syntax checked at validate time (`VAL-COND`) |
 | API auth | Optional Bearer via `GRAPHYN_API_TOKEN` (shared single-tenant; see `docs/TRUST_MODEL.md`) |
 | MCP auth | Token at `arguments._meta.auth_token` (same shared token policy) |
 | Plugin sources | `GRAPHYN_PLUGIN_ALLOWED_SOURCES` — comma-separated base-URL allowlist (structural host/path match, not string prefix); empty = allow all |
@@ -515,7 +517,7 @@ get_backend().execute(graph, ...)
 | Checkpoint node IDs | Null byte rejection + path traversal guard via `os.path.abspath` prefix check |
 | Webhook DNS | Resolves once, connects to IP directly with `Host` header (DNS rebinding fix) |
 | `python_code` | Trusted-operator `exec` with AST filters (defense-in-depth, **not** a sandbox); see `docs/TRUST_MODEL.md` |
-| Workflow HTTP egress | `GRAPHYN_HTTP_EGRESS_MODE=trusted\|restricted` + optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST` on `http_request`, `http_webhook`, `asr_transcribe`, `structured_llm` (`app/core/egress.py`) |
+| Workflow HTTP egress | `GRAPHYN_HTTP_EGRESS_MODE=trusted\|restricted` + optional `GRAPHYN_HTTP_EGRESS_ALLOWLIST` on `http_request`, `http_webhook`, `asr_transcribe`, `structured_llm` (`app/core/trust/egress.py`) |
 
 ---
 

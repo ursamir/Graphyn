@@ -112,7 +112,7 @@ class TestCleanup:
         keep_dir, keep_art = _make_finished_run(tmp_workspace, "keep-latest")
         gone_dir, gone_art = _make_finished_run(tmp_workspace, "gone-run")
         run_dir, run_art = _make_finished_run(tmp_workspace, "live-run", status="running")
-        from app.core.workspace_paths import publish_latest
+        from app.core.paths.workspace_paths import publish_latest
 
         publish_latest("demo", "keep-latest")
         resp = api_client.post(

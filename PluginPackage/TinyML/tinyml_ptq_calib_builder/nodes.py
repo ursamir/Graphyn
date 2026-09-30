@@ -1,9 +1,11 @@
 """TinymlPtqCalibBuilderNode — Build PTQ representative set
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+
+import random
 
 import importlib
 import logging
@@ -18,7 +20,43 @@ from app.core.nodes.ports import InputPort, OutputPort
 
 from app.models.dataset_artifact import DatasetArtifact
 
+try:
+    _pkg = __name__.rsplit(".", 1)[0] if "." in __name__ else __name__
+    _types = importlib.import_module(f"{_pkg}.types")
+except (ImportError, ModuleNotFoundError):
+    try:
+        _types = importlib.import_module("tinyml_ptq_calib_builder.types")
+    except (ImportError, ModuleNotFoundError):
+        from . import types as _types  # type: ignore
+
 log = logging.getLogger(__name__)
+
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _as_list(obj: Any) -> list:
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, tuple):
+        return list(obj)
+    return [obj]
+
+def _calib(config, inputs, types):
+    items = _as_list(inputs.get("input"))
+    max_n = int(_cfg(config, "max_samples", 64) or 64)
+    seed = int(_cfg(config, "seed", 0) or 0)
+    rng = random.Random(seed)
+    chosen = items
+    if len(items) > max_n:
+        chosen = rng.sample(items, max_n)
+    return {"samples": chosen, "n": len(chosen), "stratify": bool(_cfg(config, "stratify", False))}
+
 
 
 class TinymlPtqCalibBuilderNode(Node):
@@ -32,7 +70,7 @@ class TinymlPtqCalibBuilderNode(Node):
         description="Build PTQ representative set",
         category="ML",
         version="0.1.0",
-        tags=["tinyml", "stub"],
+        tags=["tinyml"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -49,7 +87,7 @@ class TinymlPtqCalibBuilderNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         max_samples: int = Field(default=100, title="Max samples", description="Max samples.")
         stratify: bool = Field(default=True, title="Stratify", description="Stratify.")
         seed: int = Field(default=42, title="Seed", description="Seed.")
@@ -61,10 +99,17 @@ class TinymlPtqCalibBuilderNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'tinyml' / 'tinyml_ptq_calib_builder'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = DatasetArtifact(labels=[], input_shape=(), n_classes=0, metadata={"stub": True})
             return {"output": result}
@@ -74,23 +119,8 @@ class TinymlPtqCalibBuilderNode(Node):
         except ImportError as exc:
             raise ImportError(f"tinyml_ptq_calib_builder: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'tinyml' / 'tinyml_ptq_calib_builder'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": DatasetArtifact(labels=[], input_shape=(), n_classes=0, metadata={"stub": True})}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _calib(self.config, inputs, _types)}

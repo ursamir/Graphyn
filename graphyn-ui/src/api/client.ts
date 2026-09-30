@@ -59,16 +59,21 @@ export function staticUrl(path: string): string {
   return `${STATIC_BASE_URL}${normalized}`
 }
 
+/** Actor name configured in Admin → Access (localStorage `graphyn.actor`), or ''. */
+export function configuredActor(): string {
+  try {
+    return localStorage.getItem('graphyn.actor')?.trim() ?? ''
+  } catch {
+    return ''
+  }
+}
+
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {}
   const token = getApiToken()
   if (token) headers.Authorization = `Bearer ${token}`
-  try {
-    const actor = localStorage.getItem('graphyn.actor')?.trim()
-    if (actor) headers['X-Actor'] = actor
-  } catch {
-    /* ignore */
-  }
+  const actor = configuredActor()
+  if (actor) headers['X-Actor'] = actor
   return headers
 }
 
@@ -102,7 +107,7 @@ function stringifyObjectDetail(d: Record<string, unknown>): string {
   return JSON.stringify(d)
 }
 
-async function parseError(res: Response, path: string): Promise<ApiError> {
+export async function parseError(res: Response, path: string): Promise<ApiError> {
   let body: unknown
   let detail = `HTTP ${res.status}`
   try {
@@ -138,12 +143,21 @@ export async function apiFetch(path: string, init?: ApiOptions): Promise<Respons
   const method = (rest.method ?? 'GET').toUpperCase()
   const maxAttempts = method === 'GET' ? Math.max(1, retries + 1) : 1
 
+  const userSignal = rest.signal ?? undefined
   let lastErr: unknown
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (userSignal?.aborted) {
+      lastErr = new DOMException('Aborted', 'AbortError')
+      break
+    }
     const controller = new AbortController()
-    const userSignal = rest.signal
+    // Forward caller abort for the whole response lifetime (headers AND body
+    // streaming). The listener is intentionally NOT removed once headers
+    // arrive: callers reading an NDJSON/SSE body rely on abort() to stop it.
+    // `once` + the controller going out of scope keeps this leak-free.
     const onAbort = () => controller.abort()
-    userSignal?.addEventListener('abort', onAbort)
+    userSignal?.addEventListener('abort', onAbort, { once: true })
+    // Timeout applies to the headers phase only; long streams must not be cut.
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const res = await fetch(url, {
@@ -157,12 +171,13 @@ export async function apiFetch(path: string, init?: ApiOptions): Promise<Respons
         },
       })
       clearTimeout(timer)
-      userSignal?.removeEventListener('abort', onAbort)
       return res
     } catch (err) {
       clearTimeout(timer)
       userSignal?.removeEventListener('abort', onAbort)
       lastErr = err
+      // Never retry a request the caller deliberately aborted.
+      if (userSignal?.aborted) break
       if (attempt < maxAttempts - 1) {
         await new Promise((r) => setTimeout(r, 250 * (attempt + 1)))
         continue

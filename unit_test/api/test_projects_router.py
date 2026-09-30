@@ -75,13 +75,13 @@ class TestCreateProject:
             api_client.post("/api/v1/projects", json={"name": "my-project"})
         pm.create.assert_called_once_with("my-project")
 
-    def test_duplicate_project_returns_422(self, api_client):
-        """POST /api/v1/projects with duplicate name returns 422."""
+    def test_duplicate_project_returns_409(self, api_client):
+        """POST /api/v1/projects with duplicate name returns 409 (conflict, not validation)."""
         pm = _make_pm()
         pm.create.side_effect = ValueError("Project already exists")
         with patch("app.api.routers.projects._pm", pm):
             resp = api_client.post("/api/v1/projects", json={"name": "existing-proj"})
-        assert resp.status_code == 422
+        assert resp.status_code == 409
 
 
 class TestDeleteProject:

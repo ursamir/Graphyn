@@ -169,7 +169,7 @@ class TrainerNode(Node):
 
     def _configure_keras_device(self) -> str:
         """Select TF device string and enable VRAM sharing. Returns '/GPU:0' or '/CPU:0'."""
-        from app.core.tf_runtime import select_keras_device
+        from app.core.ml.tf_runtime import select_keras_device
 
         import tensorflow as tf  # type: ignore
 
@@ -870,7 +870,7 @@ class ModelBuilderNode(Node):
 
         if backend == "keras":
             try:
-                from app.core.tf_runtime import select_keras_device
+                from app.core.ml.tf_runtime import select_keras_device
                 import tensorflow as tf  # type: ignore
 
                 device = select_keras_device("auto")

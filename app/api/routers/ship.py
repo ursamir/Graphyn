@@ -4,7 +4,7 @@ Bounded Context:  REST API Layer
 Responsibility:   Ship package REST (§9.2.14) under /projects/{name}/ship/packages.
 Owns:             list/create/get/download/promote/transition routes.
 Public Surface:   FastAPI router mounted at /api/v1.
-Must NOT:         Contain persistence — delegate to app.core.ship_packages.
+Must NOT:         Contain persistence — delegate to app.core.mlops.ship_packages.
 Dependencies:     fastapi, ship_packages, idempotency, actor, errors patterns.
 Reason To Change: New ship package endpoint or contract change.
 """
@@ -83,7 +83,7 @@ def list_ship_packages(
     limit: int = Query(100, ge=1, le=500),
     env: Optional[str] = Query(None),
 ):
-    from app.core.ship_packages import list_packages
+    from app.core.mlops.ship_packages import list_packages
 
     project_dir = _require_project(name)
     return list_packages(project_dir, limit=limit, env=env)
@@ -92,8 +92,8 @@ def list_ship_packages(
 @router.post("/{name}/ship/packages", summary="Create a ship package", status_code=201)
 def create_ship_package(name: str, body: CreateShipPackageBody, request: Request):
     """POST create — Idempotency-Key required (API-CONV-004 / §9.2.14)."""
-    from app.api.idempotency import begin_idempotent, complete_idempotent
-    from app.core.ship_packages import InvalidPackageTransition, create_package
+    from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
+    from app.core.mlops.ship_packages import InvalidPackageTransition, create_package
 
     key = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
     if not key or not str(key).strip():
@@ -110,39 +110,40 @@ def create_ship_package(name: str, body: CreateShipPackageBody, request: Request
     if cached is not None:
         return cached
 
-    project_dir = _require_project(name)
-    try:
-        result = create_package(
-            project_dir,
-            project_name=name,
-            model_name=body.model_name,
-            model_stage_or_version=body.model_stage_or_version,
-            target=body.target,
-            env=body.env or "draft",
-            actor=resolve_actor(request),
-            notes=body.notes,
-            unsigned_allowed=body.unsigned_allowed,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": str(exc)},
-        ) from exc
-    except InvalidPackageTransition as exc:
-        raise _invalid_transition("new", exc.current, exc.action) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "validation_failed", "message": str(exc)},
-        ) from exc
+    with idempotency_guard(request):
+        project_dir = _require_project(name)
+        try:
+            result = create_package(
+                project_dir,
+                project_name=name,
+                model_name=body.model_name,
+                model_stage_or_version=body.model_stage_or_version,
+                target=body.target,
+                env=body.env or "draft",
+                actor=resolve_actor(request),
+                notes=body.notes,
+                unsigned_allowed=body.unsigned_allowed,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": str(exc)},
+            ) from exc
+        except InvalidPackageTransition as exc:
+            raise _invalid_transition("new", exc.current, exc.action) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "validation_failed", "message": str(exc)},
+            ) from exc
 
-    complete_idempotent(request, status_code=201, body=result)
+        complete_idempotent(request, status_code=201, body=result)
     return JSONResponse(status_code=201, content=result)
 
 
 @router.get("/{name}/ship/packages/{package_id}", summary="Get ship package")
 def get_ship_package(name: str, package_id: str):
-    from app.core.ship_packages import get_package
+    from app.core.mlops.ship_packages import get_package
 
     project_dir = _require_project(name)
     try:
@@ -164,7 +165,7 @@ def get_ship_package(name: str, package_id: str):
     summary="Download ship package archive",
 )
 def download_ship_package(name: str, package_id: str):
-    from app.core.ship_packages import download_package_path
+    from app.core.mlops.ship_packages import download_package_path
 
     project_dir = _require_project(name)
     try:
@@ -203,8 +204,8 @@ def promote_ship_package(
     name: str, package_id: str, body: PromoteShipPackageBody, request: Request
 ):
     """Promote — Idempotency-Key required."""
-    from app.api.idempotency import begin_idempotent, complete_idempotent
-    from app.core.ship_packages import InvalidPackageTransition, promote_package
+    from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
+    from app.core.mlops.ship_packages import InvalidPackageTransition, promote_package
 
     key = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
     if not key or not str(key).strip():
@@ -225,42 +226,43 @@ def promote_ship_package(
     if cached is not None:
         return cached
 
-    from app.api.concurrency import resolve_expected_version, version_conflict_http
-    from app.core.errors import VersionConflict
+    with idempotency_guard(request):
+        from app.api.concurrency import resolve_expected_version, version_conflict_http
+        from app.core.errors import VersionConflict
 
-    expected, via_if_match = resolve_expected_version(request, body.resource_version)
-    project_dir = _require_project(name)
-    try:
-        result = promote_package(
-            project_dir,
-            package_id,
-            to_env=body.to_env,
-            approve=body.approve,
-            actor=resolve_actor(request),
-            expected_resource_version=expected,
-            via_if_match=via_if_match,
-        )
-    except VersionConflict as exc:
-        raise version_conflict_http(exc) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "message": str(exc)},
-        ) from exc
-    except InvalidPackageTransition as exc:
-        raise _invalid_transition(package_id, exc.current, exc.action) from exc
-    except ValueError as exc:
-        msg = str(exc)
-        code = "validation_failed"
-        status = 422
-        if "approve" in msg.lower():
-            status = 400
-        raise HTTPException(
-            status_code=status,
-            detail={"error": code, "message": msg},
-        ) from exc
+        expected, via_if_match = resolve_expected_version(request, body.resource_version)
+        project_dir = _require_project(name)
+        try:
+            result = promote_package(
+                project_dir,
+                package_id,
+                to_env=body.to_env,
+                approve=body.approve,
+                actor=resolve_actor(request),
+                expected_resource_version=expected,
+                via_if_match=via_if_match,
+            )
+        except VersionConflict as exc:
+            raise version_conflict_http(exc) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": str(exc)},
+            ) from exc
+        except InvalidPackageTransition as exc:
+            raise _invalid_transition(package_id, exc.current, exc.action) from exc
+        except ValueError as exc:
+            msg = str(exc)
+            code = "validation_failed"
+            status = 422
+            if "approve" in msg.lower():
+                status = 400
+            raise HTTPException(
+                status_code=status,
+                detail={"error": code, "message": msg},
+            ) from exc
 
-    complete_idempotent(request, status_code=200, body=result)
+        complete_idempotent(request, status_code=200, body=result)
     return result
 
 
@@ -271,7 +273,7 @@ def promote_ship_package(
 def transition_ship_package(
     name: str, package_id: str, body: TransitionShipPackageBody, request: Request
 ):
-    from app.core.ship_packages import InvalidPackageTransition, transition_package
+    from app.core.mlops.ship_packages import InvalidPackageTransition, transition_package
 
     from app.api.concurrency import resolve_expected_version, version_conflict_http
     from app.core.errors import VersionConflict

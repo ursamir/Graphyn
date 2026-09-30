@@ -7,7 +7,7 @@ platform_version = ">=0.0"
 entry_points     = ["types.py", "nodes.py"]
 license          = "MIT"
 
-tags = ["agents", "tool", "stub"]
+tags = ["agents", "tool"]
 
 dependencies = [
     "numpy>=1.24",
@@ -17,6 +17,6 @@ runtime = "inprocess"
 node_types = ["tool_router"]
 
 [config_schema.tool_router]
-stub = { type = "boolean", title = "Stub mode", default = true, description = "When true (default), return typed minimal outputs without heavy ML deps." }
-tools = { type = "array", title = "Tools", default = [], description = "Tools." }
-strict = { type = "boolean", title = "Strict", default = true, description = "Strict." }
+stub = { type = "boolean", title = "Stub mode", default = false, description = "Opt-in placeholder. Default runs the real implementation." }
+tools = { type = "array", title = "Tools", default = [], description = "Tool names or {name, keywords[]} dicts." }
+strict = { type = "boolean", title = "Strict", default = true, description = "When false, unmatched text falls back to the first tool." }

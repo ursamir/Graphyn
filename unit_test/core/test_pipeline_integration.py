@@ -21,7 +21,7 @@ def _install_plugins(tmp_dir: str):
     from app.core.nodes.registry import NodeRegistry
     from app.core.plugins.manager import PluginManager
     reg = NodeRegistry()
-    mgr = PluginManager(registry=reg)
+    mgr = PluginManager(registry=reg, base_dir=tmp_dir)
     mgr._plugins_dir = tmp_dir
     mgr.install("PluginPackage/Audio/audio_conditioner/")
     mgr.install("PluginPackage/Audio/feature_frontend/")
@@ -38,6 +38,7 @@ def _make_sample(sr=16000, n=4000):
 
 # ── Two-node pipeline runs and returns ArtifactCollection ────────────────────
 
+@pytest.mark.requires_plugins
 def test_two_node_pipeline_returns_artifact_collection(tmp_workspace):
     """Req 14 — two-node pipeline [audio_conditioner → feature_frontend] returns ArtifactCollection."""
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -60,6 +61,7 @@ def test_two_node_pipeline_returns_artifact_collection(tmp_workspace):
 
 # ── Cache hit on second run ───────────────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_cache_hit_on_second_run(tmp_workspace):
     """Req 14 — second run with same input uses cache."""
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -86,9 +88,10 @@ def test_cache_hit_on_second_run(tmp_workspace):
 
 # ── Cycle raises PipelineGraphError ──────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_cycle_raises_pipeline_graph_error():
     """Req 14 — cycle in pipeline raises PipelineGraphError."""
-    from app.core.planner import EdgeSpec, NodeSpec, PipelineConfig, PipelineGraph
+    from app.core.execution.planner import EdgeSpec, NodeSpec, PipelineConfig, PipelineGraph
 
     nodes = [
         NodeSpec(node_id="a", node_type="audio_conditioner", config={}),
@@ -105,6 +108,7 @@ def test_cycle_raises_pipeline_graph_error():
 
 # ── parallel=True completes ───────────────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_parallel_true_completes(tmp_workspace):
     """Req 14 — parallel=True completes without error."""
     import concurrent.futures
@@ -136,6 +140,7 @@ def test_parallel_true_completes(tmp_workspace):
 
 # ── subscribe callback receives events ───────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_subscribe_callback_receives_events(tmp_workspace):
     """Req 14 — subscribe callback receives pipeline events."""
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -163,6 +168,7 @@ def test_subscribe_callback_receives_events(tmp_workspace):
 
 # ── unsubscribe stops forwarding ─────────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_unsubscribe_stops_forwarding(tmp_workspace):
     """Req 14 — unsubscribe callable stops event forwarding."""
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -194,7 +200,7 @@ def test_retry_on_first_attempt_failure(tmp_workspace):
         from app.core.nodes.registry import NodeRegistry
         from app.core.plugins.manager import PluginManager
         reg = NodeRegistry()
-        mgr = PluginManager(registry=reg)
+        mgr = PluginManager(registry=reg, base_dir=str(Path(tmp_dir) / "retry"))
         mgr._plugins_dir = tmp_dir
         mgr.install("PluginPackage/Audio/audio_conditioner/")
 
@@ -211,7 +217,7 @@ def test_retry_on_first_attempt_failure(tmp_workspace):
                 raise RuntimeError("Simulated first-attempt failure")
             return original_process(inputs)
 
-        from app.core.node_executor import NodeExecutor
+        from app.core.execution.node_executor import NodeExecutor
         from app.core.nodes.retry import RetryPolicy
 
         node.retry_policy = RetryPolicy(max_attempts=2, backoff_seconds=0.0)
@@ -227,6 +233,7 @@ def test_retry_on_first_attempt_failure(tmp_workspace):
 
 # ── checkpoint writes files ───────────────────────────────────────────────────
 
+@pytest.mark.requires_plugins
 def test_checkpoint_writes_files(tmp_workspace):
     """Req 14 — checkpoint=True writes checkpoint files."""
     with tempfile.TemporaryDirectory() as tmp_dir:

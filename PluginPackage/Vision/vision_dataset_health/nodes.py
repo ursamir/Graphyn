@@ -1,9 +1,10 @@
 """VisionDatasetHealthNode — Class balance / box size health
 
 Auto-scaffolded from docs/PLUGIN_NODE_PLATFORM_CATALOG.json.
-Default config.stub=True returns typed minimal outputs without heavy deps.
+Default config.stub=False runs the real implementation.
 """
 from __future__ import annotations
+from collections import Counter
 
 import importlib
 import logging
@@ -32,6 +33,63 @@ VisionDatasetArtifact = _types.VisionDatasetArtifact
 log = logging.getLogger(__name__)
 
 
+def _num_or(value, default):
+    """Config numeric with a real default: only None falls back (0 stays 0)."""
+    return default if value is None or value == "" else value
+
+def _cfg(config: Any, name: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+def _T(types: Any, name: str, **kwargs: Any) -> Any:
+    cls = getattr(types, name, None) if types is not None else None
+    if cls is None:
+        return kwargs
+    fields = getattr(cls, "model_fields", None)
+    if isinstance(fields, dict) and fields:
+        kwargs = {k: v for k, v in kwargs.items() if k in fields}
+    return cls(**kwargs)
+
+def _dump(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return obj
+
+def _as_list(obj: Any) -> list:
+    if obj is None:
+        return []
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, tuple):
+        return list(obj)
+    return [obj]
+
+def _vision_images(obj: Any) -> list[dict]:
+    out = []
+    for item in _as_list(obj):
+        data = _dump(item)
+        if isinstance(data, str):
+            data = {"path": data}
+        if isinstance(data, dict):
+            out.append(data)
+    return out
+
+def _vision_health(config, inputs, types):
+    images = _vision_images(inputs.get("input"))
+    counts = Counter(str(im.get("label") or "unknown") for im in images)
+    empty = [im.get("path") for im in images if not im.get("path") and not im.get("image")]
+    min_per = int(_num_or(_cfg(config, "min_per_class", 1), 1))
+    under = [k for k, v in counts.items() if v < min_per]
+    issues = [f"under-min:{k}" for k in under]
+    if bool(_cfg(config, "flag_empty_images", True)):
+        issues.extend(f"empty:{p}" for p in empty[:20])
+    return _T(types, "DatasetHealthReport", ok=not issues, issues=issues, stats={"counts": dict(counts), "n": len(images)})
+
+
+
 class VisionDatasetHealthNode(Node):
     """Class balance / box size health"""
 
@@ -43,7 +101,7 @@ class VisionDatasetHealthNode(Node):
         description="Class balance / box size health",
         category="Quality",
         version="0.1.0",
-        tags=["vision", "stub"],
+        tags=["vision"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=True,
@@ -60,7 +118,7 @@ class VisionDatasetHealthNode(Node):
     }
 
     class Config(NodeConfig):
-        stub: bool = Field(default=True, title="Stub mode", description="When true, return typed minimal outputs without heavy ML deps.")
+        stub: bool = Field(default=False, title="Stub mode", description="Opt-in placeholder. Default runs the real implementation.")
         min_per_class: int = Field(default=20, title="Min per class", description="Min per class.")
         flag_empty_images: bool = Field(default=True, title="Flag empty images", description="Flag empty images.")
 
@@ -71,10 +129,17 @@ class VisionDatasetHealthNode(Node):
         if not isinstance(inputs, dict):
             inputs = {"input": inputs}
 
-        stub = bool(getattr(self.config, 'stub', True))
+        stub = bool(getattr(self.config, 'stub', False))
         out_dir = Path('workspace/artifacts') / 'vision' / 'vision_dataset_health'
         if stub:
-            out_dir.mkdir(parents=True, exist_ok=True)
+            log.warning(
+                "%s: stub mode (config.stub=True) returned a placeholder, not a real result",
+                getattr(self, "node_type", type(self).__name__),
+            )
+            try:
+                out_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
             _out = out_dir / 'stub'
             result = DatasetHealthReport()
             return {"output": result}
@@ -84,23 +149,8 @@ class VisionDatasetHealthNode(Node):
         except ImportError as exc:
             raise ImportError(f"vision_dataset_health: optional dependency missing ({exc}). Install plugin optional_dependencies or set config.stub=True.") from exc
 
+
+
     def _process_real(self, inputs: dict):
-        """Override point for richer backends; default = stub path."""
-        # Keep default identical to stub so unit tests stay offline.
-        prev = self.config.stub
-        object.__setattr__(self.config, 'stub', True) if hasattr(self.config, 'model_copy') else None
-        try:
-            self.config.stub = True  # type: ignore[misc]
-        except Exception:
-            pass
-        try:
-            # Re-enter stub branch
-            out_dir = Path('workspace/artifacts') / 'vision' / 'vision_dataset_health'
-            out_dir.mkdir(parents=True, exist_ok=True)
-            _out = out_dir / 'stub'
-            return {"output": DatasetHealthReport()}
-        finally:
-            try:
-                self.config.stub = prev  # type: ignore[misc]
-            except Exception:
-                pass
+        """Run this node's real implementation."""
+        return {"output": _vision_health(self.config, inputs, _types)}

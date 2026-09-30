@@ -1,0 +1,194 @@
+# app/core/trust/secrets.py
+"""Local file-backed named secret store under GRAPHYN_HOME/secrets.
+
+API/MCP list endpoints must never return secret values — names only.
+Nodes resolve provider keys via resolve_secret() (store, then process env).
+
+Env fallback is restricted (graph authors choose secret *names*): process env
+is consulted only for conventional secret-shaped names (``*_API_KEY``,
+``*_KEY``, ``*_TOKEN``, ``*_SECRET``, ``*_PASSWORD``, ``*_DSN``, ``*_URL``,
+``*_URI``) that do **not** start with ``GRAPHYN_`` (platform internals such as
+``GRAPHYN_CREDENTIALS_KEY`` / ``GRAPHYN_API_TOKEN``), or for names listed in
+``GRAPHYN_SECRET_ENV_ALLOWLIST`` (comma-separated). The file-backed store is
+unaffected — operators create those entries explicitly.
+"""
+from __future__ import annotations
+
+import os
+import re
+import stat
+import tempfile
+from pathlib import Path
+
+from app.core.config import secrets_dir
+
+_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_SECRET_SUFFIX_RE = re.compile(
+    r"(?:_API_KEY|_APIKEY|_KEY|_TOKEN|_SECRET|_PASSWORD|_DSN|_URL|_URI)$"
+)
+
+
+def _env_allowlist() -> frozenset[str]:
+    raw = os.environ.get("GRAPHYN_SECRET_ENV_ALLOWLIST", "") or ""
+    return frozenset(n.strip() for n in raw.split(",") if n.strip())
+
+
+def env_secret_name_allowed(name: str) -> bool:
+    """True if *name* may be read from process env as a node-selected secret.
+
+    Never allows ``GRAPHYN_*`` internals unless explicitly allowlisted via
+    ``GRAPHYN_SECRET_ENV_ALLOWLIST``.
+    """
+    cleaned = (name or "").strip()
+    if not cleaned or not _NAME_RE.match(cleaned):
+        return False
+    if cleaned in _env_allowlist():
+        return True
+    if cleaned.upper().startswith("GRAPHYN_"):
+        return False
+    return bool(_ENV_SECRET_SUFFIX_RE.search(cleaned.upper()))
+
+
+class SecretError(ValueError):
+    """Invalid secret name or empty value."""
+
+
+def validate_secret_name(name: str) -> str:
+    cleaned = (name or "").strip()
+    if not cleaned or not _NAME_RE.match(cleaned):
+        raise SecretError(
+            f"Invalid secret name {name!r}. Use an env-style identifier "
+            "(e.g. OPENAI_API_KEY, DEEPGRAM_API_KEY)."
+        )
+    return cleaned
+
+
+def _secret_path(name: str) -> Path:
+    return secrets_dir() / validate_secret_name(name)
+
+
+def _ensure_dir() -> Path:
+    root = secrets_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(root, 0o700)
+    except OSError:
+        pass
+    return root
+
+
+def secret_resource_version(name: str) -> str:
+    """Opaque mtime-based token for If-Match (API-CONV-005)."""
+    path = _secret_path(name)
+    try:
+        return str(path.stat().st_mtime_ns)
+    except OSError:
+        return "0"
+
+
+def secret_meta(name: str) -> dict:
+    """Names-only metadata including resource_version (never value)."""
+    cleaned = validate_secret_name(name)
+    path = _secret_path(cleaned)
+    if not path.is_file():
+        raise FileNotFoundError(f"Secret {cleaned!r} not found")
+    try:
+        updated_at = path.stat().st_mtime
+        from datetime import datetime, timezone
+        updated_iso = datetime.fromtimestamp(updated_at, tz=timezone.utc).isoformat()
+    except OSError:
+        updated_iso = None
+    return {
+        "name": cleaned,
+        "updated_at": updated_iso,
+        "resource_version": secret_resource_version(cleaned),
+    }
+
+
+def list_secret_names() -> list[str]:
+    """Return stored secret names only (never values)."""
+    root = secrets_dir()
+    if not root.exists():
+        return []
+    names = []
+    for p in sorted(root.iterdir()):
+        if p.is_file() and not p.name.startswith(".") and _NAME_RE.match(p.name):
+            names.append(p.name)
+    return names
+
+
+def get_secret(name: str) -> str:
+    """Return the stored value for *name*, or empty string if missing."""
+    path = _secret_path(name)
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").rstrip("\r\n")
+    except OSError:
+        return ""
+
+
+def set_secret(name: str, value: str) -> str:
+    """Write *value* to a 0600 file. Returns the name. Never logs the value."""
+    cleaned = validate_secret_name(name)
+    if value is None or str(value) == "":
+        raise SecretError(f"Secret {cleaned} value must not be empty.")
+    text = str(value)
+    if text.endswith("\n") and text.count("\n") == 1:
+        text = text[:-1]
+    if not text:
+        raise SecretError(f"Secret {cleaned} value must not be empty.")
+    root = _ensure_dir()
+    dest = root / cleaned
+    fd, tmp = tempfile.mkstemp(prefix=f".{cleaned}.", dir=str(root), text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, dest)
+        os.chmod(dest, 0o600)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return cleaned
+
+
+def delete_secret(name: str) -> bool:
+    path = _secret_path(name)
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
+def resolve_secret(name: str) -> str:
+    """Resolve a named credential: secret store first, then process env.
+
+    Does not raise on miss — callers fail closed with a named error.
+    """
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return ""
+    try:
+        stored = get_secret(cleaned)
+    except SecretError:
+        stored = ""
+    if stored:
+        return stored
+    if not env_secret_name_allowed(cleaned):
+        # Fail closed: internal GRAPHYN_* keys and non-secret-shaped env vars
+        # are never handed to node code by name.
+        return ""
+    return os.environ.get(cleaned, "").strip()
+
+
+def file_mode(name: str) -> int | None:
+    path = secrets_dir() / validate_secret_name(name)
+    if not path.is_file():
+        return None
+    return stat.S_IMODE(path.stat().st_mode)

@@ -18,7 +18,7 @@ import {
   Search,
   Star,
 } from 'lucide-react'
-import { apiJson } from '../../api/client'
+import { ApiError, apiJson } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
@@ -171,6 +171,15 @@ export default function ProjectsView() {
   const [opening, setOpening] = React.useState(false)
 
   const [spec, setSpec] = React.useState('')
+  type DocKey = 'spec' | 'taxonomy' | 'contract'
+  // Per-tab load errors (non-404). A tab that failed to load must not be
+  // saveable, or Save would overwrite real server content with the empty
+  // placeholder we rendered.
+  const [docErrors, setDocErrors] = React.useState<Partial<Record<DocKey, string>>>({})
+  // Workspace whose spec/taxonomy/contract are currently in the editors.
+  const [docsLoadedFor, setDocsLoadedFor] = React.useState<string | null>(null)
+  // Monotonic open() request id — results of superseded opens are dropped.
+  const openSeqRef = React.useRef(0)
   const [taxonomy, setTaxonomy] = React.useState('[]')
   const [contract, setContract] = React.useState('{}')
   const [versions, setVersions] = React.useState<unknown[]>([])
@@ -261,6 +270,10 @@ export default function ProjectsView() {
   }, [selected, loadAllRuns])
 
   const open = async (name: string) => {
+    const seq = ++openSeqRef.current
+    const stale = () => seq !== openSeqRef.current
+    setDocsLoadedFor(null)
+    setDocErrors({})
     noteRecentWorkspace(name)
     setSelected(name)
     setActiveProject(name)
@@ -275,17 +288,30 @@ export default function ProjectsView() {
     setVersionStats(null)
     setVersionSamples(null)
     setDiffResult(null)
+    const docErrs: Partial<Record<DocKey, string>> = {}
+    // Only "not found" means "empty document"; 401/500/timeouts are errors.
+    const emptyOn404 =
+      <T,>(key: DocKey, fallback: T) =>
+      (err: unknown): T => {
+        if (!(err instanceof ApiError && err.status === 404)) {
+          docErrs[key] = err instanceof Error ? err.message : String(err)
+        }
+        return fallback
+      }
     try {
       const [vers, sp, tax, con, snaps, lin] = await Promise.all([
         apiJson<unknown[]>(`/projects/${encodeURIComponent(name)}/versions`),
-        apiJson<{ markdown?: string }>(`/projects/${encodeURIComponent(name)}/spec`).catch(() => ({
-          markdown: '',
-        })),
-        apiJson(`/projects/${encodeURIComponent(name)}/taxonomy`).catch(() => []),
-        apiJson(`/projects/${encodeURIComponent(name)}/contract`).catch(() => ({})),
+        apiJson<{ markdown?: string }>(`/projects/${encodeURIComponent(name)}/spec`).catch(
+          emptyOn404<{ markdown?: string }>('spec', { markdown: '' }),
+        ),
+        apiJson<unknown>(`/projects/${encodeURIComponent(name)}/taxonomy`).catch(emptyOn404<unknown>('taxonomy', [])),
+        apiJson<unknown>(`/projects/${encodeURIComponent(name)}/contract`).catch(emptyOn404<unknown>('contract', {})),
         apiJson<unknown[]>(`/projects/${encodeURIComponent(name)}/snapshots`).catch(() => []),
         apiJson(`/projects/${encodeURIComponent(name)}/lineage`).catch(() => null),
       ])
+      if (stale()) return
+      setDocErrors(docErrs)
+      setDocsLoadedFor(name)
       setVersions(vers)
       setSpec(sp?.markdown ?? '')
       setTaxonomy(JSON.stringify(tax, null, 2))
@@ -317,6 +343,7 @@ export default function ProjectsView() {
           >(`/projects/${encodeURIComponent(name)}/pipelines`).catch(() => []),
           apiJson<{ schedules?: unknown[] }>('/system/schedules').catch(() => ({ schedules: [] })),
         ])
+        if (stale()) return
         setRecentRuns(Array.isArray(runs) ? runs.slice(0, 8) : [])
         setProjectPipelines(Array.isArray(pipes) ? pipes : [])
         {
@@ -344,6 +371,7 @@ export default function ProjectsView() {
         setInputLabels(labels)
         setLinkPick(labels.find((l) => !(linkData?.inputs || []).includes(l)) || labels[0] || '')
       } catch {
+        if (stale()) return
         setRecentRuns([])
         setProjectPipelines([])
         setSchedules([])
@@ -357,6 +385,8 @@ export default function ProjectsView() {
       setDiffA(first)
       setDiffB(typeof vers[1] === 'string' ? vers[1] : first)
     } catch (err) {
+      if (stale()) return
+      setDocsLoadedFor(null)
       setOpenError(err instanceof Error ? err.message : String(err))
       // Keep selected, but clear Home payload so we don't pretend load succeeded.
       setVersions([])
@@ -373,9 +403,13 @@ export default function ProjectsView() {
       setDiffA('')
       setDiffB('')
     } finally {
-      setOpening(false)
+      if (!stale()) setOpening(false)
     }
   }
+
+  /** Save allowed only when the editor holds this workspace's loaded content. */
+  const canSaveDoc = (key: DocKey) =>
+    Boolean(selected) && !opening && docsLoadedFor === selected && !docErrors[key]
 
   React.useEffect(() => {
     const apply = () => {
@@ -639,6 +673,10 @@ export default function ProjectsView() {
 
   const saveSpec = async () => {
     if (!selected) return
+    if (!canSaveDoc('spec')) {
+      pushToast(docErrors['spec'] ? `Not saved — spec failed to load: ${docErrors['spec']}` : 'Workspace is still loading', 'error')
+      return
+    }
     try {
       await apiJson(`/projects/${encodeURIComponent(selected)}/spec`, {
         method: 'PUT',
@@ -652,6 +690,10 @@ export default function ProjectsView() {
 
   const saveTaxonomy = async () => {
     if (!selected) return
+    if (!canSaveDoc('taxonomy')) {
+      pushToast(docErrors['taxonomy'] ? `Not saved — taxonomy failed to load: ${docErrors['taxonomy']}` : 'Workspace is still loading', 'error')
+      return
+    }
     try {
       const body = JSON.parse(taxonomy) as unknown
       await apiJson(`/projects/${encodeURIComponent(selected)}/taxonomy`, {
@@ -666,6 +708,10 @@ export default function ProjectsView() {
 
   const saveContract = async () => {
     if (!selected) return
+    if (!canSaveDoc('contract')) {
+      pushToast(docErrors['contract'] ? `Not saved — contract failed to load: ${docErrors['contract']}` : 'Workspace is still loading', 'error')
+      return
+    }
     try {
       const body = JSON.parse(contract) as unknown
       await apiJson(`/projects/${encodeURIComponent(selected)}/contract`, {
@@ -2116,19 +2162,28 @@ export default function ProjectsView() {
               {tab === 'spec' && (
                 <section className="space-y-2">
                   <textarea value={spec} onChange={(e) => setSpec(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  <button type="button" className="btn-secondary" onClick={() => void saveSpec()}>Save spec</button>
+                  {docErrors.spec ? (
+                    <p className="text-[12px] text-rose-700">Could not load spec ({docErrors.spec}). Saving is disabled so existing content is not overwritten — reopen the workspace to retry.</p>
+                  ) : null}
+                  <button type="button" className="btn-secondary" disabled={!canSaveDoc('spec')} onClick={() => void saveSpec()}>Save spec</button>
                 </section>
               )}
               {tab === 'taxonomy' && (
                 <section className="space-y-2">
                   <textarea value={taxonomy} onChange={(e) => setTaxonomy(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  <button type="button" className="btn-secondary" onClick={() => void saveTaxonomy()}>Save taxonomy</button>
+                  {docErrors.taxonomy ? (
+                    <p className="text-[12px] text-rose-700">Could not load taxonomy ({docErrors.taxonomy}). Saving is disabled so existing content is not overwritten — reopen the workspace to retry.</p>
+                  ) : null}
+                  <button type="button" className="btn-secondary" disabled={!canSaveDoc('taxonomy')} onClick={() => void saveTaxonomy()}>Save taxonomy</button>
                 </section>
               )}
               {tab === 'contract' && (
                 <section className="space-y-2">
                   <textarea value={contract} onChange={(e) => setContract(e.target.value)} rows={12} className="w-full rounded-lg border border-ink-200 p-3 font-mono text-[12px]" />
-                  <button type="button" className="btn-secondary" onClick={() => void saveContract()}>Save contract</button>
+                  {docErrors.contract ? (
+                    <p className="text-[12px] text-rose-700">Could not load contract ({docErrors.contract}). Saving is disabled so existing content is not overwritten — reopen the workspace to retry.</p>
+                  ) : null}
+                  <button type="button" className="btn-secondary" disabled={!canSaveDoc('contract')} onClick={() => void saveContract()}>Save contract</button>
                 </section>
               )}
               {tab === 'versions' && (
