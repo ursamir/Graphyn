@@ -1394,11 +1394,11 @@ export default function ProjectsView() {
                   </button>
                 </div>
               ) : dense ? (
-                <ul className="divide-y divide-ink-100 overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
+                <ul className="divide-y divide-ink-100 rounded-2xl border border-ink-200/80 bg-white shadow-sm">
                   {sorted.map((p) => (
                     <li
                       key={p.name}
-                      className="group relative flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 transition hover:bg-ink-50/70"
+                      className="group relative flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 transition first:rounded-t-2xl last:rounded-b-2xl hover:bg-ink-50/70"
                     >
                       <button
                         type="button"

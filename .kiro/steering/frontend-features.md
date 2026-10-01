@@ -20,7 +20,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 
 ## Projects (`ProjectsView`)
 
-- Picker: filter + dense rows; create in explorer header.
+- Picker: filter + dense rows; create in explorer header. Row ⋯ menu is Open, View runs, Clone, then Delete. The list does not use `overflow-hidden`, so that menu (including Delete on the last row) paints outside the card. Open a workspace for the same Delete under Workspace settings.
 - **Home / Overview:** first-run 2-card strip when empty (Templates · Datasets); header keeps primary **Open Editor**.
 - Situation strip; **Pinned inputs** (manual — runs do not auto-link); Versions & taxonomy collapsed.
 - Pipeline **pin favorites** via `localStorage` `graphyn.pinnedPipelines.{project}` (star; pinned sort first).

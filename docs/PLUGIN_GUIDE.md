@@ -1,6 +1,6 @@
 # Plugin Guide
 
-All **49** production node types are implemented as plugins in `PluginPackage/` (Audio + Common; see `PluginPackage/NODES.md`). This guide covers how to write new plugins, install them, and manage their lifecycle.
+Branch `test/example-06-plugins` keeps only the Example 06 speech-commands plugins and deploy: `dataset-ingest`, `audio-conditioner`, `segmenter`, `audio-quality-gate`, `augmentation-pipeline`, `audio-exporter`, `feature-frontend`, `dataset-builder`, `trainer` (includes `model_builder`), `evaluator`, `edge-optimizer`, `realtime-inference`, `deployment-packager`, `python-code`. Other plugin sources were removed on this branch. Templates were not removed.
 
 **Not in the default catalog:** `PluginPackage/Video/` is a placeholder (no manifests). `PluginPackage/WakeWord/` is experimental source-only — it is **not** auto-installed and is not importable as a full plugin pack until its training subtree is wired to a manifest; use Audio/Common wake-word templates for runnable graphs.
 

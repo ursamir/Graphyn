@@ -33,7 +33,10 @@ services:
       GRAPHYN_HOME: /data/graphyn-home
       GRAPHYN_PROJECT_DIR: /app/workspace
       GRAPHYN_PLUGINS_DIR: /app/plugins
-      GRAPHYN_AUTO_INSTALL_PLUGINS: "1"
+      # Test branch: do not restore plugins that were removed from this install.
+      # The kept set is Example 06 plus deployment-packager and python-code.
+      GRAPHYN_AUTO_INSTALL_PLUGINS: "0"
+      GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST: "dataset-ingest,audio-conditioner,segmenter,audio-quality-gate,augmentation-pipeline,audio-exporter,feature-frontend,dataset-builder,trainer,evaluator,edge-optimizer,realtime-inference,deployment-packager,python-code"
       # Example datasets under workspace/datasets/input are symlinks into
       # examples/. Those resolve outside GRAPHYN_PROJECT_DIR, so Browse marks
       # every label blocked unless this is on. Set 0 to fail closed.

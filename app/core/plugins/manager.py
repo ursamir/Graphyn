@@ -664,11 +664,17 @@ class PluginManager:
         if not root.is_dir():
             log.warning("Bundled PluginPackage directory missing: %s", root)
             return 0
+        from app.core.config import bundled_plugin_allowlist
+        from app.core.plugins.manifest import load_manifest
+
+        allow = bundled_plugin_allowlist()
         tomls = sorted(root.glob("*/*/plugin.toml"))
         installed = 0
         for toml_path in tomls:
             plugin_dir = toml_path.parent
             try:
+                if allow is not None and load_manifest(plugin_dir).name not in allow:
+                    continue
                 self.install(str(plugin_dir), upgrade=upgrade)
                 installed += 1
             except Exception as exc:

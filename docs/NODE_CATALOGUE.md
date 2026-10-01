@@ -2,7 +2,7 @@
 
 The first two tables are the Audio + Common production nodes; compact tables for the other packs follow (see `PluginPackage/NODES.md` — `model_builder` ships inside the `trainer` plugin). There are no built-in node implementations in `app/core/nodes/audio/` or `app/core/nodes/ml/` — those directories do not exist.
 
-`PluginPackage/` currently has 156 `plugin.toml` manifests. Proposed packs (RAG, Vision, TinyML, MLOps, Agents, WakeWord, Video) run their real implementations by default (`config.stub=False`). `stub=True` is an explicit placeholder that logs a warning. The editor catalog badges a node **stub** only when that field's schema default is true. Device flash and on-device metrics write a host-side dry-run receipt; they do not program a board or report device telemetry.
+Branch `test/example-06-plugins` keeps 14 plugins (Example 06 plus `deployment-packager` and `python-code`). Tables below still name nodes from packs removed on this branch. Proposed packs (RAG, Vision, TinyML, MLOps, Agents, WakeWord, Video) run their real implementations by default (`config.stub=False`). `stub=True` is an explicit placeholder that logs a warning. The editor catalog badges a node **stub** only when that field's schema default is true. Device flash and on-device metrics write a host-side dry-run receipt; they do not program a board or report device telemetry.
 
 
 > **Platform design catalog (100+ node_types, alterations, TinyML/YOLO/RAG):** [`docs/PLUGIN_NODE_PLATFORM_CATALOG.md`](./PLUGIN_NODE_PLATFORM_CATALOG.md) (+ [`PLUGIN_NODE_PLATFORM_CATALOG.json`](./PLUGIN_NODE_PLATFORM_CATALOG.json)).

@@ -27,6 +27,7 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_PLUGINS_DIR             Default: plugins/
   GRAPHYN_PLUGIN_AUTO_INSTALL     Default: "" (disabled — pip deps)
   GRAPHYN_AUTO_INSTALL_PLUGINS    Default: true when GRAPHYN_ENV=production
+  GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST Default: unset (install every manifest)
   GRAPHYN_PLUGIN_PACKAGE_DIR      Default: <repo>/PluginPackage
   GRAPHYN_SKIP_PLUGIN_LOAD        Default: "" (set 1 to skip bundled install+load)
   GRAPHYN_PLUGIN_INDEX_URL        Default: "" (no remote index)
@@ -175,6 +176,19 @@ def auto_install_plugins() -> bool:
     if raw is not None and raw.strip() != "":
         return raw.strip().lower() in ("1", "true", "yes")
     return graphyn_env() in ("production", "prod")
+
+
+def bundled_plugin_allowlist() -> frozenset[str] | None:
+    """Plugin names startup may install, or None for every bundled manifest.
+
+    ``GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST`` is a comma-separated list of plugin
+    slugs (``plugin.toml`` ``name``). Empty or unset means no filter.
+    """
+    raw = os.environ.get("GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST", "").strip()
+    if not raw:
+        return None
+    names = frozenset(part.strip() for part in raw.split(",") if part.strip())
+    return names or None
 
 
 def plugin_venvs_dir() -> Path:
