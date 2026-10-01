@@ -64,7 +64,7 @@ Once multi-user identity exists, **cross-project access must be prevented by def
 | Control | Behaviour |
 |---|---|
 | Product store | `GRAPHYN_HOME/credentials/` (encrypted payloads); Admin → Credentials UI |
-| REST / MCP | `/api/v1/credentials` + credential MCP tools — **redacted** only |
+| REST / MCP | `/api/v1/credentials` + credential MCP tools — **redacted** only. In `fields`, a secret field that is set reads `"***"` and an unset one reads `""`. Every response also carries `secret_fields_set: {field: bool}` so clients can tell "redacted" from "never set" without seeing the value |
 | Ops bootstrap | Optional `GRAPHYN_HOME/secrets/<NAME>` files (`0700`/`0600`) + process env via CLI |
 | Validation errors | `/api/v1/credentials` 422 responses redact `payload` / secret field `input` |
 | Node resolution | `connection_id` → credential store; else `resolve_secret(name)` → file then env; miss errors cite the **name**, never the value |

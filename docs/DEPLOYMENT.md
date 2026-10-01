@@ -29,7 +29,7 @@ docker compose up --build -d graphyn-api graphyn-ui
 - API: `http://localhost:8001/api/v1/`
 - Named volume `graphyn-home` persists `GRAPHYN_HOME` (plugins + `secrets/` files, mode 0600)
 - `./workspace` is the project dir (`GRAPHYN_PROJECT_DIR`)
-- Pipeline outputs belong in `workspace/artifacts/<name>/runs/<run_id>/` on that bind-mount (not `examples/` inside the image). Successful runs also publish `workspace/artifacts/<name>/latest/` (symlink, or a `latest.json` pointer if the host cannot symlink) so later graphs can consume the production alias.
+- Pipeline outputs belong in `workspace/artifacts/<name>/runs/<run_id>/` on that bind-mount (not `examples/` inside the image). Successful runs that wrote at least one file into their `runs/<run_id>/` dir also publish `workspace/artifacts/<name>/latest/` (symlink, or a `latest.json` pointer if the host cannot symlink) so later graphs can consume the production alias. A run that produced nothing there (e.g. a preprocess graph exporting into the stable `<name>/dataset/` tree) leaves `latest` unchanged, and its empty run dir is removed (run dirs are no longer pre-created).
 
 **UI-only rebuild (do not touch the API):** recreating `graphyn-api` re-runs plugin install/venv boot and routinely takes **15+ minutes**. For `graphyn-ui` changes only:
 

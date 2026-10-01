@@ -125,6 +125,24 @@ def redact_payload(kind_id: str, payload: dict[str, Any] | None) -> dict[str, An
     return out
 
 
+def secret_fields_set(kind_id: str, payload: dict[str, Any] | None) -> dict[str, bool]:
+    """``{secret_field: is_set}`` for every secret field of the kind.
+
+    Lets clients tell "redacted" (``"***"``, True) from "never set" (``""``,
+    False) without ever seeing the value.
+    """
+    kind = get_kind(kind_id)
+    secrets = secret_field_names(kind_id)
+    names: list[str] = []
+    if kind:
+        names.extend(f.name for f in kind.fields if f.name in secrets)
+    names.extend(k for k in (payload or {}) if k in secrets and k not in names)
+    return {
+        name: (payload or {}).get(name) not in (None, "")
+        for name in names
+    }
+
+
 def _register_builtins() -> None:
     if _REGISTRY:
         return

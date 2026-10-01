@@ -9,6 +9,10 @@ Config (and port maps) from:
   1. The nested ``class Config`` in entry-point source (AST, no exec)
   2. Optional ``config_schema`` JSON-Schema-like tables in plugin.toml
 
+Display metadata (label / description / category / tags / capability flags)
+is read from the class's ``metadata = NodeMetadata(...)`` literal keywords so
+isolated stubs list with the same category as in-process nodes.
+
 Ports use platform types from ``app.models`` when ``data_type=Name/Attribute``
 resolves to a known host type (e.g. ModelArtifact). Unknown plugin-local types
 stay ``object`` so the host never imports the plugin module.
@@ -181,6 +185,45 @@ class IsolatedNodeSpec:
     config_fields: list[tuple[str, Any, Any]] = field(default_factory=list)
     input_ports: dict[str, InputPort] = field(default_factory=dict)
     output_ports: dict[str, OutputPort] = field(default_factory=dict)
+    # Literal keyword args of ``metadata = NodeMetadata(...)`` (no exec).
+    metadata_kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+# NodeMetadata keywords copied from the AST onto isolated stubs.
+_METADATA_KEYS = frozenset(
+    {
+        "label",
+        "description",
+        "category",
+        "version",
+        "tags",
+        "requires_gpu",
+        "supports_cpu",
+        "supports_edge",
+        "deterministic",
+        "cacheable",
+        "streaming_support",
+        "realtime_support",
+        "memory_requirements",
+        "dependency_requirements",
+        "batch_support",
+    }
+)
+
+
+def _metadata_kwargs(value: ast.AST | None) -> dict[str, Any]:
+    """Literal keyword args from a ``NodeMetadata(...)`` call (others skipped)."""
+    if not isinstance(value, ast.Call) or "NodeMetadata" not in _call_name(value):
+        return {}
+    out: dict[str, Any] = {}
+    for kw in value.keywords:
+        if kw.arg not in _METADATA_KEYS:
+            continue
+        lit = _eval_literal(kw.value)
+        if lit is _MISSING:
+            continue
+        out[kw.arg] = lit
+    return out
 
 
 def specs_from_source(source: str, *, filename: str = "<isolated>") -> dict[str, IsolatedNodeSpec]:
@@ -303,6 +346,8 @@ def _class_to_spec(cls: ast.ClassDef) -> IsolatedNodeSpec | None:
                 spec.input_ports = _extract_input_ports(value)
             elif name == "output_ports" and value is not None:
                 spec.output_ports = _extract_output_ports(value)
+            elif name == "metadata" and value is not None:
+                spec.metadata_kwargs = _metadata_kwargs(value)
     return spec
 
 

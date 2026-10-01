@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from typing import ClassVar, Literal
-from pydantic import Field
+from pydantic import Field, model_validator
 
 import librosa
 import numpy as np
@@ -96,21 +96,32 @@ class AudioQualityGateNode(Node):
     }
 
     class Config(NodeConfig):
-        min_snr_db: float = Field(default=10.0, title="Min SNR (dB)", description="Reject audio whose estimated SNR is below this (dB).")
-        max_clipping_ratio: float = Field(default=0.01, title="Max clipping ratio", description="Reject if fraction of clipped samples exceeds this (0–1).")
-        min_duration_s: float = Field(default=0.1, title="Min duration (s)", description="Reject clips shorter than this many seconds.")
-        max_duration_s: float = Field(default=60.0, title="Max duration (s)", description="Reject clips longer than this many seconds (0 = no max).")
-        min_lufs: float = Field(default=-70.0, title="Min LUFS", description="Reject if integrated loudness is below this LUFS.")
-        max_lufs: float = Field(default=-10.0, title="Max LUFS", description="Reject if integrated loudness is above this LUFS.")
-        min_bandwidth_hz: float = Field(default=1000.0, title="Min bandwidth (Hz)", description="Reject if estimated bandwidth is below this (Hz).")
-        rejection_policy: Literal["skip", "warn", "raise"] = Field(default='skip', title="Rejection Policy", description="What to do when a sample fails quality checks. One of: skip, warn, raise.")
+        min_snr_db: float = Field(default=10.0, title="Min SNR (dB)", description="Reject audio whose estimated SNR (mean power vs 5th-percentile amplitude floor) is below this (dB).")
+        max_clipping_ratio: float = Field(default=0.01, ge=0, le=1, title="Max clipping ratio", description="Reject if the fraction of samples with |x| >= 0.99 exceeds this (0–1).")
+        min_duration_s: float = Field(default=0.1, ge=0, title="Min duration (s)", description="Reject clips shorter than this many seconds.")
+        max_duration_s: float = Field(default=60.0, ge=0, title="Max duration (s)", description="Reject clips longer than this many seconds (0 = no max).")
+        min_lufs: float = Field(default=-70.0, le=0, title="Min LUFS", description="Reject if integrated loudness is below this LUFS.")
+        max_lufs: float = Field(default=-10.0, le=0, title="Max LUFS", description="Reject if integrated loudness is above this LUFS.")
+        min_bandwidth_hz: float = Field(default=1000.0, ge=0, title="Min bandwidth (Hz)", description="Reject if the mean 85% spectral rolloff is below this (Hz).")
+        rejection_policy: Literal["skip", "warn", "raise"] = Field(default='skip', title="Rejection Policy", description="skip = route to 'rejected' silently; warn = same plus a warning log; raise = fail the run.")
         check_snr: bool = Field(default=True, title="Check SNR", description="Enable SNR quality check against min_snr_db (On/Off).")
-        check_clipping: bool = Field(default=True, title="Check Clipping", description="Enable check clipping.")
-        check_silence: bool = Field(default=True, title="Check Silence", description="Enable check silence.")
-        silence_rms_threshold: float = Field(default=0.001, title="Silence RMS threshold", description="RMS below which the clip is treated as silence and rejected.")
-        check_duration: bool = Field(default=True, title="Check Duration", description="Enable check duration.")
+        check_clipping: bool = Field(default=True, title="Check Clipping", description="Enable the clipping-ratio check against max_clipping_ratio (On/Off).")
+        check_silence: bool = Field(default=True, title="Check Silence", description="Enable the silence check against silence_rms_threshold (On/Off).")
+        silence_rms_threshold: float = Field(default=0.001, ge=0, le=1, title="Silence RMS threshold", description="Linear RMS below which the clip is treated as silence and rejected.")
+        check_duration: bool = Field(default=True, title="Check Duration", description="Enable the duration check against min/max_duration_s (On/Off).")
         check_lufs: bool = Field(default=False, title="Check LUFS", description="Enable integrated-loudness check against min/max LUFS (On/Off).")
-        check_bandwidth: bool = Field(default=True, title="Check Bandwidth", description="Enable check bandwidth.")
+        check_bandwidth: bool = Field(default=True, title="Check Bandwidth", description="Enable the spectral-bandwidth check against min_bandwidth_hz (On/Off).")
+
+        @model_validator(mode="after")
+        def _ranges_ordered(self):
+            if self.max_duration_s > 0 and self.min_duration_s > self.max_duration_s:
+                raise ValueError(
+                    f"min_duration_s ({self.min_duration_s}) must be <= max_duration_s "
+                    f"({self.max_duration_s}) (or set max_duration_s=0 for no max)"
+                )
+            if self.min_lufs > self.max_lufs:
+                raise ValueError(f"min_lufs ({self.min_lufs}) must be <= max_lufs ({self.max_lufs})")
+            return self
 
     # ── multi-port process ────────────────────────────────────────────────────
 
@@ -173,7 +184,7 @@ class AudioQualityGateNode(Node):
         duration = len(sample.data) / sample.sample_rate
         if duration < self.config.min_duration_s:
             return f"too_short ({duration:.3f}s < {self.config.min_duration_s}s)"
-        if duration > self.config.max_duration_s:
+        if self.config.max_duration_s > 0 and duration > self.config.max_duration_s:
             return f"too_long ({duration:.3f}s > {self.config.max_duration_s}s)"
         return None
 

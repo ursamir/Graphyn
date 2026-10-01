@@ -29,6 +29,15 @@ class CreateProposalBody(BaseModel):
     base_graph_hash: Optional[str] = Field(
         None, description="Optional hash of the graph this proposal is based on"
     )
+    kind: Optional[str] = Field(
+        None,
+        max_length=64,
+        description='Optional proposal kind, e.g. "explain_failure"',
+    )
+    context: Optional[dict[str, Any]] = Field(
+        None,
+        description="Optional structured context, e.g. {run_id, node_id, error} (<=16 KiB)",
+    )
 
 
 class ResolveBody(BaseModel):
@@ -48,6 +57,8 @@ def create_proposal_endpoint(body: CreateProposalBody):
             actor=body.actor or "api",
             base_graph=body.base_graph,
             base_graph_hash=body.base_graph_hash,
+            kind=body.kind,
+            context=body.context,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -23,6 +23,11 @@ export type ParsedPath = {
    * replaces the URL with this on sync.
    */
   canonical?: string
+  /**
+   * The pathname matched no route. App renders a "Page not found" view (with a
+   * link to the closest real route) instead of silently redirecting to Home.
+   */
+  notFound?: boolean
 }
 
 const PANEL_SET = new Set<RunPanel>(['logs', 'outputs', 'lineage', 'details', 'checkpoints'])
@@ -45,9 +50,10 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
 
   const [a, b, c, d, e] = parts
 
-  if (a === 'login' || a === 'settings' || a === '404') {
+  if (a === 'login' || a === 'settings') {
     return { view: 'projects' }
   }
+  if (a === '404') return { view: 'projects', notFound: true }
 
   if (a === 'workspaces') {
     if (!b) return { view: 'projects' }
@@ -117,7 +123,56 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
     if (b === 'access') return { view: 'access' as AppView }
   }
 
-  return { view: 'projects', canonical: '/workspaces' }
+  return { view: 'projects', notFound: true }
+}
+
+/** Global routes that need no workspace, keyed by the words people type. */
+const GLOBAL_ROUTE_ALIASES: Array<{ words: string[]; path: string; label: string }> = [
+  { words: ['plugins', 'plugin', 'packs', 'nodes'], path: '/library/plugins', label: 'Plugins' },
+  { words: ['artifacts', 'artifact', 'registry'], path: '/library/artifacts', label: 'Artifacts' },
+  { words: ['datasets', 'dataset', 'data', 'inputs', 'outputs'], path: '/library/datasets', label: 'Datasets library' },
+  { words: ['credentials', 'credential', 'secrets', 'secret', 'connections'], path: '/admin/credentials', label: 'Credentials' },
+  { words: ['ops', 'system', 'schedules', 'schedule', 'webhooks', 'audit', 'health'], path: '/admin/ops', label: 'Ops' },
+  { words: ['access', 'users', 'rbac', 'roles'], path: '/admin/access', label: 'Access' },
+  { words: ['workers', 'worker', 'fleet', 'queue'], path: '/deploy/workers', label: 'Worker fleet' },
+  { words: ['templates', 'template', 'marketplace', 'examples'], path: '/templates', label: 'Templates' },
+  { words: ['inbox', 'proposals', 'proposal', 'agent'], path: '/agent/inbox', label: 'Agent inbox' },
+  { words: ['projects', 'project', 'workspace', 'home'], path: '/workspaces', label: 'Workspaces' },
+]
+
+/** Workspace-scoped routes (need an open workspace). */
+const WORKSPACE_ROUTE_ALIASES: Array<{ words: string[]; seg: string; label: string }> = [
+  { words: ['editor', 'builder', 'canvas', 'graph'], seg: 'editor', label: 'Editor' },
+  { words: ['runs', 'run', 'history', 'live', 'trace', 'lineage'], seg: 'runs', label: 'Runs' },
+  { words: ['compare', 'experiments'], seg: 'runs/compare', label: 'Compare runs' },
+  { words: ['models', 'model'], seg: 'models', label: 'Models' },
+  { words: ['ship', 'edge', 'deploy', 'devices'], seg: 'ship', label: 'Ship' },
+]
+
+/**
+ * Best guess at the real route a mistyped / legacy URL meant — `/plugins` →
+ * `/library/plugins`, `/credentials` → `/admin/credentials`. Workspace routes
+ * resolve only when `workspaceId` is known. Returns null when nothing fits.
+ */
+export function suggestRouteFor(
+  pathname: string,
+  workspaceId?: string | null,
+): { path: string; label: string } | null {
+  const words = pathname
+    .toLowerCase()
+    .split('/')
+    .map((w) => w.trim())
+    .filter(Boolean)
+  // Last segment first ("/library/foo/plugins" → plugins), then earlier ones.
+  for (const word of [...words].reverse()) {
+    const ws = WORKSPACE_ROUTE_ALIASES.find((r) => r.words.includes(word))
+    if (ws && workspaceId) {
+      return { path: `/workspaces/${encodeURIComponent(workspaceId)}/${ws.seg}`, label: ws.label }
+    }
+    const g = GLOBAL_ROUTE_ALIASES.find((r) => r.words.includes(word))
+    if (g) return { path: g.path, label: g.label }
+  }
+  return null
 }
 
 /** Drop legacy `#/…` fragments so path + hash hybrids never stick in the address bar. */

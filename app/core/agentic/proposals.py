@@ -4,7 +4,8 @@ Bounded Context:  BC — Agentic Builder
 Responsibility:   Persist GraphIR change proposals and compute simple diffs
                   for human-in-the-loop approval (propose → accept/reject).
 Owns:             proposals/ store under project_dir, create/list/get/accept/reject,
-                  diff_graphs().
+                  diff_graphs(); optional ``kind`` / ``context`` (structured
+                  inbox context, e.g. explain_failure + run_id/node_id/error).
 Public Surface:   create_proposal, list_proposals, get_proposal, accept_proposal,
                   reject_proposal, diff_graphs, proposals_dir.
 Must NOT:         Import from app.api; call an LLM; embed secrets in IR.
@@ -16,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -222,6 +224,8 @@ def _public_summary(proposal: dict[str, Any]) -> dict[str, Any]:
         "actor": proposal.get("actor"),
         "summary": proposal.get("summary"),
         "base_graph_hash": proposal.get("base_graph_hash"),
+        "kind": proposal.get("kind"),
+        "context": proposal.get("context"),
         "diff_summary": {
             "nodes_added": (counts or {}).get("nodes_added", len(diff.get("nodes_added") or [])),
             "nodes_removed": (counts or {}).get("nodes_removed", len(diff.get("nodes_removed") or [])),
@@ -238,6 +242,32 @@ def _public_summary(proposal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_KIND_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_MAX_CONTEXT_BYTES = 16_384
+
+
+def _validate_kind_context(
+    kind: str | None, context: dict[str, Any] | None
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Normalize optional ``kind`` / ``context``; raise ValueError when invalid."""
+    kind_s: str | None = None
+    if kind is not None:
+        kind_s = str(kind).strip().lower() or None
+        if kind_s is not None and not _KIND_RE.match(kind_s):
+            raise ValueError("kind must match ^[a-z][a-z0-9_.-]{0,63}$")
+    if context is None:
+        return kind_s, None
+    if not isinstance(context, dict):
+        raise ValueError("context must be a JSON object")
+    try:
+        encoded = json.dumps(context)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"context must be JSON-serializable: {exc}") from exc
+    if len(encoded.encode("utf-8")) > _MAX_CONTEXT_BYTES:
+        raise ValueError(f"context exceeds {_MAX_CONTEXT_BYTES} bytes")
+    return kind_s, json.loads(encoded)
+
+
 def create_proposal(
     graph_dict: dict[str, Any],
     summary: str,
@@ -245,11 +275,19 @@ def create_proposal(
     *,
     base_graph: dict[str, Any] | None = None,
     base_graph_hash: str | None = None,
+    kind: str | None = None,
+    context: dict[str, Any] | None = None,
     base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Persist a pending proposal and return it. Records audit ``proposal.create``."""
+    """Persist a pending proposal and return it. Records audit ``proposal.create``.
+
+    Optional ``kind`` (e.g. ``"explain_failure"``) and ``context`` (e.g.
+    ``{run_id, node_id, error}``) are stored verbatim and returned by
+    get/list so an agent inbox item carries structured context.
+    """
     if not isinstance(graph_dict, dict) or not graph_dict:
         raise ValueError("graph must be a non-empty GraphIR dict")
+    kind_s, context_d = _validate_kind_context(kind, context)
     summary_s = (summary or "").strip() or "Graph change proposal"
     actor_s = (actor or "agent").strip() or "agent"
     proposal_id = uuid.uuid4().hex[:12]
@@ -270,6 +308,8 @@ def create_proposal(
         "base_graph_hash": resolved_base_hash,
         "proposed_graph": graph_dict,
         "diff_summary": diff,
+        "kind": kind_s,
+        "context": context_d,
     }
 
     path = _proposal_path(proposal_id, base_dir)
@@ -288,6 +328,7 @@ def create_proposal(
                 "summary": summary_s,
                 "counts": diff.get("counts"),
                 "base_graph_hash": resolved_base_hash,
+                "kind": kind_s,
             },
             base_dir=base_dir,
         )

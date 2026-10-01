@@ -23,9 +23,9 @@ runtime = "isolated"
 node_types = ["dataset_builder"]
 
 [config_schema.dataset_builder]
-split_ratios = {  type = "object", title = "Split ratios", default = { }, description = "Train/val/test ratios as a JSON object that should sum to ~1.0.", widget = "json", train = 0.7, val = 0.15, test = 0.15  }
-shuffle = { type = "boolean", title = "Shuffle", default = true, description = "Shuffle samples before splitting." }
-stratify = { type = "boolean", title = "Stratify", default = true, description = "Stratify train/val/test splits by label." }
-output_format = { type = "string", title = "Output Format", default = "numpy", description = "Output Format. One of: numpy, tensorflow, pytorch.", enum = ["numpy", "tensorflow", "pytorch"] }
-fixed_length = { type = "integer", title = "Fixed length", default = 0, description = "Pad/truncate examples to this length (0 = keep native)." }
-random_seed = { type = "integer", title = "Random seed", default = 42, description = "RNG seed for reproducible splits and sampling." }
+split_ratios = {  type = "object", title = "Split ratios", default = { train = 0.7, val = 0.15, test = 0.15 }, description = "Auto-split only (used when not every sample carries a train/val/test split in metadata or in its path): train/val/test fractions, each in [0, 1], summing to 1.0.", widget = "json" }
+shuffle = { type = "boolean", title = "Shuffle", default = true, description = "Auto-split only: shuffle before splitting (stratify requires shuffle On)." }
+stratify = { type = "boolean", title = "Stratify", default = true, description = "Auto-split only: stratify train/val/test by label (falls back to unstratified when a class is too small)." }
+output_format = { type = "string", title = "Output Format", default = "numpy", description = "numpy = arrays only; tensorflow / pytorch additionally attach tf.data / TensorDataset objects in metadata (in-process runtime only — they cannot cross the isolated-worker boundary).", enum = ["numpy", "tensorflow", "pytorch"] }
+fixed_length = { type = "integer", title = "Fixed length", default = 0, minimum = 0, description = "Pad (zeros) / truncate the time axis to this many frames (0 = pad every split to the longest clip)." }
+random_seed = { type = "integer", title = "Random seed", default = 42, description = "RNG seed for reproducible auto-splits." }

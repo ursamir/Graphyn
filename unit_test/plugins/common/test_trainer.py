@@ -205,7 +205,11 @@ def test_hyperparam_defaults():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     props = mod.TrainerNode.Config.model_json_schema()["properties"]
-    assert props["learning_rate"]["default"] == 0.001
+    # None = keep the model's compiled LR (model_builder.learning_rate, default 0.001);
+    # before this, trainer always recompiled at 0.001 and model_builder's LR was dead.
+    assert props["learning_rate"]["default"] is None
+    builder = mod.ModelBuilderNode.Config.model_json_schema()["properties"]
+    assert builder["learning_rate"]["default"] == 0.001
     assert props["reduce_lr_factor"]["default"] == 0.5
     assert props["reduce_lr_patience"]["default"] == 3
     assert props["shuffle"]["default"] is True

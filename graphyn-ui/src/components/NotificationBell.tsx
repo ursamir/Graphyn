@@ -4,24 +4,24 @@ import clsx from 'clsx'
 import { apiJson } from '../api/client'
 import { useAppStore } from '../store/appStore'
 import { usePolling } from '../lib/usePolling'
+import { sharedFetch } from '../lib/sharedFetch'
+import { useMenuDismiss } from '../lib/menus'
+import { checkRunExists } from '../lib/runExists'
+import { humanizeNotification, notificationRunLabel, type NotificationRow } from '../lib/notifications'
 
-type NotificationItem = {
-  id: string
-  title?: string
-  body?: string
-  level?: string
-  event?: string
-  run_id?: string
-  project?: string
-  read?: boolean
-  created_at?: string
-  ts?: string
-}
+type NotificationItem = NotificationRow
 
 type ListResp = {
   notifications?: NotificationItem[]
   unread_count?: number
   total?: number
+}
+
+const TONE_DOT: Record<string, string> = {
+  success: 'bg-emerald-500',
+  error: 'bg-rose-500',
+  cancelled: 'bg-ink-400',
+  info: 'bg-accent-500',
 }
 
 function shortWhen(iso?: string): string {
@@ -49,11 +49,17 @@ export function NotificationBell() {
   const [loading, setLoading] = React.useState(false)
   const rootRef = React.useRef<HTMLDivElement | null>(null)
 
-  const load = React.useCallback(async () => {
+  const load = React.useCallback(async (fresh = false) => {
     setLoading(true)
     setError(null)
     try {
-      const data = await apiJson<ListResp>('/system/notifications', { query: { limit: 30 } })
+      // Shared/de-duplicated: StrictMode double-mount, the open-panel refresh and
+      // the 45 s poll used to each fire their own GET within the same second.
+      const data = await sharedFetch<ListResp>(
+        'notifications:30',
+        () => apiJson<ListResp>('/system/notifications', { query: { limit: 30 } }),
+        { fresh, maxAgeMs: 5000 },
+      )
       setItems(Array.isArray(data.notifications) ? data.notifications : [])
       setUnread(typeof data.unread_count === 'number' ? data.unread_count : 0)
     } catch (err) {
@@ -65,17 +71,31 @@ export function NotificationBell() {
     }
   }, [])
 
-  usePolling(load, 45_000, { resetKey: load })
+  usePolling(() => load(false), 45_000)
 
   React.useEffect(() => {
-    if (!open) return
-    void load()
-    const onDoc = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
+    if (open) void load(false)
   }, [open, load])
+
+  const closePanel = React.useCallback(() => setOpen(false), [])
+  useMenuDismiss(open, closePanel, rootRef)
+
+  const openNotificationRun = async (n: NotificationItem) => {
+    if (!n.run_id) return
+    const runId = n.run_id
+    try {
+      const found = await checkRunExists(runId)
+      if (!found.exists) {
+        pushToast(`Run ${runId.slice(0, 8)} no longer exists`, 'info')
+        return
+      }
+      const project = n.project || found.project || undefined
+      setOpen(false)
+      openRun(runId, project ? { project } : undefined)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
 
   const markAll = async () => {
     try {
@@ -139,7 +159,7 @@ export function NotificationBell() {
                   Mark all read
                 </button>
               ) : null}
-              <button type="button" className="text-[11px] text-ink-500 hover:underline" onClick={() => void load()}>
+              <button type="button" className="text-[11px] text-ink-500 hover:underline" onClick={() => void load(true)}>
                 Refresh
               </button>
             </div>
@@ -155,41 +175,49 @@ export function NotificationBell() {
               </p>
             ) : (
               <ul className="divide-y divide-ink-50">
-                {items.map((n) => (
-                  <li
-                    key={n.id}
-                    className={clsx('px-3 py-2.5 text-[12px]', !n.read && 'bg-accent-50/40')}
-                  >
-                    <button
-                      type="button"
-                      className="w-full text-left"
-                      onClick={() => {
-                        void markOne(n.id)
-                        if (n.run_id) {
-                          openRun(n.run_id, n.project ? { project: n.project } : undefined)
-                          setOpen(false)
-                        }
-                      }}
+                {items.map((n) => {
+                  const h = humanizeNotification(n)
+                  const runLabel = notificationRunLabel(n.run_id)
+                  return (
+                    <li
+                      key={n.id}
+                      className={clsx('px-3 py-2.5 text-[12px]', !n.read && 'bg-accent-50/40')}
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <span className={clsx('font-medium text-ink-900', !n.read && 'font-semibold')}>
-                          {n.title || n.event || 'Event'}
-                        </span>
-                        <span className="shrink-0 text-[10px] text-ink-400">
-                          {shortWhen(n.created_at || n.ts)}
-                        </span>
-                      </div>
-                      {n.body ? (
-                        <p className="mt-0.5 line-clamp-2 text-[11px] text-ink-500">{n.body}</p>
-                      ) : null}
-                      {n.run_id ? (
-                        <span className="mt-1 inline-block font-mono text-[10px] text-accent-700">
-                          Open run {n.run_id.slice(0, 8)}…
-                        </span>
-                      ) : null}
-                    </button>
-                  </li>
-                ))}
+                      <button
+                        type="button"
+                        className="w-full text-left"
+                        title={n.run_id ? `Run ${n.run_id}` : undefined}
+                        onClick={() => {
+                          if (!n.read) void markOne(n.id)
+                          void openNotificationRun(n)
+                        }}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="flex min-w-0 items-start gap-1.5">
+                            <span
+                              aria-hidden
+                              className={clsx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', TONE_DOT[h.tone] ?? 'bg-ink-300')}
+                            />
+                            <span className={clsx('min-w-0 break-words font-medium text-ink-900', !n.read && 'font-semibold')}>
+                              {h.title}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-[10px] text-ink-400">
+                            {shortWhen(n.created_at || n.ts)}
+                          </span>
+                        </div>
+                        {h.detail ? (
+                          <p className="mt-0.5 line-clamp-2 pl-3 text-[11px] text-ink-500">{h.detail}</p>
+                        ) : null}
+                        {runLabel ? (
+                          <span className="mt-1 inline-block pl-3 font-mono text-[10px] text-accent-700">
+                            Open {runLabel}
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>

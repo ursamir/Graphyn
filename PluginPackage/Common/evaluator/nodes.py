@@ -219,10 +219,10 @@ class EvaluatorNode(Node):
 
     class Config(NodeConfig):
         output_path: str = Field(default='workspace/artifacts/evaluation', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        plot_confusion_matrix: bool = Field(default=True, title="Plot Confusion Matrix", description="Enable plot confusion matrix.")
-        plot_training_curves: bool = Field(default=True, title="Plot Training Curves", description="Enable plot training curves.")
-        compute_roc: bool = Field(default=True, title="Compute ROC", description="Compute ROC/AUC curves when binary labels are available (On/Off).")
-        compute_fairness: bool = Field(default=False, title="Compute Fairness", description="Enable compute fairness.")
+        plot_confusion_matrix: bool = Field(default=True, title="Plot Confusion Matrix", description="Save confusion_matrix.png (needs matplotlib + seaborn) (On/Off).")
+        plot_training_curves: bool = Field(default=True, title="Plot Training Curves", description="Save training_curves.png from the trainer history (On/Off).")
+        compute_roc: bool = Field(default=True, title="Compute ROC", description="Compute macro ROC AUC (OvR for multi-class) and save roc_curves.png (On/Off).")
+        compute_fairness: bool = Field(default=False, title="Compute Fairness", description="Per-group test accuracy sliced by fairness_attribute_key (On/Off).")
         fairness_attribute_key: str = Field(default='speaker_id', title="Fairness attribute key", description="Metadata key used to slice fairness metrics (e.g. gender).")
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -566,6 +566,13 @@ class EvaluatorNode(Node):
                 )
 
         # ── Return enriched artifact ──────────────────────────────────────────
+        # Keep upstream hand-off keys (e.g. keras_model_path) so edge_optimizer
+        # can still locate the .keras / calibration data next to the model.
+        upstream = {
+            k: v for k, v in (artifact.metrics or {}).items()
+            if k.endswith("_path") and k not in metrics
+        }
+        metrics.update(upstream)
         return {
             "output": ModelArtifact(
                 model_path=artifact.model_path,

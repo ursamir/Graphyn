@@ -152,7 +152,10 @@ def notify_from_run_event(event: str, payload: dict[str, Any]) -> dict[str, Any]
     try:
         status = str(payload.get("status") or "")
         run_id = str(payload.get("run_id") or "")
-        level = "error" if event == "pipeline_failed" else "info"
+        level = {
+            "pipeline_failed": "error",
+            "pipeline_cancelled": "warning",
+        }.get(event, "info")
         title = f"{event}: run {run_id or '?'}"
         lines = [f"status={status}"]
         if payload.get("graph_name"):

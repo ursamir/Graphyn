@@ -5,48 +5,75 @@ Responsibility:   Pluggable serializer registry for artifact types.
                   Defines the interface that domain handlers must implement
                   and the singleton registry that platform code calls.
 Owns:             ArtifactTypeHandler (ABC), ArtifactSerializerRegistry
-                  (singleton), get_serializer_registry().
-Public Surface:   ArtifactTypeHandler, ArtifactSerializerRegistry,
+                  (singleton), FileListing / FileListingEntry,
                   get_serializer_registry().
+Public Surface:   ArtifactTypeHandler, ArtifactSerializerRegistry,
+                  FileListing, FileListingEntry, get_serializer_registry().
 Must NOT:         Import from app.domain, app.models, app.api, or any
                   audio/ML library. This module is pure platform infrastructure.
                   Must not contain any domain-specific serialization logic.
-Dependencies:     stdlib only (abc, pathlib, threading, typing, Any).
+Dependencies:     stdlib only (abc, dataclasses, pathlib, threading, typing, Any).
 Reason To Change: New serialization interface methods are needed, or the
                   registry lifecycle (singleton vs. per-request) changes.
 
 ## Design
 
-Platform code (artifact_store, pipeline_cache, checkpoint) calls:
+Platform code (artifact_store, pipeline_cache, checkpoint, run_outputs) calls:
 
     registry = get_serializer_registry()
-    handler  = registry.get("audio_samples")   # returns None if not registered
+    handler  = registry.get("dataset_artifact")   # returns None if not registered
     if handler:
         handler.serialize(data, dest_dir)
         data = handler.deserialize(src_dir)
         artifact_type = handler.infer_type(value)
+        listing = handler.list_files(dest_dir)   # optional inventory for UIs
 
-Domain code (app/models/audio_artifact_serializer.py) calls:
+Domain / platform handlers register at startup from each entry point
+(app/api/main.py, app/cli/main.py, app/mcp/server.py):
 
-    get_serializer_registry().register("audio_samples", AudioSampleHandler())
-
-This is called once at application startup from each entry point
-(app/api/main.py, app/cli/main.py, app/mcp/server.py) via:
-
-    from app.models.audio_artifact_serializer import register_audio_serializer
     register_audio_serializer()
+    register_dataset_serializer()
+    register_file_tree_serializer()
 
 The registry is intentionally fail-open: if no handler is registered for a
 type, platform code falls back to JSON serialization (or returns None on
-deserialize). This means the platform works without any domain handlers
-installed — it just cannot serialize audio-specific types.
+deserialize). The JSON fallback writes ndarrays as sibling ``.npy`` files
+rather than expanding them with ``.tolist()``. ``list_files`` defaulting to
+``None`` means the listing layer uses a shallow generic fallback.
 """
 from __future__ import annotations
 
 import threading
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Listing contract (platform-owned, domain-agnostic)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FileListingEntry:
+    """One downloadable file from an artifact inventory."""
+
+    path: Path
+    size: int | None = None
+    name: str | None = None
+
+
+@dataclass
+class FileListing:
+    """Inventory a handler exposes for run-output listing UIs.
+
+    ``total`` is the full count (may exceed ``len(entries)`` when the handler
+    returns a sample). The listing caller applies further caps.
+    """
+
+    total: int
+    entries: list[FileListingEntry] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +87,8 @@ class ArtifactTypeHandler(ABC):
     Each handler is responsible for exactly one artifact_type string
     (e.g. ``"audio_samples"``).
 
-    All methods receive/return plain Python objects — no platform types.
+    All methods receive/return plain Python objects — no platform types
+    beyond ``FileListing`` for the optional listing hook.
     """
 
     @abstractmethod
@@ -101,6 +129,16 @@ class ArtifactTypeHandler(ABC):
 
         The default implementation always returns ``None`` — override to
         enable automatic type inference.
+        """
+        return None
+
+    def list_files(self, src_dir: Path) -> FileListing | None:
+        """Return a downloadable inventory for listing UIs.
+
+        Override when the on-disk layout has an inventory the handler owns
+        (manifest, inventory.json, …). Return ``None`` to let the platform
+        use a shallow generic fallback for ``src_dir`` — never encode domain
+        formats in the listing layer.
         """
         return None
 

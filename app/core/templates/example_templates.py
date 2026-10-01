@@ -5,7 +5,8 @@ Responsibility:   Discover example Graph IR files under examples/ and sync them
                   into the project templates directory for the console UI.
 Owns:             Example discovery, path rewriting, template sync helpers.
 Public Surface:   discover_example_graphs, rewrite_graph_paths, sync_example_templates,
-                  seed_example_input_datasets
+                  seed_example_input_datasets, template_display_title,
+                  source_template_metadata, resolve_template_title
 Must NOT:         Execute pipelines or mutate example sources.
 Dependencies:     pathlib, json, app.core.config.project_dir, app.core.paths.workspace_paths
 Reason To Change: Example layout changes or template naming conventions change.
@@ -21,6 +22,97 @@ from typing import Any
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _PREFIX = "ex-"
+
+_EX_ID_RE = re.compile(r"^ex-(\d+)-(.+)$")
+_TITLE_ACRONYMS = frozenset(
+    {"asr", "llm", "crm", "rag", "pii", "kws", "tflite", "onnx", "vad", "e2e", "mlops", "gpu", "ml", "ai"}
+)
+
+
+def _humanize_template_id(name: str) -> str:
+    words = [w for w in re.split(r"[-_]+", name) if w]
+    out: list[str] = []
+    for i, w in enumerate(words):
+        low = w.lower()
+        if low in _TITLE_ACRONYMS:
+            out.append(low.upper())
+        elif i == 0:
+            out.append(low[:1].upper() + low[1:])
+        else:
+            out.append(low)
+    return " ".join(out) or name
+
+
+def template_display_title(name: str, metadata: dict[str, Any] | None = None) -> str:
+    """Human display title for a template card.
+
+    ``metadata.title`` wins (ignored by the IR loader, so it is safe to add to
+    any graph). Otherwise the id is humanized; synced numbered examples
+    (``ex-NN-<slug>``) get an ``(example NN)`` suffix so they never collide
+    with a same-named starter under ``examples/templates/``.
+    """
+    meta = metadata if isinstance(metadata, dict) else {}
+    title = meta.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()[:120]
+    m = _EX_ID_RE.match(name or "")
+    if m:
+        return f"{_humanize_template_id(m.group(2))} (example {int(m.group(1)):02d})"
+    return _humanize_template_id(name or "")
+
+
+def source_template_metadata(
+    name: str, synced_metadata: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Return ``metadata`` of the repo source graph a synced template came from.
+
+    Workspace copies under ``configs/templates/`` can predate metadata added to
+    the repo sources (e.g. ``metadata.title``). Resolution order: the synced
+    copy's ``metadata.source_example`` (relative to ``examples/``), then
+    ``examples/templates/<name>.graph.json``. Returns ``{}`` when not found.
+    """
+    if not name or not _SAFE_NAME_RE.match(name):
+        return {}
+    root = examples_dir()
+    candidates: list[Path] = []
+    meta = synced_metadata if isinstance(synced_metadata, dict) else {}
+    src_rel = meta.get("source_example")
+    if isinstance(src_rel, str) and src_rel and ".." not in Path(src_rel).parts:
+        candidates.append(root / src_rel)
+    candidates.append(root / "templates" / f"{name}.graph.json")
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(root.resolve())
+        except (OSError, ValueError):
+            continue
+        if not resolved.is_file():
+            continue
+        try:
+            data = json.loads(resolved.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("metadata"), dict):
+            return data["metadata"]
+    return {}
+
+
+def resolve_template_title(name: str, synced_metadata: dict[str, Any] | None = None) -> str:
+    """Display title for a workspace template, falling back to the repo source.
+
+    Uses the synced copy's ``metadata.title`` when present, else the repo
+    source graph's ``metadata.title``, else :func:`template_display_title`.
+    """
+    meta = synced_metadata if isinstance(synced_metadata, dict) else {}
+    title = meta.get("title")
+    if isinstance(title, str) and title.strip():
+        return template_display_title(name, meta)
+    src_meta = source_template_metadata(name, meta)
+    src_title = src_meta.get("title")
+    if isinstance(src_title, str) and src_title.strip():
+        return template_display_title(name, {"title": src_title})
+    return template_display_title(name, meta)
+
 
 # Preference order for "one example → one Builder template".
 # Per-label / per-phase shards (pipeline_go, pipeline_preprocess_up, …) are
@@ -129,7 +221,7 @@ def discover_example_graphs() -> list[dict[str, Any]]:
                 "id": name,
                 "source": str(rel).replace("\\", "/"),
                 "path": str(path),
-                "title": (meta.get("name") if isinstance(meta, dict) else None) or example_dir.name,
+                "title": template_display_title(name, meta),
                 "description": description,
                 "tags": (meta.get("tags") if isinstance(meta, dict) else None) or [],
                 "example_dir": example_dir.name,
@@ -160,7 +252,7 @@ def discover_example_graphs() -> list[dict[str, Any]]:
                     "id": name,
                     "source": str(rel).replace("\\", "/"),
                     "path": str(path),
-                    "title": (meta.get("name") if isinstance(meta, dict) else None) or name,
+                    "title": template_display_title(name, meta),
                     "description": (meta.get("description") if isinstance(meta, dict) else None) or "",
                     "tags": (meta.get("tags") if isinstance(meta, dict) else None) or [],
                     "example_dir": "templates",
@@ -304,7 +396,15 @@ def sync_example_templates(*, force: bool = True, prune_shards: bool = True) -> 
                 cfg = node.get("config") or {}
                 path = cfg.get("path")
                 if isinstance(path, str) and path:
-                    from app.core.paths.workspace_paths import ingest_dir_candidates, dir_has_ingest_files
+                    from app.core.paths.workspace_paths import (
+                        dir_has_ingest_files,
+                        ingest_dir_candidates,
+                        is_produced_dataset_path,
+                    )
+
+                    if is_produced_dataset_path(path):
+                        # Written by a sibling template (Phase-1 export) at run time.
+                        continue
 
                     ok = False
                     for candidate in ingest_dir_candidates(path):

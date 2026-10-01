@@ -107,27 +107,31 @@ class TrainerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: Literal["keras", "pytorch", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: keras, pytorch, auto.")
-        device: Literal["auto", "cpu", "gpu"] = Field(default='auto', title="Device", description="Compute device (auto uses GPU when available and allowed).")
-        epochs: int = Field(default=30, title="Epochs", description="Maximum training epochs (early stopping may halt sooner).")
-        batch_size: int = Field(default=32, title="Batch size", description="Process in batches of N (0 = all at once).")
-        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        patience: int = Field(default=5, title="Patience", description="EarlyStopping patience (monitors validation metric).")
-        mixed_precision: bool = Field(default=False, title="Mixed precision", description="Enable mixed-precision training when the backend supports it (On/Off).")
-        min_val_accuracy: float = Field(default=0.0, title="Min val accuracy", description="Warn if best validation accuracy is below this threshold (0 disables).")
-        checkpoint_path: str = Field(default='', title="Checkpoint path", description="Optional checkpoint directory under workspace/artifacts.")
-        learning_rate: float = Field(
-            default=0.001,
+        backend: Literal["keras", "pytorch", "auto"] = Field(default='auto', title="Backend", description="keras = TensorFlow/Keras (works with model_builder); pytorch = needs an in-process nn.Module; auto = keras when TensorFlow is importable.")
+        device: Literal["auto", "cpu", "gpu"] = Field(default='auto', title="Device", description="auto = GPU when available and allowed, else CPU; cpu = force CPU; gpu = prefer GPU (falls back to CPU).")
+        epochs: int = Field(default=30, ge=1, title="Epochs", description="Maximum training epochs (early stopping may halt sooner).")
+        batch_size: int = Field(default=32, ge=1, title="Batch size", description="Mini-batch size for training and validation.")
+        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Directory for model.keras, saved_model/ and checkpoints/ (under workspace/artifacts).")
+        patience: int = Field(default=5, ge=0, title="Patience", description="EarlyStopping patience in epochs on val_accuracy.")
+        mixed_precision: bool = Field(default=False, title="Mixed precision", description="Keras mixed_float16 (restored afterwards) / PyTorch CUDA autocast (On/Off).")
+        min_val_accuracy: float = Field(default=0.0, ge=0, le=1, title="Min val accuracy", description="Warn if best validation accuracy is below this threshold (0 disables).")
+        checkpoint_path: str = Field(default='', title="Checkpoint path", description="Best-val_accuracy checkpoint file; empty = <output_path>/checkpoints/best.keras.")
+        learning_rate: float | None = Field(
+            default=None,
+            gt=0,
             title="Learning rate",
-            description="Adam learning rate used when (re)compiling for training.",
+            description="Adam learning rate for training. None = keep the model's compiled learning rate (model_builder.learning_rate).",
         )
         reduce_lr_factor: float = Field(
             default=0.5,
+            gt=0,
+            lt=1,
             title="Reduce LR factor",
             description="Multiply learning rate by this factor on plateau (Keras ReduceLROnPlateau).",
         )
         reduce_lr_patience: int = Field(
             default=3,
+            ge=0,
             title="Reduce LR patience",
             description="Epochs with no val_loss improvement before reducing LR (Keras).",
         )
@@ -138,8 +142,9 @@ class TrainerNode(Node):
         )
         early_stopping_min_delta: float = Field(
             default=0.0,
+            ge=0,
             title="Early stopping min delta",
-            description="Minimum change in the monitored metric to qualify as an improvement.",
+            description="Minimum val_accuracy increase that counts as an improvement.",
         )
 
     # ── backend detection ─────────────────────────────────────────────────────
@@ -204,11 +209,7 @@ class TrainerNode(Node):
             if learning_rate is not None:
                 lr = float(learning_rate)
             else:
-                lr = 0.001
-                try:
-                    lr = float(keras.backend.get_value(model.optimizer.learning_rate))
-                except Exception:
-                    pass
+                lr = TrainerNode._compiled_learning_rate(model)
             cloned.compile(
                 optimizer=keras.optimizers.Adam(learning_rate=lr),
                 loss="sparse_categorical_crossentropy",
@@ -216,6 +217,40 @@ class TrainerNode(Node):
                 jit_compile=False,
             )
             return cloned
+
+    @staticmethod
+    def _representative_rows(X_train, limit: int = 1000):
+        """Rows saved as X_train_repr.npy for INT8 calibration.
+
+        Evenly spaced across the training set: dataset_builder groups X_train by
+        split path (label-sorted), so the first ``limit`` rows used to cover only
+        the first few labels (Example 06 live run: down/go/no only → INT8 test
+        accuracy 0.68 vs 0.87 float).
+        """
+        n = len(X_train)
+        if n <= limit:
+            return X_train
+        return X_train[np.linspace(0, n - 1, limit, dtype=int)]
+
+    @staticmethod
+    def _compiled_learning_rate(model, default: float = 0.001) -> float:
+        """Learning rate of the model's compiled optimizer (Keras 3 + 2 safe)."""
+        opt = getattr(model, "optimizer", None)
+        lr = getattr(opt, "learning_rate", None)
+        if lr is None:
+            return default
+        for conv in (
+            lambda v: float(v),
+            lambda v: float(__import__("keras").ops.convert_to_numpy(v)),
+            lambda v: float(v.numpy()),
+        ):
+            try:
+                out = conv(lr)
+                if out > 0:
+                    return out
+            except Exception:
+                continue
+        return default
 
     @staticmethod
     def _fit_keras(model, dataset, *, epochs: int, batch_size: int, callbacks, device: str, shuffle: bool = True):
@@ -279,9 +314,27 @@ class TrainerNode(Node):
 
         model = self._keras_model_from_input(model)
 
+        prev_policy = None
         if self.config.mixed_precision:
+            try:
+                prev_policy = keras.mixed_precision.global_policy().name
+            except Exception:
+                prev_policy = "float32"
             keras.mixed_precision.set_global_policy("mixed_float16")
             log.info("TrainerNode (keras): mixed_float16 precision enabled.")
+        try:
+            return self._train_keras_inner(model, dataset, out_path)
+        finally:
+            if prev_policy is not None:
+                try:
+                    keras.mixed_precision.set_global_policy(prev_policy)
+                except Exception:
+                    pass
+
+    def _train_keras_inner(self, model, dataset, out_path: Path) -> ModelArtifact:
+        import keras
+        import tensorflow as tf  # type: ignore
+
 
         keras.utils.set_random_seed(self.seed)
 
@@ -330,7 +383,7 @@ class TrainerNode(Node):
         ]
 
         device = self._configure_keras_device()
-        model = self._keras_model_on_device(model, device, learning_rate=float(self.config.learning_rate))
+        model = self._keras_model_on_device(model, device, learning_rate=self.config.learning_rate)
 
         log.info(
             "TrainerNode (keras): training for up to %d epochs (batch_size=%d, device=%s)...",
@@ -378,7 +431,7 @@ class TrainerNode(Node):
                     tf.config.set_soft_device_placement(False)
                 except Exception:
                     pass
-                model = self._keras_model_on_device(model, device, learning_rate=float(self.config.learning_rate))
+                model = self._keras_model_on_device(model, device, learning_rate=self.config.learning_rate)
                 history = self._fit_keras(
                     model,
                     dataset,
@@ -386,6 +439,7 @@ class TrainerNode(Node):
                     batch_size=self.config.batch_size,
                     callbacks=callbacks,
                     device=device,
+                    shuffle=bool(self.config.shuffle),
                 )
             else:
                 raise RuntimeError(
@@ -432,8 +486,7 @@ class TrainerNode(Node):
         # representative_samples (default 100), so saving the full training
         # set wastes disk space for large datasets.
         repr_path = str(out_path / "saved_model" / "X_train_repr.npy")
-        n_repr = min(1000, len(dataset.X_train))
-        np.save(repr_path, dataset.X_train[:n_repr])
+        np.save(repr_path, self._representative_rows(dataset.X_train))
 
         # Warn if val_accuracy is below threshold
         val_accs = history.history.get("val_accuracy", [0.0])
@@ -465,7 +518,21 @@ class TrainerNode(Node):
         import torch.nn as nn
         from torch.utils.data import DataLoader, TensorDataset
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if not isinstance(model, nn.Module):
+            raise TypeError(
+                "TrainerNode (pytorch): the 'model' port must carry a torch.nn.Module "
+                f"(got {type(model).__name__}). model_builder only produces Keras models — "
+                "use backend='keras' (or 'auto' with TensorFlow installed)."
+            )
+        want = str(self.config.device or "auto").lower()
+        if want == "cpu":
+            device = torch.device("cpu")
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            if want == "gpu":
+                log.warning("TrainerNode (pytorch): device=gpu but CUDA is unavailable; using CPU")
+            device = torch.device("cpu")
         model = model.to(device)
 
         # Build DataLoaders from dataset attributes
@@ -485,7 +552,7 @@ class TrainerNode(Node):
             shuffle=False,
         )
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=float(self.config.learning_rate))
+        optimizer = torch.optim.Adam(model.parameters(), lr=float(self.config.learning_rate or 0.001))
         criterion = nn.CrossEntropyLoss()
 
         # Mixed precision scaler (only meaningful on CUDA)
@@ -760,13 +827,13 @@ class ModelBuilderNode(Node):
     }
 
     class Config(NodeConfig):
-        architecture: Literal["ds_cnn", "mobilenet", "simple_cnn"] = Field(default='ds_cnn', title="Architecture", description="Model architecture. One of: ds_cnn, mobilenet, simple_cnn.")
-        filters: int = Field(default=64, title="Filters", description="Base convolution filter count.")
-        num_layers: int = Field(default=4, title="Num Layers", description="Number of blocks/layers in the architecture.")
-        dropout_rate: float = Field(default=0.25, title="Dropout Rate", description="Dropout probability before the classifier head.")
-        learning_rate: float = Field(default=0.001, title="Learning Rate", description="Optimizer learning rate.")
+        architecture: Literal["ds_cnn", "mobilenet", "simple_cnn"] = Field(default='ds_cnn', title="Architecture", description="ds_cnn = depthwise-separable blocks; mobilenet = inverted residuals; simple_cnn = fixed 2-layer CNN (ignores num_layers).")
+        filters: int = Field(default=64, ge=1, title="Filters", description="Base convolution filter count.")
+        num_layers: int = Field(default=4, ge=0, title="Num Layers", description="Number of DS blocks (ds_cnn) or inverted-residual blocks (mobilenet). Ignored by simple_cnn.")
+        dropout_rate: float = Field(default=0.25, ge=0, lt=1, title="Dropout Rate", description="Dropout probability before the classifier head.")
+        learning_rate: float = Field(default=0.001, gt=0, title="Learning Rate", description="Adam learning rate compiled into the model (used by trainer unless trainer.learning_rate is set).")
         backend: Literal["keras", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: keras, auto.")
-        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Directory for the compiled_<uuid>.keras hand-off file.")
 
     def _build_keras_model(self, input_shape: tuple, n_classes: int):
         """Build and compile a Keras model."""

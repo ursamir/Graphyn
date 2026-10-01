@@ -4,10 +4,14 @@ Bounded Context:  Graph Language / Workspace
 Responsibility:   Rewrite pipeline output paths into workspace/artifacts/<slug>/,
                   sample ingest into workspace/datasets/input/<slug>/, and keep
                   Library dataset exports under workspace/datasets/output/.
-Owns:             artifact_slug, rewire_graph_outputs, apply_output_rewire.
+Owns:             artifact_slug, rewire_graph_outputs, apply_output_rewire,
+                  publish_alias/publish_latest(_if_produced).
 Public Surface:   artifact_slug, rewire_graph_outputs, apply_output_rewire,
+                  publish_latest_if_produced, run_dir_has_artifacts,
+                  resolve_ingest_dir, is_produced_dataset_path,
                   ARTIFACTS_PREFIX, DATASETS_INPUT_PREFIX, DATASETS_OUTPUT_PREFIX.
-Must NOT:         Execute pipelines or write files.
+Must NOT:         Execute pipelines; file writes are limited to alias pointers
+                  (publish_alias) and pruning empty run dirs.
 Dependencies:     copy, re, pathlib; GraphIR loader imported lazily.
 Reason To Change: Artifact layout or relocatable-output heuristics change.
 
@@ -731,6 +735,59 @@ def publish_latest(slug: str, run_id: str) -> str:
     """Point ``workspace/artifacts/<slug>/latest`` at ``runs/<run_id>``."""
     return publish_alias(slug, run_id, "latest")
 
+
+def run_dir_has_artifacts(slug: str, run_id: str) -> bool:
+    """True when ``artifacts/<slug>/runs/<run_id>/`` holds at least one file."""
+    import os
+
+    run_path = artifact_fs_path(artifact_layout(slug, run_id)["run_dir"])
+    if not run_path.is_dir():
+        return False
+    try:
+        for _dirpath, _dirnames, filenames in os.walk(run_path):
+            if any(not name.startswith(".") for name in filenames):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def prune_empty_run_dir(slug: str, run_id: str) -> bool:
+    """Remove ``artifacts/<slug>/runs/<run_id>/`` when it contains no files.
+
+    Only empty directory trees are removed (never a file); returns True when
+    something was pruned. The ``runs/`` parent is removed too when left empty.
+    """
+    run_path = artifact_fs_path(artifact_layout(slug, run_id)["run_dir"])
+    if not run_path.is_dir() or run_path.is_symlink() or run_dir_has_artifacts(slug, run_id):
+        return False
+    try:
+        for d in sorted((p for p in run_path.rglob("*") if p.is_dir()), reverse=True):
+            d.rmdir()
+        run_path.rmdir()
+    except OSError:
+        return False
+    for parent in (run_path.parent, run_path.parent.parent):
+        try:
+            parent.rmdir()  # only succeeds when empty
+        except OSError:
+            break
+    return True
+
+
+def publish_latest_if_produced(slug: str, run_id: str) -> str | None:
+    """Repoint ``latest`` only when this run wrote artifacts under its slug dir.
+
+    A run that produced nothing in ``artifacts/<slug>/runs/<run_id>/`` (e.g. a
+    preprocessing graph whose outputs live in the stable ``<slug>/dataset/``
+    tree) leaves ``latest`` where it was and its empty run dir is pruned.
+    Returns the alias path, or None when ``latest`` was not moved.
+    """
+    if not run_dir_has_artifacts(slug, run_id):
+        prune_empty_run_dir(slug, run_id)
+        return None
+    return publish_latest(slug, run_id)
+
 def _dir_has_ingest_files(path: Path) -> bool:
     """True when *path* is a directory that contains at least one file.
 
@@ -867,26 +924,51 @@ def ingest_dir_candidates(raw: str) -> list[Path]:
         tail_parts = [p for p in tail.split("/") if p]
         for data_dir in _example_data_dirs_for_slug(slug):
             add(data_dir.joinpath(*tail_parts) if tail_parts else data_dir)
-    needle = text.replace("_", "-")
-    if "speech-command" in needle:
-        add(examples_dir() / "02_speech_commands" / "data")
-        add(repo_root() / "examples" / "02_speech_commands" / "data")
-        if mapped:
-            _slug, tail = mapped
-            tail_parts = [p for p in tail.split("/") if p]
-            if tail_parts:
-                add(examples_dir() / "02_speech_commands" / "data" / Path(*tail_parts))
-                add(repo_root() / "examples" / "02_speech_commands" / "data" / Path(*tail_parts))
+    if _example_fallback_enabled() and is_produced_dataset_path(text):
+        # Explicit opt-in only: a missing pipeline-produced dataset (Phase-1
+        # export) would otherwise be silently replaced by raw example clips.
+        produced_slug = slug_from_artifacts_posix(text) or ""
+        for data_dir in _example_data_dirs_for_slug(produced_slug) if produced_slug else []:
+            add(data_dir)
     return out
+
+
+INGEST_EXAMPLE_FALLBACK_ENV = "GRAPHYN_INGEST_EXAMPLE_FALLBACK"
+
+
+def _example_fallback_enabled() -> bool:
+    return os.environ.get(INGEST_EXAMPLE_FALLBACK_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_produced_dataset_path(raw: str) -> bool:
+    """True for ingest paths another pipeline is expected to write.
+
+    ``workspace/artifacts/<slug>/{dataset,latest,runs/<id>}/...`` and Library
+    exports under ``workspace/datasets/output/...`` — as opposed to seeded
+    sample input under ``workspace/datasets/input`` or ``examples/**/data``.
+    """
+    text = _normalize_artifacts(_posix(strip_legacy_absolute_prefix(raw or "")).strip())
+    if not text:
+        return False
+    if _is_datasets_output_path(text):
+        return True
+    parsed = _artifact_parts_after_slug(text)
+    if not parsed:
+        return False
+    _slug, tail = parsed
+    return bool(tail) and tail[0] in {"dataset", "latest", "runs"}
 
 
 def resolve_ingest_dir(raw: str) -> Path:
     """Return an existing directory for ingest, or raise FileNotFoundError.
 
     Does **not** create empty folders — ingest reads audio. Prefers a
-    non-empty workspace input dir; if that path is missing or empty, falls
-    back to bundled ``examples/**/data`` (including
-    ``examples/02_speech_commands/data`` for speech-commands graphs).
+    non-empty workspace input dir; a missing/empty
+    ``workspace/datasets/input/<slug>/…`` falls back to the bundled
+    ``examples/<folder>/data`` seed of the same slug. Pipeline-produced
+    datasets (:func:`is_produced_dataset_path`) never fall back to example
+    clips unless ``GRAPHYN_INGEST_EXAMPLE_FALLBACK=1``; a missing one raises
+    with a "run the producing pipeline first" message.
     Missing ``latest/`` falls back to the same path without ``latest``.
 
     Refuses empty / CWD / bare ``workspace`` paths (would recursively load the
@@ -912,6 +994,13 @@ def resolve_ingest_dir(raw: str) -> Path:
             empty.append(candidate)
         except OSError:
             continue
+    if is_produced_dataset_path(text):
+        raise FileNotFoundError(
+            f"Dataset {text!r} has not been produced yet (missing or empty). It is "
+            "written by another pipeline (e.g. the example's preprocess / export "
+            "phase) — run that first. Bundled example clips are NOT substituted "
+            f"unless {INGEST_EXAMPLE_FALLBACK_ENV}=1 is set. Tried: {tried[:8]}"
+        )
     hint = (
         "Ingest reads audio; empty folders are not created. "
         "Copy or symlink bundled example wavs into workspace/datasets/input "

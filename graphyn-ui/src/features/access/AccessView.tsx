@@ -1,4 +1,5 @@
 import React from 'react'
+import { ShieldCheck as EmptyShieldCheck } from 'lucide-react'
 import { KeyRound, Users } from 'lucide-react'
 import { PageHeader, EmptyState } from '../../components/ui'
 import { useAppStore } from '../../store/appStore'
@@ -39,7 +40,7 @@ export default function AccessView() {
           <KeyRound className="h-3.5 w-3.5" /> API token &amp; Settings
         </button>
       </div>
-      <EmptyState
+      <EmptyState icon={EmptyShieldCheck}
         title="Roles coming with multi-user API"
         description="Prod approve, admin Ops, and credential write will gate on roles once Access APIs ship. Actor chips already flow into audit."
         action={

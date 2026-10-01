@@ -140,11 +140,22 @@ def _cache_load(
     config: dict[str, Any],
     inputs: dict[str, Any],
     seed: int,
+    run_id: str | None = None,
+    ir_node: Any = None,
 ) -> tuple[str | None, Any]:
-    """Return ``(cache_key, outputs)``. Outputs is None on miss or when disabled."""
+    """Return ``(cache_key, outputs)``. Outputs is None on miss or when disabled.
+
+    Non-cacheable nodes get ``(None, None)`` (no load, and no save later since
+    the key is None). Hits that reference another run's artifact dir are
+    re-homed into ``run_id`` (or discarded) by ``rescope_cached_outputs``.
+    """
     if not use_cache:
         return None, None
+    from app.core.execution.cache_rescope import node_is_cacheable, rescope_cached_outputs
     from app.core.execution.pipeline_cache import PipelineCache
+
+    if not node_is_cacheable(node_type, ir_node):
+        return None, None
 
     version = None
     try:
@@ -161,7 +172,7 @@ def _cache_load(
         node_seed=seed,
         node_version=version,
     )
-    return key, cache.load(key)
+    return key, rescope_cached_outputs(cache.load(key), run_id)
 
 
 def _wait_remote_result(queue: Any, run: Any, job_id: str, *, timeout_s: float) -> Any:
@@ -677,6 +688,8 @@ class DistributedBackend(RuntimeBackend):
                             config=logical_configs[node_id],
                             inputs=inputs,
                             seed=node_seed,
+                            run_id=run_id,
+                            ir_node=ir_node,
                         )
                         if cached is not None:
                             outputs = cached
@@ -708,6 +721,8 @@ class DistributedBackend(RuntimeBackend):
                         config=logical_configs[node_id],
                         inputs=inputs,
                         seed=node_seed,
+                        run_id=run_id,
+                        ir_node=ir_node,
                     )
                     if cached is not None:
                         node_outputs[node_id] = cached

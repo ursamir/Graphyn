@@ -7,6 +7,7 @@ import { shortRunId } from '../lib/format'
 import { pathForView } from '../routes/viewMap'
 import { navigatePath } from '../routes/parsePath'
 import { paths } from '../routes/paths'
+import { confirmNavigation } from '../lib/navigationGuard'
 
 type PaletteItem = {
   id: string
@@ -33,6 +34,10 @@ const VIEW_JUMPS: Array<{ id: AppView; label: string; keywords?: string }> = [
   { id: 'system', label: 'Ops', keywords: 'health schedules admin s system ops' },
   { id: 'access', label: 'Access', keywords: 'rbac actor roles access' },
 ]
+
+/** Views the Workspace section already lists while a workspace is open — the
+ *  Views section skips them so Home/Models/Ship/Datasets don't appear twice. */
+const WORKSPACE_SECTION_VIEWS = new Set<AppView>(['projects', 'models', 'edge', 'data'])
 
 function fuzzyScore(query: string, text: string): number {
   const q = query.trim().toLowerCase()
@@ -151,7 +156,7 @@ export function CommandPalette({
     if (activeProject) {
       out.push({
         id: 'workspace:switch',
-        label: 'Switch project',
+        label: 'Switch workspace',
         hint: 'Show picker',
         group: 'Workspace',
         keywords: 'switch change workspace leave picker',
@@ -237,24 +242,30 @@ export function CommandPalette({
       keywords: 'lineage trace provenance deep link o',
       run: () => {
         const rid = useAppStore.getState().lastRunId
-        if (rid) openTrace({ runId: rid })
-        else goView('runs')
+        if (rid) {
+          openTrace({ runId: rid })
+          setOpen(false)
+        } else goView('runs')
       },
     })
     out.push({
       id: 'runs:compare',
       label: 'Runs → Compare runs',
-      hint: '/runs/compare',
+      hint: activeProject ? paths.runsCompare(activeProject) : 'Open a workspace first',
       group: 'Runs panels',
       keywords: 'compare experiments metrics e',
       run: () => {
         const W = useAppStore.getState().activeProject
         setFocusRunsTab('compare')
-        if (W) navigatePath(paths.runsCompare(W))
-        else goView('runs')
+        if (W) {
+          navigatePath(paths.runsCompare(W))
+          setView('runs')
+          setOpen(false)
+        } else goView('runs')
       },
     })
     for (const v of VIEW_JUMPS) {
+      if (activeProject && WORKSPACE_SECTION_VIEWS.has(v.id)) continue
       out.push({
         id: `view:${v.id}`,
         label: v.label,
@@ -305,7 +316,7 @@ export function CommandPalette({
       })
     }
     return out
-  }, [goView, lastRunId, recentRuns, projects, openRun, openProject, setActiveProject, setOpen, activeProject, closeProject, setView, openArtifacts, openEdge, setFocusRunsTab])
+  }, [goView, lastRunId, recentRuns, projects, openRun, openProject, setActiveProject, setOpen, activeProject, closeProject, setView, openArtifacts, openEdge, openData, openTrace, setFocusRunsTab])
 
   const filtered = React.useMemo(() => {
     const scored = items
@@ -321,6 +332,15 @@ export function CommandPalette({
   React.useEffect(() => {
     setActiveIdx(0)
   }, [query, open])
+
+  /** Every palette entry navigates — consult the Editor unsaved-changes guard first. */
+  const runItem = React.useCallback(
+    (item: PaletteItem) => {
+      if (!confirmNavigation()) return
+      item.run()
+    },
+    [],
+  )
 
   React.useEffect(() => {
     if (!open) return
@@ -362,12 +382,12 @@ export function CommandPalette({
       if (e.key === 'Enter') {
         e.preventDefault()
         const item = filtered[activeIdx]
-        if (item) item.run()
+        if (item) runItem(item)
       }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [open, filtered, activeIdx, setOpen])
+  }, [open, filtered, activeIdx, setOpen, runItem])
 
   if (!open) return null
 
@@ -393,7 +413,7 @@ export function CommandPalette({
             id="command-palette-input"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Jump to view, project, or run…"
+            placeholder="Jump to view, workspace, or run…"
             className="min-w-0 flex-1 bg-transparent text-[14px] text-ink-900 outline-none placeholder:text-ink-400"
             aria-labelledby="command-palette-title"
             autoComplete="off"
@@ -432,7 +452,7 @@ export function CommandPalette({
                               active ? 'bg-accent-50 text-accent-950' : 'text-ink-800 hover:bg-ink-50'
                             }`}
                             onMouseEnter={() => setActiveIdx(idx)}
-                            onClick={() => item.run()}
+                            onClick={() => runItem(item)}
                           >
                             <span className="min-w-0 truncate font-medium">{item.label}</span>
                             {item.hint ? (

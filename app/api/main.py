@@ -77,6 +77,10 @@ print("graphyn-api: process starting", flush=True, file=sys.stderr)
 # domain models themselves (ARCH-2 fix).
 from app.models.audio_artifact_serializer import register_audio_serializer as _reg_audio
 _reg_audio()
+from app.models.dataset_artifact_serializer import register_dataset_serializer as _reg_dataset
+_reg_dataset()
+from app.core.artifacts.file_tree import register_file_tree_serializer as _reg_file_tree
+_reg_file_tree()
 
 from app.core.nodes import initialize_registry as _init_registry
 

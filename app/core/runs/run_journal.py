@@ -389,12 +389,26 @@ class RunManager:
             existing = self._read_meta_unlocked(meta_path)
             if not self._status_write_allowed(existing.get("status"), "cancel"):
                 return False
+            already_cancelled = str(existing.get("status") or "").lower() in ("cancelled", "canceled")
             existing.update({
                 "status": "cancelled",
                 "duration_s": round(duration, 3),
             })
             self._write_meta_unlocked(existing, meta_path, tmp)
-            return True
+        if already_cancelled:
+            return True  # idempotent re-stamp — the cancel event already fired
+        try:
+            from app.core.runs.run_notify import notify_run_terminal
+
+            notify_run_terminal(
+                "cancelled",
+                self.run_id,
+                graph_name=existing.get("graph_name") if isinstance(existing.get("graph_name"), str) else None,
+                project=existing.get("project") if isinstance(existing.get("project"), str) else None,
+            )
+        except Exception:
+            pass
+        return True
 
     def mark_running(self) -> bool:
         """Transition durable meta pending→running (SRS §13.2) — compare-and-set.
@@ -626,6 +640,14 @@ class RunManager:
 
         with self._artifacts_lock:
             self._artifacts.append(record)
+        try:
+            from pathlib import Path as _Path
+
+            from app.core.runs.outputs_index import append_artifact_source
+
+            append_artifact_source(_Path(self.base_path), record)
+        except Exception as exc:
+            log.debug("outputs_index append failed for %s: %s", record.artifact_id, exc)
         return record
 
     @property

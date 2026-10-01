@@ -18,7 +18,7 @@ imports (`.types`) — they break under that loader.
 
 import logging
 from typing import ClassVar, Literal
-from pydantic import Field
+from pydantic import Field, field_validator
 
 import importlib
 
@@ -100,12 +100,32 @@ class DatasetBuilderNode(Node):
     }
 
     class Config(NodeConfig):
-        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Train/val/test ratios as a JSON object that should sum to ~1.0.")
-        shuffle: bool = Field(default=True, title="Shuffle", description="Shuffle samples before splitting.")
-        stratify: bool = Field(default=True, title="Stratify", description="Stratify train/val/test splits by label.")
-        output_format: Literal["numpy", "tensorflow", "pytorch"] = Field(default='numpy', title="Output Format", description="Output Format. One of: numpy, tensorflow, pytorch.")
-        fixed_length: int = Field(default=0, title="Fixed length", description="Pad/truncate examples to this length (0 = keep native).")
-        random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible splits and sampling.")
+        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Auto-split only: train/val/test fractions, each in [0, 1], summing to 1.0.")
+        shuffle: bool = Field(default=True, title="Shuffle", description="Auto-split only: shuffle before splitting.")
+        stratify: bool = Field(default=True, title="Stratify", description="Auto-split only: stratify train/val/test splits by label.")
+        output_format: Literal["numpy", "tensorflow", "pytorch"] = Field(default='numpy', title="Output Format", description="numpy = arrays only; tensorflow / pytorch also attach framework datasets in metadata (in-process only).")
+        fixed_length: int = Field(default=0, ge=0, title="Fixed length", description="Pad/truncate the time axis to this many frames (0 = pad to the longest clip).")
+        random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible auto-splits.")
+
+        @field_validator("split_ratios")
+        @classmethod
+        def _check_split_ratios(cls, v: dict) -> dict:
+            if not isinstance(v, dict):
+                raise ValueError("split_ratios must be an object like {train: 0.7, val: 0.15, test: 0.15}")
+            if not v:
+                return {"train": 0.7, "val": 0.15, "test": 0.15}
+            unknown = set(v) - {"train", "val", "test"}
+            if unknown:
+                raise ValueError(f"split_ratios keys must be train/val/test, got extra {sorted(unknown)}")
+            out = {k: float(v.get(k, 0.0)) for k in ("train", "val", "test")}
+            for k, w in out.items():
+                if not 0.0 <= w <= 1.0:
+                    raise ValueError(f"split_ratios[{k!r}] must be in [0, 1], got {w}")
+            if abs(sum(out.values()) - 1.0) > 1e-3:
+                raise ValueError(f"split_ratios must sum to 1.0, got {sum(out.values()):.4f}")
+            if out["train"] <= 0:
+                raise ValueError("split_ratios['train'] must be > 0")
+            return out
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -165,6 +185,16 @@ class DatasetBuilderNode(Node):
         )
         return X, y
 
+    @staticmethod
+    def _scalar_meta(f) -> dict:
+        meta = getattr(f, "metadata", None) or {}
+        out = {
+            k: v for k, v in meta.items()
+            if isinstance(v, (str, int, float, bool)) or v is None
+        }
+        out.setdefault("source_path", getattr(f, "source_path", "") or "")
+        return out
+
     def _infer_split(self, f) -> str | None:
         """Get split from metadata, or infer from source_path directory structure."""
         valid_splits = {"train", "val", "test"}
@@ -194,7 +224,7 @@ class DatasetBuilderNode(Node):
         test_r = ratios.get("test", 0.15)
 
         total = train_r + val_r + test_r
-        if abs(total - 1.0) > 1e-6:
+        if abs(total - 1.0) > 1e-3:
             raise ValueError(
                 f"DatasetBuilderNode: split_ratios must sum to 1.0, got {total:.4f} "
                 f"(train={train_r}, val={val_r}, test={test_r})"
@@ -205,6 +235,8 @@ class DatasetBuilderNode(Node):
 
         # First split: train vs (val+test)
         val_test_r = val_r + test_r
+        if val_test_r <= 0:
+            return {"train": list(features), "val": [], "test": []}
         try:
             train_idx, val_test_idx = train_test_split(
                 indices,
@@ -229,6 +261,13 @@ class DatasetBuilderNode(Node):
 
         # Second split: val vs test (within the val+test portion)
         val_fraction_of_remainder = val_r / val_test_r if val_test_r > 0 else 0.5
+        if val_r <= 0 or test_r <= 0:
+            rest = [features[i] for i in val_test_idx]
+            return {
+                "train": [features[i] for i in train_idx],
+                "val": rest if val_r > 0 else [],
+                "test": rest if test_r > 0 else [],
+            }
         val_test_labels = labels_arr[val_test_idx] if cfg.stratify else None
         try:
             val_idx, test_idx = train_test_split(
@@ -376,7 +415,13 @@ class DatasetBuilderNode(Node):
             input_shape = (1, 1, 1)
 
         # ── Optional framework datasets ───────────────────────────────────────
-        extra_metadata: dict = {}
+        extra_metadata: dict = {
+            # Per-test-sample scalar metadata (same order as X_test/y_test) so
+            # EvaluatorNode.compute_fairness can slice by e.g. speaker_id.
+            "test_metadata": [self._scalar_meta(f) for f in split_groups["test"]],
+            "split_mode": "metadata" if has_split_metadata else "auto",
+            "split_counts": {k: len(v) for k, v in split_groups.items()},
+        }
         if cfg.output_format == "tensorflow":
             extra_metadata.update(
                 self._build_tf_datasets(X_train, y_train, X_val, y_val, X_test, y_test)

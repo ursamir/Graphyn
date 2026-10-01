@@ -19,13 +19,18 @@ _EXPORTS: dict[str, str] = {
     "ArtifactTypeHandler": "app.core.artifacts.artifact_serializer",
     "ArtifactURI": "app.core.artifacts.artifact_uri",
     "ArtifactURIError": "app.core.artifacts.artifact_uri",
+    "FileListing": "app.core.artifacts.artifact_serializer",
+    "FileListingEntry": "app.core.artifacts.artifact_serializer",
+    "FileTreeHandler": "app.core.artifacts.file_tree",
     "ProvenanceRecord": "app.core.artifacts.provenance",
     "ProvenanceStore": "app.core.artifacts.provenance",
     "build_artifact_uri": "app.core.artifacts.artifact_uri",
+    "file_tree_payload": "app.core.artifacts.file_tree",
     "get_serializer_registry": "app.core.artifacts.artifact_serializer",
     "local_artifact_uri": "app.core.artifacts.artifact_uri",
     "local_content_key": "app.core.artifacts.artifact_uri",
     "parse_artifact_uri": "app.core.artifacts.artifact_uri",
+    "register_file_tree_serializer": "app.core.artifacts.file_tree",
 }
 
 

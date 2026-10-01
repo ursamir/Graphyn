@@ -5,7 +5,9 @@ Responsibility:   Define the base class and lifecycle protocol for all pipeline
                   nodes. The single contract every node implementation must satisfy.
 Owns:             Node (generic base class), SISO wrapper installation logic,
                   _maybe_wrap_siso(), _install_siso_wrapper().
-Public Surface:   Node[InputT, OutputT] — subclass to implement a node.
+Public Surface:   Node[InputT, OutputT] — subclass to implement a node;
+                  Node.publish_files / take_published_file_trees for path
+                  side-effect announcements (plain dicts; no BC6 imports).
 Must NOT:         Import from app.domain, app.api, app.core.execution.orchestrator,
                   app.core.execution.planner, or any BC4/BC5/BC6 module.
 Dependencies:     BC2 (nodes.config, nodes.ports, nodes.retry, nodes.compat,
@@ -107,6 +109,98 @@ class Node(Generic[InputT, OutputT]):
         self.seed = seed
         self.observer = observer
         self._run_id: str = ""  # set by pipeline executor per execution
+        # Path side-effects announced during process(); drained by the run
+        # layer into file_tree artifacts. Plain dicts only — no BC6 imports.
+        self._published_file_trees: list[dict[str, Any]] = []
+
+    def publish_files(
+        self,
+        root: "str | Path",
+        files: "list[str] | list[dict[str, Any]] | Path",
+        *,
+        total: int | None = None,
+    ) -> None:
+        """Announce a path-published file tree for this node (generic).
+
+        Call from ``process()`` after writing files under ``root``. The run
+        layer registers a platform ``file_tree`` artifact — no domain formats
+        (labels.csv, wav trees, …) are inferred by core.
+
+        Args:
+            root: Jailed directory (or file parent) containing the published files.
+            files: Explicit relative paths, entry dicts ``{path, size?}``, or a
+                path to a JSON inventory ``{"files": [...], "total"?}``.
+            total: Optional full count when ``files`` is a sample; defaults to
+                ``len(files)``.
+        """
+        from pathlib import Path as _Path
+
+        root_path = _Path(root)
+        root_str = str(root).replace("\\", "/").strip()
+        if not root_str:
+            raise ValueError("publish_files: root must be non-empty")
+
+        entries: list[dict[str, Any]] = []
+        if isinstance(files, _Path) or (
+            isinstance(files, str) and str(files).endswith(".json")
+        ):
+            inv_path = _Path(files)
+            try:
+                import json as _json
+
+                raw = _json.loads(inv_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise ValueError(f"publish_files: cannot read inventory {inv_path}: {exc}") from exc
+            if not isinstance(raw, dict):
+                raise ValueError("publish_files: inventory JSON must be an object")
+            if total is None and isinstance(raw.get("total"), int):
+                total = int(raw["total"])
+            raw_files = raw.get("files") or []
+            if not isinstance(raw_files, list):
+                raise ValueError("publish_files: inventory.files must be a list")
+            files = raw_files  # type: ignore[assignment]
+
+        if not isinstance(files, list):
+            raise TypeError("publish_files: files must be a list or inventory Path")
+
+        for item in files:
+            if isinstance(item, str) and item.strip():
+                rel = item.replace("\\", "/").lstrip("./")
+                # Prefer paths relative to root when absolute under root.
+                try:
+                    abs_item = _Path(item)
+                    if abs_item.is_absolute():
+                        rel = str(abs_item.relative_to(root_path.resolve())).replace("\\", "/")
+                except (OSError, ValueError):
+                    pass
+                entries.append({"path": rel})
+            elif isinstance(item, dict):
+                path = item.get("path")
+                if not isinstance(path, str) or not path.strip():
+                    continue
+                rel = path.replace("\\", "/").lstrip("./")
+                entry: dict[str, Any] = {"path": rel}
+                size = item.get("size")
+                if isinstance(size, (int, float)) and size >= 0:
+                    entry["size"] = int(size)
+                name = item.get("name")
+                if isinstance(name, str) and name.strip():
+                    entry["name"] = name
+                entries.append(entry)
+
+        self._published_file_trees.append(
+            {
+                "root": root_str,
+                "files": entries,
+                "total": int(total) if isinstance(total, int) and total >= 0 else len(entries),
+            }
+        )
+
+    def take_published_file_trees(self) -> list[dict[str, Any]]:
+        """Drain queued ``publish_files`` announcements (run layer only)."""
+        trees = list(self._published_file_trees)
+        self._published_file_trees.clear()
+        return trees
 
     # ── SISO wrapper installation ─────────────────────────────────────────────
     def __init_subclass__(cls, **kwargs: Any) -> None:

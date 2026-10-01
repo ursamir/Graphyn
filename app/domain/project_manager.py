@@ -15,7 +15,8 @@ Public Surface:   ProjectManager (all methods)
 Must NOT:         Import from app.core.nodes, app.core.execution.orchestrator, or
                   app.core.execution.executor. Must not register node types.
 Dependencies:     app.core.config (datasets_output_dir),
-                  app.core.pipelines.project_pipelines (resource_lock), stdlib (csv,
+                  app.core.pipelines.project_pipelines (resource_lock),
+                  app.core.pipelines.schedules (lazy; orphan on delete), stdlib (csv,
                   datetime, functools, hashlib, io, json, os, pathlib,
                   shutil, tempfile, uuid).
 Reason To Change: Project schema changes, new project-level operation added,
@@ -264,6 +265,25 @@ class ProjectManager:
             d = self._require_project(name)
             shutil.rmtree(str(d))
         self._prune_empty_leftovers()
+        self._orphan_project_schedules(name)
+
+    @staticmethod
+    def _orphan_project_schedules(name: str) -> None:
+        """Disable schedules that target a deleted project (best effort).
+
+        Schedules are kept (not deleted) with ``orphaned: true`` and a
+        ``disabled_reason`` so operators can see what was running.
+        """
+        try:
+            from app.core.pipelines.schedules import disable_schedules_for_project
+
+            disable_schedules_for_project(name, reason=f"Project deleted: {name}")
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "could not disable schedules for deleted project %s", name, exc_info=True
+            )
 
     @_project_locked
     def set_status(self, name: str, status: str) -> dict:

@@ -1,4 +1,5 @@
 import React from 'react'
+import { Database as EmptyDatabase, FolderOpen as EmptyFolderOpen, Tags as EmptyTags, TriangleAlert as EmptyTriangleAlert } from 'lucide-react'
 import { ArrowDown, ArrowUp, FileAudio, Play, RefreshCw, Search, Upload, X } from 'lucide-react'
 import {
   apiFetch,
@@ -21,6 +22,7 @@ import {
 } from '../../lib/format'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { paths } from '../../routes/paths'
+import { naturalCompare } from '../../lib/naturalSort'
 
 interface OutputProject {
   project: string
@@ -726,9 +728,49 @@ export default function DataView() {
 
   const versions = outputs.find((o) => o.project === project)?.versions ?? []
 
+  /* Workspace Datasets used to promise "Inputs/Outputs linked here" while
+     listing every shared input label. Now: when the workspace has pinned
+     inputs (Home → Linked inputs) only those are listed, with a toggle for the
+     full shared catalog; with none pinned, all are shown with a note. */
+  const onWorkspaceDatasets =
+    typeof window !== 'undefined' &&
+    window.location.pathname.startsWith('/workspaces/') &&
+    window.location.pathname.includes('/datasets')
+  const [linkedInputs, setLinkedInputs] = React.useState<string[] | null>(null)
+  const [showAllInputs, setShowAllInputs] = React.useState(false)
+  React.useEffect(() => {
+    if (!onWorkspaceDatasets || !activeProject) {
+      setLinkedInputs(null)
+      return
+    }
+    let cancelled = false
+    apiJson<{ inputs?: string[] }>(`/projects/${encodeURIComponent(activeProject)}/links`)
+      .then((d) => {
+        if (!cancelled) setLinkedInputs(Array.isArray(d?.inputs) ? d.inputs.map(String) : [])
+      })
+      .catch(() => {
+        if (!cancelled) setLinkedInputs(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [onWorkspaceDatasets, activeProject])
+  const scopeToLinked = Boolean(linkedInputs && linkedInputs.length > 0 && !showAllInputs)
+  const visibleInputs = React.useMemo(() => {
+    const base = scopeToLinked ? inputs.filter((i) => linkedInputs?.includes(i.label)) : inputs
+    return [...base].sort((a, b) => naturalCompare(a.label, b.label))
+  }, [inputs, linkedInputs, scopeToLinked])
+  React.useEffect(() => {
+    // Keep the selected label inside the visible set when scoping to linked inputs.
+    if (!scopeToLinked || visibleInputs.length === 0) return
+    if (!visibleInputs.some((i) => i.label === label)) {
+      const next = visibleInputs.find((i) => i.accessible !== false) ?? visibleInputs[0]
+      setLabel(next.label)
+    }
+  }, [scopeToLinked, visibleInputs, label])
   const filteredInputs = React.useMemo(
-    () => inputs.filter((i) => matchesQuery(`${i.label} ${i.file_count}`, listFilter)),
-    [inputs, listFilter],
+    () => visibleInputs.filter((i) => matchesQuery(`${i.label} ${i.file_count}`, listFilter)),
+    [visibleInputs, listFilter],
   )
   const filteredOutputs = React.useMemo(
     () =>
@@ -765,7 +807,8 @@ export default function DataView() {
       if (sortKey === 'modified') {
         return (time(a.modified_at) - time(b.modified_at)) * dir
       }
-      return String(a.path ?? '').localeCompare(String(b.path ?? '')) * dir
+      // Natural order: nohash_2 before nohash_10.
+      return naturalCompare(String(a.path ?? ''), String(b.path ?? '')) * dir
     })
   }, [filteredRows, sortKey, sortDir])
   const displayRows = sortedRows.slice(0, listCap)
@@ -828,7 +871,7 @@ export default function DataView() {
       <input
         value={listFilter}
         onChange={(e) => setListFilter(e.target.value)}
-        placeholder={mode === 'inputs' ? 'Filter labels or files…' : 'Filter projects or files…'}
+        placeholder={mode === 'inputs' ? 'Filter labels or files…' : 'Filter workspaces or files…'}
         className="w-full rounded-lg border border-ink-200 py-1.5 pl-8 pr-2 text-sm"
       />
     </label>
@@ -851,7 +894,9 @@ return (
         title={workspaceDatasetsPath ? 'Workspace datasets' : 'Datasets'}
         description={
           workspaceDatasetsPath
-            ? 'Datasets scoped to this workspace — Inputs/Outputs linked here. Use Browse shared library for the catalog.'
+            ? linkedInputs && linkedInputs.length > 0
+              ? `Input labels pinned to ${activeProject ?? 'this workspace'} (Home → Linked inputs), plus shared outputs. Toggle “Show all shared inputs” or Browse shared library for the full catalog.`
+              : 'Shared Inputs/Outputs library, opened from this workspace. No inputs are pinned here yet — pin labels under Home → Linked inputs to narrow this list.'
             : 'Library — Shared Inputs and Outputs for pipelines (not per-run downloads under Runs).'
         }
         actions={
@@ -1052,9 +1097,9 @@ return (
       ) : uxMode === 'manage' && manageTab === 'merge' ? (
         <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-2">
           <h3 className="text-sm font-semibold">Merge datasets</h3>
-          <p className="text-sm text-ink-500">Comma-separated project:version pairs combined into the target project version.</p>
-          <input value={mergeSources} onChange={(e) => setMergeSources(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="project:version, other:v2" />
-          <input value={mergeTargetProject} onChange={(e) => setMergeTargetProject(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="target project" />
+          <p className="text-sm text-ink-500">Comma-separated workspace:version pairs combined into a new version of the target workspace.</p>
+          <input value={mergeSources} onChange={(e) => setMergeSources(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="workspace:version, other:v2" />
+          <input value={mergeTargetProject} onChange={(e) => setMergeTargetProject(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="target workspace" />
           <input value={mergeTargetVersion} onChange={(e) => setMergeTargetVersion(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="target version" />
           <button type="button" className="btn-primary" onClick={() => void doMerge()}>Merge</button>
         </section>
@@ -1062,7 +1107,7 @@ return (
         <>
           {mode === 'outputs' ? (
             showEmptyOutputs ? (
-              <EmptyState
+              <EmptyState icon={EmptyDatabase}
                 title={pathRecovery ? 'Dataset path reset' : 'No output datasets yet'}
                 description={
                   pathRecovery
@@ -1198,7 +1243,7 @@ return (
               </div>
             )
           ) : showEmptyInputs ? (
-            <EmptyState
+            <EmptyState icon={EmptyTags}
               title="No input labels"
               description="Upload files or ingest URLs to create a label folder under workspace/datasets/input."
               action={
@@ -1230,13 +1275,30 @@ return (
                 className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
               >
                 {!label ? <option value="">Select a label…</option> : null}
-                {(listFilter.trim() ? filteredInputs : inputs).map((i) => (
+                {filteredInputs.map((i) => (
                   <option key={i.label} value={i.label}>
                     {i.label} ({i.file_count})
                     {i.accessible === false ? ' — external (blocked)' : ''}
                   </option>
                 ))}
               </select>
+              {linkedInputs && linkedInputs.length > 0 ? (
+                <label
+                  className="inline-flex items-center gap-1.5 text-[12px] text-ink-600"
+                  title={`${linkedInputs.length} label${linkedInputs.length === 1 ? '' : 's'} pinned to ${activeProject}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showAllInputs}
+                    onChange={(e) => setShowAllInputs(e.target.checked)}
+                  />
+                  Show all shared inputs
+                </label>
+              ) : linkedInputs && linkedInputs.length === 0 ? (
+                <span className="text-[12px] text-ink-400">
+                  None pinned to {activeProject} — showing all shared input labels.
+                </span>
+              ) : null}
               {uxMode === 'manage' && label ? (
                 <ConfirmButton
                   label="Delete"
@@ -1335,7 +1397,7 @@ return (
 
           {showEmptyOutputs || showEmptyInputs ? null : stats != null && <KeyValue data={stats} />}
           {showEmptyOutputs || showEmptyInputs ? null : showBrowseError && filteredRows.length === 0 ? (
-            <EmptyState
+            <EmptyState icon={EmptyTriangleAlert}
               title="Couldn’t load files"
               description="This selection isn’t browseable. Clear it and pick an accessible label or version."
               action={
@@ -1357,7 +1419,7 @@ return (
               }
             />
           ) : filteredRows.length === 0 ? (
-            <EmptyState
+            <EmptyState icon={EmptyFolderOpen}
               title={
                 listFilter.trim()
                   ? 'No matches'

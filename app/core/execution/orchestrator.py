@@ -11,7 +11,8 @@ Must NOT:         Understand audio domain logic, parse API requests,
 Dependencies:     BC1 (ir.models, ir.loader), BC2 (nodes.base, nodes.observers),
                   BC3 (registry_runtime), BC4 (planner), BC6 (checkpoint,
                   artifact_store, run_journal, run_control, pipeline_cache,
-                  logger), app.core.utils, app.core.execution.conditions, app.core.execution.events.
+                  logger), app.core.utils, app.core.execution.conditions, app.core.execution.events,
+                  app.core.execution.cache_rescope (run-local cache hits).
 Reason To Change: Runtime execution semantics evolve (new execution mode,
                   cancellation protocol, resume logic, partial execution).
 """
@@ -36,8 +37,9 @@ from app.core.execution.planner import (
 from app.core.execution.node_executor import NodeExecutor
 from app.core.runs.checkpoint import write_checkpoint, load_checkpoint_outputs
 from app.core.utils import collect_stream as _collect_stream
-from app.core.host.registry_runtime import resolve_capability as _resolve_capability_impl
 from app.core.nodes.metadata import stable_node_type
+from app.core.execution.cache_rescope import node_is_cacheable, rescope_cached_outputs
+from app.core.logger import port_item_counts
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +104,6 @@ def _graph_display_name(graph: Any) -> str:
 def _scope_graph_to_run(graph: Any, run: Any) -> Any:
     """Rewire output paths into workspace/artifacts/<slug>/runs/<run_id>/."""
     from app.core.paths.workspace_paths import (
-        artifact_fs_path,
         artifact_layout,
         artifact_slug,
         scope_outputs_to_run,
@@ -112,10 +113,8 @@ def _scope_graph_to_run(graph: Any, run: Any) -> Any:
     name = _graph_display_name(scoped) or _graph_display_name(graph)
     slug = artifact_slug(name or "pipeline")
     layout = artifact_layout(slug, run.run_id)
-    try:
-        artifact_fs_path(layout["run_dir"]).mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    # The run dir is not pre-created: nodes create it when they write, and
+    # _finalize_run_artifacts prunes it (and keeps ``latest``) when empty.
     run._write_meta_field("artifacts_dir", layout["run_dir"])
     return scoped
 
@@ -159,7 +158,7 @@ def _finalize_run_artifacts(run: Any, graph: Any) -> dict[str, Any]:
     from app.core.paths.workspace_paths import (
         artifact_layout,
         artifact_slug,
-        publish_latest,
+        publish_latest_if_produced,
         read_run_metrics,
     )
 
@@ -176,7 +175,9 @@ def _finalize_run_artifacts(run: Any, graph: Any) -> dict[str, Any]:
         except Exception:
             pass
     try:
-        publish_latest(slug, run.run_id)
+        # Only runs that wrote into artifacts/<slug>/runs/<id>/ move ``latest``
+        # (an empty preprocess run must not hide the last trained model).
+        publish_latest_if_produced(slug, run.run_id)
     except Exception:
         log.warning("Failed to publish latest artifacts for run %s", run.run_id, exc_info=True)
     try:
@@ -737,7 +738,8 @@ async def _run_pipeline_body(
             # Cache check — load() directly; None is a miss (ARCH-9: no has()).
             cache_hit = False
             cache_key: str | None = None
-            if cache is not None:
+            _ir_node_c = next((n for n in graph.nodes if n.id == node_id), None)
+            if cache is not None and node_is_cacheable(node_type, _ir_node_c):
                 node_cfg_dict = logical_configs.get(node_id)
                 if node_cfg_dict is None:
                     node_cfg_dict = next(
@@ -757,7 +759,7 @@ async def _run_pipeline_body(
                     node_seed=getattr(node, "seed", None),
                     node_version=_node_version,
                 )
-                cached_result = cache.load(cache_key)
+                cached_result = rescope_cached_outputs(cache.load(cache_key), run_id)
                 if cached_result is not None:
                     node_outputs[node_id] = cached_result
                     cache_hit = True
@@ -783,18 +785,9 @@ async def _run_pipeline_body(
 
                 node_outputs[node_id] = outputs
 
+                # cache_key is only set for cacheable nodes (checked before load).
                 if cache is not None and cache_key is not None:
-                    cacheable = True
-                    ir_node = next((n for n in graph.nodes if n.id == node_id), None)
-                    if ir_node is not None:
-                        try:
-                            from app.core.host.registry_runtime import get_registry as _get_reg
-                            cap = _resolve_capability_impl(ir_node, _get_reg())
-                            cacheable = cap.cacheable
-                        except Exception:
-                            cacheable = True
-                    if cacheable:
-                        cache.save(cache_key, outputs)
+                    cache.save(cache_key, outputs)
 
             if checkpoint:
                 write_checkpoint(
@@ -834,18 +827,38 @@ async def _run_pipeline_body(
                         "Artifact registration failed for node '%s' port '%s': %s",
                         node_id, _port_name, _art_exc,
                     )
+            if not cache_hit:
+                try:
+                    from app.core.artifacts.file_tree import file_tree_payload
+
+                    for _pub in node.take_published_file_trees():
+                        _rec = run.register_artifact(
+                            node_id=node_id,
+                            node_type=node_type,
+                            artifact_type="file_tree",
+                            data=file_tree_payload(_pub),
+                            metadata={"kind": "published_files"},
+                            input_artifact_ids=[
+                                aid for aid in _prior_artifact_ids
+                                if aid not in _registered_this_node
+                            ],
+                        )
+                        _registered_this_node.add(_rec.artifact_id)
+                except Exception as _pub_exc:
+                    log.warning(
+                        "Published file_tree registration failed for node '%s': %s",
+                        node_id,
+                        _pub_exc,
+                    )
 
             node_duration = time.time() - node_start_time
             # SA-O-CNT: list length for list ports, 1 per non-None scalar port.
-            _output_count = sum(
-                len(v) if isinstance(v, list) else (0 if v is None else 1)
-                for v in node_outputs[node_id].values()
-            )
+            _port_counts = port_item_counts(node_outputs[node_id])
             logger.node_end(
                 node_type,
                 idx,
                 node_duration,
-                output_count=_output_count,
+                output_counts=_port_counts,
                 node_id=node_id,
             )
             node_stats.append(
@@ -1066,13 +1079,10 @@ async def _run_event_driven(
                 return False
             node_outputs[exec_node_id] = exec_outputs
             _node_duration = time.time() - _node_start_time
-            _output_count = sum(
-                len(v) if isinstance(v, list) else (0 if v is None else 1)
-                for v in exec_outputs.values()
-            )
+            _port_counts = port_item_counts(exec_outputs)
             logger.node_end(
                 exec_node_type, exec_idx, _node_duration,
-                output_count=_output_count, node_id=exec_node_id,
+                output_counts=_port_counts, node_id=exec_node_id,
             )
             node_stats.append(
                 _node_stat_record(exec_node_id, exec_node_type, exec_idx, _node_duration)

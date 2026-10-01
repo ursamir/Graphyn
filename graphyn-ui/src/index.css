@@ -9,6 +9,10 @@
   --shadow-lg: 0 12px 40px rgba(26, 33, 41, 0.10);
   --border-soft: rgba(26, 33, 41, 0.08);
   --surface-muted: #f7f9fb;
+  /* Distance of the global toast stack from the viewport bottom. Pages with a
+     critical bottom panel (Editor execution log, …) raise it via
+     lib/toastInset.ts `useToastBottomInset(px)`. */
+  --toast-bottom-inset: 1rem;
 }
 
 html,

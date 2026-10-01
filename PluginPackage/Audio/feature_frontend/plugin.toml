@@ -28,18 +28,18 @@ dependencies = [
 node_types = ["feature_frontend"]
 
 [config_schema.feature_frontend]
-feature_type = {  type = "string", title = "Feature type", default = "log_mel", description = "Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw.", enum = ["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"]  }
-sample_rate = { type = "integer", title = "Sample rate", default = 16000, description = "Audio sample rate in Hz." }
-fixed_length = { type = "integer", title = "Fixed length (frames)", default = 0, description = "Pad/truncate the time axis to exactly N frames (0 = variable length)." }
-n_fft = { type = "integer", title = "FFT size", default = 512, description = "FFT window size in samples (power of two recommended)." }
-hop_length = { type = "integer", title = "Hop length", default = 160, description = "Hop between STFT frames in samples." }
-win_length = { type = "integer", title = "Window length", default = 400, description = "Analysis window length in samples (≤ n_fft)." }
-n_mels = { type = "integer", title = "Mel bins", default = 80, description = "Number of mel filterbank bins." }
-n_mfcc = { type = "integer", title = "MFCC coeffs", default = 13, description = "Number of MFCC coefficients to keep." }
-fmin = { type = "number", title = "Min frequency (Hz)", default = 0.0, description = "Lowest frequency included in the mel/spectrogram filterbank." }
-fmax = { type = "number", title = "Max frequency (Hz)", description = "Highest frequency included (null = Nyquist / sample_rate/2)." }
-log_scale = { type = "boolean", title = "Log scale", default = true, description = "Apply log compression to spectrogram/mel energies (On/Off)." }
-normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize feature or audio amplitude (On/Off)." }
+feature_type = {  type = "string", title = "Feature type", default = "log_mel", description = "Audio feature representation to extract. One of: log_mel, mfcc, spectrogram, chroma, zcr, spectral_centroid, spectral_rolloff, raw. Output is (T, F) per clip.", enum = ["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff", "raw"]  }
+sample_rate = { type = "integer", title = "Sample rate", default = 16000, minimum = 1000, maximum = 384000, description = "Clips at another rate are resampled to this rate (Hz) before extraction." }
+fixed_length = { type = "integer", title = "Fixed length (frames)", default = 0, minimum = 0, description = "Pad (zeros) / truncate the time axis to exactly N frames (0 = variable length). 101 = 1 s at 16 kHz with hop 160." }
+n_fft = { type = "integer", title = "FFT size", default = 512, minimum = 16, description = "FFT window size in samples (power of two recommended).", ui = { visible_if = { feature_type = ["log_mel", "mfcc", "spectrogram", "chroma", "spectral_centroid", "spectral_rolloff"] } } }
+hop_length = { type = "integer", title = "Hop length", default = 160, minimum = 1, description = "Hop between frames in samples.", ui = { visible_if = { feature_type = ["log_mel", "mfcc", "spectrogram", "chroma", "zcr", "spectral_centroid", "spectral_rolloff"] } } }
+win_length = { type = "integer", title = "Window length", default = 400, minimum = 1, description = "Analysis window length in samples (must be <= n_fft; zcr frame length).", ui = { visible_if = { feature_type = ["log_mel", "mfcc", "spectrogram", "zcr", "spectral_centroid", "spectral_rolloff"] } } }
+n_mels = { type = "integer", title = "Mel bins", default = 80, minimum = 1, description = "Number of mel filterbank bins (log_mel output size; MFCC filterbank size).", ui = { visible_if = { feature_type = ["log_mel", "mfcc"] } } }
+n_mfcc = { type = "integer", title = "MFCC coeffs", default = 13, minimum = 1, description = "Number of MFCC coefficients to keep (must be <= n_mels).", ui = { visible_if = { feature_type = "mfcc" } } }
+fmin = { type = "number", title = "Min frequency (Hz)", default = 0.0, minimum = 0, description = "Lowest frequency of the mel filterbank (log_mel, mfcc).", ui = { visible_if = { feature_type = ["log_mel", "mfcc"] } } }
+fmax = { type = "number", title = "Max frequency (Hz)", exclusiveMinimum = 0, description = "Highest frequency of the mel filterbank (log_mel, mfcc); null = Nyquist (sample_rate/2).", ui = { visible_if = { feature_type = ["log_mel", "mfcc"] } } }
+log_scale = { type = "boolean", title = "Log scale", default = true, description = "Convert energies to dB (spectrogram: amplitude_to_db; log_mel: power_to_db; Off = linear mel power) (On/Off).", ui = { visible_if = { feature_type = ["log_mel", "spectrogram"] } } }
+normalize = { type = "boolean", title = "Normalize", default = true, description = "Per-clip mean/variance normalization of the feature matrix (not applied to raw) (On/Off)." }
 center = { type = "boolean", title = "Center frames", default = true, description = "Pad so frames are centered on the signal (librosa center=True)." }
-delta = { type = "boolean", title = "Delta features", default = false, description = "Append first-order delta (velocity) coefficients (On/Off)." }
-delta_delta = { type = "boolean", title = "Delta-delta features", default = false, description = "Append second-order delta (acceleration) coefficients (On/Off)." }
+delta = { type = "boolean", title = "Delta features", default = false, description = "Append first-order delta coefficients along the feature axis (log_mel, mfcc) (On/Off).", ui = { visible_if = { feature_type = ["log_mel", "mfcc"] } } }
+delta_delta = { type = "boolean", title = "Delta-delta features", default = false, description = "Append second-order delta coefficients (log_mel, mfcc) (On/Off).", ui = { visible_if = { feature_type = ["log_mel", "mfcc"] } } }

@@ -171,6 +171,10 @@ def _startup() -> None:
         # can handle AudioSample objects without importing domain models (ARCH-2 fix).
         from app.models.audio_artifact_serializer import register_audio_serializer
         register_audio_serializer()
+        from app.models.dataset_artifact_serializer import register_dataset_serializer
+        register_dataset_serializer()
+        from app.core.artifacts.file_tree import register_file_tree_serializer
+        register_file_tree_serializer()
 
         # Explicitly populate the NodeRegistry singleton after the domain serializer
         # is registered so node imports that reference AudioSample work correctly.

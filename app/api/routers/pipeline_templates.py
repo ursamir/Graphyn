@@ -85,8 +85,11 @@ _SINK_HINTS = ("export", "write", "save", "output", "upload", "publish")
 
 def _summarize_template(name: str) -> dict[str, Any]:
     """Card-facing fields for Templates UI (description, I/O, plugins, difficulty)."""
+    from app.core.templates.example_templates import resolve_template_title
+
     summary: dict[str, Any] = {
         "name": name,
+        "title": resolve_template_title(name),
         "description": "",
         "difficulty": None,
         "required_plugins": [],
@@ -101,6 +104,8 @@ def _summarize_template(name: str) -> dict[str, Any]:
         return summary
     meta = graph.get("metadata") if isinstance(graph.get("metadata"), dict) else {}
     nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    # Synced copies may predate metadata.title in the repo source graph.
+    summary["title"] = resolve_template_title(name, meta)
     summary["description"] = str(meta.get("description") or "")[:400]
     difficulty = meta.get("difficulty")
     if isinstance(difficulty, str) and difficulty.strip():

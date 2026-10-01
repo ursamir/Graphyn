@@ -6,6 +6,7 @@ import React from 'react'
 import { createPortal } from 'react-dom'
 import { Check, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
+import { announceMenuOpen, MENU_OPEN_EVENT } from '../lib/menus'
 
 export type FieldSelectOption = {
   value: string
@@ -54,6 +55,7 @@ export function FieldSelect({
   id,
 }: FieldSelectProps) {
   const [open, setOpen] = React.useState(false)
+  const selectMenuId = React.useId()
   const [pos, setPos] = React.useState<MenuPos | null>(null)
   const [activeIdx, setActiveIdx] = React.useState(0)
   const triggerRef = React.useRef<HTMLButtonElement>(null)
@@ -113,17 +115,25 @@ export function FieldSelect({
       if (triggerRef.current?.contains(t) || listRef.current?.contains(t)) return
       setOpen(false)
     }
+    // One open popover at a time (lib/menus): announce, and close when another opens.
+    const menuId = `field-select-${selectMenuId}`
+    announceMenuOpen(menuId)
+    const onOtherMenu = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== menuId) setOpen(false)
+    }
+    window.addEventListener(MENU_OPEN_EVENT, onOtherMenu)
     window.addEventListener('resize', onScroll)
     window.addEventListener('scroll', onScroll, true)
     window.addEventListener('keydown', onKey)
     document.addEventListener('mousedown', onDown)
     return () => {
+      window.removeEventListener(MENU_OPEN_EVENT, onOtherMenu)
       window.removeEventListener('resize', onScroll)
       window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('keydown', onKey)
       document.removeEventListener('mousedown', onDown)
     }
-  }, [open, updatePos])
+  }, [open, updatePos, selectMenuId])
 
   React.useEffect(() => {
     if (!open) return

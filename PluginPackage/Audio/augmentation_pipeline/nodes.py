@@ -16,7 +16,7 @@ import io
 import logging
 import os
 from typing import Any, ClassVar
-from pydantic import Field
+from pydantic import Field, field_validator
 
 import librosa
 import numpy as np
@@ -29,6 +29,11 @@ from app.core.nodes.ports import InputPort, OutputPort
 from app.models.audio_sample import AudioSample
 
 log = logging.getLogger(__name__)
+
+_KNOWN_AUGMENTATIONS = frozenset({
+    "gain", "pitch_shift", "time_stretch", "speed_perturb", "reverb",
+    "noise_inject", "codec_degrade", "eq", "audiomentations",
+})
 
 
 class AugmentationPipelineNode(Node):
@@ -89,8 +94,32 @@ class AugmentationPipelineNode(Node):
     }
 
     class Config(NodeConfig):
-        copies_per_sample: int = Field(default=1, title="Copies per sample", description="How many augmented copies to emit per input sample.")
-        augmentations: list = Field(default=[{'type': 'gain', 'apply_prob': 0.5, 'gain_db': [-6, 6]}, {'type': 'pitch_shift', 'apply_prob': 0.3, 'semitones': [-2, 2]}, {'type': 'time_stretch', 'apply_prob': 0.3, 'rate': [0.9, 1.1]}, {'type': 'speed_perturb', 'apply_prob': 0.3, 'speed_factor': [0.9, 1.1]}, {'type': 'codec_degrade', 'apply_prob': 0.2, 'codec': 'mp3', 'bitrate': 32}, {'type': 'eq', 'apply_prob': 0.2, 'bands': [{'freq': 1000, 'gain_db': 3, 'q': 1.0}]}], title="Augmentations", description="Ordered list of augmentation specs (type + params).")
+        copies_per_sample: int = Field(default=1, ge=0, title="Copies per sample", description="Augmented copies emitted per input sample in addition to the original (0 = originals only).")
+        augmentations: list = Field(default=[{'type': 'gain', 'apply_prob': 0.5, 'gain_db': [-6, 6]}, {'type': 'pitch_shift', 'apply_prob': 0.3, 'semitones': [-2, 2]}, {'type': 'time_stretch', 'apply_prob': 0.3, 'rate': [0.9, 1.1]}, {'type': 'speed_perturb', 'apply_prob': 0.3, 'speed_factor': [0.9, 1.1]}, {'type': 'codec_degrade', 'apply_prob': 0.2, 'codec': 'mp3', 'bitrate': 32}, {'type': 'eq', 'apply_prob': 0.2, 'bands': [{'freq': 1000, 'gain_db': 3, 'q': 1.0}]}], title="Augmentations", description="Ordered list of augmentation specs {type, apply_prob in [0,1], params}. An empty list makes every copy an unmodified duplicate.")
+
+        @field_validator("augmentations")
+        @classmethod
+        def _check_augmentations(cls, v: list) -> list:
+            for i, aug in enumerate(v):
+                if not isinstance(aug, dict):
+                    raise ValueError(f"augmentations[{i}] must be an object, got {type(aug).__name__}")
+                aug_type = aug.get("type", "")
+                if aug_type not in _KNOWN_AUGMENTATIONS:
+                    raise ValueError(
+                        f"augmentations[{i}].type {aug_type!r} is not one of {sorted(_KNOWN_AUGMENTATIONS)}"
+                    )
+                prob = aug.get("apply_prob", 0.5)
+                try:
+                    prob_f = float(prob)
+                except (TypeError, ValueError):
+                    raise ValueError(f"augmentations[{i}].apply_prob must be a number in [0, 1], got {prob!r}")
+                if not 0.0 <= prob_f <= 1.0:
+                    raise ValueError(f"augmentations[{i}].apply_prob must be in [0, 1], got {prob_f}")
+                for key in ("rate", "speed_factor"):
+                    rng = aug.get(key)
+                    if isinstance(rng, (list, tuple)) and len(rng) >= 2 and min(float(rng[0]), float(rng[1])) <= 0:
+                        raise ValueError(f"augmentations[{i}].{key} values must be > 0, got {rng!r}")
+            return v
 
     def __init__(self, config=None, seed: int = 0, observer=None):
         super().__init__(config=config, seed=seed, observer=observer)

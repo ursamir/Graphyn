@@ -88,15 +88,15 @@ class SegmenterNode(Node):
     }
 
     class Config(NodeConfig):
-        mode: Literal["fixed", "silence", "vad", "event", "speaker_turn"] = Field(default='fixed', title="Mode", description="Operating mode. One of: fixed, silence, vad, event, speaker_turn.")
-        window_ms: int = Field(default=1000, title="Window (ms)", description="Segment/window length in milliseconds.")
-        overlap: float = Field(default=0.0, title="Overlap", description="Fractional overlap between consecutive windows in [0, 1).")
+        mode: Literal["fixed", "silence", "vad", "event", "speaker_turn"] = Field(default='fixed', title="Mode", description="Operating mode. fixed = sliding windows; silence = split on silence (may emit several segments per clip); vad = WebRTC VAD (falls back to silence); event = energy onsets; speaker_turn = metadata.speaker_segments (falls back to silence).")
+        window_ms: int = Field(default=1000, title="Window (ms)", description="Window length in milliseconds (fixed mode). Clips shorter than one window are emitted whole.")
+        overlap: float = Field(default=0.0, title="Overlap", description="Fractional overlap in [0, 1). fixed: window overlap; silence/vad: each segment end is extended by this fraction of its length.")
         vad_aggressiveness: int = Field(default=2, title="VAD aggressiveness", description="WebRTC VAD aggressiveness 0–3 (higher = more aggressive speech filtering).")
-        silence_threshold_db: float = Field(default=40.0, title="Silence threshold (dB)", description="Silence detection threshold in dB (higher = more audio treated as silence).")
-        event_threshold_db: float = Field(default=-30.0, title="Event threshold (dB)", description="Energy threshold in dB for event-mode onset detection.")
-        event_min_gap_ms: int = Field(default=200, title="Event min gap (ms)", description="Minimum gap between events before they are split (milliseconds).")
-        min_segment_ms: int = Field(default=100, title="Min segment (ms)", description="Discard or merge segments shorter than this (milliseconds).")
-        max_segment_ms: int = Field(default=30000, title="Max segment (ms)", description="Hard cap on segment length (milliseconds); longer spans are split.")
+        silence_threshold_db: float = Field(default=40.0, gt=0, le=120, title="Silence threshold (dB below peak)", description="librosa top_db: frames quieter than (peak - this) dB are silence. Higher = less audio treated as silence.")
+        event_threshold_db: float = Field(default=-30.0, le=0, title="Event threshold (dB re peak)", description="Event mode: frames whose RMS is at least this many dB relative to the loudest frame (<= 0) are active.")
+        event_min_gap_ms: int = Field(default=200, title="Event min gap (ms)", description="Event mode: an event ends after this much continuous inactivity (milliseconds).")
+        min_segment_ms: int = Field(default=100, title="Min segment (ms)", description="Discard segments shorter than this (milliseconds). Must be < max_segment_ms.")
+        max_segment_ms: int = Field(default=30000, title="Max segment (ms)", description="Hard cap on segment length (milliseconds); longer spans are split into max-length chunks.")
 
         @pydantic.field_validator("overlap")
         @classmethod
@@ -199,6 +199,36 @@ class SegmenterNode(Node):
         max_s = int(sr * self.config.max_segment_ms / 1000)
         return min_s <= n_samples <= max_s
 
+    def _bounded_spans(self, start: int, end: int, sr: int) -> list[tuple[int, int]]:
+        """Split [start, end) into chunks <= max_segment_ms; drop chunks < min_segment_ms."""
+        min_s = int(sr * self.config.min_segment_ms / 1000)
+        max_s = max(1, int(sr * self.config.max_segment_ms / 1000))
+        spans: list[tuple[int, int]] = []
+        pos = start
+        while pos < end:
+            stop = min(pos + max_s, end)
+            if stop - pos >= min_s:
+                spans.append((pos, stop))
+            pos = stop
+        return spans
+
+    def _emit_intervals(
+        self,
+        s: AudioSample,
+        intervals: list[tuple[int, int]],
+        extra_meta: dict | None = None,
+    ) -> list[AudioSample]:
+        y = s.data
+        sr = s.sample_rate
+        segments: list[AudioSample] = []
+        seg_id = 0
+        for start_sample, end_sample in intervals:
+            end_sample = min(int(end_sample), len(y))
+            for a, b in self._bounded_spans(int(start_sample), end_sample, sr):
+                segments.append(self._make_segment(s, y[a:b], a, b, seg_id, extra_meta))
+                seg_id += 1
+        return segments
+
     def _apply_overlap_merge(
         self,
         intervals: list[tuple[int, int]],
@@ -240,21 +270,15 @@ class SegmenterNode(Node):
                 "(%d samples) — emitting whole clip as one segment",
                 s.path, len(y), window_size,
             )
-            if len(y) == 0 or not self._within_bounds(len(y), sr):
+            if len(y) == 0:
                 return []
-            return [self._make_segment(s, y, 0, len(y), 0)]
+            return self._emit_intervals(s, [(0, len(y))])
 
-        segments: list[AudioSample] = []
-        seg_id = 0
-
-        for i in range(0, len(y) - window_size + 1, step):
-            chunk = y[i:i + window_size]
-            if not self._within_bounds(len(chunk), sr):
-                continue
-            segments.append(self._make_segment(s, chunk, i, i + window_size, seg_id))
-            seg_id += 1
-
-        return segments
+        intervals = [
+            (i, i + window_size)
+            for i in range(0, len(y) - window_size + 1, step)
+        ]
+        return self._emit_intervals(s, intervals)
 
     # ── silence-based segmentation ────────────────────────────────────────────
 
@@ -266,19 +290,7 @@ class SegmenterNode(Node):
         intervals = self._apply_overlap_merge(
             [(int(a), int(b)) for a, b in intervals], sr
         )
-
-        segments: list[AudioSample] = []
-        seg_id = 0
-
-        for start_sample, end_sample in intervals:
-            end_sample = min(end_sample, len(y))
-            chunk = y[start_sample:end_sample]
-            if not self._within_bounds(len(chunk), sr):
-                continue
-            segments.append(self._make_segment(s, chunk, start_sample, end_sample, seg_id))
-            seg_id += 1
-
-        return segments
+        return self._emit_intervals(s, intervals)
 
     # ── VAD segmentation ──────────────────────────────────────────────────────
 
@@ -346,18 +358,7 @@ class SegmenterNode(Node):
 
         # Apply overlap extension
         intervals = self._apply_overlap_merge(intervals, sr)
-
-        segments: list[AudioSample] = []
-        seg_id = 0
-        for start_sample, end_sample in intervals:
-            end_sample = min(end_sample, len(y))
-            chunk = y[start_sample:end_sample]
-            if not self._within_bounds(len(chunk), sr):
-                continue
-            segments.append(self._make_segment(s, chunk, start_sample, end_sample, seg_id))
-            seg_id += 1
-
-        return segments
+        return self._emit_intervals(s, intervals)
 
     # ── event-based segmentation ──────────────────────────────────────────────
 
@@ -415,21 +416,13 @@ class SegmenterNode(Node):
             intervals.append((event_start, len(active)))
 
         # Convert frame indices → sample indices
-        segments: list[AudioSample] = []
-        seg_id = 0
-        for frame_start, frame_end in intervals:
-            start_sample = frame_start * hop
-            end_sample = min(frame_end * hop + frame_len, len(y))
-            chunk = y[start_sample:end_sample]
-            if not self._within_bounds(len(chunk), sr):
-                continue
-            segments.append(self._make_segment(
-                s, chunk, start_sample, end_sample, seg_id,
-                extra_meta={"event_threshold_db": threshold_db},
-            ))
-            seg_id += 1
-
-        return segments
+        sample_intervals = [
+            (frame_start * hop, min(frame_end * hop + frame_len, len(y)))
+            for frame_start, frame_end in intervals
+        ]
+        return self._emit_intervals(
+            s, sample_intervals, extra_meta={"event_threshold_db": threshold_db}
+        )
 
     # ── speaker_turn placeholder ──────────────────────────────────────────────
 
@@ -457,16 +450,12 @@ class SegmenterNode(Node):
 
                 start_sample = int(start_s * sr)
                 end_sample = min(int(end_s * sr), len(y))
-                chunk = y[start_sample:end_sample]
-
-                if not self._within_bounds(len(chunk), sr):
-                    continue
-
-                segments.append(self._make_segment(
-                    s, chunk, start_sample, end_sample, seg_id,
-                    extra_meta={"speaker_id": speaker_id},
-                ))
-                seg_id += 1
+                for a, b in self._bounded_spans(start_sample, end_sample, sr):
+                    segments.append(self._make_segment(
+                        s, y[a:b], a, b, seg_id,
+                        extra_meta={"speaker_id": speaker_id},
+                    ))
+                    seg_id += 1
 
             return segments
         else:

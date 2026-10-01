@@ -90,12 +90,12 @@ class DatasetIngestNode(Node):
         path: str = Field(default='', title="Path", description="Dataset path under workspace/ (relative path preferred).")
         manifest_path: str = Field(default='', title="Manifest path", description="Path to a manifest JSON/CSV under workspace/.")
         recursive: bool = Field(default=True, title="Recursive", description="Walk subdirectories when scanning the filesystem (On/Off).")
-        limit: int = Field(default=0, title="Limit", description="Maximum items to load (0 = no limit).")
+        limit: int = Field(default=0, ge=0, title="Limit", description="Maximum files to load (0 = no limit); per label when filesystem+recursive, else total.")
         label_override: str = Field(default='', title="Label override", description="Force every sample to this label (empty = infer from folders/manifest).")
         hf_split: str = Field(default='train', title="HF split", description="HuggingFace split name (train / validation / test).")
         hf_audio_column: str = Field(default='audio', title="HF audio column", description="Column containing audio in the HuggingFace dataset.")
         hf_label_column: str = Field(default='label', title="HF label column", description="Column containing labels in the HuggingFace dataset.")
-        lazy: bool = Field(default=False, title="Lazy load", description="Defer waveform decode until a downstream node reads samples (On/Off).")
+        lazy: bool = Field(default=False, title="Lazy load", description="Not implemented yet: On only logs a warning; samples are always decoded eagerly.")
         resume_from: str = Field(default='', title="Resume from", description="Optional checkpoint/manifest path to resume ingestion.")
         validate_integrity: bool = Field(default=False, title="Validate integrity", description="Verify .sha256 sidecars when present (On/Off).")
         deduplicate: bool = Field(default=False, title="Deduplicate", description="Skip duplicate waveforms by content hash (On/Off).")
@@ -162,6 +162,15 @@ class DatasetIngestNode(Node):
             raise ValueError(f"DatasetIngestNode: {exc}") from exc
         if not root_path.is_dir():
             raise ValueError(f"DatasetIngestNode: path must be a directory: {root_path}")
+        if self._is_fallback_dir(path, root_path):
+            # resolve_ingest_dir fell back (e.g. missing Phase-1 dataset → bundled
+            # examples/**/data). Make the substitution visible in the run log.
+            log.warning(
+                "DatasetIngestNode: configured path %r not found or empty — "
+                "ingesting fallback directory %s instead",
+                path,
+                root_path,
+            )
 
         # Load resume checkpoint
         already_processed = self._load_checkpoint()
@@ -243,6 +252,27 @@ class DatasetIngestNode(Node):
         _flush_checkpoint_buffer()
 
         return samples
+
+    @staticmethod
+    def _is_fallback_dir(raw: str, resolved: Path) -> bool:
+        """True when *resolved* is not the configured path itself (relative to cwd/project)."""
+        text = (raw or "").strip()
+        direct = [Path(text), Path.cwd() / text]
+        try:
+            from app.core.config import project_dir
+
+            root = project_dir()
+            direct.append(root / text)
+            parts = Path(text).parts
+            if parts and parts[0] == "workspace":
+                direct.append(root / Path(*parts[1:]))
+        except Exception:
+            pass
+        try:
+            target = resolved.resolve()
+            return not any(c.exists() and c.resolve() == target for c in direct)
+        except OSError:
+            return False
 
     # ── huggingface ───────────────────────────────────────────────────────────
 

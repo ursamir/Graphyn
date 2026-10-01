@@ -5,7 +5,7 @@ from typing import ClassVar, Literal
 
 import librosa
 import numpy as np
-from pydantic import field_validator, Field
+from pydantic import field_validator, model_validator, Field
 
 from app.core.nodes.base import Node
 from app.core.nodes.config import NodeConfig
@@ -117,24 +117,24 @@ class FeatureFrontendNode(Node):
                 )
             return normalized
 
-        sample_rate: int = Field(default=16000, title="Sample rate", description="Audio sample rate in Hz.")
+        sample_rate: int = Field(default=16000, ge=1000, le=384000, title="Sample rate", description="Audio sample rate in Hz.")
 
-        fixed_length: int = Field(default=0, title="Fixed length (frames)", description="Pad/truncate the time axis to exactly N frames (0 = variable length).")
+        fixed_length: int = Field(default=0, ge=0, title="Fixed length (frames)", description="Pad/truncate the time axis to exactly N frames (0 = variable length).")
         # 0 = variable length (default); N = pad/truncate time axis to exactly N frames.
         # Use this in inference pipelines to match the fixed input shape the model was
         # trained with (e.g. fixed_length=101 for a 1-second clip at 16kHz/hop=160).
 
-        n_fft: int = Field(default=512, title="FFT size", description="FFT window size in samples (power of two recommended).")
-        hop_length: int = Field(default=160, title="Hop length", description="Hop between STFT frames in samples.")
-        win_length: int = Field(default=400, title="Window length", description="Analysis window length in samples (≤ n_fft).")
+        n_fft: int = Field(default=512, ge=16, title="FFT size", description="FFT window size in samples (power of two recommended).")
+        hop_length: int = Field(default=160, ge=1, title="Hop length", description="Hop between STFT frames in samples.")
+        win_length: int = Field(default=400, ge=1, title="Window length", description="Analysis window length in samples (≤ n_fft).")
 
-        n_mels: int = Field(default=80, title="Mel bins", description="Number of mel filterbank bins.")
-        n_mfcc: int = Field(default=13, title="MFCC coeffs", description="Number of MFCC coefficients to keep.")
+        n_mels: int = Field(default=80, ge=1, title="Mel bins", description="Number of mel filterbank bins.")
+        n_mfcc: int = Field(default=13, ge=1, title="MFCC coeffs", description="Number of MFCC coefficients to keep.")
 
-        fmin: float = Field(default=0.0, title="Min frequency (Hz)", description="Lowest frequency included in the mel/spectrogram filterbank.")
-        fmax: float | None = Field(default=None, title="Max frequency (Hz)", description="Highest frequency included (null = Nyquist / sample_rate/2).")
+        fmin: float = Field(default=0.0, ge=0, title="Min frequency (Hz)", description="Lowest frequency included in the mel/spectrogram filterbank.")
+        fmax: float | None = Field(default=None, gt=0, title="Max frequency (Hz)", description="Highest frequency included (null = Nyquist / sample_rate/2).")
 
-        log_scale: bool = Field(default=True, title="Log scale", description="Apply log compression to spectrogram/mel energies (On/Off).")
+        log_scale: bool = Field(default=True, title="Log scale", description="Convert energies to dB (spectrogram: amplitude_to_db; log_mel: power_to_db; Off = linear mel power) (On/Off).")
 
         normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude (On/Off).")
 
@@ -143,6 +143,20 @@ class FeatureFrontendNode(Node):
         # Delta / delta-delta (applies to mfcc; also stacked onto log_mel if set)
         delta: bool = Field(default=False, title="Delta features", description="Append first-order delta (velocity) coefficients (On/Off).")
         delta_delta: bool = Field(default=False, title="Delta-delta features", description="Append second-order delta (acceleration) coefficients (On/Off).")
+
+        @model_validator(mode="after")
+        def _check_frame_params(self):
+            if self.feature_type not in ("zcr", "raw") and self.win_length > self.n_fft:
+                raise ValueError(f"win_length ({self.win_length}) must be <= n_fft ({self.n_fft})")
+            if self.feature_type == "mfcc" and self.n_mfcc > self.n_mels:
+                raise ValueError(f"n_mfcc ({self.n_mfcc}) must be <= n_mels ({self.n_mels})")
+            if self.fmax is not None and self.fmax <= self.fmin:
+                raise ValueError(f"fmax ({self.fmax}) must be > fmin ({self.fmin})")
+            if self.fmax is not None and self.fmax > self.sample_rate / 2:
+                raise ValueError(
+                    f"fmax ({self.fmax}) must be <= Nyquist ({self.sample_rate / 2}) for sample_rate={self.sample_rate}"
+                )
+            return self
 
     # ── normalization ─────────────────────────────────────────────────────────
 
@@ -167,7 +181,10 @@ class FeatureFrontendNode(Node):
             fmax=self.config.fmax,
             center=self.config.center,
         )
-        features = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
+        if self.config.log_scale:
+            features = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
+        else:
+            features = mel.astype(np.float32)
 
         if self.config.delta or self.config.delta_delta:
             features = self._append_deltas(features)
@@ -183,6 +200,9 @@ class FeatureFrontendNode(Node):
             hop_length=self.config.hop_length,
             win_length=self.config.win_length,
             n_mels=self.config.n_mels,
+            fmin=self.config.fmin,
+            fmax=self.config.fmax,
+            center=self.config.center,
         ).astype(np.float32)
 
         if self.config.delta or self.config.delta_delta:
@@ -231,6 +251,7 @@ class FeatureFrontendNode(Node):
             sr=sr,
             n_fft=self.config.n_fft,
             hop_length=self.config.hop_length,
+            center=self.config.center,
         ).astype(np.float32)
 
     def _extract_zcr(self, y: np.ndarray) -> np.ndarray:
@@ -268,7 +289,7 @@ class FeatureFrontendNode(Node):
         return rolloff.astype(np.float32)  # shape (1, T)
 
     def _extract_raw(self, y: np.ndarray) -> np.ndarray:
-        """Raw waveform passthrough — shape (1, N) for SSL model compatibility."""
+        """Raw waveform passthrough — (1, N) here; process() transposes it to (N, 1) like all (F, T) features."""
         return y[np.newaxis, :].astype(np.float32)
 
     # ── SISO process ──────────────────────────────────────────────────────────
@@ -331,10 +352,10 @@ class FeatureFrontendNode(Node):
                 features = self._normalize(features)
 
             # Track whether normalization was actually applied (std > 1e-8)
-            actually_normalized = (
+            actually_normalized = bool(
                 self.config.normalize
                 and feature_type != "raw"
-                and np.std(features) > 1e-8
+                and float(np.std(features)) > 1e-8
             )
 
             # Transpose from (F, T) → (T, F) for downstream compatibility

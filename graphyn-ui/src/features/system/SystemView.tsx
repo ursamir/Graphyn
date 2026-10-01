@@ -1,5 +1,7 @@
 import React from 'react'
+import { CalendarClock as EmptyCalendarClock, ScrollText as EmptyScrollText } from 'lucide-react'
 import { RefreshCw, Trash2 } from 'lucide-react'
+import { workspaceErrorMessage } from '../../lib/workspaceName'
 import { apiJson } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
 import {
@@ -56,6 +58,27 @@ function pipelineName(p: unknown): string {
   return ''
 }
 
+/** GET /system/schedules row. `orphaned` = owning workspace was deleted. */
+type ScheduleRow = {
+  id?: string
+  name?: string
+  project?: string
+  pipeline?: string
+  interval_minutes?: number
+  enabled?: boolean
+  next_run_at?: string
+  last_run_id?: string
+  last_error?: string
+  env?: string
+  orphaned?: boolean
+  orphaned_at?: string
+  disabled_reason?: string
+}
+
+/** Shared label + control styling so every Add-schedule field lines up. */
+const SCHED_LABEL = 'mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400'
+const SCHED_FIELD = 'h-9 w-full rounded-lg border border-ink-200 bg-white px-3 text-sm disabled:bg-ink-50 disabled:text-ink-400'
+
 export default function SystemView() {
   const pushToast = useAppStore((s) => s.pushToast)
   const [health, setHealth] = React.useState<unknown>(null)
@@ -98,18 +121,7 @@ export default function SystemView() {
     ok?: boolean
   } | null>(null)
   const [schedules, setSchedules] = React.useState<
-    Array<{
-      id?: string
-      name?: string
-      project?: string
-      pipeline?: string
-      interval_minutes?: number
-      enabled?: boolean
-      next_run_at?: string
-      last_run_id?: string
-      last_error?: string
-      env?: string
-    }>
+    ScheduleRow[]
   >([])
   const [schedName, setSchedName] = React.useState('hourly')
   const [schedProject, setSchedProject] = React.useState('')
@@ -218,18 +230,7 @@ export default function SystemView() {
       const sched = settled[6].value
       const schedList = Array.isArray(sched?.schedules) ? sched.schedules : []
       setSchedules(
-        schedList.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
-          id?: string
-          name?: string
-          project?: string
-          pipeline?: string
-          interval_minutes?: number
-          enabled?: boolean
-          next_run_at?: string
-          last_run_id?: string
-          last_error?: string
-          env?: string
-        }>,
+        schedList.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as ScheduleRow[],
       )
     } else {
       setSchedules([])
@@ -355,7 +356,6 @@ export default function SystemView() {
   ]
 
   const useProjectSelect = projectsApiOk && projectOptions.length > 0
-  const usePipelineSelect = useProjectSelect && pipelinesApiOk && !!schedProject.trim()
 
   return (
     <div className="h-full min-h-0 overflow-y-auto p-6 space-y-5">
@@ -705,7 +705,7 @@ export default function SystemView() {
           </div>
           {auditError && <p className="text-sm text-amber-800">{auditError}</p>}
           {!auditError && auditEvents.length === 0 ? (
-            <EmptyState
+            <EmptyState icon={EmptyScrollText}
               title="No audit events yet"
               description="Accept/reject proposals or other audited mutations will appear here."
               action={
@@ -762,67 +762,89 @@ export default function SystemView() {
             as saved. Staging and prod run a published version.
           </p>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-          <input
-            className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
-            placeholder="Name"
-            value={schedName}
-            onChange={(e) => setSchedName(e.target.value)}
-          />
-          {useProjectSelect ? (
-            <select
-              className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
-              value={schedProject}
-              onChange={(e) => {
-                setSchedProject(e.target.value)
-                setSchedPipeline('')
-              }}
-            >
-              <option value="">Select workspace…</option>
-              {projectOptions.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
-              placeholder="Workspace"
-              value={schedProject}
-              onChange={(e) => setSchedProject(e.target.value)}
-            />
-          )}
-          {usePipelineSelect ? (
-            <select
-              className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
-              value={schedPipeline}
-              disabled={pipelinesLoading || !schedProject}
-              onChange={(e) => setSchedPipeline(e.target.value)}
-            >
-              <option value="">{pipelinesLoading ? 'Loading pipelines…' : 'Select pipeline…'}</option>
-              {pipelineOptions.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              className="rounded-lg border border-ink-200 px-3 py-2 text-sm"
-              placeholder="Pipeline"
-              value={schedPipeline}
-              onChange={(e) => setSchedPipeline(e.target.value)}
-            />
-          )}
+        <div className="grid items-end gap-2 sm:grid-cols-2 lg:grid-cols-5">
           <label className="block text-sm text-ink-600">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-              Interval (minutes)
-            </span>
+            <span className={SCHED_LABEL}>Name</span>
+            <input
+              className={SCHED_FIELD}
+              placeholder="e.g. hourly"
+              value={schedName}
+              onChange={(e) => setSchedName(e.target.value)}
+            />
+          </label>
+          <label className="block text-sm text-ink-600">
+            <span className={SCHED_LABEL}>Workspace</span>
+            {useProjectSelect ? (
+              <select
+                className={SCHED_FIELD}
+                value={schedProject}
+                onChange={(e) => {
+                  setSchedProject(e.target.value)
+                  setSchedPipeline('')
+                }}
+              >
+                <option value="">Select workspace…</option>
+                {projectOptions.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className={SCHED_FIELD}
+                placeholder="workspace name"
+                value={schedProject}
+                onChange={(e) => setSchedProject(e.target.value)}
+              />
+            )}
+          </label>
+          <label className="block text-sm text-ink-600">
+            <span className={SCHED_LABEL}>Pipeline</span>
+            {useProjectSelect && (!schedProject.trim() || pipelinesApiOk) ? (
+              <select
+                className={SCHED_FIELD}
+                value={schedPipeline}
+                disabled={pipelinesLoading || !schedProject || pipelineOptions.length === 0}
+                onChange={(e) => setSchedPipeline(e.target.value)}
+                title={
+                  !schedProject
+                    ? 'Select a workspace first'
+                    : pipelineOptions.length === 0 && !pipelinesLoading
+                      ? `${schedProject} has no saved pipelines — save one from the Editor`
+                      : undefined
+                }
+              >
+                <option value="">
+                  {!schedProject
+                    ? 'Select a workspace first'
+                    : pipelinesLoading
+                      ? 'Loading pipelines…'
+                      : pipelineOptions.length === 0
+                        ? 'No saved pipelines'
+                        : 'Select pipeline…'}
+                </option>
+                {pipelineOptions.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className={SCHED_FIELD}
+                placeholder="pipeline name"
+                value={schedPipeline}
+                onChange={(e) => setSchedPipeline(e.target.value)}
+              />
+            )}
+          </label>
+          <label className="block text-sm text-ink-600">
+            <span className={SCHED_LABEL}>Interval (minutes)</span>
             <input
               type="number"
               min={1}
-              className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              className={SCHED_FIELD}
               placeholder="e.g. 60"
               value={schedInterval}
               onChange={(e) => setSchedInterval(Number(e.target.value) || 60)}
@@ -830,11 +852,9 @@ export default function SystemView() {
             />
           </label>
           <label className="block text-sm text-ink-600">
-            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-              Environment
-            </span>
+            <span className={SCHED_LABEL}>Environment</span>
             <select
-              className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+              className={SCHED_FIELD}
               value={schedEnv}
               onChange={(e) => setSchedEnv(e.target.value as 'draft' | 'staging' | 'prod')}
               aria-label="Schedule environment"
@@ -845,6 +865,11 @@ export default function SystemView() {
             </select>
           </label>
         </div>
+        {useProjectSelect && schedProject && pipelinesApiOk && !pipelinesLoading && pipelineOptions.length === 0 ? (
+          <p className="text-xs text-ink-500">
+            {schedProject} has no saved pipelines yet — save one from its Editor, then schedule it here.
+          </p>
+        ) : null}
         <p className="text-[11px] text-ink-400">
           Name, workspace, and pipeline use letters, numbers, underscores, and hyphens.
         </p>
@@ -878,7 +903,7 @@ export default function SystemView() {
                   void refresh()
                 })
                 .catch((err) =>
-                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                  pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error'),
                 )
                 .finally(() => setSchedSaving(false))
             }}
@@ -906,14 +931,15 @@ export default function SystemView() {
         {loading ? (
           <LoadingBlock label="Loading schedules…" />
         ) : schedules.length === 0 ? (
-          <EmptyState
+          <EmptyState icon={EmptyCalendarClock}
             title="No schedules yet"
-            description="Pick a project pipeline and interval, then Add schedule. Jobs only fire while this API process is running."
+            description="Pick a workspace, one of its pipelines and an interval, then Add schedule. Jobs only fire while this API process is running."
           />
         ) : (
           <ul className="space-y-2">
             {schedules.map((s) => {
               const hasError = Boolean(s.last_error)
+              const orphaned = Boolean(s.orphaned)
               return (
               <li
                 key={s.id}
@@ -929,14 +955,28 @@ export default function SystemView() {
                     <span className="font-mono text-[11px] text-ink-500">
                       {s.project}/{s.pipeline}
                     </span>
-                    <StatusBadge status={s.enabled ? 'enabled' : 'disabled'} />
+                    {orphaned ? (
+                      <span
+                        className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900"
+                        title={s.orphaned_at ? `Orphaned ${formatRelativeTime(s.orphaned_at)}` : undefined}
+                      >
+                        Orphaned — workspace deleted
+                      </span>
+                    ) : (
+                      <StatusBadge status={s.enabled ? 'enabled' : 'disabled'} />
+                    )}
                   </div>
                   <div className="text-[11px] text-ink-500">
                     every {s.interval_minutes ?? '—'} min · {s.env || 'prod'}
-                    {s.enabled && s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
-                    {!s.enabled ? ' · paused' : ''}
+                    {s.enabled && !orphaned && s.next_run_at ? ` · next ${formatRelativeTime(s.next_run_at)}` : ''}
+                    {!s.enabled && !orphaned ? ' · paused' : ''}
                     {s.last_run_id ? ` · last run ${String(s.last_run_id).slice(0, 8)}…` : ''}
                   </div>
+                  {s.disabled_reason && (!s.enabled || orphaned) ? (
+                    <div className="mt-1 text-[12px] text-amber-900">
+                      Disabled: {s.disabled_reason}
+                    </div>
+                  ) : null}
                   {hasError ? (
                     <div className="mt-1 text-[12px] font-medium text-rose-900" title={s.last_error}>
                       Last error: {s.last_error}
@@ -944,6 +984,8 @@ export default function SystemView() {
                   ) : null}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
+                  {!orphaned ? (
+                  <>
                   <select
                     className="rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs"
                     value={s.env || 'prod'}
@@ -1001,7 +1043,10 @@ export default function SystemView() {
                   >
                     {s.enabled ? 'Disable' : 'Enable'}
                   </button>
+                  </>
+                  ) : null}
                   <button
+                    title={orphaned ? 'Workspace deleted — this schedule can only be removed' : undefined}
                     type="button"
                     className="btn-secondary"
                     onClick={() =>
@@ -1068,6 +1113,7 @@ export default function SystemView() {
             [
               ['pipeline_complete', 'Pipeline complete'],
               ['pipeline_failed', 'Pipeline failed'],
+              ['pipeline_cancelled', 'Pipeline cancelled'],
             ] as const
           ).map(([ev, label]) => (
             <label key={ev} className="flex items-center gap-2">

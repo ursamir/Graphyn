@@ -1,8 +1,10 @@
 import React from 'react'
+import { Puzzle as EmptyPuzzle } from 'lucide-react'
 import clsx from 'clsx'
 import { Download, RefreshCw, PackagePlus, MoreHorizontal, Search, Trash2 } from 'lucide-react'
 import { ApiError, apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
+import { useMenuDismiss } from '../../lib/menus'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
 import { formatLocaleDateTime, formatRelativeTime, isIsolatedRuntime } from '../../lib/format'
 
@@ -198,6 +200,10 @@ export default function PluginsView() {
   const [error, setError] = React.useState<string | null>(null)
   const [expanded, setExpanded] = React.useState<string | null>(null)
   const [menuFor, setMenuFor] = React.useState<string | null>(null)
+  const pluginMenuRef = React.useRef<HTMLDivElement | null>(null)
+  const closePluginMenu = React.useCallback(() => setMenuFor(null), [])
+  // Escape / outside click / another menu opening closes the row ⋯ menu.
+  useMenuDismiss(Boolean(menuFor), closePluginMenu, pluginMenuRef)
   const [depStatus, setDepStatus] = React.useState<DepStatus | null>(null)
   const [installingName, setInstallingName] = React.useState<string | null>(null)
   const [installingOptional, setInstallingOptional] = React.useState(false)
@@ -638,8 +644,11 @@ export default function PluginsView() {
       />
       <p className="rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
         <span className="font-medium text-ink-800">Deps:</span>{' '}
-        <span className="font-mono text-[11px]">inprocess</span> installs into the shared API Python;{' '}
-        <span className="font-mono text-[11px]">isolated</span> creates{' '}
+        <span className="rounded bg-ink-100 px-1 font-mono text-[11px] text-ink-600">shared env</span>{' '}
+        plugins (<span className="font-mono text-[11px]">runtime=inprocess</span>) install into the API’s own
+        Python;{' '}
+        <span className="rounded bg-accent-50 px-1 font-mono text-[11px] text-accent-900">isolated venv</span>{' '}
+        plugins (<span className="font-mono text-[11px]">runtime=isolated</span>) get their own{' '}
         <span className="font-mono text-[11px]">~/.graphyn/plugins/venvs/&lt;name&gt;</span> (heavy ML
         stacks). Reinstall/upgrade a plugin after changing its runtime. Mode B workers need the same
         packs —{' '}
@@ -883,7 +892,7 @@ export default function PluginsView() {
           {plugins === null ? (
             <LoadingBlock />
           ) : plugins.length === 0 ? (
-            <EmptyState
+            <EmptyState icon={EmptyPuzzle}
               title="No plugins installed"
               description="Install a package, path, or git URL to add nodes to the Editor catalog."
               action={
@@ -1113,7 +1122,7 @@ export default function PluginsView() {
                           </div>
                         )}
                       </div>
-                      <div className="relative">
+                      <div className="relative" ref={menuFor === p.name ? pluginMenuRef : undefined}>
                         <button
                           type="button"
                           className="btn-icon"

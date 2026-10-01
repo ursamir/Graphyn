@@ -23,11 +23,11 @@ runtime = "isolated"
 node_types = ["realtime_inference"]
 
 [config_schema.realtime_inference]
-model_path = { type = "string", default = "", title = "Model path", description = "Model file under workspace/artifacts (or empty for built-in)." }
-backend = { type = "string", title = "Backend", default = "auto", description = "One of: tflite, pytorch, onnx, ultralytics, tflm_host, auto.", enum = ["tflite", "pytorch", "onnx", "ultralytics", "tflm_host", "auto"] }
-mode = { type = "string", title = "Mode", default = "classification", description = "One of: classification, wake_word, streaming_asr, detect, segment.", enum = ["classification", "wake_word", "streaming_asr", "detect", "segment"] }
-wake_word_threshold = { type = "number", title = "Wake-word threshold", default = 0.8, description = "Detection threshold in [0, 1]; higher = fewer false accepts." }
-batch_size = { type = "integer", title = "Batch size", default = 1, description = "Process in batches of N (0 = all at once)." }
-adaptive = {  type = "boolean", title = "Adaptive", default = false, description = "Adaptively skip frames under load using adaptive_skip_ratio (On/Off)."  }
-adaptive_skip_ratio = { type = "number", title = "Adaptive skip ratio", default = 0.5, description = "Fraction of frames eligible to skip under load (0–1)." }
-streaming_buffer_size = { type = "integer", title = "Streaming buffer size", default = 10, description = "Frames kept in the realtime inference buffer." }
+model_path = { type = "string", default = "", title = "Model path", description = "Required model file (.tflite / .pt TorchScript / .onnx) under workspace/artifacts; labels.txt must sit next to it." }
+backend = { type = "string", title = "Backend", default = "auto", description = "tflite, pytorch (TorchScript), onnx, tflm_host (TFLite interpreter on host), ultralytics (vision models; not usable with audio FeatureArray input), auto = from model file extension.", enum = ["tflite", "pytorch", "onnx", "ultralytics", "tflm_host", "auto"] }
+mode = { type = "string", title = "Mode", default = "classification", description = "classification = top-1 label per input; wake_word = 'wake_word_detected' when top-1 probability >= wake_word_threshold; streaming_asr = average probabilities over streaming_buffer_size inputs. detect / segment are reserved for vision backends and currently behave like classification.", enum = ["classification", "wake_word", "streaming_asr", "detect", "segment"] }
+wake_word_threshold = { type = "number", title = "Wake-word threshold", default = 0.8, minimum = 0, maximum = 1, description = "Top-1 probability threshold in [0, 1]; higher = fewer false accepts.", ui = { visible_if = { mode = "wake_word" } } }
+batch_size = { type = "integer", title = "Batch size", default = 1, minimum = 1, description = "Informational: inputs are run one at a time (batch 1)." }
+adaptive = {  type = "boolean", title = "Adaptive", default = false, description = "Randomly skip a fraction (adaptive_skip_ratio) of inputs to save compute; seeded by the node seed (On/Off)."  }
+adaptive_skip_ratio = { type = "number", title = "Adaptive skip ratio", default = 0.5, minimum = 0, maximum = 1, description = "Fraction of inputs skipped when adaptive is On (0–1).", ui = { visible_if = { adaptive = true } } }
+streaming_buffer_size = { type = "integer", title = "Streaming buffer size", default = 10, minimum = 1, description = "streaming_asr: number of inputs averaged per emitted prediction.", ui = { visible_if = { mode = "streaming_asr" } } }

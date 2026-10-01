@@ -19,6 +19,8 @@ List all registered nodes, optionally filtered by category.
 - `offset` (optional, default 0) — page start
 - `envelope` (optional) — default on (`{ items, total, limit, offset, next_offset }`); pass `0` for a bare array (still limited by `limit`)
 
+Isolated plugin nodes (`runtime = "isolated"`) are never imported in the host process. Their `label`, `description`, `category`, `tags`, and capability flags are read from the entry point's `metadata = NodeMetadata(...)` literal using the AST. So `trainer`, `model_builder`, `evaluator`, and `dataset_builder` list as `ML`, `edge_optimizer` as `Export`, and `realtime_inference` as `Inference`, the same categories as in-process nodes. Values that are not literals fall back to the manifest (`description`, `tags`, `version`) and then to category `plugin`.
+
 **Response (default):** paginated envelope. Clients that need the full catalog (Editor) must request `limit=500` and/or follow `next_offset` until null.
 
 ```json
@@ -189,6 +191,10 @@ Subsequent structured events (including `pipeline_start` / `done`) carry the sam
 
 **Response:** `Content-Type: application/x-ndjson` — one JSON object per line.
 
+Runs never create or overwrite saved project pipelines. The executed graph is stored only as `runs/<run_id>/graph.json`. Saving to `datasets/output/<project>/pipelines/` happens only through `PUT /api/v1/projects/{name}/pipelines/{pipeline}`.
+
+**503 `draining`:** the only 503 this route (and `/run-async`) returns. It means the control plane is shutting down. Body: `{"error": {"code": "draining", "retryable": true, …}}` with a `Retry-After: 30` header. Retry after the API restarts. There is no concurrency 503: runs beyond the 4-thread stream executor queue (`pending`) instead of being refused.
+
 #### Streaming Protocol
 
 Each line is a JSON object. Two types of objects are interleaved:
@@ -203,12 +209,16 @@ Each line is a JSON object. Two types of objects are interleaved:
 {"type": "run_started", "run_id": "…"}
 {"type": "pipeline_start", "total_nodes": 5, "run_id": "…", "timestamp": "2024-01-01T00:00:00+00:00"}
 {"type": "node_start", "node_type": "dataset_ingest", "node_index": 0, "total_nodes": 5, "run_id": "…", "timestamp": "..."}
-{"type": "node_end", "node_type": "dataset_ingest", "node_index": 0, "duration_s": 0.123, "output_count": 42, "run_id": "…", "timestamp": "..."}
-{"type": "node_error", "node_type": "audio_conditioner", "node_index": 1, "error_message": "...", "error_type": "ValueError", "run_id": "…", "timestamp": "..."}
+{"type": "node_end", "node_type": "audio_quality_gate", "node_index": 3, "duration_s": 0.123, "output_count": 206, "output_counts": {"output": 206, "rejected": 13}, "rejected_count": 13, "run_id": "…", "timestamp": "..."}
+{"type": "node_error", "node_type": "audio_conditioner", "node_index": 1, "node_id": "audio_conditioner_1", "error": "...", "error_message": "...", "error_type": "ValueError", "run_id": "…", "timestamp": "..."}
 {"type": "pipeline_summary", "run_id": "…", "timestamp": "..."}
 {"type": "done", "run_id": "…", "duration_s": 1.23, "timestamp": "2024-01-01T00:00:01+00:00"}
-{"type": "error", "run_id": "…", "timestamp": "...", "error_type": "ValueError", "message": "..."}
+{"type": "error", "run_id": "…", "timestamp": "...", "error_type": "ValueError", "error": "...", "message": "...", "already_reported": true, "node_id": "audio_conditioner_1", "node_type": "audio_conditioner"}
 ```
+
+`node_end.output_count` is the item count of the node's primary `output` port (sum over all ports only when the node has no `output` port); side ports such as a quality gate's `rejected` are not added. `output_counts` gives every port's count and `rejected_count` is present when the node has a `rejected` port.
+
+**Error field.** `error` is the canonical error text on `node_error` and the terminal `error` event (`error_message` / `message` are kept for older clients). When the run failed because a node failed, that failure was already streamed as `node_error`; the terminal `error` event then carries `already_reported: true` plus `node_id` / `node_type`. Render the error once (from `node_error`) and treat that terminal event only as end-of-stream. Without `already_reported` (backend / planner errors), the terminal event is the only report.
 
 The stream starts with `run_started` (and `X-Run-Id`). It **always** ends with either `{"type": "done", "run_id": "…"}` (success — synthesized if the backend emitted none) or `{"type": "error", "run_id": "…"}` (failure), then closes. Back-pressure: at most 512 events are buffered per stream; when a slow client lets the buffer fill, the **oldest non-terminal** events are dropped (the terminal event is never dropped) and the execution thread never blocks. A disconnected client stops buffering; the run itself continues and is visible via `GET /runs/{run_id}`. The `run.start` audit actor is `X-Actor` (default `api`).
 
@@ -243,6 +253,7 @@ List available pipeline templates with card summaries for the console.
 [
   {
     "name": "basic-wakeword",
+    "title": "Basic wakeword",
     "description": "…",
     "difficulty": null,
     "required_plugins": ["audio"],
@@ -254,6 +265,8 @@ List available pipeline templates with card summaries for the console.
   }
 ]
 ```
+
+`title` is the display name to show on cards. It comes from `metadata.title` when set (the IR loader ignores that key, so it is safe on any graph). Otherwise the id is humanized, and synced numbered examples (`ex-NN-<slug>`) get an `(example NN)` suffix so they never collide with a same-named starter, for example `Call analytics (example 22)` vs `Call analytics (local Whisper + heuristic extract)`. `GET /pipelines/examples` items use the same rule. Workspace copies in `configs/templates/` synced before a source graph gained `metadata.title` fall back to the repo source's title. The source is found from the copy's `metadata.source_example`, or else `examples/templates/<name>.graph.json`. Re-running `POST /pipelines/templates/sync-examples` also refreshes the copy.
 
 ---
 
@@ -408,10 +421,20 @@ Get a run's config YAML and log entries.
   "meta": {"run_id": "a1b2c3d4", "status": "completed", ...},
   "config_yaml": "pipeline:\n  seed: 42\n  ...",
   "logs": [
-    {"time": "2024-01-01T00:00:00+00:00", "level": "INFO", "message": "Pipeline starting — 5 nodes"}
+    {"time": "2024-01-01T00:00:00+00:00", "level": "INFO", "message": "Pipeline starting — 5 nodes"},
+    {"type": "node_error", "node_id": "audio_conditioner_1", "error": "Sample rate should be over 0", "error_message": "…"}
+  ],
+  "is_latest": false,
+  "artifacts_dir": "workspace/artifacts/<slug>/runs/a1b2c3d4",
+  "node_order": [
+    {"node_id": "dataset_ingest_0", "node_type": "dataset_ingest", "label": null, "index": 0, "wave": 0, "status": "completed"},
+    {"node_id": "audio_conditioner_1", "node_type": "audio_conditioner", "label": null, "index": 1, "wave": 1, "status": "failed"},
+    {"node_id": "segmenter_2", "node_type": "segmenter", "label": null, "index": 2, "wave": 2, "status": "not_run"}
   ]
 }
 ```
+
+`node_order` lists every node in the run's `graph.json` in execution order (wave-major, matching the planner), including nodes that never ran. `status` comes from `meta.node_stats`, or is `"not_run"` when the node has no stats row. It is computed without the node registry, so it also works when a node's plugin is no longer installed. It is `[]` when `graph.json` is missing. Every `node_error` / `error` log entry has an `error` field. Older logs that only had `error_message` / `message` are filled in when read.
 
 **Errors:** `400` invalid run_id. `404` not found.
 
@@ -504,13 +527,12 @@ List all artifacts registered for a specific run. Returns 404 if the run does no
 
 List downloadable files for a run (auth required). Sources:
 
-1. Files under the run directory
-2. Paths on `ArtifactRecord`s for that run
-3. Directories from node config `output_dir` / `output_path` / `model_path` / output-like `path` on the stored `graph.json`
-4. `workspace/artifacts/` (bind-mounted project artifacts; prefer `<slug>/` then a capped walk of the tree)
-5. Legacy `examples/06_speech_commands_e2e/output` when those files exist
+1. Files under the run journal directory (`graph.json`, `meta.json`, logs, …)
+2. `ArtifactRecord`s for that run, expanded via `ArtifactTypeHandler.list_files(data_dir)` (or a shallow listing of that artifact `data/` when the handler returns `None`)
 
-Pipeline graphs should write under `workspace/artifacts/<name>/`, not into `examples/`.
+Path side-effects (exporters, model dumps, webhook/LLM folders, …) appear only when the node called `Node.publish_files` and the run registered a platform `file_tree` artifact. Core does **not** walk graph `output_dir` trees or parse domain inventories such as `labels.csv`.
+
+Pipeline graphs should write under `workspace/artifacts/<name>/` or other jailed write keys, not into `examples/`.
 
 **Response:**
 ```json
@@ -525,7 +547,21 @@ Pipeline graphs should write under `workspace/artifacts/<name>/`, not into `exam
 ]
 ```
 
-`node_id` is set when the file is tied to a node (ArtifactStore data dir, path refs inside that node's `data.json`, graph `output_path`, or basename hints such as `confusion_matrix.png` → evaluator). Journal files (`meta.json` / `logs.json` / `graph.json`) omit `node_id`. Large audio-sample artifact dirs are summarized (manifest + a few clips) so the listing cap stays usable for plots and models.
+`node_id` comes from the `ArtifactRecord`. Journal files (`meta.json` / `logs.json` / `graph.json`) omit `node_id`. Typed artifacts expose inventories through their serializers (`audio_samples` → WAV + `manifest.json`; `dataset_artifact` → `.npy` + `manifest.json`; `file_tree` → published paths from `inventory.json`). A run-local `outputs_index.json` caches ArtifactRecord refs (schema v2) and is rebuilt from the ArtifactStore when missing.
+
+**Project folders.** Listing never includes ProjectManager metadata (`project.json`, `spec.md`, `pipelines/`, …) even when a `file_tree` root sits under `datasets/output/<project>/`.
+
+**Cap priority.** Candidates from journal + artifact inventories are filled into a 400-entry cap in this order: (1) run journal files; (2) key files — models (`.tflite`, `.keras`, `.onnx`, …) and small summaries; (3) everything else. Steps 2 and 3 are shared round-robin across nodes. `truncated_by_node.total` uses each handler's `FileListing.total` (not a filesystem recount).
+
+**Truncation (opt-in, backwards compatible).** The default response stays a bare array, capped at 400 entries. The header `X-Graphyn-Outputs-Truncated: true|false` says whether anything was capped or summarized.
+
+| Query | Response |
+|---|---|
+| *(none)* | `[ {name, path, size, kind, node_id?}, … ]` (unchanged) |
+| `?with_meta=1` | `{ "items": [...], "truncated": bool, "max_items": 400, "truncated_by_node": { "<node_id>": {"shown": 9, "total": 201} }, "inputs_by_node": { … } }`. `shown` counts that node's file entries in `items`. `total` is the handler inventory total (`FileListing.total`). Only truncated nodes appear in `truncated_by_node`. |
+| `?node_id=<id>&limit=200&offset=0` | `{ "node_id", "items", "total", "offset", "limit", "has_more" }`. Pages every inventored file for that node (`limit` 1–1000). |
+
+**Ordering.** Inventories and the capped list use natural order (digit runs compare numerically). `node_id` paging and `truncated_by_node.total` share the same ArtifactStore inventories.
 ---
 
 ### `GET /api/v1/runs/{run_id}/outputs/zip`
@@ -778,9 +814,22 @@ Readiness check with basic filesystem dependency validation.
   "worker_count": 0,
   "registry_ready": true,
   "registry_init_error": null,
+  "node_type_count": 15,
+  "catalog": {
+    "bundled_plugins": 14,
+    "bundled_node_types": 14,
+    "installed_plugins": 14,
+    "enabled_plugins": 14,
+    "registered_node_types": 15,
+    "partial_catalog": false,
+    "warnings": [],
+    "plugin_package_dir": "/app/PluginPackage"
+  },
   "checks": {"runs_dir_exists": true, "cache_dir_exists": true}
 }
 ```
+
+`catalog` is **informational only** and never changes `ready` / `status`. `partial_catalog: true` (with human-readable `warnings`) means fewer plugins are installed and enabled than the bundled `PluginPackage/*/*/plugin.toml` manifests (after `GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST`), or the registry has fewer node types than those manifests declare. Graphs that use the missing node types fail validation. The section is cached for 30s.
 
 `status` is `starting` while plugins load, `ready` when the registry initialized cleanly, or `failed` when `registry_init_error` is set.
 
@@ -896,7 +945,7 @@ Fire a test event to the configured webhook URL and wait for the HTTP result. Th
 
 Returns `{"ok": false, "reason": "..."}` when no URL is set or delivery fails. The reason does not include the secret path.
 
-Terminal run statuses fire `pipeline_complete` / `pipeline_failed` via `app.core.runs.run_notify` when configured.
+Terminal run statuses fire `pipeline_complete` / `pipeline_failed` / `pipeline_cancelled` via `app.core.runs.run_notify` when configured. All three events carry the same fields (`run_id`, `status`, optional `graph_name`, `project`, `error`) and go to webhooks, optional SMTP, and in-app notifications. In-app notifications use `level`: `error` for failed, `warning` for cancelled, and `info` otherwise. A webhook with an explicit `events` list must include `pipeline_cancelled` to receive it. Before this change, cancelled runs fired no event.
 
 ---
 
@@ -904,7 +953,13 @@ Terminal run statuses fire `pipeline_complete` / `pipeline_failed` via `app.core
 
 List interval schedules that run project pipelines while the API process is up.
 
-**Response:** `{ "schedules": [ { "id", "name", "project", "pipeline", "interval_minutes", "enabled", "next_run_at", "last_run_id", … } ] }`
+**Query:** `?project=<name>` returns only that project's schedules.
+
+**Response:** `{ "schedules": [ { "id", "name", "project", "pipeline", "interval_minutes", "enabled", "next_run_at", "last_run_id", "last_error", "last_error_at"?, "orphaned", "disabled_reason", "orphaned_at", … } ] }`
+
+`orphaned` (bool), `disabled_reason`, and `orphaned_at` are always present (`false` / `null` when unset). The same shape is returned by `POST /system/schedules` and `POST /system/schedules/{id}/enable`. `next_run_at` is `null` while a schedule is disabled or orphaned, because a disabled schedule never fires. Enabling it recomputes `next_run_at` as now + `interval_minutes`. A manual `…/run` on a disabled schedule does not re-arm it.
+
+**Orphans and permanent errors.** Deleting a project (`DELETE /projects/{name}`) disables every schedule for it. The schedule is kept, not deleted, with `orphaned: true`, `orphaned_at`, and `disabled_reason: "Project deleted: <name>"`. If a tick (or `…/run`) fails with a permanent error (`Project not found: …` or `Pipeline '…' not found`), the schedule is also auto-disabled. It records `last_error`, `last_error_at`, `disabled_reason`, and `orphaned: true` when the project is gone. Other start errors (a missing published env version, a busy backend) only set `last_error`, and the schedule retries on the next tick. Re-enabling clears `orphaned` / `disabled_reason`. The next tick disables it again if the target is still missing.
 
 ### `POST /api/v1/system/schedules`
 
@@ -1181,11 +1236,13 @@ Agentic Builder proposals (Pillar C). Store under `{project}/proposals/`.
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/v1/proposals` | Create proposal (`summary`, `graph`, optional `actor` / `base_graph`) |
+| POST | `/api/v1/proposals` | Create proposal (`summary`, `graph`, optional `actor` / `base_graph` / `base_graph_hash` / `kind` / `context`) |
 | GET | `/api/v1/proposals` | List proposals (`?status=pending\|accepted\|rejected`) |
 | GET | `/api/v1/proposals/{id}` | Get one proposal |
 | POST | `/api/v1/proposals/{id}/accept` | Accept → audit; UI loads graph into Builder |
 | POST | `/api/v1/proposals/{id}/reject` | Reject (optional reason) |
+
+**Optional structured context.** `kind` is a lowercase id matching `^[a-z][a-z0-9_.-]{0,63}$`, for example `"explain_failure"`. `context` is a JSON object of at most 16 KiB, for example `{"run_id": "…", "node_id": "audio_conditioner_1", "error": "Sample rate should be over 0"}`. Both are stored as given and returned by create, get, and list. Both are `null` when omitted. An invalid `kind` / `context` returns `400`.
 
 MCP equivalents: `propose_graph`, `list_proposals`, `get_proposal`.
 

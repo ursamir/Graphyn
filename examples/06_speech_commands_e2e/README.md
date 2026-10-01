@@ -57,24 +57,25 @@ dataset_ingest(data/{label}/)
     │  Load 200 WAV clips
     ▼
 audio_conditioner
-    │  Resample to 16 kHz, mono, peak-normalise
+    │  Resample to 16 kHz, mono, DC removal, trim edges quieter than peak-40 dB,
+    │  peak-normalise to -1 dBFS
     ▼
-segmenter
-    │  Remove leading/trailing silence (threshold: -40 dB)
+segmenter  (mode=silence, silence_threshold_db=40 → "40 dB below peak")
+    │  Splits each clip on silence; a clip can yield >1 segment (≈1.1 per clip)
     ▼
-audio_quality_gate  (SNR filter)
-    │  Drop clips with SNR < -60 dB
+audio_quality_gate  (quality: SNR ≥ 5 dB, clipping ≤ 1 %, RMS ≥ 0.001,
+    │                 85 % rolloff ≥ 1 kHz; duration check off)
     ▼
-audio_quality_gate  (duration filter)
-    │  Keep clips between 0.2 s and 1.0 s
+audio_quality_gate  (duration only: 0.2 s ≤ d ≤ 1.0 s)
     ▼
 augmentation_pipeline
-    │  pitch_shift ±2 semitones + time_stretch 0.9×–1.1×
-    │  copies_per_sample=2 → ~3× more samples
+    │  pitch_shift ±2 semitones + time_stretch 0.9×–1.1× (both always applied)
+    │  copies_per_sample=2 → original + 2 copies = 3× samples
     ▼
-audio_exporter(output/dataset/speech_commands/, append=True)
-    │  Writes WAV files split 70/15/15 train/val/test
-    └─ Appends each label's output to the same directory
+audio_exporter(workspace/artifacts/speech-commands/dataset/speech_commands, v1)
+    │  Writes WAV files split 70/15/15 train/val/test, one split per source
+    │  clip (group_by_source) so augmented copies never leak into test
+    └─ "yes" runs with append=false (fresh v1), the other five with append=true
 ```
 
 ### Phase 2 — Feature Extraction + Training (runs once)
@@ -82,11 +83,14 @@ audio_exporter(output/dataset/speech_commands/, append=True)
 Uses explicit edge routing because `trainer` and `evaluator` have named input ports.
 
 ```
-dataset_ingest(output/dataset/speech_commands/v1/, recursive=True)
-    │  Load all preprocessed WAV files
+dataset_ingest(workspace/artifacts/speech-commands/dataset/speech_commands/v1, recursive=True)
+    │  Load all preprocessed WAV files. If Phase 1 has not run the ingest
+    │  fails with "has not been produced yet" — set
+    │  GRAPHYN_INGEST_EXAMPLE_FALLBACK=1 to train on the bundled raw clips
+    │  in examples/02_speech_commands/data instead (opt-in)
     ▼
 feature_frontend
-    │  MFCC: 40 coefficients, 101 frames, hop=160, fmax=8000 Hz
+    │  MFCC: 40 coefficients × 101 frames (T×F = 101×40), n_fft=512, hop=160, fmax=8000 Hz
     ▼
 dataset_builder
     │  Assembles X_train/X_val/X_test numpy arrays
@@ -94,10 +98,11 @@ dataset_builder
     ▼
 model_builder  ◄── receives dataset (port: "input")
     │  DS-CNN: Conv2D → 4× DepthwiseConv2D → GAP → Dropout → Dense(6)
-    │  ~22K parameters, Adam(lr=0.001)
+    │  ~22K parameters, Adam(lr=0.001) — trainer keeps this LR unless
+    │  trainer.learning_rate is set
     ▼
 trainer  ◄── receives model (port: "model") + dataset (port: "dataset")
-    │  Up to 30 epochs, batch_size=32, EarlyStopping(patience=5)
+    │  Up to 50 epochs, batch_size=32, EarlyStopping(val_accuracy, patience=15)
     │  Saves: output/saved_model/, output/checkpoints/
     ▼
 evaluator  ◄── receives model_artifact + dataset
@@ -124,6 +129,17 @@ realtime_inference
 ```
 
 ---
+
+### Console (template `ex-06-speech-commands-e2e`)
+
+The Builder template is **Phase 2** (`pipeline_train_ml.graph.json`). Run the
+six `pipeline_preprocess*.graph.json` graphs first (CLI `run_preprocess.sh`, or
+paste each into the Editor) — otherwise training falls back to the raw clips.
+Picking a workspace in the console stamps `audio_exporter` with
+`project=<workspace>`, which moves the Phase-1 output to
+`workspace/datasets/output/<workspace>/v1`; in that case point the template's
+`dataset_ingest.path` at that folder. Coverage, live run results and known
+limitations: [`docs/EXAMPLE_06_COVERAGE.md`](../../docs/EXAMPLE_06_COVERAGE.md).
 
 ## What This Demonstrates
 

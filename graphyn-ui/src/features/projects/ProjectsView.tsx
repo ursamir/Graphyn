@@ -38,6 +38,14 @@ import {
   noteRecentWorkspace,
   readRecentWorkspaces,
 } from '../../lib/recentWorkspaces'
+import { useMenuDismiss } from '../../lib/menus'
+import { checkRunExists } from '../../lib/runExists'
+import {
+  isValidWorkspaceName,
+  WORKSPACE_NAME_HINT,
+  workspaceErrorMessage,
+  workspaceNameError,
+} from '../../lib/workspaceName'
 
 interface Project {
   name: string
@@ -153,6 +161,7 @@ export default function ProjectsView() {
   const [selected, setSelected] = React.useState<string | null>(initialLoc.project ?? null)
   const [tab, setTab] = React.useState<Tab>(initialLoc.tab ?? 'versions')
   const [newName, setNewName] = React.useState('')
+  const newNameError = workspaceNameError(newName)
   const nameRef = React.useRef<HTMLInputElement | null>(null)
   const [renameTo, setRenameTo] = React.useState('')
   const [cloneTo, setCloneTo] = React.useState('')
@@ -341,7 +350,9 @@ export default function ProjectsView() {
               }
             }>
           >(`/projects/${encodeURIComponent(name)}/pipelines`).catch(() => []),
-          apiJson<{ schedules?: unknown[] }>('/system/schedules').catch(() => ({ schedules: [] })),
+          apiJson<{ schedules?: unknown[] }>('/system/schedules', { query: { project: name } }).catch(() => ({
+            schedules: [],
+          })),
         ])
         if (stale()) return
         setRecentRuns(Array.isArray(runs) ? runs.slice(0, 8) : [])
@@ -359,7 +370,9 @@ export default function ProjectsView() {
             last_run_id?: string
             last_error?: string
           }>
-          setSchedules(typed)
+          // Server filters by ?project=; keep a client filter too so a schedule of
+          // another (possibly deleted) workspace can never show up on this Home.
+          setSchedules(typed.filter((s) => String(s.project || '') === name))
         }
         setLinks({
           inputs: Array.isArray(linkData?.inputs) ? linkData.inputs : [],
@@ -550,6 +563,23 @@ export default function ProjectsView() {
     }
   }
 
+  /** Schedule rows link to their last run only while it still exists; otherwise Ops → Schedules. */
+  const openScheduleRun = async (s: { last_run_id?: string; name?: string; id?: string }) => {
+    const rid = String(s.last_run_id || '')
+    if (!rid) return
+    try {
+      const found = await checkRunExists(rid)
+      if (found.exists) {
+        useAppStore.getState().openRun(rid, selected ? { project: selected } : undefined)
+        return
+      }
+    } catch {
+      /* fall through to Ops */
+    }
+    pushToast(`Run ${shortRunId(rid)} no longer exists — showing the schedule in Ops`, 'info')
+    goView('system')
+  }
+
   const runSchedule = async (id: string) => {
     try {
       const res = await apiJson<{ last_run_id?: string }>(`/system/schedules/${encodeURIComponent(id)}/run`, {
@@ -565,7 +595,11 @@ export default function ProjectsView() {
 
   const create = async () => {
     if (!newName.trim()) {
-      pushToast('Enter a project name first', 'error')
+      pushToast('Enter a workspace name first', 'error')
+      nameRef.current?.focus()
+      return
+    }
+    if (!isValidWorkspaceName(newName)) {
       nameRef.current?.focus()
       return
     }
@@ -578,7 +612,7 @@ export default function ProjectsView() {
       await load()
       await open(created)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
     }
   }
 
@@ -594,7 +628,7 @@ export default function ProjectsView() {
       await load()
       await open(renameTo.trim())
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
     }
   }
 
@@ -608,7 +642,7 @@ export default function ProjectsView() {
       pushToast(`Cloned to ${cloneTo}`, 'success')
       await load()
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
     }
   }
 
@@ -623,7 +657,7 @@ export default function ProjectsView() {
       pushToast(`Cloned ${from} → ${to}`, 'success')
       await load()
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
     }
   }
 
@@ -638,7 +672,7 @@ export default function ProjectsView() {
       if (useAppStore.getState().activeProject === name) setActiveProject(null)
       await load()
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
     }
   }
 
@@ -850,21 +884,9 @@ export default function ProjectsView() {
   const [activityFilter, setActivityFilter] = React.useState<'all' | 'failed'>('all')
   const [menuUp, setMenuUp] = React.useState(false)
   const cardMenuRef = React.useRef<HTMLDivElement | null>(null)
-  React.useEffect(() => {
-    if (!cardMenu) return
-    const onDoc = (e: MouseEvent) => {
-      if (!cardMenuRef.current?.contains(e.target as Node)) setCardMenu(null)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setCardMenu(null)
-    }
-    document.addEventListener('mousedown', onDoc)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [cardMenu])
+  const closeCardMenu = React.useCallback(() => setCardMenu(null), [])
+  // Escape / outside click / another menu opening closes the row ⋯ menu.
+  useMenuDismiss(Boolean(cardMenu), closeCardMenu, cardMenuRef)
   const setSortPref = (next: WorkspaceSort) => {
     setSortBy(next)
     try {
@@ -1283,20 +1305,38 @@ export default function ProjectsView() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="my-workspace"
-                  className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
-                  onKeyDown={(e) => e.key === 'Enter' && void create()}
+                  maxLength={160}
+                  aria-invalid={newNameError ? true : undefined}
+                  aria-describedby="new-workspace-hint"
+                  className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm ${
+                    newNameError ? 'border-rose-300 bg-rose-50/40 focus:border-rose-400' : 'border-ink-200'
+                  }`}
+                  onKeyDown={(e) => e.key === 'Enter' && !newNameError && void create()}
                 />
               </label>
               <button
                 type="button"
                 className="btn-primary mb-px"
-                disabled={!newName.trim()}
-                title={!newName.trim() ? 'Type a name first' : `Create ${newName.trim()}`}
+                disabled={!newName.trim() || Boolean(newNameError)}
+                title={
+                  !newName.trim()
+                    ? 'Type a name first'
+                    : newNameError
+                      ? newNameError
+                      : `Create ${newName.trim()}`
+                }
                 onClick={() => void create()}
               >
                 <Plus className="h-3.5 w-3.5" /> Create workspace
               </button>
             </div>
+            <p
+              id="new-workspace-hint"
+              className={`mt-1.5 text-[12px] ${newNameError ? 'text-rose-700' : 'text-ink-400'}`}
+              role={newNameError ? 'alert' : undefined}
+            >
+              {newNameError ?? WORKSPACE_NAME_HINT}
+            </p>
             <p className="mt-2 text-[12px] text-ink-400">
               Created empty and opened immediately. Templates and Datasets are shared across
               workspaces, so you can look at those before picking one.
@@ -1796,32 +1836,52 @@ export default function ProjectsView() {
                       <button
                         type="button"
                         className="ide-row w-full px-3"
-                        onClick={() => useAppStore.getState().openRun(r.run_id)}
+                        onClick={() =>
+                          useAppStore.getState().openRun(r.run_id, selected ? { project: selected } : undefined)
+                        }
                       >
                         <History className="h-3.5 w-3.5 shrink-0 text-ink-400" />
                         <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-700">
                           {r.run_id.slice(0, 10)}…
                           {r.graph_name ? ` · ${r.graph_name}` : ''}
                         </span>
-                        {r.status ? <StatusBadge status={r.status} /> : null}
+                        {r.created_at ? (
+                          <time
+                            className="shrink-0 text-[11px] text-ink-400"
+                            dateTime={r.created_at}
+                            title={new Date(r.created_at).toLocaleString()}
+                          >
+                            {formatRelativeTime(r.created_at)}
+                          </time>
+                        ) : null}
+                        <StatusBadge status={r.status || 'unknown'} />
                       </button>
                     </li>
                   ))}
                   {schedules
-                    .filter((s) => s.last_run_id)
+                    .filter((s) => s.last_run_id && String(s.project || '') === selected)
                     .slice(0, 3)
                     .map((s) => (
                       <li key={`sched-fire-${s.id}-${s.last_run_id}`}>
                         <button
                           type="button"
                           className="ide-row w-full px-3"
-                          onClick={() => s.last_run_id && useAppStore.getState().openRun(String(s.last_run_id))}
+                          title={
+                            s.last_error
+                              ? `Last error: ${s.last_error}`
+                              : `Open the schedule's last run (${s.last_run_id})`
+                          }
+                          onClick={() => void openScheduleRun(s)}
                         >
                           <CalendarClock className="h-3.5 w-3.5 shrink-0 text-ink-400" />
                           <span className="min-w-0 flex-1 truncate text-[12px] text-ink-700">
-                            Schedule {s.name || s.id} · last {String(s.last_run_id).slice(0, 8)}…
+                            Schedule {s.name || s.id} · last {shortRunId(String(s.last_run_id))}
+                            {s.last_error ? (
+                              <span className="ml-1 text-rose-700">· error: {s.last_error}</span>
+                            ) : null}
                           </span>
                           <span className="text-[11px] text-ink-400">{s.pipeline || ''}</span>
+                          {s.last_error ? <StatusBadge status="failed" /> : null}
                         </button>
                       </li>
                     ))}
@@ -1989,9 +2049,8 @@ export default function ProjectsView() {
                 if (projectSchedules.length === 0) {
                   return (
                     <div className="px-4 py-4 text-[13px] text-ink-500">
-                      {schedules.length === 0
-                        ? 'No schedules yet. Create them under Ops, or run on demand from the Editor.'
-                        : `${schedules.length} schedule${schedules.length === 1 ? '' : 's'} on this API — none bound to this project.`}{' '}
+                      No schedules for this workspace yet. Create one under Ops, or run on demand from the
+                      Editor.{' '}
                       <button
                         type="button"
                         className="font-medium text-accent-800 hover:underline"
@@ -2016,7 +2075,7 @@ export default function ProjectsView() {
                           </div>
                           {s.last_error ? (
                             <div className="mt-0.5 truncate text-[11px] text-rose-700" title={s.last_error}>
-                              last_error: {s.last_error}
+                              Last error: {s.last_error}
                             </div>
                           ) : null}
                         </div>

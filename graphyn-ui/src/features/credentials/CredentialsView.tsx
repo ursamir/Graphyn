@@ -1,4 +1,5 @@
 import React from 'react'
+import { KeyRound as EmptyKeyRound } from 'lucide-react'
 import { KeyRound, RefreshCw, Search } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -13,6 +14,31 @@ type CredItem = {
   created_at?: string
   updated_at?: string
   fields?: Record<string, unknown>
+  /** Per secret field: true when a value is stored (values are never returned). */
+  secret_fields_set?: Record<string, boolean>
+}
+
+const SECRETISH_KEY = /(key|secret|token|password|passwd|pwd|credential|auth|private)/i
+
+/** "set" / "not set" for secret-ish fields, else the plain value. */
+function describeField(
+  c: CredItem,
+  key: string,
+  value: unknown,
+  kind: KindInfo | undefined,
+): { secret: boolean; set: boolean; text: string } {
+  const declared = kind?.fields.find((f) => f.name === key)
+  const fromApi = c.secret_fields_set && key in c.secret_fields_set ? c.secret_fields_set[key] : undefined
+  const secret = declared ? declared.secret : fromApi !== undefined || SECRETISH_KEY.test(key)
+  const str = value == null ? '' : typeof value === 'string' ? value : JSON.stringify(value)
+  if (secret) {
+    // API `secret_fields_set` wins; otherwise "" means not set.
+    const t = str.trim().toLowerCase()
+    // Any non-empty value (normally the "***" redaction marker) counts as set; it is never displayed.
+    const set = fromApi !== undefined ? Boolean(fromApi) : t !== ''
+    return { secret, set, text: '' }
+  }
+  return { secret, set: str.trim() !== '', text: str }
 }
 
 type KindInfo = {
@@ -214,7 +240,7 @@ export default function CredentialsView() {
       {loading ? (
         <LoadingBlock label="Loading credentials…" />
       ) : filtered.length === 0 ? (
-        <EmptyState title="No credentials" description="Create a connection above. Values are stored encrypted under GRAPHYN_HOME/credentials." />
+        <EmptyState icon={EmptyKeyRound} title="No credentials" description="Create a connection above. Values are stored encrypted under GRAPHYN_HOME/credentials." />
       ) : (
         <ul className="divide-y divide-ink-100 rounded-2xl border border-ink-200 bg-white">
           {filtered.map((c) => (
@@ -228,9 +254,45 @@ export default function CredentialsView() {
                   ) : null}
                 </div>
                 <div className="mt-0.5 font-mono text-[11px] text-ink-400">{c.id}</div>
-                <div className="mt-1 font-mono text-[11px] text-ink-500">
-                  fields: {JSON.stringify(c.fields ?? {})}
-                </div>
+                {(() => {
+                  const kindInfo = kinds.find((k) => k.id === c.kind)
+                  const keys = Array.from(
+                    new Set([...Object.keys(c.fields ?? {}), ...Object.keys(c.secret_fields_set ?? {})]),
+                  )
+                  if (keys.length === 0) {
+                    return <div className="mt-1 text-[11px] text-ink-400">No fields</div>
+                  }
+                  return (
+                    <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-[11px]">
+                      {keys.map((k) => {
+                        const d = describeField(c, k, c.fields?.[k], kindInfo)
+                        return (
+                          <React.Fragment key={k}>
+                            <dt className="font-mono text-ink-500">{k}</dt>
+                            <dd className="min-w-0">
+                              {d.secret ? (
+                                <span
+                                  className={
+                                    d.set
+                                      ? 'rounded bg-emerald-50 px-1.5 py-px font-medium text-emerald-800'
+                                      : 'rounded bg-amber-50 px-1.5 py-px font-medium text-amber-900'
+                                  }
+                                  title={d.set ? 'A value is stored (never shown)' : 'No value stored'}
+                                >
+                                  {d.set ? 'set' : 'not set'}
+                                </span>
+                              ) : d.set ? (
+                                <span className="break-all font-mono text-ink-800">{d.text}</span>
+                              ) : (
+                                <span className="text-ink-400">empty</span>
+                              )}
+                            </dd>
+                          </React.Fragment>
+                        )
+                      })}
+                    </dl>
+                  )
+                })()}
               </div>
               <div className="flex gap-2">
                 {!c.is_default && (

@@ -21,7 +21,7 @@ import re
 import random
 from pathlib import Path
 from typing import ClassVar, Literal
-from pydantic import Field
+from pydantic import Field, field_validator
 
 import numpy as np
 
@@ -88,13 +88,32 @@ class AudioExporterNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = Field(default="workspace/datasets/output/audio_export", title="Output dir", description="Project root under workspace/datasets/output/{project}; version_tag is appended.")
+        output_dir: str = Field(default="workspace/datasets/output/audio_export", title="Output dir", description="Export root (inside the working directory); files go to {output_dir}/{version_tag}/{split}/{label}/. Ignored when project is set.")
         project: str = Field(default='', title="Project", description="Optional project name; when set, output_dir becomes workspace/datasets/output/{project}.")
-        format: Literal["wav"] = Field(default='wav', title="Format", description="Output audio format. Currently wav only (soundfile PCM). One of: wav.")
-        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Train/val/test ratios as JSON; should sum to ~1.0.")
-        version_tag: str = Field(default='v1', title="Version tag", description="Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0).")
-        random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible splits and sampling.")
-        append: bool = Field(default=False, title="Append", description="Append files into an existing export tree instead of replacing it (On/Off).")
+        format: Literal["wav"] = Field(default='wav', title="Format", description="Output audio format. Currently wav only (soundfile, 16-bit PCM). One of: wav.")
+        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Split name -> weight (each >= 0, at least one > 0); normalised when the sum is not 1.")
+        group_by_source: bool = Field(default=True, title="Group splits by source", description="One split per source recording (metadata.parent or path) so segments/augmented copies never leak across splits.")
+        version_tag: str = Field(default='v1', pattern=r"^v\d+(\.\d+)*$", title="Version tag", description="Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0).")
+        random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible split assignment.")
+        append: bool = Field(default=False, title="Append", description="On = merge into an existing {output_dir}/{version_tag}; Off = delete that version dir first.")
+
+        @field_validator("split_ratios")
+        @classmethod
+        def _check_split_ratios(cls, v: dict) -> dict:
+            if not isinstance(v, dict) or not v:
+                raise ValueError("split_ratios must be a non-empty object, e.g. {train: 0.7, val: 0.15, test: 0.15}")
+            out: dict = {}
+            for key, val in v.items():
+                try:
+                    w = float(val)
+                except (TypeError, ValueError):
+                    raise ValueError(f"split_ratios[{key!r}] must be a number, got {val!r}")
+                if w < 0:
+                    raise ValueError(f"split_ratios[{key!r}] must be >= 0, got {w}")
+                out[str(key)] = w
+            if sum(out.values()) <= 0:
+                raise ValueError("split_ratios must contain at least one weight > 0")
+            return out
 
     # ── SISO process ──────────────────────────────────────────────────────────
 
@@ -144,6 +163,7 @@ class AudioExporterNode(Node):
             self._write_manifests(cfg, out_root, [], [])
             self._write_lineage(out_root, version_tag, 0)
             self._register_version(Path(output_dir), version_tag)
+            self._publish_export_tree(out_root, [])
             log.info(
                 "AudioExporterNode: no samples — stamped empty version at %s",
                 out_root,
@@ -172,6 +192,7 @@ class AudioExporterNode(Node):
 
         rows: list[dict] = []
         meta_entries: list[dict] = []
+        group_splits: dict[str, str] = {}
 
         try:
             for idx, sample in enumerate(samples):
@@ -187,7 +208,15 @@ class AudioExporterNode(Node):
                 # Use pre-assigned split if available
                 split = sample.metadata.get("split")
                 if split not in splits:
-                    split = rng.choices(splits, weights=weights, k=1)[0]
+                    if cfg.group_by_source:
+                        group = self._source_group(sample, idx)
+                        split = group_splits.get(group)
+                        if split is None:
+                            g_rng = random.Random(f"{cfg.random_seed}:{group}")
+                            split = g_rng.choices(splits, weights=weights, k=1)[0]
+                            group_splits[group] = split
+                    else:
+                        split = rng.choices(splits, weights=weights, k=1)[0]
 
                 label = sample.label or "unknown"
                 label_dir = out_root / split / label
@@ -251,8 +280,47 @@ class AudioExporterNode(Node):
             split_counts,
         )
         self._register_version(Path(output_dir), version_tag)
+        self._publish_export_tree(out_root, [str(r["path"]) for r in rows if r.get("path")])
 
         return samples
+
+    def _publish_export_tree(self, out_root: Path, rel_paths: list[str]) -> None:
+        """Announce the export tree via the generic Node.publish_files contract."""
+        files: list[dict] = []
+        for name in ("labels.csv", "metadata.json", "lineage.json"):
+            p = out_root / name
+            if p.is_file():
+                try:
+                    files.append({"path": name, "size": p.stat().st_size})
+                except OSError:
+                    files.append({"path": name})
+        for rel in rel_paths:
+            if not isinstance(rel, str) or not rel.strip():
+                continue
+            rel_n = rel.replace("\\", "/").lstrip("./")
+            entry: dict = {"path": rel_n}
+            try:
+                size = (out_root / rel_n).stat().st_size
+                entry["size"] = size
+            except OSError:
+                pass
+            files.append(entry)
+        try:
+            self.publish_files(out_root, files, total=len(files))
+        except Exception as exc:
+            log.warning("AudioExporterNode: publish_files failed: %s", exc)
+
+    @staticmethod
+    def _source_group(sample: AudioSample, idx: int) -> str:
+        """Key identifying the source recording (segments + augmented copies share it)."""
+        meta = sample.metadata or {}
+        for key in ("parent", "source_path", "original_path"):
+            val = meta.get(key)
+            if isinstance(val, str) and val:
+                return val
+        if sample.path:
+            return str(sample.path)
+        return f"__sample_{idx}"
 
     def _write_manifests(
         self,

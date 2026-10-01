@@ -6,14 +6,32 @@ import { useAppStore, type AppView } from '../store/appStore'
 import { navigatePath } from './parsePath'
 import { paths } from './paths'
 import { pathForView, type ViewPathContext } from './viewMap'
+import { confirmNavigation } from '../lib/navigationGuard'
 
-/** Navigate to an AppView via typed path builders + store view. */
-export function goView(view: AppView, ctx: ViewPathContext = {}, replace = false) {
+export { confirmNavigation, registerNavigationGuard } from '../lib/navigationGuard'
+
+/**
+ * Navigate to a path after consulting the app navigation guards (Editor
+ * unsaved changes). Returns false when the user cancelled.
+ */
+export function guardedNavigatePath(path: string, replace = false): boolean {
+  if (!confirmNavigation()) return false
+  navigatePath(path, replace)
+  return true
+}
+
+/**
+ * Navigate to an AppView via typed path builders + store view. Consults the
+ * navigation guards first; returns false when the user cancelled.
+ */
+export function goView(view: AppView, ctx: ViewPathContext = {}, replace = false): boolean {
+  if (!confirmNavigation()) return false
   const store = useAppStore.getState()
   const workspaceId = ctx.workspaceId ?? store.activeProject
   const path = pathForView(view, { ...ctx, workspaceId }) ?? paths.workspaces()
   navigatePath(path, replace)
   store.setView(view)
+  return true
 }
 
 /** Build pathname + search; replace history when different (no hash). */

@@ -94,14 +94,14 @@ class RealtimeInferenceNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str = Field(default="", title="Model path", description="Model file under workspace/artifacts (or empty for built-in).")
+        model_path: str = Field(default="", title="Model path", description="Required model file (.tflite / .pt / .onnx); labels.txt must sit next to it.")
         backend: Literal["tflite", "pytorch", "onnx", "ultralytics", "tflm_host", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: tflite, pytorch, onnx, ultralytics, tflm_host, auto.")
-        mode: Literal["classification", "wake_word", "streaming_asr", "detect", "segment"] = Field(default='classification', title="Mode", description="Operating mode. One of: classification, wake_word, streaming_asr, detect, segment.")
-        wake_word_threshold: float = Field(default=0.8, title="Wake-word threshold", description="Detection threshold in [0, 1]; higher = fewer false accepts.")
-        batch_size: int = Field(default=1, title="Batch size", description="Process in batches of N (0 = all at once).")
-        adaptive: bool = Field(default=False, title="Adaptive", description="Adaptively skip frames under load using adaptive_skip_ratio (On/Off).")
-        adaptive_skip_ratio: float = Field(default=0.5, title="Adaptive skip ratio", description="Fraction of frames eligible to skip under load (0–1).")
-        streaming_buffer_size: int = Field(default=10, title="Streaming buffer size", description="Frames kept in the realtime inference buffer.")
+        mode: Literal["classification", "wake_word", "streaming_asr", "detect", "segment"] = Field(default='classification', title="Mode", description="classification | wake_word | streaming_asr (detect / segment currently behave like classification).")
+        wake_word_threshold: float = Field(default=0.8, ge=0, le=1, title="Wake-word threshold", description="Top-1 probability threshold in [0, 1]; higher = fewer false accepts.")
+        batch_size: int = Field(default=1, ge=1, title="Batch size", description="Informational: inputs are run one at a time (batch 1).")
+        adaptive: bool = Field(default=False, title="Adaptive", description="Randomly skip a fraction (adaptive_skip_ratio) of inputs; seeded by the node seed (On/Off).")
+        adaptive_skip_ratio: float = Field(default=0.5, ge=0, le=1, title="Adaptive skip ratio", description="Fraction of inputs skipped when adaptive is On (0–1).")
+        streaming_buffer_size: int = Field(default=10, ge=1, title="Streaming buffer size", description="streaming_asr: number of inputs averaged per emitted prediction.")
 
     # ── backend detection ─────────────────────────────────────────────────────
 
@@ -151,9 +151,9 @@ class RealtimeInferenceNode(Node):
     def setup(self) -> None:
         """Load model and labels once before the first process() call."""
         self._asr_buffer: list = []   # streaming ASR frame buffer — reset on setup
-        model_path = Path(self.config.model_path)
+        model_path = self._resolve_model_path(self.config.model_path)
         # Path("") resolves to "." (always exists) — treat empty as missing.
-        if not str(self.config.model_path or "").strip() or not model_path.exists():
+        if not str(self.config.model_path or "").strip() or not model_path.is_file():
             raise FileNotFoundError(
                 f"RealtimeInferenceNode: model not found: {model_path}"
             )
@@ -188,6 +188,35 @@ class RealtimeInferenceNode(Node):
         log.info("RealtimeInferenceNode: loaded model from %s", model_path)
         log.info("RealtimeInferenceNode: backend=%s labels=%s", self._backend, self._labels)
 
+
+    @staticmethod
+    def _resolve_model_path(raw: str) -> Path:
+        """Resolve a relative model path against cwd and the Graphyn project dir.
+
+        Isolated workers may not run with cwd == project root, so
+        ``workspace/artifacts/...`` is also tried under ``project_dir()``.
+        """
+        text = str(raw or "").strip()
+        path = Path(text)
+        if not text or path.is_absolute():
+            return path
+        candidates = [Path.cwd() / path]
+        try:
+            from app.core.config import project_dir
+
+            root = project_dir()
+            candidates.append(root / path)
+            if path.parts and path.parts[0] == "workspace":
+                candidates.append(root / Path(*path.parts[1:]))
+        except Exception:
+            pass
+        for cand in candidates:
+            try:
+                if cand.is_file():
+                    return cand
+            except OSError:
+                continue
+        return path
 
     def _setup_additive_backend(self, model_path: Path, backend: str) -> None:
         """Load ultralytics / tflm_host when optional deps exist; else clear message."""
@@ -283,27 +312,52 @@ class RealtimeInferenceNode(Node):
         """
         input_detail = self._input_details[0]
         output_detail = self._output_details[0]
-        is_int8 = input_detail["dtype"] == np.uint8
+        inp = self._fit_to_input_shape(inp, input_detail.get("shape"))
+        in_dtype = input_detail["dtype"]
 
-        if is_int8:
+        if in_dtype in (np.uint8, np.int8):
             scale, zero_point = input_detail["quantization"]
             if scale == 0:
                 scale = 1.0
+            info = np.iinfo(in_dtype)
             inp = np.clip(
-                np.round(inp / scale + zero_point), 0, 255
-            ).astype(np.uint8)
+                np.round(inp / scale + zero_point), info.min, info.max
+            ).astype(in_dtype)
 
         self._interpreter.set_tensor(input_detail["index"], inp)
         self._interpreter.invoke()
         output = self._interpreter.get_tensor(output_detail["index"])
 
-        if output_detail["dtype"] == np.uint8:
+        if output_detail["dtype"] in (np.uint8, np.int8):
             scale, zero_point = output_detail["quantization"]
             if scale == 0:
                 scale = 1.0
             output = (output.astype(np.float32) - zero_point) * scale
 
         return output[0].tolist()
+
+    @staticmethod
+    def _fit_to_input_shape(inp: np.ndarray, shape) -> np.ndarray:
+        """Pad (zeros) / truncate the time axis to the model's fixed input length.
+
+        Only the time axis (axis 1 of [1, T, F, 1]) is adapted; a feature-axis
+        mismatch is a real config error and is left for the interpreter to report.
+        """
+        try:
+            dims = [int(d) for d in list(shape)]
+        except Exception:
+            return inp
+        if len(dims) != inp.ndim or len(dims) < 2 or dims[1] <= 0:
+            return inp
+        target_t = dims[1]
+        t = inp.shape[1]
+        if t == target_t:
+            return inp
+        if t > target_t:
+            return inp[:, :target_t, ...]
+        pad = [(0, 0)] * inp.ndim
+        pad[1] = (0, target_t - t)
+        return np.pad(inp, pad).astype(inp.dtype)
 
     def _infer_pytorch(self, inp: np.ndarray) -> list:
         """Run PyTorch inference on a single [1, T, F, 1] float32 array.
@@ -367,8 +421,9 @@ class RealtimeInferenceNode(Node):
 
             # Adaptive frame-skipping: probabilistic skip based on adaptive_skip_ratio
             if self.config.adaptive:
-                import random as _random
-                if _random.random() < self.config.adaptive_skip_ratio:
+                if not hasattr(self, "_skip_rng"):
+                    self._skip_rng = np.random.default_rng(getattr(self, "seed", 0))
+                if self._skip_rng.random() < self.config.adaptive_skip_ratio:
                     log.debug("RealtimeInferenceNode: adaptive skip frame %d", frame_count)
                     continue
 
@@ -381,12 +436,17 @@ class RealtimeInferenceNode(Node):
             inp = data[np.newaxis, ..., np.newaxis].astype(np.float32)  # (1, T, F, 1)
 
             t0 = time.monotonic()
-            if self._backend == "tflite":
+            if self._backend in ("tflite", "tflm_host"):
                 probs = self._infer_tflite(inp)
             elif self._backend == "pytorch":
                 probs = self._infer_pytorch(inp)
-            else:  # onnx
+            elif self._backend == "onnx":
                 probs = self._infer_onnx(inp)
+            else:
+                raise NotImplementedError(
+                    f"RealtimeInferenceNode: backend '{self._backend}' cannot score audio "
+                    "FeatureArray inputs; use tflite, tflm_host, pytorch or onnx."
+                )
             elapsed_ms = (time.monotonic() - t0) * 1000
             log.debug("RealtimeInferenceNode: inference %.1f ms", elapsed_ms)
 
@@ -431,7 +491,12 @@ class RealtimeInferenceNode(Node):
                     self._labels[i]: float(probs[i])
                     for i in range(len(self._labels))
                 },
-                metadata=dict(f.metadata),
+                metadata={
+                    **dict(f.metadata),
+                    "confidence": top1_prob,
+                    "true_label": getattr(f, "label", None),
+                    "inference_ms": round(elapsed_ms, 3),
+                },
             ))
 
         # Note: the _asr_buffer intentionally persists across process() calls so

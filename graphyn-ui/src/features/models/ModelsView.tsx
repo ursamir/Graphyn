@@ -1,4 +1,5 @@
 import React from 'react'
+import { Boxes as EmptyBoxes } from 'lucide-react'
 import { Box, CheckCircle2, GitBranch, RefreshCw, Shield } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -317,7 +318,7 @@ export default function ModelsView() {
       {loading ? (
         <LoadingBlock label="Loading models…" />
       ) : filteredRows.length === 0 ? (
-        <EmptyState
+        <EmptyState icon={EmptyBoxes}
           title={activeProject && scopeMode === 'workspace' ? 'No models for this workspace' : 'No registered models'}
           description={
             activeProject && scopeMode === 'workspace'

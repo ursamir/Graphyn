@@ -92,9 +92,9 @@ class EdgeOptimizerNode(Node):
         backend: Literal["tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"] = Field(default='tflite', title="Backend", description="Implementation backend. One of: tflite, onnx, tflm, executorch, ultralytics_export, auto.")
         quantization: Literal["float32", "float16", "int8"] = Field(default='int8', title="Quantization", description="Weight/activation quantization mode. One of: float32, float16, int8.")
         output_path: str = Field(default='workspace/artifacts/optimized', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        representative_samples: int = Field(default=100, title="Representative samples", description="Number of calibration samples for int8 quantization.")
-        prune: bool = Field(default=False, title="Prune", description="Apply unstructured/magnitude pruning before export (On/Off).")
-        operator_fusion: bool = Field(default=True, title="Operator fusion", description="Enable backend operator fusion optimizations (On/Off).")
+        representative_samples: int = Field(default=100, ge=1, title="Representative samples", description="Number of calibration samples (evenly spaced over X_train_repr.npy) for int8 quantization.")
+        prune: bool = Field(default=False, title="Prune", description="Not implemented yet: On only logs a warning.")
+        operator_fusion: bool = Field(default=True, title="Weight optimization", description="float32 only: On applies tf.lite.Optimize.DEFAULT (dynamic-range weights); Off keeps a pure float32 model.")
 
     def __init__(self, config=None, seed: int = 0, observer=None) -> None:
         super().__init__(config=config, seed=seed, observer=observer)
@@ -227,9 +227,13 @@ class EdgeOptimizerNode(Node):
 
         converter = self._tflite_converter(tf, artifact)
 
+        effective_quant = quantization
         if self.config.operator_fusion:
-            # DEFAULT optimization enables operator fusion and constant folding
+            # Optimize.DEFAULT: for float32 this is dynamic-range weight
+            # quantization (int8 weights, float activations).
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            if quantization == "float32":
+                effective_quant = "dynamic_range"
 
         if quantization == "float16":
             if not self.config.operator_fusion:
@@ -287,9 +291,10 @@ class EdgeOptimizerNode(Node):
             artifact_path=tflite_path,
             model_format="tflite",
             target_hardware="cpu",
-            quantization=quantization,
+            quantization=effective_quant,
             labels=list(artifact.labels),
             file_size_bytes=file_size,
+            metadata={"requested_quantization": quantization},
         )
 
     # ── ONNX export ───────────────────────────────────────────────────────────

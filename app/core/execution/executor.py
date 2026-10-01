@@ -25,6 +25,8 @@ from typing import Any
 # SA-O5 fix: import the shared stream collector instead of duplicating it here.
 from app.core.utils import collect_stream as _collect_stream_parallel
 from app.core.nodes.metadata import stable_node_type
+from app.core.execution.cache_rescope import node_is_cacheable, rescope_cached_outputs
+from app.core.logger import port_item_counts
 
 
 class ParallelExecutor:
@@ -196,7 +198,6 @@ class ParallelExecutor:
         the same wave — created once in ``run_wave`` rather than per node.
         """
         from app.core.runs.checkpoint import write_checkpoint
-        from app.core.host.registry_runtime import resolve_capability as _resolve_capability
 
         node = graph_obj.get_node(node_id)
         exec_ = executors[node_id]
@@ -280,7 +281,7 @@ class ParallelExecutor:
         cache_hit = False
         cache_key = None
 
-        if cache is not None:
+        if cache is not None and node_is_cacheable(node_type, ir_nodes_map.get(node_id)):
             node_cfg_dict = {}
             if cache_configs is not None and node_id in cache_configs:
                 node_cfg_dict = cache_configs[node_id]
@@ -305,7 +306,7 @@ class ParallelExecutor:
                 node_seed=getattr(node, "seed", None),
                 node_version=_node_version,
             )
-            cached_result = cache.load(cache_key)
+            cached_result = rescope_cached_outputs(cache.load(cache_key), run_id)
             if cached_result is not None:
                 node_outputs[node_id] = cached_result
                 cache_hit = True
@@ -334,19 +335,10 @@ class ParallelExecutor:
             node_outputs[node_id] = outputs
 
             # ── Save to cache (respecting cacheable flag) ──────────────────────
+            # cache_key is only set for cacheable nodes (Req 1.8 — checked
+            # before load so stale entries of non-cacheable nodes never hit).
             if cache is not None and cache_key is not None:
-                # Check cacheable flag via IRCapabilityMetadata (Req 1.8)
-                cacheable = True
-                ir_node = ir_nodes_map.get(node_id)
-                if ir_node is not None and registry is not None:
-                    try:
-                        cap_meta = _resolve_capability(ir_node, registry)
-                        cacheable = cap_meta.cacheable
-                    except Exception:
-                        cacheable = True  # default to cacheable on error
-
-                if cacheable:
-                    cache.save(cache_key, outputs)
+                cache.save(cache_key, outputs)
 
         # ── Checkpoint ────────────────────────────────────────────────────────
         if checkpoint:
@@ -398,18 +390,37 @@ class ParallelExecutor:
                         "Artifact registration failed for node '%s' port '%s': %s",
                         node_id, _port_name, _art_exc,
                     )
+            # Path side-effects announced via Node.publish_files → file_tree.
+            if not cache_hit:
+                try:
+                    from app.core.artifacts.file_tree import file_tree_payload
+
+                    for _pub in node.take_published_file_trees():
+                        run_manager.register_artifact(
+                            node_id=node_id,
+                            node_type=node_type,
+                            artifact_type="file_tree",
+                            data=file_tree_payload(_pub),
+                            metadata={"kind": "published_files"},
+                            input_artifact_ids=_prior_artifact_ids,
+                        )
+                except Exception as _pub_exc:
+                    import logging as _logging
+
+                    _logging.getLogger(__name__).warning(
+                        "Published file_tree registration failed for node '%s': %s",
+                        node_id,
+                        _pub_exc,
+                    )
 
         node_duration = time.time() - node_start_time
         _node_outputs = node_outputs[node_id]
-        _output_count = sum(
-            len(v) if isinstance(v, list) else (0 if v is None else 1)
-            for v in _node_outputs.values()
-        )
+        _port_counts = port_item_counts(_node_outputs)
         logger.node_end(
             node_type,
             idx,
             node_duration,
-            output_count=_output_count,
+            output_counts=_port_counts,
             node_id=node_id,
         )
 

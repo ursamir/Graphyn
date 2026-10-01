@@ -471,7 +471,15 @@ class ArtifactStore:
                     try:
                         import numpy as np  # noqa: PLC0415
                         if isinstance(obj, np.ndarray):
-                            return obj.tolist()
+                            # Hash shape/dtype/prefix — never materialise .tolist()
+                            # of multi-hundred-MB training tensors.
+                            prefix = obj.reshape(-1)[:1024].tobytes()
+                            return {
+                                "shape": list(obj.shape),
+                                "dtype": str(obj.dtype),
+                                "nbytes": int(obj.nbytes),
+                                "prefix_sha256": hashlib.sha256(prefix).hexdigest()[:16],
+                            }
                         if isinstance(obj, np.integer):
                             return int(obj)
                         if isinstance(obj, np.floating):
@@ -524,25 +532,44 @@ class ArtifactStore:
     def _serialize_json(self, data: Any, data_dir: Path) -> None:
         """Write data.json using model_dump or json.dumps.
 
-        Handles numpy arrays by converting them to lists via a custom default.
-        Numpy is imported conditionally so this method works on systems
-        without numpy installed.
+        Numpy arrays are written as sibling ``.npy`` files and referenced from
+        JSON as ``{"__ndarray__": "<name>.npy", "shape": [...], "dtype": "..."}``.
+        Never expand arrays with ``.tolist()`` — that produced multi-hundred-MB
+        ``data.json`` files for DatasetArtifact before a dedicated handler existed.
         """
         try:
             import numpy as np  # noqa: PLC0415
             _has_numpy = True
         except ImportError:
+            np = None  # type: ignore[assignment]
             _has_numpy = False
 
-        def _numpy_default(obj: Any) -> Any:
-            if _has_numpy:
-                if isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                if isinstance(obj, np.integer):
-                    return int(obj)
-                if isinstance(obj, np.floating):
-                    return float(obj)
-            return str(obj)
+        array_counter = 0
+
+        def _replace(obj: Any, *, key_hint: str = "arr") -> Any:
+            nonlocal array_counter
+            if _has_numpy and isinstance(obj, np.ndarray):
+                array_counter += 1
+                safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in key_hint) or "arr"
+                filename = f"{safe}_{array_counter}.npy"
+                np.save(data_dir / filename, obj)
+                return {
+                    "__ndarray__": filename,
+                    "shape": list(obj.shape),
+                    "dtype": str(obj.dtype),
+                }
+            if _has_numpy and isinstance(obj, np.integer):
+                return int(obj)
+            if _has_numpy and isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, dict):
+                return {str(k): _replace(v, key_hint=str(k)) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                # Cap nested list expansion for accidental giant lists of floats.
+                if len(obj) > 10_000 and obj and isinstance(obj[0], (int, float)):
+                    return {"__list_omitted__": True, "length": len(obj)}
+                return [_replace(v, key_hint=f"{key_hint}_{i}") for i, v in enumerate(obj)]
+            return obj
 
         if hasattr(data, "model_dump"):
             try:
@@ -556,8 +583,10 @@ class ArtifactStore:
                 serializable = [str(item) for item in data]
         else:
             serializable = data
+
+        serializable = _replace(serializable)
         (data_dir / "data.json").write_text(
-            json.dumps(serializable, indent=2, default=_numpy_default), encoding="utf-8"
+            json.dumps(serializable, indent=2, default=str), encoding="utf-8"
         )
 
     # ------------------------------------------------------------------

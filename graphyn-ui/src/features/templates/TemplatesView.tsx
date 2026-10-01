@@ -1,14 +1,18 @@
 import React from 'react'
-import { RefreshCw, ChevronRight, Database, Download, MoreHorizontal, Search, Upload } from 'lucide-react'
+import { LayoutTemplate as EmptyLayoutTemplate } from 'lucide-react'
+import { RefreshCw, ChevronRight, Database, Download, MoreHorizontal, Puzzle, Search, Upload } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
+import { useMenuDismiss } from '../../lib/menus'
 import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
 import { MarketplaceBrowse } from './MarketplaceBrowse'
 import { loadMarketplaceCatalog } from './marketplaceCatalog'
-import { humanizeTemplateName, humanNodeLabel } from '../../lib/format'
+import { humanizeTemplateName, humanNodeLabel, stripIsolatedPrefix } from '../../lib/format'
+import { workspaceErrorMessage, workspaceNameError } from '../../lib/workspaceName'
+import { buildNodeTypePluginMap, summarizeMissing, type PluginManifestLike } from './missingPlugins'
 
 function isExampleTemplate(name: string): boolean {
   return name.startsWith('ex-')
@@ -24,6 +28,8 @@ export type TemplateSummary = {
   tags?: string[]
   node_count?: number
   node_types?: string[]
+  /** Display title from the API (unique across starters/examples). */
+  title?: string
 }
 
 /* Removed: isDatasetRelatedTemplate(). It keyword-matched a template's text to
@@ -144,6 +150,48 @@ export default function TemplatesView() {
   const [projectPick, setProjectPick] = React.useState('')
   const [projectCreate, setProjectCreate] = React.useState('')
   const [projectGateBusy, setProjectGateBusy] = React.useState(false)
+  const projectCreateError = workspaceNameError(projectCreate)
+
+  /* Node types each template needs vs the loaded catalog (App pages GET /nodes
+     into the store). Template summaries strip the `Isolated_` prefix, so the
+     catalog side is normalized the same way. Empty catalog (still loading /
+     offline) → no warnings rather than "everything is missing". */
+  const catalog = useAppStore((s) => s.catalog)
+  const catalogTypes = React.useMemo(
+    () => new Set(catalog.map((c) => stripIsolatedPrefix(String(c.node_type || '')).toLowerCase())),
+    [catalog],
+  )
+  const missingNodeTypes = React.useCallback(
+    (tpl: TemplateSummary | undefined): string[] => {
+      if (!tpl || catalogTypes.size === 0) return []
+      return (tpl.node_types ?? []).filter(
+        (nt) => !catalogTypes.has(stripIsolatedPrefix(nt).toLowerCase()),
+      )
+    },
+    [catalogTypes],
+  )
+
+  /* node_type → plugin name from manifests (installed incl. disabled / failed
+     loads, plus the plugin index when it lists node types), so "Needs plugins"
+     names plugins — node types no manifest claims are labelled as such. */
+  const [nodeTypePlugins, setNodeTypePlugins] = React.useState<Map<string, string>>(() => new Map())
+  React.useEffect(() => {
+    let cancelled = false
+    void Promise.allSettled([
+      apiJson<unknown>('/plugins'),
+      apiJson<unknown>('/plugins/search', { query: { q: '' } }),
+    ]).then((res) => {
+      if (cancelled) return
+      const rows: PluginManifestLike[] = []
+      for (const r of res) {
+        if (r.status === 'fulfilled') rows.push(...unwrapList<PluginManifestLike>(r.value))
+      }
+      setNodeTypePlugins(buildNodeTypePluginMap(rows))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const onMarketplaceStats = React.useCallback(
     (stats: { matched: number; loaded: number; total: number }) => {
@@ -196,19 +244,11 @@ export default function TemplatesView() {
       })
   }, [])
 
-  React.useEffect(() => {
-    if (!menuFor && !headerMoreOpen) return
-    const onDoc = (e: MouseEvent) => {
-      if (menuFor && menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuFor(null)
-      }
-      if (headerMoreOpen && headerMoreRef.current && !headerMoreRef.current.contains(e.target as Node)) {
-        setHeaderMoreOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
-  }, [menuFor, headerMoreOpen])
+  // Escape / outside click / another menu opening closes these (lib/menus).
+  const closeCardMenu = React.useCallback(() => setMenuFor(null), [])
+  const closeHeaderMore = React.useCallback(() => setHeaderMoreOpen(false), [])
+  useMenuDismiss(Boolean(menuFor), closeCardMenu, menuRef)
+  useMenuDismiss(headerMoreOpen, closeHeaderMore, headerMoreRef)
 
   const importExamples = async () => {
     setSyncing(true)
@@ -246,23 +286,11 @@ export default function TemplatesView() {
     const stamped = stampProjectOnGraph(data.graph, project)
     setActiveProject(project)
     setBuilderDataset({ project })
-    const pipelineName = name.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'pipeline'
-    try {
-      await apiJson(
-        `/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(pipelineName)}`,
-        { method: 'PUT', body: JSON.stringify(stamped) },
-      )
-    } catch (err) {
-      pushToast(
-        err instanceof Error
-          ? `Opened Editor but could not save workspace pipeline: ${err.message}`
-          : 'Opened Editor but could not save workspace pipeline',
-        'error',
-      )
-    }
+    // Opening a template must not create/overwrite a saved workspace pipeline —
+    // the Editor's Save button does that explicitly.
     useAppStore.getState().loadGraphIntoBuilder(stamped)
     pushToast(
-      `Template ready in Editor — save or Run when you are set.`,
+      `Template ready in Editor (not saved yet) — Save to add it to the workspace.`,
       'success',
     )
   }
@@ -300,6 +328,10 @@ export default function TemplatesView() {
       pushToast('Create or select a workspace first', 'error')
       return
     }
+    if (created && projectCreateError) {
+      pushToast(projectCreateError, 'error')
+      return
+    }
     setProjectGateBusy(true)
     try {
       if (created && !projectChoices.includes(created)) {
@@ -308,7 +340,7 @@ export default function TemplatesView() {
       await loadIntoBuilderWithProject(projectGate.template, project)
       setProjectGate(null)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      pushToast(workspaceErrorMessage(err instanceof Error ? err.message : String(err)), 'error')
     } finally {
       setProjectGateBusy(false)
     }
@@ -390,6 +422,7 @@ export default function TemplatesView() {
     if (!q) return true
     const blob = [
       t.name,
+      t.title ?? '',
       humanizeTemplateName(t.name),
       t.description ?? '',
       ...(t.tags ?? []),
@@ -428,7 +461,7 @@ export default function TemplatesView() {
           a.name.localeCompare(b.name)
         )
       }
-      return humanizeTemplateName(a.name).localeCompare(humanizeTemplateName(b.name))
+      return (a.title || humanizeTemplateName(a.name)).localeCompare(b.title || humanizeTemplateName(b.name))
     })
   const exampleCount = (items ?? []).filter((t) => isExample(t.name)).length
   const savedCount = (items ?? []).filter((t) => !isExample(t.name)).length
@@ -660,7 +693,7 @@ export default function TemplatesView() {
       {items === null ? (
         <LoadingBlock />
       ) : filtered.length === 0 ? (
-        <EmptyState
+        <EmptyState icon={EmptyLayoutTemplate}
           title={
             search.trim()
               ? 'No matching templates'
@@ -702,6 +735,7 @@ export default function TemplatesView() {
             const versions = versionsMap[name] ?? []
             const latest = latestMap[name]
             const inputLabel = datasetInputLabel(tpl)
+            const missing = missingNodeTypes(tpl)
             return (
               <li
                 key={name}
@@ -711,7 +745,7 @@ export default function TemplatesView() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="truncate text-type-body font-semibold text-ink-950">
-                        {humanizeTemplateName(name)}
+                        {tpl.title || humanizeTemplateName(name)}
                       </div>
                       {/* Redundant while the Examples tab is active — it would
                           print the same word on all 25 visible cards. */}
@@ -738,12 +772,24 @@ export default function TemplatesView() {
                         ? tpl.description
                         : 'Open in Editor to inspect nodes and run this pipeline.'}
                     </p>
+                    {missing.length > 0 ? (
+                      <div
+                        className="mt-1.5 inline-flex max-w-full items-start gap-1 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-type-meta text-amber-900"
+                        title={summarizeMissing(missing, nodeTypePlugins).tooltip}
+                        data-testid="template-missing-plugins"
+                      >
+                        <Puzzle className="mt-px h-3 w-3 shrink-0" />
+                        <span className="min-w-0 break-words">
+                          {summarizeMissing(missing, nodeTypePlugins).label}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="relative shrink-0" ref={menuFor === name ? menuRef : undefined}>
                     <button
                       type="button"
                       className="btn-icon"
-                      aria-label={`More actions for ${humanizeTemplateName(name)}`}
+                      aria-label={`More actions for ${tpl.title || humanizeTemplateName(name)}`}
                       aria-expanded={menuFor === name}
                       aria-haspopup="menu"
                       onClick={(e) => {
@@ -812,7 +858,7 @@ export default function TemplatesView() {
                                 .then(load)
                                 .then(() => {
                                   setMenuFor(null)
-                                  pushToast(`Deleted ${humanizeTemplateName(name)}`, 'success')
+                                  pushToast(`Deleted ${tpl.title || humanizeTemplateName(name)}`, 'success')
                                 })
                                 .catch((err) =>
                                   pushToast(err instanceof Error ? err.message : String(err), 'error'),
@@ -968,7 +1014,7 @@ export default function TemplatesView() {
                         onChange={(e) =>
                           setSelectedVersion((s) => ({ ...s, [name]: e.target.value }))
                         }
-                        aria-label={`Version for ${humanizeTemplateName(name)}`}
+                        aria-label={`Version for ${tpl.title || humanizeTemplateName(name)}`}
                       >
                         {versions.map((v) => (
                           <option key={v} value={v}>
@@ -1036,6 +1082,20 @@ export default function TemplatesView() {
             <p className="mt-2 text-sm text-ink-500">
               Create or select a workspace, then open the graph in the Editor.
             </p>
+            {(() => {
+              const missing = missingNodeTypes(items?.find((t) => t.name === projectGate.template))
+              if (missing.length === 0) return null
+              const summary = summarizeMissing(missing, nodeTypePlugins, 8)
+              return (
+                <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+                  <Puzzle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span title={summary.tooltip}>
+                    {summary.label}. You can open it anyway — those nodes will not run until the
+                    plugins are installed (Library → Plugins).
+                  </span>
+                </div>
+              )
+            })()}
             <label className="mt-4 block text-sm text-ink-600">
               Existing workspace
               <select
@@ -1058,11 +1118,19 @@ export default function TemplatesView() {
             <label className="mt-3 block text-sm text-ink-600">
               Or create new
               <input
-                className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
-                placeholder="my-project"
+                className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm ${
+                  projectCreateError ? 'border-rose-300 bg-rose-50/40' : 'border-ink-200'
+                }`}
+                placeholder="my-workspace"
                 value={projectCreate}
+                aria-invalid={projectCreateError ? true : undefined}
                 onChange={(e) => setProjectCreate(e.target.value)}
               />
+              {projectCreateError ? (
+                <span className="mt-1 block text-[12px] text-rose-700" role="alert">
+                  {projectCreateError}
+                </span>
+              ) : null}
             </label>
             <div className="mt-4 flex justify-end gap-2">
               <button
@@ -1076,7 +1144,7 @@ export default function TemplatesView() {
               <button
                 type="button"
                 className="btn-primary"
-                disabled={projectGateBusy}
+                disabled={projectGateBusy || Boolean(projectCreate.trim() && projectCreateError)}
                 onClick={() => void confirmProjectGate()}
               >
                 {projectGateBusy ? 'Opening…' : 'Open in Editor'}

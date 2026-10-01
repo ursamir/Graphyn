@@ -25,9 +25,9 @@ runtime = "isolated"
 node_types = ["edge_optimizer"]
 
 [config_schema.edge_optimizer]
-backend = { type = "string", title = "Backend", default = "tflite", description = "One of: tflite, onnx, tflm, executorch, ultralytics_export, auto.", enum = ["tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"] }
-quantization = {  type = "string", title = "Quantization", default = "int8", description = "Weight/activation quantization mode. One of: float32, float16, int8.", enum = ["float32", "float16", "int8"]  }
-output_path = { type = "string", title = "Output path", default = "workspace/artifacts/optimized", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
-representative_samples = { type = "integer", title = "Representative samples", default = 100, description = "Number of calibration samples for int8 quantization." }
-prune = { type = "boolean", title = "Prune", default = false, description = "Apply unstructured/magnitude pruning before export (On/Off)." }
-operator_fusion = { type = "boolean", title = "Operator fusion", default = true, description = "Enable backend operator fusion optimizations (On/Off)." }
+backend = { type = "string", title = "Backend", default = "tflite", description = "tflite = TFLite converter (honours quantization); onnx = tf2onnx / torch.onnx (always float32); tflm, executorch, ultralytics_export = stub marker only (use the dedicated nodes); auto = tflite when TensorFlow is importable, else onnx.", enum = ["tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"] }
+quantization = {  type = "string", title = "Quantization", default = "int8", description = "TFLite only. float32 = no quantization; float16 = float16 weights; int8 = full-integer (uint8 input/output) calibrated on representative_samples rows of saved_model/X_train_repr.npy.", enum = ["float32", "float16", "int8"], ui = { visible_if = { backend = ["tflite", "auto"] } } }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/optimized", description = "Directory for model.tflite / model.onnx and labels.txt (under workspace/artifacts)." }
+representative_samples = { type = "integer", title = "Representative samples", default = 100, minimum = 1, description = "Number of calibration samples (evenly spaced over X_train_repr.npy) for int8 quantization.", ui = { visible_if = { quantization = "int8" } } }
+prune = { type = "boolean", title = "Prune", default = false, description = "Not implemented yet: On only logs a warning; the model is exported unpruned." }
+operator_fusion = { type = "boolean", title = "Weight optimization", default = true, description = "float32 only: On applies tf.lite.Optimize.DEFAULT (dynamic-range int8 weights, smaller file); Off keeps a pure float32 model. float16/int8 always enable Optimize.DEFAULT. TFLite fuses operators regardless.", ui = { visible_if = { quantization = "float32" } } }

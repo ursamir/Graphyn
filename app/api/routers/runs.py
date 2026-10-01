@@ -3,12 +3,13 @@
 Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for run history, status, checkpoints,
                   artifacts, and provenance.
-Owns:             Route definitions for GET /runs, GET /runs/{run_id},
+Owns:             Route definitions for GET /runs, GET /runs/{run_id}
+                  (logs with a consistent ``error`` field + ``node_order``),
                   GET /runs/{run_id}/graph,
                   GET /runs/{run_id}/status,
                   GET /runs/{run_id}/checkpoints/**,
                   GET /runs/{run_id}/artifacts,
-                  GET /runs/{run_id}/outputs,
+                  GET /runs/{run_id}/outputs (?with_meta=1, ?node_id=&limit=&offset=),
                   GET /runs/{run_id}/outputs/zip,
                   POST /runs/{run_id}/promote,
                   DELETE /runs/{run_id},
@@ -16,13 +17,15 @@ Owns:             Route definitions for GET /runs, GET /runs/{run_id},
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
                   ArtifactStore, and ProvenanceStore.
-Dependencies:     fastapi, app.core.runs.run_journal, app.core.artifacts.artifact_store,
+Dependencies:     fastapi, app.core.runs.run_journal, app.core.runs.run_nodes,
+                  app.core.artifacts.artifact_store,
                   app.core.config, stdlib (json, pathlib, re).
 Reason To Change: New run history endpoint added, or response schema changes.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -210,13 +213,25 @@ def get_run(run_id: str):
     if artifacts_dir:
         meta.setdefault("artifacts_dir", artifacts_dir)
 
+    from app.core.runs.run_nodes import normalize_log_errors, run_node_order
+
+    node_order: list[dict] = []
+    try:
+        from app.core.runs.run_outputs import load_run_graph
+
+        node_order = run_node_order(load_run_graph(run_path), meta)
+    except Exception:
+        node_order = []
+
     return {
         "run_id": run_id,
         "meta": meta,
         "config_yaml": config_yaml,
-        "logs": logs,
+        "logs": normalize_log_errors(logs),
         "is_latest": is_latest,
         "artifacts_dir": artifacts_dir,
+        # Graph nodes in execution order (incl. nodes that never ran).
+        "node_order": node_order,
     }
 
 
@@ -374,12 +389,46 @@ def get_checkpoint_samples(
 # ── Downloadable outputs ──────────────────────────────────────────────────────
 
 @router.get("/{run_id}/outputs", summary="List downloadable output files for a run")
-def list_run_outputs(run_id: str):
-    """Return files from the run dir, artifact records, graph output_path, and legacy Example 6."""
-    run_path = _run_dir(run_id)
-    from app.core.runs.run_outputs import list_run_output_files
+def list_run_outputs(
+    run_id: str,
+    response: Response,
+    with_meta: bool = Query(
+        False,
+        description=(
+            "Return {items, truncated, max_items, truncated_by_node, inputs_by_node} "
+            "instead of a bare list; truncated_by_node maps node_id -> {shown, total}; "
+            "inputs_by_node counts source-node input files that are not outputs."
+        ),
+    ),
+    node_id: str | None = Query(
+        None, description="Page every file of one node: {node_id, items, total, offset, limit, has_more}"
+    ),
+    limit: int = Query(200, ge=1, le=1000, description="Page size (node_id mode)"),
+    offset: int = Query(0, ge=0, description="Page offset (node_id mode)"),
+):
+    """Return files from the run dir, artifact records, graph output_path, and legacy Example 6.
 
-    return list_run_output_files(run_id, run_path)
+    Default response is a bare list (backwards compatible) with an
+    ``X-Graphyn-Outputs-Truncated: true|false`` header. Large audio data dirs
+    are summarized and the list is capped at 400 entries (run-level files,
+    then models / metrics / small summaries, then bulk files, round-robin per
+    node; ingest input files are not outputs); pass
+    ``with_meta=1`` for per-node ``{shown, total}`` or ``node_id=`` to page.
+    """
+    run_path = _run_dir(run_id)
+    from app.core.runs.run_outputs import (
+        list_node_output_files,
+        list_run_output_files_detail,
+        list_run_outputs_truncated_hint,
+    )
+
+    if node_id:
+        return list_node_output_files(run_id, run_path, node_id, limit=limit, offset=offset)
+    if with_meta:
+        return list_run_output_files_detail(run_id, run_path)
+    entries, truncated = list_run_outputs_truncated_hint(run_id, run_path)
+    response.headers["X-Graphyn-Outputs-Truncated"] = "true" if truncated else "false"
+    return entries
 
 
 @router.get("/{run_id}/outputs/zip", summary="Download run outputs as a zip")
@@ -418,18 +467,22 @@ def promote_run(run_id: str, request: Request, body: dict | None = Body(None)):
         raise HTTPException(status_code=409, detail="Run has no artifact slug")
     layout = artifact_layout(slug, run_id)
     run_art = artifact_fs_path(layout["run_dir"])
-    has_files = False
-    if run_art.exists():
+
+    def _dir_has_file(root: Path) -> bool:
+        """True when *root* contains any non-dot file (stops at the first hit)."""
         try:
-            has_files = any(run_art.rglob("*"))
+            if not root.exists():
+                return False
+            for _dirpath, _dirnames, filenames in os.walk(root):
+                if any(not name.startswith(".") for name in filenames):
+                    return True
         except OSError:
-            has_files = False
+            return False
+        return False
+
+    has_files = _dir_has_file(run_art)
     if not has_files and artifacts_dir:
-        alt = artifact_fs_path(str(artifacts_dir))
-        try:
-            has_files = alt.exists() and any(p.is_file() for p in alt.rglob("*"))
-        except OSError:
-            has_files = False
+        has_files = _dir_has_file(artifact_fs_path(str(artifacts_dir)))
     if not has_files:
         raise HTTPException(status_code=409, detail="Run has no artifacts to promote")
     try:

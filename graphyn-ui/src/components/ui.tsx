@@ -1,6 +1,6 @@
 import React from 'react'
 import clsx from 'clsx'
-import { AlertTriangle, CheckCircle2, ChevronRight, Copy, Info, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronRight, Copy, Inbox, Info, X, type LucideIcon } from 'lucide-react'
 import { prettyScalar, startCase } from '../lib/format'
 import { goView } from '../routes/nav'
 
@@ -8,14 +8,22 @@ export function EmptyState({
   title,
   description,
   action,
+  icon: Icon = Inbox,
 }: {
   title: string
   description?: string
   action?: React.ReactNode
+  /** lucide-react icon shown in the badge above the title (default: Inbox). */
+  icon?: LucideIcon
 }) {
   return (
     <div className="empty-state-shell">
-      <div className="mb-3 h-10 w-10 rounded-2xl border border-ink-200/60 bg-white shadow-sm" aria-hidden />
+      <div
+        className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl border border-ink-200/60 bg-white text-ink-400 shadow-sm"
+        aria-hidden
+      >
+        <Icon className="h-5 w-5" strokeWidth={1.75} />
+      </div>
       <div className="text-type-section tracking-tight text-ink-900">{title}</div>
       {description && <p className="mt-2 max-w-md text-type-body leading-relaxed text-ink-500">{description}</p>}
       {action && <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{action}</div>}
@@ -193,6 +201,43 @@ export function ConfirmButton({
   )
 }
 
+/**
+ * Keep toasts above bottom panels. Any element marked `data-toast-avoid`
+ * (e.g. the Editor execution log) that touches the bottom of the viewport
+ * pushes the stack up to sit above it. Without one, the CSS var
+ * `--toast-bottom-inset` (lib/toastInset.ts) applies.
+ */
+function useToastAvoidBottom(active: boolean): number | null {
+  const [bottom, setBottom] = React.useState<number | null>(null)
+  React.useEffect(() => {
+    if (!active || typeof window === 'undefined') {
+      setBottom(null)
+      return
+    }
+    const measure = () => {
+      const vh = window.innerHeight
+      let top = Infinity
+      document.querySelectorAll<HTMLElement>('[data-toast-avoid]').forEach((el) => {
+        const r = el.getBoundingClientRect()
+        if (r.height <= 0 || r.width <= 0) return
+        // Only panels docked at (or very near) the viewport bottom matter.
+        if (vh - r.bottom > 48) return
+        top = Math.min(top, r.top)
+      })
+      setBottom(Number.isFinite(top) ? Math.max(16, Math.round(vh - top + 8)) : null)
+    }
+    measure()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+    document.querySelectorAll<HTMLElement>('[data-toast-avoid]').forEach((el) => ro?.observe(el))
+    window.addEventListener('resize', measure)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [active])
+  return bottom
+}
+
 export function ToastHost({
   toasts,
   onDismiss,
@@ -208,10 +253,14 @@ export function ToastHost({
   onDismiss: (id: string) => void
   onDismissAll?: () => void
 }) {
+  const avoidBottom = useToastAvoidBottom(toasts.length > 0)
   if (toasts.length === 0) return null
   return (
     <div
-      className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-full max-w-sm flex-col gap-2"
+      className="pointer-events-none fixed right-4 z-[100] flex w-[min(20rem,calc(100vw-2rem))] flex-col gap-1.5"
+      style={{
+        bottom: avoidBottom != null ? `${avoidBottom}px` : 'var(--toast-bottom-inset, 1rem)',
+      }}
       aria-live="polite"
       aria-relevant="additions text"
       aria-atomic="false"
@@ -237,7 +286,7 @@ export function ToastHost({
           key={t.id}
           role={t.tone === 'error' ? 'alert' : 'status'}
           className={clsx(
-            'pointer-events-auto flex items-start gap-2 rounded-xl border px-3 py-2 shadow-lg backdrop-blur',
+            'pointer-events-auto flex items-start gap-2 rounded-xl border px-2.5 py-1.5 shadow-lg backdrop-blur',
             t.tone === 'error' && 'border-rose-200 bg-rose-50 text-rose-900',
             t.tone === 'success' && 'border-emerald-200 bg-emerald-50 text-emerald-900',
             t.tone === 'info' && 'border-ink-200 bg-white text-ink-900',
@@ -251,7 +300,9 @@ export function ToastHost({
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
           )}
           <div className="min-w-0 flex-1">
-            <div className="break-words text-sm">{t.message}</div>
+            <div className="line-clamp-4 break-words text-[13px] leading-snug" title={t.message}>
+              {t.message}
+            </div>
             {t.actionLabel && t.onAction ? (
               <button
                 type="button"

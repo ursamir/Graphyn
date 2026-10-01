@@ -21,12 +21,12 @@ optional_dependencies = [
 node_types = ["segmenter"]
 
 [config_schema.segmenter]
-mode = {  type = "string", title = "Mode", default = "fixed", description = "Operating mode. One of: fixed, silence, vad, event, speaker_turn.", enum = ["fixed", "silence", "vad", "event", "speaker_turn"]  }
-window_ms = { type = "integer", title = "Window (ms)", default = 1000, description = "Segment/window length in milliseconds." }
-overlap = { type = "number", title = "Overlap", default = 0.0, description = "Fractional overlap between consecutive windows in [0, 1)." }
-vad_aggressiveness = { type = "integer", title = "VAD aggressiveness", default = 2, description = "WebRTC VAD aggressiveness 0–3 (higher = more aggressive speech filtering)." }
-silence_threshold_db = { type = "number", title = "Silence threshold (dB)", default = 40.0, description = "Silence detection threshold in dB (higher = more audio treated as silence)." }
-event_threshold_db = { type = "number", title = "Event threshold (dB)", default = -30.0, description = "Energy threshold in dB for event-mode onset detection." }
-event_min_gap_ms = { type = "integer", title = "Event min gap (ms)", default = 200, description = "Minimum gap between events before they are split (milliseconds)." }
-min_segment_ms = { type = "integer", title = "Min segment (ms)", default = 100, description = "Discard or merge segments shorter than this (milliseconds)." }
-max_segment_ms = { type = "integer", title = "Max segment (ms)", default = 30000, description = "Hard cap on segment length (milliseconds); longer spans are split." }
+mode = {  type = "string", title = "Mode", default = "fixed", description = "Operating mode. fixed = sliding windows; silence = split on silence (librosa.effects.split, may emit several segments per clip); vad = WebRTC VAD (falls back to silence when webrtcvad is missing); event = energy onsets; speaker_turn = metadata.speaker_segments (falls back to silence).", enum = ["fixed", "silence", "vad", "event", "speaker_turn"]  }
+window_ms = { type = "integer", title = "Window (ms)", default = 1000, minimum = 1, description = "Window length in milliseconds (fixed mode). Clips shorter than one window are emitted whole.", ui = { visible_if = { mode = "fixed" } } }
+overlap = { type = "number", title = "Overlap", default = 0.0, minimum = 0, exclusiveMaximum = 1, description = "Fractional overlap in [0, 1). fixed: window overlap; silence/vad: each segment end is extended by this fraction of its length.", ui = { visible_if = { mode = ["fixed", "silence", "vad"] } } }
+vad_aggressiveness = { type = "integer", title = "VAD aggressiveness", default = 2, minimum = 0, maximum = 3, description = "WebRTC VAD aggressiveness 0–3 (higher = more aggressive speech filtering).", ui = { visible_if = { mode = "vad" } } }
+silence_threshold_db = { type = "number", title = "Silence threshold (dB below peak)", default = 40.0, exclusiveMinimum = 0, maximum = 120, description = "librosa top_db: frames quieter than (peak - this) dB are silence. Higher = less audio treated as silence. Used by silence mode and the vad/speaker_turn fallbacks.", ui = { visible_if = { mode = ["silence", "vad", "speaker_turn"] } } }
+event_threshold_db = { type = "number", title = "Event threshold (dB re peak)", default = -30.0, maximum = 0, description = "Event mode: frames whose RMS is at least this many dB relative to the clip's loudest frame (<= 0) are active.", ui = { visible_if = { mode = "event" } } }
+event_min_gap_ms = { type = "integer", title = "Event min gap (ms)", default = 200, minimum = 1, description = "Event mode: an event ends after this much continuous inactivity (milliseconds).", ui = { visible_if = { mode = "event" } } }
+min_segment_ms = { type = "integer", title = "Min segment (ms)", default = 100, minimum = 1, description = "Discard segments shorter than this (milliseconds). Must be < max_segment_ms." }
+max_segment_ms = { type = "integer", title = "Max segment (ms)", default = 30000, minimum = 1, description = "Hard cap on segment length (milliseconds); longer spans are split into max-length chunks (a trailing chunk shorter than min_segment_ms is dropped)." }

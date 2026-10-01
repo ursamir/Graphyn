@@ -2,6 +2,7 @@
   "schema_version": "1.2",
   "metadata": {
     "name": "call-analytics",
+    "title": "Call analytics (local Whisper + heuristic extract)",
     "seed": 42,
     "description": "Call analytics: local_whisper ASR \u2192 PII redact \u2192 local_heuristic extract \u2192 eval_gate \u2192 httpbin webhook. Free local E2E.",
     "created_at": null,

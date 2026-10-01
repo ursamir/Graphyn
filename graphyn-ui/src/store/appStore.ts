@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { GraphIR, NodeCatalogEntry } from '../types/graph'
 import { paths } from '../routes/paths'
 import { navigatePath, parsePathname } from '../routes/parsePath'
+import { isWorkspaceKnownValid } from '../lib/workspaceValidity'
 
 export type AppView =
   | 'builder'
@@ -60,13 +61,30 @@ function clearToastTimer(id: string) {
 
 const ACTIVE_PROJECT_KEY = 'graphyn.activeProject'
 
+/**
+ * Persist the active workspace. Only ids App has validated against the API
+ * (`lib/workspaceValidity`) are written — `/workspaces/does-not-exist` must
+ * never become the remembered workspace. App calls `commitActiveProject` once
+ * validation succeeds for an id that was set before it was known.
+ */
 function persistActiveProject(name: string | null) {
   try {
-    if (name && name.trim()) localStorage.setItem(ACTIVE_PROJECT_KEY, name.trim())
-    else localStorage.removeItem(ACTIVE_PROJECT_KEY)
+    if (name && name.trim()) {
+      if (isWorkspaceKnownValid(name)) localStorage.setItem(ACTIVE_PROJECT_KEY, name.trim())
+    } else localStorage.removeItem(ACTIVE_PROJECT_KEY)
   } catch {
     /* ignore quota / private mode */
   }
+}
+
+/** Drop the remembered workspace (it no longer exists and there is no valid fallback). */
+export function forgetPersistedActiveProject() {
+  persistActiveProject(null)
+}
+
+/** Write `name` as the remembered workspace if it is (still) the active one and validated. */
+export function commitActiveProject(name: string) {
+  if (useAppStore.getState().activeProject === name) persistActiveProject(name)
 }
 
 /** Detail panel on the Run page (Prefect-style tabs on one surface). */
@@ -124,6 +142,10 @@ interface AppState {
   setStatusMessage: (msg: string | null) => void
   runOutcome: RunOutcome
   setRunOutcome: (outcome: RunOutcome) => void
+  /** Run id `runOutcome` describes (the lastRunId when it was set). The header
+   *  ignores `runOutcome` for any other run — openRun() moves lastRunId without
+   *  touching the outcome, which used to paint one run's dot on another. */
+  runOutcomeRunId: string | null
   toasts: Toast[]
   pushToast: (message: string, tone?: ToastTone, opts?: PushToastOpts) => void
   dismissToast: (id: string) => void
@@ -173,10 +195,31 @@ function panelPathSegment(
   return panel
 }
 
-/** Workspace id from the address bar. localStorage is not a source of truth. */
+/** Last workspace the user had open (cleared by Switch / the Workspaces picker). */
+export function readPersistedActiveProject(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_PROJECT_KEY)?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Workspace id from the address bar. On a *global* route (Templates, Library,
+ * Admin, Agent inbox, …) the URL carries no workspace, so a cold load of
+ * `/templates` used to show "No workspace open" even though one was open a
+ * moment ago. There we resume the last active workspace from localStorage;
+ * App validates it against `GET /projects` on boot and clears it if it was
+ * deleted. `/workspaces` (the picker) and `/` never resume.
+ */
 function readInitialProject(): string | null {
   if (typeof window === 'undefined') return null
-  return parsePathname(window.location.pathname, window.location.search).workspaceId ?? null
+  const { pathname, search } = window.location
+  const fromUrl = parsePathname(pathname, search).workspaceId
+  if (fromUrl) return fromUrl
+  const first = pathname.split('/').filter(Boolean)[0]
+  if (!first || first === 'workspaces' || first === 'login') return null
+  return readPersistedActiveProject()
 }
 
 function readInitialView(): AppView {
@@ -395,11 +438,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   setIsRunning: (isRunning) => set({ isRunning }),
   lastRunId: null,
   lastRunProject: null,
-  setLastRunId: (lastRunId) => set({ lastRunId, lastRunProject: lastRunId ? get().activeProject : null }),
+  setLastRunId: (lastRunId) =>
+    set((s) => ({
+      lastRunId,
+      lastRunProject: lastRunId ? s.activeProject : null,
+      // Editor sets 'running' before the run id arrives — carry it onto the new id.
+      runOutcomeRunId: s.isRunning || s.runOutcome === 'running' ? lastRunId : s.runOutcomeRunId,
+    })),
   statusMessage: null,
   setStatusMessage: (statusMessage) => set({ statusMessage }),
   runOutcome: 'idle',
-  setRunOutcome: (runOutcome) => set({ runOutcome }),
+  runOutcomeRunId: null,
+  setRunOutcome: (runOutcome) => set((s) => ({ runOutcome, runOutcomeRunId: s.lastRunId })),
   toasts: [],
   pushToast: (message, tone = 'info', opts) => {
     const id = crypto.randomUUID()

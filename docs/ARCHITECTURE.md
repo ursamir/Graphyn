@@ -189,13 +189,13 @@ sdk.py
 
 api/main.py
   ├── initialize_registry()              ← explicit startup call
-  ├── register_audio_serializer()        ← domain serializer registration
+  ├── register_audio_serializer() / register_dataset_serializer() / register_file_tree_serializer()
   └── api/routers/*.py
         └── sdk.py (Pipeline, PipelineNode)
 
 mcp/server.py
   ├── initialize_registry()              ← explicit startup call
-  ├── register_audio_serializer()        ← domain serializer registration
+  ├── register_audio_serializer() / register_dataset_serializer() / register_file_tree_serializer()
   └── mcp/tool_registry.py
         └── mcp/handlers/*.py
               └── runtime_backend.py (get_backend().execute())
@@ -203,7 +203,7 @@ mcp/server.py
 
 cli/main.py
   ├── initialize_registry()              ← explicit startup call
-  ├── register_audio_serializer()        ← domain serializer registration
+  ├── register_audio_serializer() / register_dataset_serializer() / register_file_tree_serializer()
   └── sdk.py (Pipeline.from_json, Pipeline.from_yaml)
   └── runtime_backend.py (get_backend().execute())
   └── registry_runtime.py (resolve_capability)  ← inspect command
@@ -283,38 +283,47 @@ User Input (IR JSON / SDK nodes)
 ```
 Node produces output
          │
+         ├── port values
+         │        │
+         │        ▼
+         │   run_manager.register_artifact(…, data=port_value)
+         │
+         └── optional path side-effects
+                  │
+                  ▼
+             Node.publish_files(root, files)   ← generic; no domain formats
+                  │
+                  ▼
+             run_manager.register_artifact(…, artifact_type="file_tree", data=…)
+         │
          ▼
-    run_manager.register_artifact(
-        node_id, node_type, artifact_type, data
-    )
+    ArtifactStore.register()
+         ├── compute SHA-256 content_hash
+         │   └── handler.compute_content_hash_input()  ← via ArtifactSerializerRegistry
+         ├── check index.json for deduplication
+         ├── serialize data to artifacts/{id}/data/
+         │   ├── registered type → handler.serialize()  ← via ArtifactSerializerRegistry
+         │   │   (e.g. "audio_samples" → WAV + manifest.json;
+         │   │    "dataset_artifact" → .npy + manifest.json;
+         │   │    "file_tree" → inventory.json pointing at a jailed root)
+         │   └── unregistered type → data.json (JSON fallback)
+         ├── write artifacts/{id}/record.json (ArtifactRecord)
+         └── update artifacts/index.json
          │
-         ├── ArtifactStore.register()
-         │   ├── compute SHA-256 content_hash
-         │   │   └── handler.compute_content_hash_input()  ← via ArtifactSerializerRegistry
-         │   ├── check index.json for deduplication
-         │   ├── serialize data to artifacts/{id}/data/
-         │   │   ├── registered type → handler.serialize()  ← via ArtifactSerializerRegistry
-         │   │   │   (e.g. "audio_samples" → AudioSampleHandler → WAV + manifest.json)
-         │   │   └── unregistered type → data.json (JSON fallback)
-         │   ├── write artifacts/{id}/record.json (ArtifactRecord)
-         │   └── update artifacts/index.json
-         │
-         └── ProvenanceStore.record()
-             ├── write provenance/{artifact_id}.json (ProvenanceRecord)
-             └── append to provenance/by_run/{run_id}.json
+         ▼
+    ProvenanceStore.record() …
          │
          ▼
     ArtifactRecord returned
-    (artifact_id, content_hash, artifact_type, node_id, run_id, data_path)
          │
          ▼
-    Later: ProvenanceStore.get_lineage(artifact_id)
-    ├── load provenance/{artifact_id}.json
-    ├── recursively resolve input_artifact_ids
-    └── return tree dict (never raises — error nodes for missing records)
+    Listing (GET /runs/{id}/outputs):
+         ├── run journal files (graph/meta/logs)
+         └── for each ArtifactRecord: handler.list_files(data_dir)
+             (None → shallow generic fallback of that data_dir only)
 ```
 
-**ArtifactSerializerRegistry** is the indirection layer that keeps platform infrastructure free of domain knowledge. At startup, `register_audio_serializer()` registers `AudioSampleHandler` for `"audio_samples"`. The registry is fail-open: unregistered types fall back to JSON serialization.
+**ArtifactSerializerRegistry** is the indirection layer that keeps platform infrastructure free of domain knowledge. At startup, `register_audio_serializer()`, `register_dataset_serializer()`, and `register_file_tree_serializer()` register handlers for `"audio_samples"`, `"dataset_artifact"`, and the platform-generic `"file_tree"`. Handlers may implement optional `list_files(src_dir) → FileListing` so run-output listing never parses domain inventories (`labels.csv`, …) in core. The registry is fail-open: unregistered types fall back to JSON, and that fallback writes ndarrays as sibling `.npy` files instead of `.tolist()`.
 
 ---
 
@@ -378,9 +387,8 @@ Application startup (API / CLI / MCP)
          │               ├── DependencyChecker.verify()
          │               └── import entry_points → register node types
          │
-         └── register_audio_serializer()        ← domain serializer registration
-             (app/models/audio_artifact_serializer.py)
-             └── ArtifactSerializerRegistry.register("audio_samples", AudioSampleHandler())
+         └── register_audio_serializer() / register_dataset_serializer() / register_file_tree_serializer()
+             └── ArtifactSerializerRegistry.register("audio_samples" | "dataset_artifact" | "file_tree", …)
 
     For each Node subclass found:
     ├── derive node_type (explicit or PascalCase → snake_case)

@@ -3,12 +3,22 @@
 Bounded Context:  REST API Layer helpers
 Responsibility:   Path-jailed discovery and download of pipeline output files.
 Owns:             Jail roots, allow-list, listing run outputs, zip packing.
-Public Surface:   list_run_output_files (entries may include node_id), resolve_download_path,
+Public Surface:   list_run_output_files (entries may include node_id),
+                  list_run_output_files_detail (items + per-node truncation +
+                  inputs_by_node; prioritised, per-node-fair 400 cap),
+                  list_node_output_files (page one node's files),
+                  is_project_metadata_path, resolve_download_path,
+                  natural_sort_key (listing order: digit runs compared numerically),
                   pack_outputs_zip, OutputPathError, ALLOWED_SUFFIXES.
 Must NOT:         Serve files outside project_dir, graphyn_home, or repo examples/,
                   nor config/secret files inside them (webhooks.json, plugin
-                  registry, credentials/secrets/audit dirs, *.sqlite, dotfiles).
-Dependencies:     stdlib, app.core.config, app.core.templates.example_templates.
+                  registry, credentials/secrets/audit dirs, *.sqlite, dotfiles);
+                  must not attribute ProjectManager-owned project metadata
+                  (project.json, spec.md, pipelines/, …) to a run's nodes;
+                  must not rediscover domain trees (labels.csv walks, …) —
+                  listing uses ArtifactStore + ArtifactTypeHandler.list_files.
+Dependencies:     stdlib, app.core.config, app.core.templates.example_templates,
+                  app.core.runs.outputs_index, app.core.artifacts.artifact_serializer.
 Reason To Change: New output locations, allow-list, or listing sources.
 """
 from __future__ import annotations
@@ -16,11 +26,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import zipfile
 from pathlib import Path
 from typing import Any, Iterable
 
-from app.core.config import artifacts_dir, graphyn_home, project_dir
+from app.core.config import artifacts_dir, datasets_output_dir, graphyn_home, project_dir
 from app.core.templates.example_templates import examples_dir, repo_root
 
 LEGACY_EXAMPLE_OUTPUT = "examples/06_speech_commands_e2e/output"
@@ -71,6 +82,99 @@ _MAX_DATASET_WAVS = 3
 _MAX_DATASET_DEPTH = 3  # dataset / <name> / v1 / train|val|test
 
 _MAX_LISTED_FILES = 400
+# Candidates gathered before prioritised selection trims to _MAX_LISTED_FILES.
+_MAX_CANDIDATES = 5000
+# Share of the cap reserved (at most) for model / metrics / small summary files.
+_KEY_FILE_SHARE = 0.5
+_KEY_FILE_SUFFIXES = frozenset({".tflite", ".keras", ".onnx", ".h5", ".pt", ".pth", ".zip"})
+_SUMMARY_SUFFIXES = frozenset({".json", ".md", ".txt", ".csv", ".png", ".jpg", ".jpeg", ".svg"})
+_SUMMARY_MAX_BYTES = 1024 * 1024
+# Per-tree audio sample budget during listing walks. Preprocess exporters write
+# thousands of wavs; collecting them all for a 400-cap list burned seconds and
+# starved other nodes of slots. Full totals still come from a cheap count.
+_MAX_AUDIO_SAMPLES_PER_TREE = 16
+# Config keys a *source* node (no incoming edges) reads its input from.
+_INPUT_PATH_KEYS = ("path", "data_dir")
+# Hard cap when counting / paging a single node's files (``?node_id=``).
+_MAX_NODE_SCAN = 50_000
+# ArtifactStore often serialises whole tensors into data.json (hundreds of MB).
+# Path extraction must not json.loads those; listing omits them as downloads.
+_MAX_DATA_JSON_PARSE_BYTES = 2 * 1024 * 1024
+_MAX_DATA_JSON_LIST_BYTES = 8 * 1024 * 1024
+
+# Files / dirs at the top of datasets/output/<project>/ that belong to the
+# ProjectManager (not to any pipeline node). The audio_exporter writes its
+# version dir (v1/…) into the same folder, so walks of that folder must skip
+# these or a run would "own" the whole project.
+_PROJECT_META_NAMES = frozenset(
+    {
+        "project.json",
+        "spec.md",
+        "taxonomy.json",
+        "contract.json",
+        "links.json",
+        "environments.json",
+        "quality_report.json",
+        "curation_decisions.json",
+        "lineage.json",
+        "pipelines",
+        "snapshots",
+        "versions",
+    }
+)
+_PROJECT_META_PREFIXES = ("annotations", "curation")
+_PROJECT_META_SUFFIXES = (".lock", ".tmp", ".bak", ".partial")
+
+
+_NATURAL_SPLIT_RE = re.compile(r"(\d+)")
+
+
+def natural_sort_key(name: str | Path) -> tuple[Any, ...]:
+    """Sort key comparing digit runs numerically (``2.wav`` < ``10.wav``).
+
+    Used for every directory walk in this module so per-node truncation keeps
+    the *first* N files a human expects (0, 1, 2, …) instead of the
+    lexicographic 0, 1, 10, 100, ….
+    """
+    text = name.name if isinstance(name, Path) else str(name)
+    parts = _NATURAL_SPLIT_RE.split(text)
+    key: list[Any] = []
+    for i, part in enumerate(parts):
+        if i % 2:
+            key.append((0, int(part), part))
+        else:
+            key.append((1, part.lower(), part))
+    return tuple(key)
+
+
+def is_project_metadata_path(path: Path) -> bool:
+    """True when ``path`` is ProjectManager-owned metadata (or the project dir).
+
+    Only applies under ``datasets/output/<project>/`` when that folder holds a
+    ``project.json``; everything else returns False.
+    """
+    try:
+        resolved = path.resolve()
+        base = datasets_output_dir().resolve()
+        if not resolved.is_relative_to(base):
+            return False
+        parts = resolved.relative_to(base).parts
+    except (OSError, ValueError):
+        return False
+    if not parts:
+        return True
+    if not (base / parts[0] / "project.json").is_file():
+        return False
+    if len(parts) == 1:
+        return True  # the project folder itself — not a node output
+    top = parts[1].lower()
+    if top in _PROJECT_META_NAMES or top.startswith("."):
+        return True
+    if top.startswith(_PROJECT_META_PREFIXES):
+        return True
+    if any(".tmp" in part.lower() or part.startswith(".") for part in parts[1:]):
+        return True
+    return resolved.name.lower().endswith(_PROJECT_META_SUFFIXES)
 _MAX_ZIP_BYTES = 512 * 1024 * 1024
 
 
@@ -88,7 +192,25 @@ def _has_dotdot(raw: str) -> bool:
     return any(part == ".." for part in Path(normalized).parts) or "/../" in f"/{normalized}/"
 
 
+_JAIL_ROOTS_CACHE: tuple[tuple[str, str, str], tuple[Path, ...]] | None = None
+
+
 def jail_roots() -> list[Path]:
+    """Jail roots for download / listing checks.
+
+    Cached for the current ``GRAPHYN_PROJECT_DIR`` / ``GRAPHYN_HOME`` /
+    examples root — a preprocess outputs listing previously called this
+    ~16k times (resolve × 3 each).
+    """
+    global _JAIL_ROOTS_CACHE
+    key = (
+        os.environ.get("GRAPHYN_PROJECT_DIR", ""),
+        os.environ.get("GRAPHYN_HOME", ""),
+        os.environ.get("GRAPHYN_EXAMPLES_DIR", ""),
+    )
+    cached = _JAIL_ROOTS_CACHE
+    if cached is not None and cached[0] == key:
+        return list(cached[1])
     roots: list[Path] = []
     for candidate in (project_dir(), graphyn_home(), examples_dir()):
         try:
@@ -98,11 +220,12 @@ def jail_roots() -> list[Path]:
     seen: set[str] = set()
     unique: list[Path] = []
     for root in roots:
-        key = str(root)
-        if key not in seen:
-            seen.add(key)
+        s = str(root)
+        if s not in seen:
+            seen.add(s)
             unique.append(root)
-    return unique
+    _JAIL_ROOTS_CACHE = (key, tuple(unique))
+    return list(unique)
 
 
 def is_under_jail(resolved: Path) -> bool:
@@ -119,6 +242,15 @@ def _allowed_file(path: Path) -> bool:
     if not path.is_file():
         return False
     suffix = path.suffix.lower()
+    # ArtifactStore data.json often holds dumped tensors (hundreds of MB). Those
+    # are not console downloadables — listing them invited 20 s UI stalls when
+    # path-scanning tried to parse the whole file.
+    if path.name.lower() == "data.json":
+        try:
+            if path.stat().st_size > _MAX_DATA_JSON_LIST_BYTES:
+                return False
+        except OSError:
+            return False
     if suffix in ALLOWED_SUFFIXES:
         return True
     parent = path.parent.name.lower()
@@ -272,7 +404,14 @@ def resolve_download_path(raw: str) -> Path:
     raise OutputPathError(403, "Path is outside allowed directories")
 
 
-def _walk_allowed_files(root: Path, *, limit: int, this_run_id: str | None = None) -> list[Path]:
+def _walk_allowed_files(
+    root: Path,
+    *,
+    limit: int,
+    this_run_id: str | None = None,
+    stats: dict[str, int] | None = None,
+    audio_cap: int | None = _MAX_AUDIO_SAMPLES_PER_TREE,
+) -> list[Path]:
     found: list[Path] = []
     if not root.exists() or limit <= 0:
         return found
@@ -292,21 +431,33 @@ def _walk_allowed_files(root: Path, *, limit: int, this_run_id: str | None = Non
         return found
     if not is_under_jail(resolved_root):
         return found
+    _ = jail_roots()
+    audio_kept = 0
+    audio_seen = 0
     for dirpath, dirnames, filenames in os.walk(resolved_root):
         dirnames[:] = sorted(
-            d
-            for d in dirnames
-            if d not in _SKIP_DIR_NAMES
-            and d not in _SKIP_HEAVY_DIR_NAMES
-            and not d.startswith(".")
+            (
+                d
+                for d in dirnames
+                if d not in _SKIP_DIR_NAMES
+                and d not in _SKIP_HEAVY_DIR_NAMES
+                and not d.startswith(".")
+            ),
+            key=natural_sort_key,
         )
         if this_run_id:
             base = Path(dirpath)
             if base.name == "runs":
                 dirnames[:] = [d for d in dirnames if d == this_run_id]
-        for name in sorted(filenames):
+        for name in sorted(filenames, key=natural_sort_key):
             if name.startswith("."):
                 continue
+            suffix = Path(name).suffix.lower()
+            is_audio = suffix in _DATASET_AUDIO_SUFFIXES
+            if is_audio:
+                audio_seen += 1
+                if audio_cap is not None and audio_kept >= audio_cap:
+                    continue
             child = Path(dirpath) / name
             try:
                 resolved = child.resolve()
@@ -316,8 +467,14 @@ def _walk_allowed_files(root: Path, *, limit: int, this_run_id: str | None = Non
                 continue
             if _allowed_file(resolved):
                 found.append(resolved)
+                if is_audio:
+                    audio_kept += 1
                 if len(found) >= limit:
+                    if stats is not None and audio_seen:
+                        stats["audio_seen"] = stats.get("audio_seen", 0) + audio_seen
                     return found
+    if stats is not None and audio_seen:
+        stats["audio_seen"] = stats.get("audio_seen", 0) + audio_seen
     return found
 
 
@@ -377,7 +534,8 @@ def _summarize_dataset_tree(root: Path, *, limit: int) -> list[Path]:
     wav_count = 0
     for dirpath, dirnames, filenames in os.walk(resolved_root):
         dirnames[:] = sorted(
-            d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")
+            (d for d in dirnames if d not in _SKIP_DIR_NAMES and not d.startswith(".")),
+            key=natural_sort_key,
         )
         base = Path(dirpath)
         depth = _dataset_depth(base)
@@ -395,7 +553,7 @@ def _summarize_dataset_tree(root: Path, *, limit: int) -> list[Path]:
                     dir_count += 1
                 else:
                     return found
-        for name in sorted(filenames):
+        for name in sorted(filenames, key=natural_sort_key):
             if name.startswith("."):
                 continue
             child = base / name
@@ -412,13 +570,19 @@ def _summarize_dataset_tree(root: Path, *, limit: int) -> list[Path]:
 
 
 def _collect_listed_paths(
-    root: Path, *, limit: int, this_run_id: str | None = None
+    root: Path,
+    *,
+    limit: int,
+    this_run_id: str | None = None,
+    stats: dict[str, int] | None = None,
 ) -> list[Path]:
     if limit <= 0:
         return []
     if _path_has_dataset_segment(root):
         return _summarize_dataset_tree(root, limit=limit)
-    return _walk_allowed_files(root, limit=limit, this_run_id=this_run_id)
+    return _walk_allowed_files(
+        root, limit=limit, this_run_id=this_run_id, stats=stats
+    )
 
 
 # Basename / dirname → node_id substrings (shared run dirs lack per-node folders).
@@ -535,25 +699,37 @@ def _artifact_skip_path_keys(node_id: str) -> frozenset[str]:
 
 
 def _load_data_json_paths(data_root: Path, *, node_id: str = "") -> list[str]:
-    """Read path refs from an ArtifactStore data dir (or data.json file)."""
+    """Read path refs from an ArtifactStore data dir (manifest.json or data.json).
+
+    Prefers the small ``manifest.json`` written by typed serializers
+    (``audio_samples``, ``dataset_artifact``). Legacy tensor dumps in
+    ``data.json`` larger than ``_MAX_DATA_JSON_PARSE_BYTES`` are skipped — those
+    belong in ``.npy`` via DatasetArtifactHandler, not JSON.
+    """
     candidates: list[Path] = []
     try:
         resolved = data_root.resolve()
     except OSError:
         return []
-    if resolved.is_file() and resolved.name == "data.json":
+    if resolved.is_file() and resolved.name in {"data.json", "manifest.json"}:
         candidates.append(resolved)
     elif resolved.is_dir():
+        # Typed handlers write manifest.json; generic fallback still uses data.json.
+        candidates.append(resolved / "manifest.json")
         candidates.append(resolved / "data.json")
     skip = _artifact_skip_path_keys(node_id)
     for path in candidates:
         if not path.is_file():
             continue
         try:
+            if path.stat().st_size > _MAX_DATA_JSON_PARSE_BYTES:
+                continue
             raw = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
-        return _path_strings_from_json(raw, skip_keys=skip)
+        found = _path_strings_from_json(raw, skip_keys=skip)
+        if found:
+            return found
     return []
 
 
@@ -610,7 +786,11 @@ _MAX_AUDIO_SAMPLES_LISTED = 8
 
 
 def _collect_artifact_data_dir(
-    root: Path, *, limit: int, this_run_id: str | None = None
+    root: Path,
+    *,
+    limit: int,
+    this_run_id: str | None = None,
+    stats: dict[str, int] | None = None,
 ) -> list[Path]:
     """List an ArtifactStore data/ dir; summarize large audio-sample dumps."""
     if limit <= 0:
@@ -624,7 +804,7 @@ def _collect_artifact_data_dir(
     audio_files: list[Path] = []
     other: list[Path] = []
     try:
-        for child in sorted(resolved.iterdir()):
+        for child in sorted(resolved.iterdir(), key=natural_sort_key):
             if not child.is_file() or child.name.startswith("."):
                 continue
             if child.suffix.lower() in _DATASET_AUDIO_SUFFIXES:
@@ -635,6 +815,8 @@ def _collect_artifact_data_dir(
         return _collect_listed_paths(root, limit=limit, this_run_id=this_run_id)
     if len(audio_files) <= _MAX_AUDIO_SAMPLES_LISTED:
         return _collect_listed_paths(root, limit=limit, this_run_id=this_run_id)
+    if stats is not None:
+        stats["total"] = stats.get("total", 0) + len(audio_files) + len(other)
     # Prefer manifest/meta + a few sample clips so the run cap stays usable.
     preferred = [
         p
@@ -712,21 +894,49 @@ def _looks_like_output_path(key: str, value: str) -> bool:
     return suffix in ALLOWED_SUFFIXES
 
 
-def _output_paths_from_graph(graph: dict[str, Any]) -> list[Path]:
+_VERSION_TAG_RE = re.compile(r"^v\d+(\.\d+)*$")
+
+
+def _node_config_output_paths(config: dict[str, Any]) -> list[str]:
+    """Output path strings a node config points at.
+
+    Version-stamping exporters (``version_tag`` + ``output_dir``/``project``)
+    write only ``<output_dir>/<version_tag>/``; the parent is the
+    ProjectManager project folder, so report the version dir instead.
+    """
+    version_tag = str(config.get("version_tag") or "").strip()
+    if version_tag and _VERSION_TAG_RE.match(version_tag):
+        project = str(config.get("project") or "").strip()
+        if project:
+            return [f"workspace/datasets/output/{project}/{version_tag}"]
+        out_dir = config.get("output_dir")
+        if isinstance(out_dir, str) and out_dir.strip():
+            return [f"{out_dir.rstrip('/')}/{version_tag}"]
+    found: list[str] = []
+    for key in ("output_path", "model_path", "output_dir", "path", "root"):
+        value = config.get(key)
+        if isinstance(value, str) and value.strip() and _looks_like_output_path(key, value):
+            found.append(value)
+    return found
+
+
+def _output_paths_from_graph(graph: dict[str, Any], *, skip: Any = None) -> list[Path]:
     found: list[Path] = []
     nodes = graph.get("nodes") or []
     if not isinstance(nodes, list):
         return found
-    for node in nodes:
+    for i, node in enumerate(nodes):
         if not isinstance(node, dict):
             continue
         config = node.get("config") or {}
         if not isinstance(config, dict):
             continue
-        for key in ("output_path", "model_path", "output_dir", "path", "root"):
-            value = config.get(key)
-            if isinstance(value, str) and value.strip() and _looks_like_output_path(key, value):
-                found.append(Path(value))
+        node_id = str(node.get("id") or f"{node.get('type', 'node')}_{i}").strip()
+        found.extend(
+            Path(v)
+            for v in _node_config_output_paths(config)
+            if skip is None or not skip(node_id, v)
+        )
     return found
 
 
@@ -797,29 +1007,94 @@ def _stamp_path_tree(
     *,
     limit: int = 200,
 ) -> None:
-    """Record node_id for root and allowed files under it (no overwrite)."""
+    """Record node_id for ``root`` (files under it are attributed in ``_add_paths``).
+
+    Previously walked up to ``limit`` files under every output root; on Example 06
+    preprocess that re-scanned thousands of wavs for no listing benefit.
+    """
     if not node_id:
         return
     try:
         resolved = root.resolve()
     except OSError:
         return
-    key = str(resolved)
-    attribution.setdefault(key, node_id)
-    if resolved.is_file():
-        return
-    if not resolved.is_dir():
-        return
-    n = 0
-    for child in _walk_allowed_files(resolved, limit=limit):
-        attribution.setdefault(str(child.resolve()), node_id)
-        n += 1
-        if n >= limit:
-            break
+    attribution.setdefault(str(resolved), node_id)
+    # ``limit`` kept for call-site compatibility; walking is intentionally skipped.
+    _ = limit
 
 
-def _graph_node_output_paths(graph: dict[str, Any]) -> list[tuple[str, Path]]:
-    """(node_id, output path) pairs from graph config for attribution."""
+def _name_looks_allowed(name: str) -> bool:
+    """Suffix-only allow check for fast counting (no stat / resolve)."""
+    if name.startswith("."):
+        return False
+    lower = name.lower()
+    if lower == "data.json":
+        return True
+    suffix = Path(name).suffix.lower()
+    if suffix in ALLOWED_SUFFIXES:
+        return True
+    return lower.startswith("variables.")
+
+
+def _count_allowed_files_fast(
+    roots: Iterable[Path],
+    *,
+    this_run_id: str | None,
+    cap: int,
+) -> int:
+    """Count downloadable files under ``roots`` without per-file resolve/jail.
+
+    Roots are already jail-checked when recorded on the listing context. Used
+    for ``truncated_by_node.total`` so with_meta does not re-materialise every
+    wav path (preprocess exporters: ~3.7k files).
+    """
+    count = 0
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved = root.resolve()
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if resolved.is_file():
+            if _name_looks_allowed(resolved.name) and not is_project_metadata_path(resolved):
+                count += 1
+                if count >= cap:
+                    return count
+            continue
+        if not resolved.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(resolved, followlinks=False):
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d not in _SKIP_DIR_NAMES and not d.startswith(".")
+            ]
+            base_name = os.path.basename(dirpath)
+            if base_name in _PROJECT_META_NAMES:
+                dirnames[:] = []
+                continue
+            if this_run_id and base_name == "runs":
+                dirnames[:] = [d for d in dirnames if d == this_run_id]
+            for name in filenames:
+                if not _name_looks_allowed(name):
+                    continue
+                count += 1
+                if count >= cap:
+                    return count
+    return count
+
+
+def _graph_node_output_paths(
+    graph: dict[str, Any], *, skip: Any = None
+) -> list[tuple[str, Path]]:
+    """(node_id, output path) pairs from graph config for attribution.
+
+    ``skip(node_id, value)`` drops config values that are a node's *input*.
+    """
     found: list[tuple[str, Path]] = []
     nodes = graph.get("nodes") or []
     if not isinstance(nodes, list):
@@ -831,11 +1106,11 @@ def _graph_node_output_paths(graph: dict[str, Any]) -> list[tuple[str, Path]]:
         config = node.get("config") or {}
         if not isinstance(config, dict):
             continue
-        for key in ("output_path", "model_path", "output_dir", "path", "root"):
-            value = config.get(key)
-            if isinstance(value, str) and value.strip() and _looks_like_output_path(key, value):
-                for candidate in _candidate_fs_paths(value):
-                    found.append((node_id, candidate))
+        for value in _node_config_output_paths(config):
+            if skip is not None and skip(node_id, value):
+                continue
+            for candidate in _candidate_fs_paths(value):
+                found.append((node_id, candidate))
     return found
 
 
@@ -867,162 +1142,493 @@ def _run_slug(run_id: str, run_dir: Path, graph: dict[str, Any]) -> str | None:
     return None
 
 
-def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
-    """Collect downloadable files for a run.
+class _ListingContext:
+    """Side information gathered while listing a run's outputs."""
 
-    Sources:
-      (a) journal files under workspace/runs/<run_id>/
-      (b) workspace/artifacts/<slug>/runs/<run_id>/
-      (c) ArtifactRecord paths for this run_id (data dir + path refs inside data.json)
-      (d) latest/ only when the pointer/symlink targets this run_id
-      (e) the stable workspace/artifacts/<slug>/dataset/ tree
-    Does not walk sibling run folders or the whole artifacts tree.
+    def __init__(self) -> None:
+        # node_id -> roots (files / dirs) that node produced
+        self.node_roots: dict[str, list[Path]] = {}
+        # node_id -> known file totals for summarized artifact data dirs
+        self.summarized_totals: dict[str, int] = {}
+        # node_id -> number of pre-existing *input* files that were skipped
+        self.input_counts: dict[str, int] = {}
+        self.capped = False
 
-    Each entry may include ``node_id`` when the file is tied to a node via the
-    artifact store, data.json path refs, graph output_path, or basename hints.
+    def add_root(self, node_id: str | None, root: Path) -> None:
+        if not node_id:
+            return
+        roots = self.node_roots.setdefault(node_id, [])
+        if root not in roots:
+            roots.append(root)
+
+
+
+def _run_started_at(run_dir: Path) -> float | None:
+    """Run start (epoch seconds) from meta.json ``created_at``; None if unknown."""
+    from datetime import datetime
+
+    try:
+        meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    raw = meta.get("created_at") if isinstance(meta, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.fromisoformat(raw.strip().replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+class _InputFilter:
+    """Pre-existing files under a source node's input ``path`` are inputs, not outputs.
+
+    A node with no incoming edges that reads ``path`` / ``data_dir`` (e.g. a
+    dataset ingest) passes its input files downstream; their paths show up in
+    its artifact record and under its config path. Only files written during
+    this run (mtime >= run start) are attributed to it as outputs.
     """
-    from app.core.paths.workspace_paths import ARTIFACTS_PREFIX, artifact_fs_path, artifact_layout, latest_run_id
 
+    def __init__(self, graph: dict[str, Any], run_dir: Path) -> None:
+        self.roots: list[tuple[str, Path]] = []
+        self.values: set[tuple[str, str]] = set()
+        self.started_at = _run_started_at(run_dir)
+        nodes = graph.get("nodes") if isinstance(graph, dict) else None
+        edges = graph.get("edges") if isinstance(graph, dict) else None
+        if not isinstance(nodes, list):
+            return
+        targets = {
+            str(e.get("dst_id") or e.get("target") or "")
+            for e in (edges if isinstance(edges, list) else [])
+            if isinstance(e, dict)
+        }
+        for i, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                continue
+            nid = str(node.get("id") or f"{node.get('type', 'node')}_{i}").strip()
+            if nid in targets:
+                continue
+            config = node.get("config") or {}
+            if not isinstance(config, dict):
+                continue
+            for key in _INPUT_PATH_KEYS:
+                value = config.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                self.values.add((nid, value))
+                for candidate in _candidate_fs_paths(value):
+                    try:
+                        resolved = candidate.resolve()
+                    except OSError:
+                        continue
+                    if resolved.exists() and (nid, resolved) not in self.roots:
+                        self.roots.append((nid, resolved))
+
+    def reads_from(self, tree: Path) -> bool:
+        """True when some input root lies inside (or is) ``tree``."""
+        try:
+            base = tree.resolve()
+        except OSError:
+            return False
+        return any(root == base or base in root.parents for _nid, root in self.roots)
+
+    def is_input_value(self, node_id: str, value: str) -> bool:
+        return (node_id, value) in self.values
+
+    def input_owner(self, resolved: Path) -> str | None:
+        """node_id whose input tree holds this pre-existing file, else None."""
+        if not self.roots:
+            return None
+        owner = None
+        for nid, root in self.roots:
+            if resolved == root or root in resolved.parents:
+                owner = nid
+                break
+        if owner is None:
+            return None
+        if self.started_at is not None:
+            try:
+                if resolved.stat().st_mtime >= self.started_at:
+                    return None  # written by this run
+            except OSError:
+                return None
+        return owner
+
+
+def _is_key_file(path: Path) -> bool:
+    """Models, metrics and other small summary files (listed before bulk outputs)."""
+    suffix = path.suffix.lower()
+    if suffix in _KEY_FILE_SUFFIXES:
+        return True
+    if suffix not in _SUMMARY_SUFFIXES:
+        return False
+    try:
+        return path.is_file() and path.stat().st_size <= _SUMMARY_MAX_BYTES
+    except OSError:
+        return False
+
+
+def _round_robin(groups: list[list[Path]], budget: int) -> list[list[Path]]:
+    """Take one item per group in turn until ``budget`` is spent (fair share)."""
+    picked: list[list[Path]] = [[] for _ in groups]
+    idx = [0] * len(groups)
+    while budget > 0:
+        progressed = False
+        for g, items in enumerate(groups):
+            if budget <= 0:
+                break
+            if idx[g] < len(items):
+                picked[g].append(items[idx[g]])
+                idx[g] += 1
+                budget -= 1
+                progressed = True
+        if not progressed:
+            break
+    return picked
+
+
+def _select_listing(
+    collected: list[Path],
+    node_of: dict[str, str | None],
+    node_order: list[str],
+    run_dir: Path,
+    cap: int,
+) -> list[Path]:
+    """Prioritised, per-node-fair subset of ``collected`` (at most ``cap``).
+
+    Order: run journal files, then model / metrics / small summary files, then
+    bulk files — key and bulk files are each shared round-robin across nodes
+    (graph order, unattributed last), so one node cannot fill the cap.
+    """
+    if len(collected) <= cap:
+        return list(collected)
+    try:
+        run_root = run_dir.resolve()
+    except OSError:
+        run_root = run_dir
+    run_level: list[Path] = []
+    rest: list[Path] = []
+    for path in collected:
+        (run_level if run_root == path or run_root in path.parents else rest).append(path)
+    selected = run_level[:cap]
+    budget = cap - len(selected)
+    if budget <= 0:
+        return selected
+    order = list(node_order)
+    for path in rest:
+        nid = node_of.get(str(path))
+        if nid and nid not in order:
+            order.append(nid)
+    keys: list[str | None] = [*order, None]
+    key_groups: dict[str | None, list[Path]] = {k: [] for k in keys}
+    bulk_groups: dict[str | None, list[Path]] = {k: [] for k in keys}
+    for path in rest:
+        nid = node_of.get(str(path))
+        bucket = key_groups if _is_key_file(path) else bulk_groups
+        bucket.setdefault(nid, []).append(path)
+    key_budget = min(budget, max(1, int(cap * _KEY_FILE_SHARE)))
+    key_pick = _round_robin([key_groups[k] for k in keys], key_budget)
+    for group in key_pick:
+        selected.extend(group)
+    budget = cap - len(selected)
+    # Key files that did not fit their share compete with bulk files.
+    leftovers: list[list[Path]] = []
+    for i, k in enumerate(keys):
+        taken = set(key_pick[i])
+        leftovers.append([p for p in key_groups[k] if p not in taken] + bulk_groups[k])
+    for group in _round_robin(leftovers, budget):
+        selected.extend(group)
+    return selected
+
+
+def _resolve_artifact_data_dir(raw: str) -> Path | None:
+    """Resolve an ArtifactRecord.data_path under the project jail."""
+    text = str(raw or "").replace("\\", "/").strip()
+    if not text:
+        return None
+    path = Path(text)
+    try:
+        if path.is_absolute():
+            resolved = path.resolve()
+        else:
+            rel = text.lstrip("./")
+            if rel.startswith("workspace/"):
+                rel = rel[len("workspace/") :]
+            resolved = (project_dir() / rel).resolve()
+        if not is_under_jail(resolved):
+            return None
+        return resolved
+    except OSError:
+        return None
+
+
+def _shallow_data_dir_files(data_dir: Path, *, limit: int = 64) -> list[Path]:
+    """Generic fallback: files directly in data_dir (no deep walk)."""
+    found: list[Path] = []
+    if not data_dir.is_dir():
+        if data_dir.is_file() and _allowed_file(data_dir):
+            return [data_dir]
+        return found
+    try:
+        children = sorted(data_dir.iterdir(), key=lambda p: natural_sort_key(p.name))
+    except OSError:
+        return found
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        try:
+            resolved = child.resolve()
+        except OSError:
+            continue
+        if not resolved.is_file():
+            continue
+        if not is_under_jail(resolved) or not _allowed_file(resolved):
+            continue
+        found.append(resolved)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def _expand_artifact_entry(
+    entry: dict[str, Any],
+    *,
+    sample_cap: int | None = 32,
+) -> tuple[list[Path], int, str | None]:
+    """Expand one ArtifactStore index entry via handler.list_files (or shallow)."""
+    node_id = str(entry.get("node_id") or "") or None
+    data_dir = _resolve_artifact_data_dir(str(entry.get("data_path") or ""))
+    if data_dir is None:
+        return [], 0, node_id
+
+    artifact_type = str(entry.get("artifact_type") or "")
+    try:
+        from app.core.artifacts.artifact_serializer import get_serializer_registry
+
+        handler = get_serializer_registry().get(artifact_type) if artifact_type else None
+    except Exception:
+        handler = None
+
+    if handler is not None:
+        try:
+            listing = handler.list_files(data_dir)
+        except Exception:
+            listing = None
+        if listing is not None:
+            paths = [e.path for e in listing.entries]
+            if sample_cap is not None:
+                paths = paths[:sample_cap]
+            return paths, int(listing.total), node_id
+
+    # Fail-open: shallow generic listing of the artifact data dir only.
+    files = _shallow_data_dir_files(
+        data_dir, limit=50_000 if sample_cap is None else max(sample_cap, 16)
+    )
+    return files, len(files), node_id
+
+
+def _list_run_outputs(
+    run_id: str, run_dir: Path
+) -> tuple[list[dict[str, Any]], _ListingContext]:
+    """Build the downloadable listing from ArtifactStore inventories.
+
+    Preferred path: ``outputs_index.json`` (ArtifactRecord refs) expanded via
+    ``ArtifactTypeHandler.list_files``. Does not walk domain trees.
+    """
+    from app.core.runs.outputs_index import (
+        artifacts_from_index,
+        ensure_outputs_index,
+    )
+
+    ctx = _ListingContext()
     collected: list[Path] = []
     seen_keys: set[str] = set()
     attribution: dict[str, str] = {}
     node_ids: list[str] = []
 
-    def _add_paths(paths: Iterable[Path], *, node_id: str | None = None) -> None:
+    # Run journal files first (graph / meta / logs).
+    for path in _collect_listed_paths(run_dir, limit=50, this_run_id=run_id):
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        collected.append(resolved)
+
+    index = ensure_outputs_index(run_id, run_dir)
+    for entry in artifacts_from_index(index):
+        paths, total, node_id = _expand_artifact_entry(entry, sample_cap=32)
+        if node_id:
+            ctx.summarized_totals[node_id] = max(
+                ctx.summarized_totals.get(node_id, 0), total
+            )
+            if node_id not in node_ids:
+                node_ids.append(node_id)
+            raw = entry.get("data_path")
+            if isinstance(raw, str):
+                data_dir = _resolve_artifact_data_dir(raw)
+                if data_dir is not None:
+                    ctx.add_root(node_id, data_dir)
+
         for path in paths:
-            if len(collected) >= _MAX_LISTED_FILES:
-                return
             try:
                 resolved = path.resolve()
             except OSError:
+                continue
+            if is_project_metadata_path(resolved):
                 continue
             key = str(resolved)
             if key in seen_keys:
                 if node_id:
                     attribution.setdefault(key, node_id)
                 continue
+            if not is_under_jail(resolved):
+                continue
+            if resolved.is_file() and not _allowed_file(resolved):
+                continue
+            # Skip missing inventory refs (handler may list not-yet-copied paths).
+            if not resolved.exists():
+                continue
             seen_keys.add(key)
             collected.append(resolved)
             if node_id:
                 attribution.setdefault(key, node_id)
 
-    _add_paths(_collect_listed_paths(run_dir, limit=_MAX_LISTED_FILES, this_run_id=run_id))
+        if total > 32:
+            ctx.capped = True
 
-    graph = _load_run_graph(run_dir)
-    for node_id, raw in _graph_node_output_paths(graph):
-        if node_id and node_id not in node_ids:
-            node_ids.append(node_id)
-        remaining = _MAX_LISTED_FILES - len(collected)
-        if remaining <= 0:
-            break
-        batch = _collect_listed_paths(raw, limit=remaining, this_run_id=run_id)
-        stamp_id: str | None = None
-        try:
-            resolved = raw.resolve()
-            name = resolved.name.lower()
-            if name != run_id.lower() and (
-                resolved.is_file() or name not in {run_id.lower(), "runs"}
-            ):
-                stamp_id = node_id
-        except OSError:
-            stamp_id = None
-        _add_paths(batch, node_id=stamp_id)
-        if stamp_id:
-            _stamp_path_tree(attribution, raw, stamp_id)
-
-    slug = _run_slug(run_id, run_dir, graph)
-    if slug:
-        layout = artifact_layout(slug, run_id)
-        remaining = _MAX_LISTED_FILES - len(collected)
-        if remaining > 0:
-            _add_paths(
-                _collect_listed_paths(
-                    artifact_fs_path(layout["run_dir"]),
-                    limit=remaining,
-                    this_run_id=run_id,
-                )
-            )
-        if latest_run_id(slug) == run_id:
-            remaining = _MAX_LISTED_FILES - len(collected)
-            if remaining > 0:
-                _add_paths(
-                    _collect_listed_paths(
-                        artifact_fs_path(layout["latest_dir"]),
-                        limit=remaining,
-                        this_run_id=run_id,
-                    )
-                )
-        remaining = _MAX_LISTED_FILES - len(collected)
-        if remaining > 0:
-            _add_paths(
-                _collect_listed_paths(
-                    artifact_fs_path(f"{ARTIFACTS_PREFIX}/{slug}/dataset"),
-                    limit=remaining,
-                    this_run_id=run_id,
-                )
-            )
-
-    try:
-        from app.core.artifacts.artifact_store import ArtifactStore
-
-        records = list(ArtifactStore().list(run_id=run_id))
-        records.sort(
-            key=lambda r: (
-                _attr_priority(str(getattr(r, "node_id", "") or "")),
-                str(getattr(r, "node_id", "") or ""),
-            )
-        )
-        for record in records:
-            nid = str(getattr(record, "node_id", "") or "").strip()
-            if nid and nid not in node_ids:
-                node_ids.append(nid)
-            for raw in _paths_from_artifact_record(record):
-                remaining = _MAX_LISTED_FILES - len(collected)
-                if remaining <= 0:
-                    break
-                try:
-                    resolved = raw.resolve()
-                    use_audio_cap = (
-                        resolved.is_dir() and resolved.name.lower() == "data"
-                    )
-                except OSError:
-                    use_audio_cap = False
-                if use_audio_cap:
-                    batch = _collect_artifact_data_dir(
-                        raw, limit=remaining, this_run_id=run_id
-                    )
-                else:
-                    batch = _collect_listed_paths(
-                        raw, limit=remaining, this_run_id=run_id
-                    )
-                _add_paths(batch, node_id=nid or None)
-                if nid:
-                    _stamp_path_tree(attribution, raw, nid)
-    except Exception:
-        pass
-
-    for raw in _output_paths_from_graph(graph):
-        bases: list[Path] = []
-        if raw.is_absolute():
-            bases.append(raw)
-        else:
-            bases.extend(_candidate_fs_paths(raw))
-        for candidate in bases:
-            remaining = _MAX_LISTED_FILES - len(collected)
-            if remaining <= 0:
-                break
-            _add_paths(
-                _collect_listed_paths(candidate, limit=remaining, this_run_id=run_id)
-            )
-
-    entries: list[dict[str, Any]] = []
+    node_of: dict[str, str | None] = {}
     for path in collected:
-        key = str(path.resolve())
-        node_id = attribution.get(key)
-        if not node_id:
-            node_id = _hint_node_for_path(path, node_ids)
-        entries.append(file_entry(path, node_id=node_id))
+        key = str(path)
+        node_of[key] = attribution.get(key) or _hint_node_for_path(path, node_ids)
+    graph = _load_run_graph(run_dir)
+    order = [
+        str(n["id"])
+        for n in (graph.get("nodes") or [])
+        if isinstance(n, dict) and n.get("id")
+    ]
+    order.extend(n for n in node_ids if n not in order)
+    selected = _select_listing(collected, node_of, order, run_dir, _MAX_LISTED_FILES)
+    if len(selected) < len(collected):
+        ctx.capped = True
+    entries = [file_entry(path, node_id=node_of.get(str(path))) for path in selected]
+    return entries, ctx
+
+
+def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
+    """Collect downloadable files for a run.
+
+    Sources:
+      (a) journal files under workspace/runs/<run_id>/
+      (b) ArtifactStore records for this run_id, expanded via
+          ``ArtifactTypeHandler.list_files`` (or a shallow data_dir fallback)
+    Does not walk sibling run folders, graph ``output_dir`` trees, or
+    ProjectManager metadata (see :func:`is_project_metadata_path`).
+
+    Each entry may include ``node_id`` from the ArtifactRecord. The list is
+    capped (400 entries) — use :func:`list_run_output_files_detail` for
+    truncation metadata.
+    """
+    entries, _ctx = _list_run_outputs(run_id, run_dir)
     return entries
+
+
+def list_run_output_files_detail(run_id: str, run_dir: Path) -> dict[str, Any]:
+    """Same listing as :func:`list_run_output_files`, plus truncation metadata.
+
+    Returns ``{"items": [...], "truncated": bool, "max_items": int,
+    "truncated_by_node": {node_id: {"shown": n, "total": m}},
+    "inputs_by_node": {node_id: {"total": k}}}``.
+
+    ``total`` comes from handler inventories (``FileListing.total``), not from
+    re-walking trees. Page a node's full list with :func:`list_node_output_files`.
+    """
+    entries, ctx = _list_run_outputs(run_id, run_dir)
+    shown: dict[str, int] = {}
+    for entry in entries:
+        nid = entry.get("node_id")
+        if nid and entry.get("kind") != "dir":
+            shown[nid] = shown.get(nid, 0) + 1
+    truncated_by_node: dict[str, dict[str, int]] = {}
+    for nid, total in ctx.summarized_totals.items():
+        n_shown = shown.get(nid, 0)
+        if total > n_shown:
+            truncated_by_node[nid] = {"shown": n_shown, "total": total}
+    return {
+        "items": entries,
+        "truncated": bool(ctx.capped or truncated_by_node),
+        "max_items": _MAX_LISTED_FILES,
+        "truncated_by_node": truncated_by_node,
+        "inputs_by_node": {nid: {"total": n} for nid, n in ctx.input_counts.items()},
+    }
+
+
+def list_run_outputs_truncated_hint(run_id: str, run_dir: Path) -> tuple[list[dict[str, Any]], bool]:
+    """Cheap listing + whether anything was capped or summarized (no full scan)."""
+    entries, ctx = _list_run_outputs(run_id, run_dir)
+    return entries, bool(ctx.capped or ctx.summarized_totals)
+
+
+def list_node_output_files(
+    run_id: str,
+    run_dir: Path,
+    node_id: str,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Page every downloadable file one node produced in this run.
+
+    Reads ArtifactStore inventories via ``handler.list_files`` — does not
+    re-walk domain trees.
+    """
+    from app.core.runs.outputs_index import artifacts_from_index, ensure_outputs_index
+
+    index = ensure_outputs_index(run_id, run_dir)
+    files: list[Path] = []
+    seen: set[str] = set()
+    for entry in artifacts_from_index(index):
+        if str(entry.get("node_id") or "") != node_id:
+            continue
+        paths, _total, _nid = _expand_artifact_entry(entry, sample_cap=None)
+        for path in paths:
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if not resolved.exists():
+                continue
+            if is_project_metadata_path(resolved):
+                continue
+            if not is_under_jail(resolved):
+                continue
+            if resolved.is_file() and not _allowed_file(resolved):
+                continue
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            files.append(resolved)
+            if len(files) >= _MAX_NODE_SCAN:
+                break
+        if len(files) >= _MAX_NODE_SCAN:
+            break
+
+    files = sorted(files, key=lambda p: (*natural_sort_key(p), str(p)))
+    limit = max(1, min(int(limit), 1000))
+    offset = max(0, int(offset))
+    page = files[offset : offset + limit]
+    return {
+        "node_id": node_id,
+        "items": [file_entry(p, node_id=node_id) for p in page],
+        "total": len(files),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < len(files),
+    }
 
 
 def pack_outputs_zip(entries: list[dict[str, Any]]) -> bytes:

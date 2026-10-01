@@ -1,4 +1,5 @@
 import React from 'react'
+import { ListTodo as EmptyListTodo, Server as EmptyServer } from 'lucide-react'
 import { ExternalLink, RefreshCw, Server, X } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { formatLocaleDateTime, formatRelativeTime } from '../../lib/format'
@@ -235,7 +236,7 @@ export default function WorkersView() {
           {loading && recentRuns.length === 0 ? (
             <LoadingBlock label="Loading recent runs…" />
           ) : recentRuns.length === 0 ? (
-            <EmptyState
+            <EmptyState icon={EmptyListTodo}
               title="No queue listing available"
               description="Use recent run statuses below as a rough proxy once runs exist, or inspect a job by id via the API."
               action={
@@ -285,7 +286,7 @@ export default function WorkersView() {
       ) : loading && workers === null ? (
         <LoadingBlock label="Loading workers…" />
       ) : !workers || workers.length === 0 ? (
-        <EmptyState
+        <EmptyState icon={EmptyServer}
           title="No workers registered"
           description="Mode A needs no workers. For Mode B, set GRAPHYN_BACKEND=distributed on the control plane, start a worker, then refresh."
           action={

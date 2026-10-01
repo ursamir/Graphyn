@@ -7,11 +7,16 @@ Owns:             json_schema_from_toml_fields, overlay_plugin_ui
 Public Surface:   json_schema_from_toml_fields, overlay_plugin_ui
 Must NOT:         Import plugins, execute plugin code, or talk to the API.
 Dependencies:     copy
-Reason To Change: Plugin UI hint keys (widget, enum, title, group) evolve.
+Reason To Change: Plugin UI hint keys (widget, enum, title, group, bounds,
+                  ui.visible_if / ui.depends_on) evolve.
 
 Plugin authors declare fields in plugin.toml. The host is a generic form
 renderer. plugin.toml wins over in-code Pydantic for title, description,
-enum, default, type, widget, group, and items when the plugin sets them.
+enum, default, type, widget, group, items, and JSON Schema bounds
+(minimum / maximum / exclusiveMinimum / exclusiveMaximum / multipleOf /
+minLength / maxLength / pattern / minItems / maxItems) when the plugin sets
+them. A ``ui`` table is passed through whole as ``ui`` (e.g. ``visible_if``,
+``depends_on``) with ``widget`` / ``group`` also flattened.
 """
 from __future__ import annotations
 
@@ -27,9 +32,20 @@ _PROP_KEYS = (
     "widget",
     "minimum",
     "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minItems",
+    "maxItems",
     "format",
     "items",
     "group",
+    # Conditional-display hints may also be declared at the top level.
+    "visible_if",
+    "depends_on",
 )
 
 
@@ -54,6 +70,9 @@ def json_schema_from_toml_fields(fields: dict[str, Any] | None) -> dict[str, Any
                 prop["widget"] = ui["widget"]
             if "group" in ui and "group" not in prop:
                 prop["group"] = ui["group"]
+            # Whole ui table (visible_if, depends_on, placeholder, …) for the
+            # Builder; widget/group stay flattened for older clients.
+            prop["ui"] = copy.deepcopy(ui)
         if prop:
             props[key] = prop
     return {"type": "object", "properties": props}

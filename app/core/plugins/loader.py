@@ -32,7 +32,7 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
@@ -530,7 +530,6 @@ class PluginLoader:
         validation does not ``extra_forbidden`` legitimate knobs.
         """
         from app.core.nodes.base import Node
-        from app.core.nodes.metadata import NodeMetadata, human_node_label
 
         names = list(manifest.node_types or [])
         if not names:
@@ -585,15 +584,8 @@ class PluginLoader:
                         "output_ports": output_ports,
                         "Config": config_cls,
                         "_siso": False,
-                        "metadata": NodeMetadata(
-                            node_type=node_type,
-                            label=human_node_label(node_type),
-                            description=(
-                                f"Isolated plugin node from '{manifest.name}' "
-                                "(executed in a plugin venv worker)"
-                            ),
-                            category="plugin",
-                            version=manifest.version,
+                        "metadata": self._isolated_stub_metadata(
+                            node_type, manifest, spec
                         ),
                         "_graphyn_isolated": True,
                         "_graphyn_plugin_install_path": install_path,
@@ -606,6 +598,50 @@ class PluginLoader:
             new_types = sorted(after - before)
 
         return new_types
+
+    @staticmethod
+    def _isolated_stub_metadata(node_type: str, manifest: PluginManifest, spec: Any) -> Any:
+        """NodeMetadata for an isolated stub, from the plugin's own declaration.
+
+        Label / description / category / tags / capability flags come from the
+        entry point's ``metadata = NodeMetadata(...)`` literal (AST, no exec);
+        missing fields fall back to the manifest (description, tags, version)
+        and finally to generic values (category ``"plugin"``).
+        """
+        from app.core.nodes.metadata import NodeMetadata, human_node_label
+
+        declared = dict(getattr(spec, "metadata_kwargs", None) or {})
+        base: dict[str, Any] = {
+            "node_type": node_type,
+            "label": human_node_label(node_type),
+            "description": (
+                manifest.description
+                or f"Isolated plugin node from '{manifest.name}' "
+                "(executed in a plugin venv worker)"
+            ),
+            "category": "plugin",
+            "version": manifest.version,
+            "tags": list(manifest.tags or []),
+        }
+        for key, value in declared.items():
+            if isinstance(value, str) and not value.strip():
+                continue
+            base[key] = value
+        try:
+            return NodeMetadata(**base)
+        except Exception as exc:  # malformed literal → generic, never fail load
+            log.warning(
+                "PluginLoader: isolated metadata for '%s' invalid (%s); using defaults",
+                node_type,
+                exc,
+            )
+            return NodeMetadata(
+                node_type=node_type,
+                label=human_node_label(node_type),
+                description=base["description"] if isinstance(base["description"], str) and base["description"].strip() else node_type,
+                category="plugin",
+                version=manifest.version,
+            )
 
     def _attach_plugin_ui_schema(self, manifest: PluginManifest) -> None:
         """Publish plugin.toml [config_schema] as the Builder UI contract."""

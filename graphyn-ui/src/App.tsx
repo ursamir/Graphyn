@@ -24,7 +24,12 @@ import {
 } from 'lucide-react'
 import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
 import { fetchAllPages } from './api/unwrapList'
-import { useAppStore, type AppView } from './store/appStore'
+import {
+  commitActiveProject,
+  forgetPersistedActiveProject,
+  useAppStore,
+  type AppView,
+} from './store/appStore'
 import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
 import { SplitPane } from './components/SplitPane'
@@ -55,6 +60,20 @@ import { pathForView } from './routes/viewMap'
 import { navigatePath, parsePathname, panelToFocus, stripLegacyAppHash } from './routes/parsePath'
 import { JUMP_KEYS } from './routes/nav'
 import { usePolling } from './lib/usePolling'
+import { installGlobalDetailsMenuDismiss, OPEN_MODE_EXPLAINER_EVENT, useMenuDismiss } from './lib/menus'
+import { sharedFetch } from './lib/sharedFetch'
+import { checkRunExists } from './lib/runExists'
+import { forgetRecentWorkspace, pruneRecentWorkspaces, readRecentWorkspaces } from './lib/recentWorkspaces'
+import {
+  checkWorkspaceExists,
+  isWorkspaceKnownMissing,
+  isWorkspaceKnownValid,
+  listWorkspaceNames,
+  pickFallbackWorkspace,
+} from './lib/workspaceValidity'
+import { confirmNavigation } from './lib/navigationGuard'
+import { NotFoundView } from './components/NotFoundView'
+import { WorkspaceNotFoundView } from './components/WorkspaceNotFoundView'
 
 type NavItem = { id: AppView; label: string; icon: React.ComponentType<{ className?: string }> }
 type NavGroup = { title: string; items: NavItem[] }
@@ -177,21 +196,9 @@ function LastRunMenu({
 }) {
   const [open, setOpen] = React.useState(false)
   const rootRef = React.useRef<HTMLDivElement>(null)
-  React.useEffect(() => {
-    if (!open) return
-    const onDoc = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  const close = React.useCallback(() => setOpen(false), [])
+  // Escape / outside click / "another menu opened" all close it (lib/menus).
+  useMenuDismiss(open, close, rootRef)
   return (
     <div
       ref={rootRef}
@@ -282,7 +289,8 @@ export default function App() {
   const closeProject = useAppStore((s) => s.closeProject)
   const openProject = useAppStore((s) => s.openProject)
   const statusMessage = useAppStore((s) => s.statusMessage)
-  const runOutcome = useAppStore((s) => s.runOutcome)
+  const storeRunOutcome = useAppStore((s) => s.runOutcome)
+  const runOutcomeRunId = useAppStore((s) => s.runOutcomeRunId)
   const lastRunId = useAppStore((s) => s.lastRunId)
   const lastRunProject = useAppStore((s) => s.lastRunProject)
   const isRunning = useAppStore((s) => s.isRunning)
@@ -472,7 +480,12 @@ export default function App() {
   usePolling(
     async () => {
       try {
-        const data = await apiJson<{ proposals: unknown[] }>('/proposals?status=pending')
+        // Shared with Agent inbox (ProposalsView) so the two never double-fetch.
+        const data = await sharedFetch<{ proposals: unknown[] }>(
+          'proposals:pending',
+          () => apiJson<{ proposals: unknown[] }>('/proposals?status=pending'),
+          { maxAgeMs: 10_000 },
+        )
         setPendingProposalCount(Array.isArray(data?.proposals) ? data.proposals.length : 0)
       } catch {
         /* quiet — badge is optional */
@@ -481,6 +494,107 @@ export default function App() {
     60_000,
     { resetKey: bootStatus },
   )
+
+  React.useEffect(() => installGlobalDetailsMenuDismiss(), [])
+
+  React.useEffect(() => {
+    const onOpen = () => setModeExplainerOpen(true)
+    window.addEventListener(OPEN_MODE_EXPLAINER_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_MODE_EXPLAINER_EVENT, onOpen)
+  }, [])
+
+  /**
+   * Workspace validation (UI review #2/#3). Every workspace id — from the URL
+   * (`/workspaces/<id>/…`) or resumed from localStorage on a global route — is
+   * checked with `GET /projects/<id>` before it is persisted as active/recent.
+   * A missing id renders WorkspaceNotFoundView (URL case) and the store falls
+   * back to the most recent *valid* workspace instead of "No workspace open".
+   */
+  const urlWorkspaceId = parsedLocation.workspaceId ?? null
+  const [wsGate, setWsGate] = React.useState<{
+    id: string
+    status: 'checking' | 'ok' | 'missing' | 'unknown'
+    fallback?: string | null
+  } | null>(null)
+  React.useEffect(() => {
+    const target = urlWorkspaceId || activeProject
+    if (!target) {
+      setWsGate(null)
+      return
+    }
+    if (isWorkspaceKnownValid(target)) {
+      setWsGate({ id: target, status: 'ok' })
+      commitActiveProject(target)
+      return
+    }
+    if (bootError) return
+    let cancelled = false
+    if (!isWorkspaceKnownMissing(target)) setWsGate({ id: target, status: 'checking' })
+    void (async () => {
+      let exists: boolean
+      try {
+        exists = await checkWorkspaceExists(target)
+      } catch {
+        // Offline / auth — keep the workspace (never drop a real one); boot banner explains.
+        if (!cancelled) setWsGate({ id: target, status: 'unknown' })
+        return
+      }
+      if (cancelled) return
+      if (exists) {
+        setWsGate({ id: target, status: 'ok' })
+        commitActiveProject(target)
+        return
+      }
+      forgetRecentWorkspace(target)
+      let fallback: string | null = null
+      try {
+        const names = await listWorkspaceNames()
+        pruneRecentWorkspaces(names)
+        fallback = pickFallbackWorkspace(readRecentWorkspaces(), names, target)
+      } catch {
+        /* list unavailable — no fallback */
+      }
+      if (cancelled) return
+      setWsGate({ id: target, status: 'missing', fallback })
+      const st = useAppStore.getState()
+      if (st.activeProject === target) {
+        if (fallback) {
+          useAppStore.setState({ activeProject: fallback })
+          commitActiveProject(fallback)
+        } else if (urlWorkspaceId === target) {
+          // Stay on the URL (it renders the not-found view); just clear the store.
+          useAppStore.setState({ activeProject: null })
+          forgetPersistedActiveProject()
+        } else {
+          setActiveProject(null)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [urlWorkspaceId, activeProject, bootError, setActiveProject])
+
+  /** Prune recents that no longer exist (once per boot, after the API answers). */
+  React.useEffect(() => {
+    if (bootError) return
+    listWorkspaceNames()
+      .then((names) => pruneRecentWorkspaces(names))
+      .catch(() => undefined)
+  }, [bootError])
+
+  const urlWorkspaceMissing =
+    Boolean(urlWorkspaceId) &&
+    ((wsGate?.id === urlWorkspaceId && wsGate.status === 'missing') ||
+      isWorkspaceKnownMissing(urlWorkspaceId))
+  // Computed synchronously (not only from wsGate) so workspace views never mount
+  // — and never note recents — for an id that has not been validated yet.
+  const urlWorkspaceChecking =
+    Boolean(urlWorkspaceId) &&
+    !bootError &&
+    !urlWorkspaceMissing &&
+    !isWorkspaceKnownValid(urlWorkspaceId) &&
+    !(wsGate?.id === urlWorkspaceId && wsGate.status === 'unknown')
 
   /** Path ↔ store sync (HTML5 History). */
   React.useEffect(() => {
@@ -491,6 +605,12 @@ export default function App() {
       if (parts[0] === 'workspaces' && !parts[1]) {
         setActiveProject(null)
       } else if (parsed.workspaceId) {
+        // A workspace App already knows is missing renders WorkspaceNotFoundView;
+        // never make it active (or open runs under it).
+        if (isWorkspaceKnownMissing(parsed.workspaceId)) {
+          if (parsed.view) setView(parsed.view)
+          return
+        }
         const cur = useAppStore.getState().activeProject
         if (cur !== parsed.workspaceId) setActiveProject(parsed.workspaceId)
       }
@@ -516,11 +636,28 @@ export default function App() {
     return () => window.removeEventListener('popstate', apply)
   }, [openRun, openExperiments, setView, setActiveProject])
 
+  const onLoginRoute = window.location.pathname.startsWith('/login')
   React.useEffect(() => {
-    const label = VIEW_LABEL[view] || 'Console'
-    const ws = activeProject ? ` · ${activeProject}` : ''
+    if (parsedLocation.notFound) {
+      document.title = 'Graphyn · Not found'
+      return
+    }
+    if (urlWorkspaceMissing) {
+      document.title = 'Graphyn · Workspace not found'
+      return
+    }
+    if (onLoginRoute) {
+      document.title = 'Graphyn · Sign in'
+      return
+    }
+    // Workspace suffix only on workspace-scoped URLs — a global page (Templates,
+    // Ops, …) is not "in" the remembered workspace. The picker is "Workspaces".
+    const inWorkspace = Boolean(parsedLocation.workspaceId && activeProject)
+    const label =
+      view === 'projects' && !inWorkspace ? 'Workspaces' : VIEW_LABEL[view] || 'Console'
+    const ws = inWorkspace ? ` · ${activeProject}` : ''
     document.title = `Graphyn · ${label}${ws}`
-  }, [view, activeProject])
+  }, [view, activeProject, parsedLocation, urlWorkspaceMissing, onLoginRoute])
 
   React.useEffect(() => {
     if (settingsOpen) {
@@ -574,7 +711,13 @@ export default function App() {
     void refreshCatalog()
   }
 
+  /** Run a navigation action only if the Editor unsaved-changes guard allows it. */
+  const guarded = (fn: () => void) => () => {
+    if (confirmNavigation()) fn()
+  }
+
   const go = (id: AppView) => {
+    if (!confirmNavigation()) return
     const ap = useAppStore.getState().activeProject
     const path = pathForView(id, { workspaceId: ap })
     if (!path) {
@@ -591,6 +734,7 @@ export default function App() {
 
   /** Switch workspace: clear active project, then show the Workspaces picker. */
   const switchProject = () => {
+    if (!confirmNavigation()) return
     closeProject()
     setView('projects')
     navigatePath(paths.workspaces())
@@ -642,14 +786,15 @@ export default function App() {
       if (key === 'o') {
         e.preventDefault()
         const rid = useAppStore.getState().lastRunId
-        if (rid) openTrace({ runId: rid })
-        else go('runs')
+        if (rid) {
+          if (confirmNavigation()) openTrace({ runId: rid })
+        } else go('runs')
         return
       }
       if (key === 'e') {
         e.preventDefault()
         const rid = useAppStore.getState().lastRunId
-        openExperiments(rid ? { runIds: [rid] } : {})
+        if (confirmNavigation()) openExperiments(rid ? { runIds: [rid] } : {})
         return
       }
       const dest = JUMP_KEYS[key]
@@ -663,11 +808,16 @@ export default function App() {
   }, [view, settingsOpen, helpOpen, paletteOpen, modeExplainerOpen, narrow])
 
   /** Prefer Overview-style project latest run when a workspace is open; keep lastRunProject scoping. */
+  // Only runs of the *active* workspace drive the header chip — a run opened
+  // from another workspace's schedule (or with no recorded owner) is never shown.
   const editorScoped =
-    Boolean(lastRunId) && (!activeProject || !lastRunProject || lastRunProject === activeProject)
+    Boolean(lastRunId) && Boolean(activeProject) && lastRunProject === activeProject
   const effectiveLastRunId = activeProject
     ? projectLatest?.run_id || (editorScoped ? lastRunId : null)
-    : lastRunId
+    : null
+  // The store outcome only counts for the run it was recorded for.
+  const runOutcome =
+    runOutcomeRunId && runOutcomeRunId === effectiveLastRunId ? storeRunOutcome : null
   const projectStatus = (projectLatest?.status || '').toLowerCase()
   const projectOutcome =
     projectStatus === 'failed' || projectStatus === 'error'
@@ -683,6 +833,39 @@ export default function App() {
             : null
   const usingProjectLatest =
     Boolean(activeProject && projectLatest?.run_id && effectiveLastRunId === projectLatest.run_id)
+
+  /**
+   * The fallback store `lastRunId` (not from `GET /runs?project=`) may point at
+   * a deleted run, or one owned by another workspace. Verify before showing it;
+   * 404 / wrong owner clears it so the chip never links to a dead run.
+   */
+  const [rejectedRunId, setRejectedRunId] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    if (!effectiveLastRunId || usingProjectLatest || isRunning) return
+    const rid = effectiveLastRunId
+    const ws = activeProject
+    let cancelled = false
+    checkRunExists(rid)
+      .then((res) => {
+        if (cancelled) return
+        const wrongOwner = Boolean(res.exists && res.project && ws && res.project !== ws)
+        if (!res.exists || wrongOwner) {
+          setRejectedRunId(rid)
+          const st = useAppStore.getState()
+          if (st.lastRunId === rid) {
+            st.setLastRunId(null)
+            st.setRunOutcome('idle')
+          }
+        }
+      })
+      .catch(() => {
+        /* transient — keep showing it */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [effectiveLastRunId, usingProjectLatest, isRunning, activeProject])
+  const shownLastRunId = effectiveLastRunId && effectiveLastRunId !== rejectedRunId ? effectiveLastRunId : null
   const effectiveOutcome = usingProjectLatest
     ? projectOutcome || (editorScoped && lastRunId === effectiveLastRunId ? runOutcome : null)
     : runOutcome
@@ -716,6 +899,14 @@ export default function App() {
     <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {window.location.pathname.startsWith('/login') ? (
         <LoginView />
+      ) : parsedLocation.notFound ? (
+        <NotFoundView pathname={window.location.pathname} />
+      ) : urlWorkspaceMissing && urlWorkspaceId ? (
+        <WorkspaceNotFoundView workspaceId={urlWorkspaceId} fallback={wsGate?.fallback ?? null} />
+      ) : urlWorkspaceChecking ? (
+        <div className="flex h-full items-center justify-center p-6 text-[13px] text-ink-500" role="status">
+          Opening workspace…
+        </div>
       ) : (
         <>
           {view === 'builder' && <BuilderView />}
@@ -938,8 +1129,10 @@ export default function App() {
               type="button"
               onClick={() => {
                 if (bootStatus === 401) openSettings()
-                else if (!bootError) setModeExplainerOpen(true)
+                else setModeExplainerOpen(true)
               }}
+              aria-haspopup="dialog"
+              aria-expanded={modeExplainerOpen}
               className={clsx(
                 'hidden items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium sm:inline-flex',
                 bootStatus === 401
@@ -954,7 +1147,7 @@ export default function App() {
                 bootStatus === 401
                   ? 'Paste API token in Settings'
                   : bootError
-                    ? bootError
+                    ? `${bootError} — click for Mode A vs Mode B`
                     : 'Click for Mode A vs Mode B'
               }
             >
@@ -983,7 +1176,7 @@ export default function App() {
                   </span>
                 )
               }
-              if (!effectiveLastRunId) {
+              if (!shownLastRunId) {
                 return (
                   <span className={clsx('hidden max-w-[12rem] truncate rounded-full px-2.5 py-0.5 text-[11px] font-medium lg:inline', chipTone)}>
                     {chipLabel}
@@ -1010,8 +1203,9 @@ export default function App() {
                 // "nothing is open" and made the project feel silently lost.
                 title={activeProject ? `${activeProject} is still open — return to it` : 'Open a workspace'}
                 onClick={() => {
-                  if (activeProject) openProject(activeProject)
-                  else go('projects')
+                  if (activeProject) {
+                    if (confirmNavigation()) openProject(activeProject)
+                  } else go('projects')
                 }}
               >
                 {activeProject ? (
@@ -1024,22 +1218,22 @@ export default function App() {
                 )}
               </button>
             )}
-            {effectiveLastRunId && (
+            {shownLastRunId && (
               <LastRunMenu
-                runId={effectiveLastRunId}
+                runId={shownLastRunId}
                 showCompare
                 outcome={isRunning ? null : effectiveOutcome}
                 outcomeLabel={isRunning ? null : chipLabel}
-                onOpenRun={() =>
-                  openRun(effectiveLastRunId, activeProject ? { project: activeProject } : undefined)
-                }
-                onOpenTrace={() =>
-                  openTrace({ runId: effectiveLastRunId, project: activeProject || undefined })
-                }
-                onOpenArtifacts={() =>
-                  openArtifacts({ runId: effectiveLastRunId, project: activeProject || undefined })
-                }
-                onOpenCompare={() => openExperiments({ runIds: [effectiveLastRunId] })}
+                onOpenRun={guarded(() =>
+                  openRun(shownLastRunId, activeProject ? { project: activeProject } : undefined),
+                )}
+                onOpenTrace={guarded(() =>
+                  openTrace({ runId: shownLastRunId, project: activeProject || undefined }),
+                )}
+                onOpenArtifacts={guarded(() =>
+                  openArtifacts({ runId: shownLastRunId, project: activeProject || undefined }),
+                )}
+                onOpenCompare={guarded(() => openExperiments({ runIds: [shownLastRunId] }))}
               />
             )}
             <button

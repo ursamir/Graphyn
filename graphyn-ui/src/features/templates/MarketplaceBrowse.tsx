@@ -1,4 +1,5 @@
 import React from 'react'
+import { SearchX as EmptySearchX } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
@@ -168,7 +169,7 @@ export function MarketplaceBrowse({
       </div>
       {error ? <ErrorBanner message={error} /> : null}
       {allMatched && allMatched.length === 0 && !busy ? (
-        <EmptyState title="No marketplace matches" description="Try another pack, status, or search term." />
+        <EmptyState icon={EmptySearchX} title="No marketplace matches" description="Try another pack, status, or search term." />
       ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {items.map((tpl) => {

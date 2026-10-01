@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import type { NodePlacement, PortDef } from '../../types/graph'
 import { AudioLines, Box, Brain, GitBranch, Pencil, Sparkles, X } from 'lucide-react'
 import { schemaFieldHint } from '../../lib/format'
+import { numberInputAttrs } from './configValidation'
 
 export type GraphynNodeData = {
   nodeType: string
@@ -21,6 +22,10 @@ export type GraphynNodeData = {
   /** Last execution error snippet when status is failed */
   lastError?: string
   runtime?: string
+  /** True once catalog data (category / schema / ports) has been applied (see builderRunState.decorateNodeData). */
+  catalogDecorated?: boolean
+  /** View-only: number of invalid config fields (schema bounds etc.); never saved. */
+  configIssues?: number
   onChangeConfig?: (key: string, value: unknown) => void
   onChangePlacement?: (next: NodePlacement | null) => void
   onDelete?: () => void
@@ -125,6 +130,8 @@ export function ConfigFieldEditor(props: {
   onChange: (v: unknown) => void
   /** Platform credential connections from GET /credentials (redacted). */
   credentials?: CredentialOption[]
+  /** Value fails schema validation — red border + aria-invalid. */
+  invalid?: boolean
 }) {
   return fieldEditor(
     props.fieldKey,
@@ -132,6 +139,7 @@ export function ConfigFieldEditor(props: {
     props.value,
     props.onChange,
     props.credentials,
+    props.invalid,
   )
 }
 
@@ -176,8 +184,10 @@ function fieldEditor(
   value: unknown,
   onChange: (v: unknown) => void,
   credentials?: CredentialOption[],
+  invalid?: boolean,
 ) {
   const type = schemaType(def)
+  const invalidCls = invalid ? ' !border-rose-400 bg-rose-50/60' : ''
   if (type === 'boolean') {
     return (
       <label className="mt-1 inline-flex items-center gap-2 text-[12px] text-ink-700">
@@ -196,7 +206,8 @@ function fieldEditor(
   if (Array.isArray(unwrapSchema(def).enum)) {
     return (
       <select
-        className="field-control"
+        className={`field-control${invalidCls}`}
+        aria-invalid={invalid || undefined}
         value={String(value ?? '')}
         title={schemaFieldHint(def)}
         onChange={(e) => onChange(e.target.value)}
@@ -346,11 +357,15 @@ function fieldEditor(
       isNullableSchema(def) ||
       def.default === null ||
       (Array.isArray(def.type) && (def.type as unknown[]).includes('null'))
+    const bounds = numberInputAttrs(def)
     return (
       <input
         type="number"
-        step={type === 'integer' ? 1 : 'any'}
-        className="field-control overflow-x-auto font-mono"
+        step={bounds.step}
+        min={bounds.min}
+        max={bounds.max}
+        aria-invalid={invalid || undefined}
+        className={`field-control overflow-x-auto font-mono${invalidCls}`}
         value={value == null || value === '' ? '' : Number(value)}
         title={schemaFieldHint(def) || formatValue(def, value)}
         placeholder={nullable ? 'default / empty' : undefined}
@@ -380,7 +395,8 @@ function fieldEditor(
   if (longText || widget === 'code') {
     return (
       <textarea
-        className="field-control mt-1 font-mono text-[11px] leading-4"
+        className={`field-control mt-1 font-mono text-[11px] leading-4${invalidCls}`}
+        aria-invalid={invalid || undefined}
         rows={4}
         value={formatValue(def, value)}
         title={schemaFieldHint(def)}
@@ -395,7 +411,8 @@ function fieldEditor(
   return (
     <div>
       <input
-        className={pathish ? 'field-control' : 'field-control overflow-x-auto font-mono'}
+        className={`${pathish ? 'field-control' : 'field-control overflow-x-auto font-mono'}${invalidCls}`}
+        aria-invalid={invalid || undefined}
         value={formatValue(def, value)}
         title={schemaFieldHint(def) || formatValue(def, value)}
         placeholder={pathish ? 'workspace/ relative path' : undefined}
@@ -509,6 +526,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
         skipped && 'opacity-60',
         status === 'cancelled' && 'border-amber-300 opacity-80',
         status === 'pending' && 'border-ink-300',
+        data.configIssues ? 'border-rose-400' : null,
       )}
     >
       {inputs.flatMap((p, i) => {
@@ -530,6 +548,14 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
             <div className={clsx('truncate text-[13px] font-semibold leading-tight', failed ? 'text-rose-900' : 'text-ink-950')}>
               {data.label || data.nodeType}
             </div>
+            {data.configIssues ? (
+              <span
+                className="shrink-0 rounded-full bg-rose-100 px-1.5 text-[10px] font-semibold text-rose-800"
+                title={`${data.configIssues} invalid config field${data.configIssues === 1 ? '' : 's'} — open the inspector`}
+              >
+                {data.configIssues} invalid
+              </span>
+            ) : null}
             <span
               className={clsx('h-2 w-2 shrink-0 rounded-full ring-2 ring-white', STATUS_DOT[status] ?? STATUS_DOT.idle)}
               title={status}
@@ -537,7 +563,7 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
             />
           </div>
           <div className={clsx('mt-0.5 truncate text-[11px]', failed ? 'text-rose-700' : 'text-ink-500')}>
-            {status !== 'idle' ? `${status} · ` : ''}
+            {status === 'skipped' ? 'skipped (not run) · ' : status !== 'idle' ? `${status} · ` : ''}
             {data.category || 'node'}
             {isolated ? ' · isolated' : ''}
             {entries.length ? ` · ${entries.length} fields` : ''}

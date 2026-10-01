@@ -1,6 +1,6 @@
 import React from 'react'
 import { Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
-import { apiJson, apiUrl, getApiToken } from '../../api/client'
+import { ApiError, apiJson, apiUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { emptyGraph } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
@@ -30,12 +30,42 @@ import {
   shortRunId,
   skipConsecutiveByText,
 } from '../../lib/format'
-import { navigatePath } from '../../routes/parsePath'
-import { paths } from '../../routes/paths'
-import { goView } from '../../routes/nav'
+import { navigatePath, panelToFocus, parsePathname } from '../../routes/parsePath'
+import { paths, type RunPanel } from '../../routes/paths'
+import { goView, onPathChange } from '../../routes/nav'
 import { RunLineagePanel } from './RunLineagePanel'
 import { PipelineStack } from './PipelineStack'
 import ExperimentsView, { type ExperimentsViewHandle } from '../experiments/ExperimentsView'
+import {
+  executionOrderFromRun,
+  normalizeOutputsResponse,
+  orderOutputGroups,
+  runHasModelOutput,
+  sortFilesNatural,
+  type NodeTruncation,
+} from './runOutputs'
+import { extractRunFailure, failureProposalSummary, pipelineNodesFromRun } from './runNodes'
+import { dedupeErrorRows } from '../builder/logDedupe'
+
+/** Run ids whose GET /runs/{id} returned 404 this session — never auto-reopened. */
+const MISSING_RUN_IDS = new Set<string>()
+
+type DetailPanel = 'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage'
+
+/** Store panel value → URL panel segment (paths.runPanel). */
+function panelToPath(panel: DetailPanel): RunPanel {
+  if (panel === 'artifacts') return 'outputs'
+  if (panel === 'debug') return 'details'
+  return panel
+}
+
+/** Fetch the outputs listing with per-node truncation info when the API supports it. */
+async function fetchRunOutputs(id: string) {
+  const raw = await apiJson<unknown>(`/runs/${encodeURIComponent(id)}/outputs`, { query: { with_meta: 1 } }).catch(
+    () => [],
+  )
+  return normalizeOutputsResponse<OutputFile>(raw)
+}
 
 interface RunSummary {
   run_id: string
@@ -444,6 +474,7 @@ export default function RunsView() {
   const focusRunsTab = useAppStore((s) => s.focusRunsTab)
   const setFocusRunsTab = useAppStore((s) => s.setFocusRunsTab)
   const lastRunId = useAppStore((s) => s.lastRunId)
+  const setLastRunId = useAppStore((s) => s.setLastRunId)
   const pushToast = useAppStore((s) => s.pushToast)
   const openExperiments = useAppStore((s) => s.openExperiments)
   const openProposals = useAppStore((s) => s.openProposals)
@@ -465,6 +496,15 @@ export default function RunsView() {
   const [checkpoints, setCheckpoints] = React.useState<string[]>([])
   const [samples, setSamples] = React.useState<unknown>(null)
   const [outputFiles, setOutputFiles] = React.useState<OutputFile[]>([])
+  const [outputsMeta, setOutputsMeta] = React.useState<{ truncated: boolean; byNode: Record<string, NodeTruncation> }>({
+    truncated: false,
+    byNode: {},
+  })
+  /** node_id → every file of that node (GET /outputs?node_id=), loaded on "Show all". */
+  const [expandedNodeFiles, setExpandedNodeFiles] = React.useState<Record<string, OutputFile[]>>({})
+  const [expandingNode, setExpandingNode] = React.useState<string | null>(null)
+  /** Selected run id whose GET /runs/{id} returned 404 (deleted / never existed). */
+  const [notFoundRunId, setNotFoundRunId] = React.useState<string | null>(null)
   const [runArtifacts, setRunArtifacts] = React.useState<RunArtifact[]>([])
   const [selectedOutputPath, setSelectedOutputPath] = React.useState<string | null>(null)
   const [focusNodeId, setFocusNodeId] = React.useState<string | null>(null)
@@ -480,6 +520,10 @@ export default function RunsView() {
   const [regModelSlug, setRegModelSlug] = React.useState('')
   const [registerBusy, setRegisterBusy] = React.useState(false)
   const [explainBusy, setExplainBusy] = React.useState(false)
+  /** "Ask agent to fix" confirmation panel open. */
+  const [askAgentOpen, setAskAgentOpen] = React.useState(false)
+  /** The run's Graph IR (GET /runs/{id}/graph or graph.json) when the detail doesn't embed it. */
+  const [runGraph, setRunGraph] = React.useState<GraphIR | null>(null)
   const [liveRuns, setLiveRuns] = React.useState<RunSummary[] | null>(null)
   const [liveSelected, setLiveSelected] = React.useState<string | null>(null)
   const [liveDetail, setLiveDetail] = React.useState<Record<string, unknown> | null>(null)
@@ -517,6 +561,35 @@ export default function RunsView() {
     clearFocusRunPanel()
   }, [focusRunPanel, clearFocusRunPanel, setFocusRunsTab])
 
+  /**
+   * Reflect the selected run + detail panel in the address bar so a selection
+   * is deep-linkable (/workspaces/<ws>/runs/<id>/<panel>). Writes history
+   * directly rather than via navigatePath: navigatePath dispatches popstate,
+   * and App's path sync would then call store.openRun — re-opening the run
+   * we just opened and rewriting the header's "Last run" to every run the
+   * user merely looks at. Back/forward is handled by the onPathChange
+   * listener above. A new run selection pushes; a panel switch replaces.
+   */
+  /** Set by user-initiated selection (list click) so that change pushes a history entry. */
+  const pushNextUrlRef = React.useRef(false)
+  React.useEffect(() => {
+    // No selection yet: leave the URL alone — on a deep-link load the run id
+    // in the address bar is about to be opened. (Explicit deselects — Back to
+    // runs, Delete — navigate themselves.)
+    if (!selected || !activeProject || focusRunsTab !== 'history') return
+    const parsed = parsePathname(window.location.pathname, window.location.search)
+    if (parsed.view !== 'runs' || parsed.runsTab !== 'history' || parsed.workspaceId !== activeProject) return
+    const target =
+      notFoundRunId === selected
+        ? paths.run(activeProject, selected)
+        : paths.runPanel(activeProject, selected, panelToPath(panel))
+    const push = pushNextUrlRef.current
+    pushNextUrlRef.current = false
+    if (window.location.pathname === target) return
+    if (push) window.history.pushState(null, '', target)
+    else window.history.replaceState(null, '', target)
+  }, [activeProject, focusRunsTab, selected, panel, notFoundRunId])
+
   const load = React.useCallback(async () => {
     setError(null)
     try {
@@ -534,10 +607,64 @@ export default function RunsView() {
   }, [load])
 
   React.useEffect(() => {
-    const id = focusRunId || lastRunId
-    if (id) void open(id)
+    // The address bar wins (deep link /runs/<id>[/<panel>]); otherwise fall
+    // back to the store's focus / last run — but never auto-reopen a run we
+    // already know 404s.
+    const fromUrl = parsePathname(window.location.pathname, window.location.search)
+    const id = fromUrl.view === 'runs' && fromUrl.runId ? fromUrl.runId : focusRunId || lastRunId
+    if (!id || id === selectedRef.current) return
+    if (!(fromUrl.runId === id) && MISSING_RUN_IDS.has(id)) return
+    void open(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRunId])
+
+  /**
+   * Back / forward between run URLs. App's own path sync also reacts (via
+   * store.openRun → focusRunId), and both paths are guarded by
+   * `id === selectedRef.current`, so a run is only opened once.
+   */
+  React.useEffect(
+    () =>
+      onPathChange(() => {
+        const parsed = parsePathname(window.location.pathname, window.location.search)
+        if (parsed.view !== 'runs' || parsed.runsTab !== 'history') return
+        if (parsed.runId) {
+          const p = panelToFocus(parsed.panel)
+          if (parsed.runId !== selectedRef.current) {
+            if (p) {
+              pendingPanelRef.current = p
+              setPanel(p)
+            }
+            void open(parsed.runId)
+          } else if (p) {
+            setPanel(p)
+          }
+        } else if (selectedRef.current) {
+          clearSelection()
+        }
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  /** Drop the detail selection (e.g. "Back to runs" from a not-found run). */
+  const clearSelection = () => {
+    openSeqRef.current++
+    selectedRef.current = null
+    setSelected(null)
+    setDetail(null)
+    setStatus(null)
+    setDebug(null)
+    setOutputFiles([])
+    setOutputsMeta({ truncated: false, byNode: {} })
+    setExpandedNodeFiles({})
+    setRunArtifacts([])
+    setRunModels([])
+    setNotFoundRunId(null)
+    setFocusNodeId(null)
+    setRunGraph(null)
+    setAskAgentOpen(false)
+  }
 
   const open = async (id: string) => {
     const switching = selected !== id
@@ -552,27 +679,62 @@ export default function RunsView() {
     setSamples(null)
     setRunModels([])
     setOutputFiles([])
+    setOutputsMeta({ truncated: false, byNode: {} })
+    setExpandedNodeFiles({})
     setRunArtifacts([])
     setSelectedOutputPath(null)
     setFocusNodeId(null)
     setPromoteOpen(false)
+    setAskAgentOpen(false)
+    if (switching) setRunGraph(null)
+    setNotFoundRunId(null)
     focusSeededForRun.current = null
     setError(null)
     try {
-      const [d, st, dbg, cps, outs, arts] = await Promise.all([
-        apiJson<Record<string, unknown>>(`/runs/${id}`),
+      // Detail first: a 404 here means the run doesn't exist (deleted, or a
+      // stale deep link) — show one clear "not found" state, not a detail
+      // panel full of UNKNOWN. One short retry covers a just-started async run
+      // whose journal isn't on disk yet.
+      let d: Record<string, unknown>
+      try {
+        d = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}`)
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 404)) throw err
+        await new Promise((r) => setTimeout(r, 800))
+        if (stale()) return
+        try {
+          d = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}`)
+        } catch (err2) {
+          if (!(err2 instanceof ApiError && err2.status === 404)) throw err2
+          if (stale()) return
+          MISSING_RUN_IDS.add(id)
+          setNotFoundRunId(id)
+          setStatus(null)
+          // Don't leave the header "Last run" chip pointing at a run that 404s.
+          if (useAppStore.getState().lastRunId === id) setLastRunId(null)
+          return
+        }
+      }
+      if (stale()) return
+      const embedded = (d?.graph ?? (d?.meta as { graph?: unknown } | undefined)?.graph) as GraphIR | undefined
+      const hasEmbedded = Boolean(embedded && Array.isArray(embedded.nodes) && Array.isArray(embedded.edges))
+      const [st, dbg, cps, outs, arts, g] = await Promise.all([
         apiJson<Record<string, unknown>>(`/runs/${id}/status`).catch(() => null),
         apiJson<Record<string, unknown>>(`/runs/${id}/debug-report`).catch(() => null),
         apiJson<string[]>(`/runs/${id}/checkpoints`).catch(() => []),
-        apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
+        fetchRunOutputs(id),
         apiJson<RunArtifact[]>(`/runs/${id}/artifacts`).catch(() => []),
+        // Node list (incl. nodes that never ran) comes from the run's graph.
+        hasEmbedded ? Promise.resolve(null) : fetchRunGraph(id, null).catch(() => null),
       ])
       if (stale()) return
+      setRunGraph(g)
       setDetail(d)
       setStatus(st)
       setDebug(dbg)
       setCheckpoints(Array.isArray(cps) ? cps : [])
-      setOutputFiles(Array.isArray(outs) ? outs : [])
+      setOutputFiles(outs.files)
+      setOutputsMeta({ truncated: outs.truncated, byNode: outs.truncatedByNode })
       void loadRunModels(id)
       setRunArtifacts(Array.isArray(arts) ? arts : [])
       const meta = d?.meta && typeof d.meta === 'object' ? (d.meta as Record<string, unknown>) : null
@@ -677,7 +839,7 @@ export default function RunsView() {
         apiJson<Record<string, unknown>>(`/runs/${id}/status`).catch(() => null),
         apiJson<Record<string, unknown>>(`/runs/${id}/debug-report`).catch(() => null),
         apiJson<string[]>(`/runs/${id}/checkpoints`).catch(() => []),
-        apiJson<OutputFile[]>(`/runs/${id}/outputs`).catch(() => []),
+        fetchRunOutputs(id),
         apiJson<RunArtifact[]>(`/runs/${id}/artifacts`).catch(() => []),
       ])
       if (selectedRef.current !== id) return
@@ -685,7 +847,9 @@ export default function RunsView() {
       setStatus(st)
       setDebug(dbg)
       setCheckpoints(Array.isArray(cps) ? cps : [])
-      setOutputFiles(Array.isArray(outs) ? outs : [])
+      setOutputFiles(outs.files)
+      setOutputsMeta({ truncated: outs.truncated, byNode: outs.truncatedByNode })
+      setExpandedNodeFiles({})
       setRunArtifacts(Array.isArray(arts) ? arts : [])
       void loadRunModels(id)
     } catch {
@@ -772,34 +936,40 @@ export default function RunsView() {
     }
   }
 
-  const explainFailure = async () => {
+  /** Real failure (node id + error text) for the selected run, or null. */
+  const runFailure = React.useMemo(
+    () =>
+      extractRunFailure({
+        events: Array.isArray(detail?.logs) ? (detail!.logs as Array<Record<string, unknown>>) : [],
+        detail,
+        status,
+        debug,
+      }),
+    [detail, status, debug],
+  )
+
+  /**
+   * "Ask agent to fix": creates a pending proposal (the run's graph + the real
+   * failing node / error) in the Agent inbox for an agent to fill in. The
+   * proposal graph is the run's unchanged graph — the agent supplies the fix.
+   * Stays on this page; the toast offers "Open proposal".
+   */
+  const askAgentToFix = async () => {
     if (!selected) return
+    const runId = selected
     setExplainBusy(true)
     try {
-      const recent = Array.isArray(debug?.recent_errors)
-        ? (debug!.recent_errors as Array<Record<string, unknown>>)
-        : []
-      const errFromDebug = recent.length
-        ? String(recent[recent.length - 1]?.message || JSON.stringify(recent[recent.length - 1]))
-        : ''
-      const runLogs = Array.isArray(detail?.logs) ? (detail!.logs as Array<Record<string, unknown>>) : []
-      const errFromLogs =
-        runLogs
-          .map((l) => String(l.message || ''))
-          .filter((m) => /fail|error/i.test(m))
-          .slice(-1)[0] || ''
-      const errText = (
-        errFromDebug ||
-        errFromLogs ||
-        String(detail?.error || status?.error || 'unknown error')
-      ).slice(0, 400)
+      const failure = runFailure
       const emb = (detail?.graph ?? (detail?.meta as { graph?: unknown } | undefined)?.graph) as
         | GraphIR
         | undefined
       const baseGraph =
         emb && Array.isArray(emb.nodes) && Array.isArray(emb.edges)
           ? emb
-          : emptyGraph(`fix-${shortRunId(selected)}`)
+          : runGraph && Array.isArray(runGraph.nodes)
+            ? runGraph
+            : emptyGraph(`fix-${shortRunId(runId)}`)
+      const errorLine = failure?.error ? failure.error.slice(0, 1000) : 'No error message was recorded'
       const graph = {
         schema_version: baseGraph.schema_version || '1.1',
         nodes: Array.isArray(baseGraph.nodes) ? baseGraph.nodes : [],
@@ -807,24 +977,31 @@ export default function RunsView() {
         parameters: baseGraph.parameters || {},
         metadata: {
           ...(baseGraph.metadata || {}),
-          name: baseGraph.metadata?.name || `fix-${shortRunId(selected)}`,
+          name: baseGraph.metadata?.name || `fix-${shortRunId(runId)}`,
           seed: baseGraph.metadata?.seed ?? 42,
-          description: `Explain/fix failed run ${selected}`,
+          description: `Fix failed run ${runId}${failure?.nodeId ? ` — node ${failure.nodeId}` : ''}: ${errorLine}`,
           created_at: baseGraph.metadata?.created_at ?? null,
           tags: [...(baseGraph.metadata?.tags || []), 'explain-failure'],
-          from_run: selected,
+          from_run: runId,
+          failed_node: failure?.nodeId ?? null,
+          failure_error: errorLine,
         },
       }
       const created = await apiJson<{ id?: string }>('/proposals', {
         method: 'POST',
         body: JSON.stringify({
-          summary: `Explain / propose fix for failed run ${selected}: ${errText}`.slice(0, 280),
+          summary: failureProposalSummary(runId, failure),
           graph,
           actor: 'ui-explain-failure',
         }),
       })
-      pushToast('Proposal created — review in Agent inbox', 'success')
-      openProposals(created?.id ? { id: String(created.id) } : {})
+      setAskAgentOpen(false)
+      const pid = created?.id ? String(created.id) : ''
+      pushToast('Sent to Agent inbox — an agent can now propose a fix', 'success', {
+        actionLabel: 'Open proposal',
+        onAction: () => openProposals(pid ? { id: pid } : {}),
+        ttlMs: 15000,
+      })
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     } finally {
@@ -837,8 +1014,10 @@ export default function RunsView() {
     try {
       await apiJson(`/runs/${selected}`, { method: 'DELETE' })
       pushToast(`Deleted run ${selected}`, 'success')
-      setSelected(null)
-      setDetail(null)
+      MISSING_RUN_IDS.add(selected)
+      if (useAppStore.getState().lastRunId === selected) setLastRunId(null)
+      clearSelection()
+      if (activeProject) window.history.replaceState(null, '', paths.runs(activeProject))
       await load()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
@@ -866,43 +1045,22 @@ export default function RunsView() {
       'unknown',
   )
   const logs = Array.isArray(detail?.logs) ? (detail!.logs as Array<Record<string, unknown>>) : []
-  const formattedLogs: FormattedLogRow[] = skipConsecutiveByText(
-    logs.map((l, i) => {
-      const raw = typeof l.message === 'string' ? l.message : JSON.stringify(l)
-      const line = formatExecutionLine(raw)
-      const nodeHint = extractLogNodeHint(l, line.text, raw)
-      const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
-      return { i, l, line, nodeHint, failed }
-    }),
+  // Drop the pipeline-level error row that restates the preceding node_error.
+  const formattedLogs: FormattedLogRow[] = dedupeErrorRows(
+    skipConsecutiveByText(
+      logs.map((l, i) => {
+        const raw = typeof l.message === 'string' ? l.message : JSON.stringify(l)
+        const line = formatExecutionLine(raw)
+        const nodeHint = extractLogNodeHint(l, line.text, raw)
+        const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
+        return { i, l, line, nodeHint, failed }
+      }),
+      (row) => row.line.text,
+    ),
     (row) => row.line.text,
+    (row) => (row.failed ? 'error' : row.line.level),
   )
 
-  const pipelineStackItems = React.useMemo(() => {
-    const items: Array<{ id: string; status?: string }> = []
-    const seenLabel = new Set<string>()
-    const push = (raw?: unknown, status?: unknown) => {
-      const id = String(raw || '').trim()
-      if (!id) return
-      const label = humanNodeLabel(id).toLowerCase()
-      if (seenLabel.has(label)) return
-      seenLabel.add(label)
-      items.push({
-        id,
-        status: typeof status === 'string' && status.trim() ? status : undefined,
-      })
-    }
-    if (Array.isArray(debug?.node_stats)) {
-      for (const n of debug.node_stats as Array<Record<string, unknown>>) {
-        push(n.node_id || n.node_type, n.status ?? n.state)
-      }
-    }
-    for (const a of runArtifacts) push(a.node_id || a.node_type)
-    for (const f of outputFiles) {
-      const g = guessNodeFromPath(f.path, runArtifacts, f)
-      if (g !== 'run') push(g)
-    }
-    return items
-  }, [debug, runArtifacts, outputFiles])
 
   React.useEffect(() => {
     // Only seed Focus from current_node while the run is live — on completed runs
@@ -930,6 +1088,26 @@ export default function RunsView() {
     : formattedLogs
 
   const selectedSummary = runs?.find((r) => r.run_id === selected)
+  const detailMeta =
+    detail?.meta && typeof detail.meta === 'object' ? (detail.meta as Record<string, unknown>) : null
+  const runNodeStats = (
+    Array.isArray(debug?.node_stats)
+      ? debug.node_stats
+      : Array.isArray(selectedSummary?.node_stats)
+        ? selectedSummary.node_stats
+        : Array.isArray(detailMeta?.node_stats)
+          ? detailMeta.node_stats
+          : []
+  ) as Array<Record<string, unknown>>
+  // "Promote model" only for runs that produced something model-like — a
+  // preprocess-only run (ingest → condition → segment) has nothing to stage.
+  const runProducedModel = runHasModelOutput({
+    files: outputFiles,
+    artifacts: runArtifacts,
+    metrics: (selectedSummary?.metrics ?? detailMeta?.metrics ?? null) as Record<string, unknown> | null,
+    nodeStats: runNodeStats,
+    registeredModels: runModels.length,
+  })
   const sourceRunId = String(
     (detail?.meta as { source_run_id?: string } | undefined)?.source_run_id ??
       detail?.source_run_id ??
@@ -944,6 +1122,42 @@ export default function RunsView() {
   const embeddedGraph = (detail?.graph ?? (detail?.meta as { graph?: unknown } | undefined)?.graph) as
     | GraphIR
     | undefined
+  const stackGraph =
+    embeddedGraph && Array.isArray(embeddedGraph.nodes) && Array.isArray(embeddedGraph.edges)
+      ? embeddedGraph
+      : runGraph
+  /**
+   * Node list for the run: every graph node in execution order (so a node that
+   * never ran after a failure still shows, numbered correctly), status from
+   * journal events → node_stats; not-run on a failed/cancelled run → skipped.
+   * Nodes only seen in artifacts / outputs (no graph available) are appended.
+   */
+  const pipelineStackItems = (() => {
+    const items = pipelineNodesFromRun({
+      graph: stackGraph as Parameters<typeof pipelineNodesFromRun>[0]['graph'],
+      nodeStats: runNodeStats,
+      events: logs,
+      runStatus,
+    }).map((n) => ({ id: n.id, label: n.label, status: n.status }))
+    const seen = new Set(items.map((i) => i.id))
+    const seenLabel = new Set(items.map((i) => i.label.toLowerCase()))
+    const push = (raw?: unknown) => {
+      const id = String(raw || '').trim()
+      if (!id || seen.has(id)) return
+      const label = humanNodeLabel(id)
+      if (seenLabel.has(label.toLowerCase())) return
+      seen.add(id)
+      seenLabel.add(label.toLowerCase())
+      items.push({ id, label, status: undefined })
+    }
+    for (const a of runArtifacts) push(a.node_id || a.node_type)
+    for (const f of outputFiles) {
+      const g = guessNodeFromPath(f.path, runArtifacts, f)
+      if (g !== 'run') push(g)
+    }
+    return items
+  })()
+
   const canOpenGraph = Boolean(
     selected &&
       (graphName ||
@@ -997,8 +1211,18 @@ export default function RunsView() {
     })
   }, [runs, statusFilter, nameQuery, activeProject, metricName, metricMin])
 
+  const filtersActive =
+    statusFilter !== 'all' || nameQuery.trim() !== '' || metricName.trim() !== ''
+  // Only when the user's filters are what hides it: the run exists (loaded
+  // here and in this page of the list) and a filter excludes it. A 404'd run
+  // or one on another page is not "hidden by filters".
   const selectedHiddenByFilters = Boolean(
-    selected && filteredRuns && !filteredRuns.some((r) => r.run_id === selected),
+    filtersActive &&
+      selected &&
+      notFoundRunId !== selected &&
+      runs?.some((r) => r.run_id === selected) &&
+      filteredRuns &&
+      !filteredRuns.some((r) => r.run_id === selected),
   )
 
   const clearRunFilters = React.useCallback(() => {
@@ -1355,12 +1579,7 @@ export default function RunsView() {
               <button
                 type="button"
                 className="btn-primary"
-                onClick={() => {
-                  setStatusFilter('all')
-                  setNameQuery('')
-                  setMetricName('')
-                  setMetricMin('')
-                }}
+                onClick={clearRunFilters}
               >
                 Clear filters
               </button>
@@ -1378,7 +1597,11 @@ export default function RunsView() {
               <li key={r.run_id}>
                 <button
                   type="button"
-                  onClick={() => void open(r.run_id)}
+                  onClick={() => {
+                    if (r.run_id !== selected) pushNextUrlRef.current = true
+                    void open(r.run_id)
+                  }}
+                  aria-current={selected === r.run_id ? 'true' : undefined}
                   className={`flex w-full min-w-0 flex-col gap-1 rounded-xl border px-3 py-2.5 text-left shadow-sm transition ${
                     selected === r.run_id
                       ? 'border-accent-200 bg-accent-50/80 shadow-soft'
@@ -1477,6 +1700,23 @@ export default function RunsView() {
                   Open Editor
                 </button>
               )
+            }
+          />
+        ) : notFoundRunId === selected ? (
+          <EmptyState
+            title={`Run ${shortRunId(selected)} not found`}
+            description="It may have been deleted, or the link points at a run from another API instance."
+            action={
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  clearSelection()
+                  if (activeProject) navigatePath(paths.runs(activeProject))
+                }}
+              >
+                Back to runs
+              </button>
             }
           />
         ) : (
@@ -1600,7 +1840,7 @@ export default function RunsView() {
                       )}
                     </div>
                   </details>
-                  {succeeded ? (
+                  {succeeded && runProducedModel ? (
                     <button
                       type="button"
                       className={
@@ -1674,16 +1914,59 @@ export default function RunsView() {
                         type="button"
                         className="btn-secondary !px-2 !py-1 text-[11px]"
                         disabled={explainBusy}
-                        onClick={() => void explainFailure()}
+                        aria-expanded={askAgentOpen}
+                        title="Create a proposal in the Agent inbox for an agent to fix this failure"
+                        onClick={() => setAskAgentOpen((v) => !v)}
                       >
-                        {explainBusy ? '…' : 'Explain'}
+                        Ask agent to fix
                       </button>
                     ) : null}
                   </div>
+                  {failed && runFailure ? (
+                    <p className="w-full truncate text-[11px] text-rose-900" title={runFailure.error}>
+                      {runFailure.nodeId ? (
+                        <span className="font-semibold">{humanNodeLabel(runFailure.nodeType || runFailure.nodeId)} · </span>
+                      ) : null}
+                      {runFailure.error.split('\n')[0]}
+                    </p>
+                  ) : null}
+                  {failed && askAgentOpen ? (
+                    <div
+                      role="dialog"
+                      aria-label="Ask agent to fix"
+                      className="w-full space-y-2 rounded-lg border border-ink-200 bg-white px-3 py-2 text-[12px] text-ink-700"
+                    >
+                      <p>
+                        This creates a <span className="font-semibold">pending proposal</span> in the Agent inbox with
+                        this run’s graph and its failure — it does not change anything yet. An agent (or you) fills in
+                        the fix; review and accept it there.
+                      </p>
+                      <p className="font-mono text-[11px] text-ink-500">
+                        {failureProposalSummary(selected, runFailure)}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          className="btn-primary !px-2 !py-1 text-[11px]"
+                          disabled={explainBusy}
+                          onClick={() => void askAgentToFix()}
+                        >
+                          {explainBusy ? 'Sending…' : 'Send to Agent inbox'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-quiet !px-2 !py-1 text-[11px]"
+                          onClick={() => setAskAgentOpen(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
-              {succeeded && promoteOpen ? (
+              {succeeded && runProducedModel && promoteOpen ? (
                 <div id="run-promote-panel" className="rounded-xl border border-accent-200/70 bg-white px-3 py-2.5 shadow-sm space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[12px] text-ink-600">
@@ -1915,7 +2198,16 @@ export default function RunsView() {
                     : null
                   const isLatest = detail?.is_latest === true
                   const groups = new Map<string, OutputFile[]>()
-                  for (const f of outputFiles) {
+                  // Nodes whose full listing was loaded via "Show all" replace
+                  // their (capped) entries from the run-wide listing.
+                  const expandedIds = new Set(Object.keys(expandedNodeFiles))
+                  const allFiles: OutputFile[] = [
+                    ...outputFiles.filter((f) => !expandedIds.has(guessNodeFromPath(f.path, runArtifacts, f))),
+                    ...Object.entries(expandedNodeFiles).flatMap(([nid, fs]) =>
+                      fs.map((f) => ({ ...f, node_id: f.node_id || nid })),
+                    ),
+                  ]
+                  for (const f of allFiles) {
                     const g = guessNodeFromPath(f.path, runArtifacts, f)
                     if (focusNodeId) {
                       // Node focus: only that node's files — never run-level journal files.
@@ -1931,20 +2223,84 @@ export default function RunsView() {
                     list.push(f)
                     groups.set(g, list)
                   }
-                  const nodeOrder: string[] = []
-                  for (const a of runArtifacts) {
-                    const nid = String(a.node_id || '').trim()
-                    if (nid && !nodeOrder.includes(nid) && groups.has(nid)) nodeOrder.push(nid)
-                  }
-                  for (const k of groups.keys()) {
-                    if (k !== 'run' && !nodeOrder.includes(k)) nodeOrder.push(k)
-                  }
+                  for (const [k, fs] of groups) groups.set(k, sortFilesNatural(fs))
+                  // Execution order (node_stats.node_index → graph → journal),
+                  // so groups read Dataset Ingest → … → Trainer, and nodes that
+                  // only passed data in memory still get a row.
+                  const execOrder = executionOrderFromRun({
+                    nodeStats: runNodeStats,
+                    graphNodes: (stackGraph?.nodes as Array<{ id?: unknown }> | undefined)?.length
+                      ? pipelineStackItems.map((i) => ({ id: i.id }))
+                      : undefined,
+                    events: logs,
+                  })
                   const order = focusNodeId
-                    ? nodeOrder
-                    : [...nodeOrder, ...(groups.has('run') ? (['run'] as const) : [])]
+                    ? orderOutputGroups(
+                        execOrder.filter((id) => focusMatchesNode(focusNodeId, id)),
+                        groups.keys(),
+                      ).filter((k) => k !== 'run')
+                    : orderOutputGroups(execOrder, groups.keys())
+                  const firstWithFiles = order.find((g) => (groups.get(g) || []).length > 0)
                   const selectedFile =
-                    outputFiles.find((f) => f.path === selectedOutputPath) ||
-                    (order.length ? (groups.get(order[0]) || [])[0] : undefined)
+                    allFiles.find((f) => f.path === selectedOutputPath) ||
+                    (firstWithFiles ? (groups.get(firstWithFiles) || [])[0] : undefined)
+
+                  const showAllForNode = async (nid: string) => {
+                    if (!selected) return
+                    const runId = selected
+                    setExpandingNode(nid)
+                    try {
+                      const res = await apiJson<{ items?: OutputFile[]; total?: number; has_more?: boolean }>(
+                        `/runs/${encodeURIComponent(runId)}/outputs`,
+                        { query: { node_id: nid, limit: 1000, offset: 0 } },
+                      )
+                      if (selectedRef.current !== runId) return
+                      const items = Array.isArray(res) ? (res as OutputFile[]) : Array.isArray(res?.items) ? res.items : []
+                      setExpandedNodeFiles((prev) => ({ ...prev, [nid]: items }))
+                      const total = typeof res?.total === 'number' ? res.total : items.length
+                      setOutputsMeta((prev) => {
+                        const byNode = { ...prev.byNode }
+                        if (total > items.length) byNode[nid] = { shown: items.length, total }
+                        else delete byNode[nid]
+                        return { ...prev, byNode }
+                      })
+                    } catch (err) {
+                      pushToast(err instanceof Error ? err.message : String(err), 'error')
+                    } finally {
+                      setExpandingNode((cur) => (cur === nid ? null : cur))
+                    }
+                  }
+
+                  const renderTruncation = (nid: string, shownCount: number) => {
+                    const t = outputsMeta.byNode[nid]
+                    if (!t || t.total <= shownCount) return null
+                    const more = t.total - shownCount
+                    const expanded = Boolean(expandedNodeFiles[nid])
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-ink-200 px-2.5 py-1.5 text-[11px] text-ink-500">
+                        <span>
+                          +{more.toLocaleString()} more {more === 1 ? 'file' : 'files'} not listed
+                        </span>
+                        {!expanded ? (
+                          <button
+                            type="button"
+                            className="font-medium text-accent-800 hover:underline disabled:opacity-50"
+                            disabled={expandingNode === nid}
+                            onClick={() => void showAllForNode(nid)}
+                          >
+                            {expandingNode === nid ? 'Loading…' : `Show all ${t.total.toLocaleString()}`}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="font-medium text-accent-800 hover:underline"
+                          onClick={() => void downloadZip()}
+                        >
+                          Download all
+                        </button>
+                      </div>
+                    )
+                  }
 
                   const renderFileList = (files: OutputFile[], group: string) => (
                     <ul className="space-y-1">
@@ -2011,11 +2367,16 @@ export default function RunsView() {
                           </button>
                         )}
                       </div>
-                      {outputFiles.length === 0 ? (
-                        <div className="text-sm text-ink-500">No downloadable files for this run.</div>
-                      ) : groups.size === 0 ? (
+                      {outputsMeta.truncated && Object.keys(outputsMeta.byNode).length === 0 ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] text-amber-950">
+                          The file listing was capped by the server — use Download all for every file.
+                        </div>
+                      ) : null}
+                      {order.length === 0 ? (
                         <div className="text-sm text-ink-500">
-                          No files for this node — select All or another step on the left.
+                          {focusNodeId
+                            ? `No file outputs for ${humanNodeLabel(focusNodeId)} (in-memory only) — select All or another step on the left.`
+                            : 'No downloadable files for this run.'}
                         </div>
                       ) : (
                         <SplitPane
@@ -2042,6 +2403,21 @@ export default function RunsView() {
                                         Journal / graph / summary for the whole run — not a node’s I/O.
                                       </p>
                                       {renderFileList(files, 'run')}
+                                    </div>
+                                  )
+                                }
+                                if (files.length === 0) {
+                                  return (
+                                    <div key={group} className="space-y-1">
+                                      <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                                        {humanNodeLabel(group)}
+                                      </div>
+                                      <p
+                                        className="rounded-lg border border-dashed border-ink-200 px-2.5 py-1.5 text-[11px] text-ink-400"
+                                        title="This step passed its results to the next node in memory and wrote no files"
+                                      >
+                                        No file outputs (in-memory)
+                                      </p>
                                     </div>
                                   )
                                 }
@@ -2078,6 +2454,7 @@ export default function RunsView() {
                                         {renderFileList(inputs, group)}
                                       </div>
                                     ) : null}
+                                    {renderTruncation(group, files.length)}
                                   </div>
                                 )
                               })}

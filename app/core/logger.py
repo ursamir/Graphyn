@@ -5,7 +5,8 @@ Responsibility:   Structured event logging for pipeline execution. Emits typed
                   events to an in-memory deque and an optional streaming queue.
 Owns:             PipelineLogger — all pipeline/node lifecycle event methods.
 Public Surface:   PipelineLogger (pipeline_start, node_start, node_end,
-                  node_error, node_skip, wave_start, wave_end, summary, etc.)
+                  node_error, node_skip, wave_start, wave_end, summary, etc.),
+                  port_item_counts(), primary_output_count().
 Must NOT:         Import from app.domain, app.api, or any execution module.
                   Must not persist logs directly (that is run_journal's job).
 Dependencies:     stdlib (logging, time, collections, queue, datetime).
@@ -20,6 +21,31 @@ from datetime import datetime, timezone
 from queue import Queue
 
 _log = logging.getLogger(__name__)
+
+# Port whose item count is the node's headline ``output_count``.
+PRIMARY_OUTPUT_PORT = "output"
+
+
+def port_item_counts(outputs: dict | None) -> dict[str, int]:
+    """Items per output port: list length, 0 for None, 1 for any other value."""
+    counts: dict[str, int] = {}
+    for port, value in (outputs or {}).items():
+        if isinstance(value, list):
+            counts[str(port)] = len(value)
+        else:
+            counts[str(port)] = 0 if value is None else 1
+    return counts
+
+
+def primary_output_count(port_counts: dict[str, int]) -> int:
+    """Count of the ``output`` port when present, else the sum over all ports.
+
+    Side ports (``rejected``, ``error`` …) of a node with a main ``output``
+    port are not added, so a gate passing 206 of 219 reports 206.
+    """
+    if PRIMARY_OUTPUT_PORT in port_counts:
+        return int(port_counts[PRIMARY_OUTPUT_PORT])
+    return int(sum(port_counts.values()))
 
 # Maximum number of log entries kept in memory per logger instance (B-09 fix).
 # Prevents unbounded memory growth for long-running pipelines.
@@ -128,15 +154,32 @@ class PipelineLogger:
         _log.info("[%s] %s — starting", index, node_type)
         self._emit_structured(event)
 
-    def node_end(self, node_type, index, duration, output_count: int = 0, node_id=None):
+    def node_end(
+        self,
+        node_type,
+        index,
+        duration,
+        output_count: int = 0,
+        node_id=None,
+        output_counts: dict[str, int] | None = None,
+    ):
         """Emit a node_end event.
 
         Args:
-            output_count: Total number of output items across all ports
-                          (sum of list lengths for list-typed ports, 1 for
-                          scalar ports). Not a port count.
+            output_count: Item count of the node's primary output (used when
+                          ``output_counts`` is not given).
+            output_counts: Per-port item counts (see :func:`port_item_counts`).
+                          When given, ``output_count`` is derived from it via
+                          :func:`primary_output_count` (the ``output`` port
+                          when present — a gate's ``rejected`` port is not
+                          added), and the event also carries
+                          ``output_counts`` and ``rejected_count``.
         """
+        if output_counts is not None:
+            output_count = primary_output_count(output_counts)
         count_str = f" → {output_count} output items" if output_count else ""
+        if output_counts and "rejected" in output_counts:
+            count_str += f" ({output_counts['rejected']} rejected)"
         _log.info("[%s] %s — done in %.3fs%s", index, node_type, duration, count_str)
         # Use "duration_s" consistently across all events (B-10 fix)
         end_event = {
@@ -147,6 +190,10 @@ class PipelineLogger:
             "output_count": output_count,
             "timestamp": self._timestamp(),
         }
+        if output_counts is not None:
+            end_event["output_counts"] = dict(output_counts)
+            if "rejected" in output_counts:
+                end_event["rejected_count"] = output_counts["rejected"]
         if node_id:
             end_event["node_id"] = node_id
         self._emit_structured(end_event)
@@ -157,6 +204,9 @@ class PipelineLogger:
             "type": "node_error",
             "node_type": node_type,
             "node_index": index,
+            # ``error`` is the canonical field (same as run meta / terminal
+            # events); ``error_message`` kept for older consumers.
+            "error": str(error),
             "error_message": str(error),
             "error_type": type(error).__name__,
             "timestamp": self._timestamp(),
@@ -177,6 +227,7 @@ class PipelineLogger:
         self._emit_structured({
             "type": "error",
             "message": message,
+            "error": message,
             "timestamp": self._timestamp(),
         })
 

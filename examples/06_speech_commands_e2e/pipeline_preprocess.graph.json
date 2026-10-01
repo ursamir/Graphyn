@@ -54,7 +54,8 @@
       "node_type": "audio_quality_gate",
       "config": {
         "min_snr_db": 5.0,
-        "rejection_policy": "skip"
+        "rejection_policy": "skip",
+        "check_duration": false
       },
       "label": null,
       "capability_metadata": null,
@@ -66,7 +67,12 @@
       "config": {
         "min_duration_s": 0.2,
         "max_duration_s": 1.0,
-        "rejection_policy": "skip"
+        "rejection_policy": "skip",
+        "check_duration": true,
+        "check_snr": false,
+        "check_clipping": false,
+        "check_silence": false,
+        "check_bandwidth": false
       },
       "label": null,
       "capability_metadata": null,

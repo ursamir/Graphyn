@@ -206,6 +206,36 @@ class AudioSampleHandler:
 
         return None
 
+    def list_files(self, src_dir: Path):
+        """Expose WAV + manifest inventory for run-output listing."""
+        from app.core.artifacts.artifact_serializer import FileListing, FileListingEntry
+
+        manifest_path = src_dir / "manifest.json"
+        if not manifest_path.is_file():
+            return None
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(
+                "AudioSampleHandler.list_files: corrupt manifest at %s (%s)",
+                src_dir,
+                exc,
+            )
+            return None
+        samples = manifest.get("samples") if isinstance(manifest, dict) else None
+        if not isinstance(samples, list):
+            return None
+        entries: list[FileListingEntry] = [
+            FileListingEntry(path=manifest_path, name="manifest.json")
+        ]
+        for entry in samples:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("filename")
+            if isinstance(name, str) and name.strip():
+                entries.append(FileListingEntry(path=src_dir / name, name=name))
+        return FileListing(total=len(samples) + 1, entries=entries)
+
 
 # ---------------------------------------------------------------------------
 # Registration entry point

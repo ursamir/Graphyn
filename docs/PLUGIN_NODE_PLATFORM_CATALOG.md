@@ -51,7 +51,13 @@ node_types = ["my_node"]
 [config_schema.my_node]
 field = { type = "string", title = "Field", default = "", enum = ["a","b"],
           description = "…", ui = { group = "Basic" } }
+rate  = { type = "number", default = 0.5, exclusiveMinimum = 0, maximum = 1, multipleOf = 0.05,
+          ui = { group = "Advanced", visible_if = { field = "b" }, depends_on = ["field"] } }
 ```
+
+`GET /api/v1/nodes` (`config_schema`) passes these keys through to each property: `type`, `title`, `description`, `default`, `enum`, `format`, `items`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `pattern`, `minItems`, `maxItems`, `widget`, `group`, `visible_if`, `depends_on`. The whole `ui` table is passed through as `ui`, with `ui.widget` / `ui.group` also flattened to `widget` / `group`.
+
+**Isolated nodes keep their real category.** For `runtime = "isolated"` plugins, the host reads `label` / `description` / `category` / `tags` and the capability flags from the `metadata = NodeMetadata(...)` literal using the AST, without importing the plugin. Keep those keyword values literal, or the stub falls back to the manifest values and category `plugin`.
 
 **Rules (from real loader behavior):**
 

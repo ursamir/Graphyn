@@ -8,6 +8,8 @@ import clsx from 'clsx'
 
 export type PipelineStackItem = {
   id: string
+  /** Display label (graph node label); falls back to a humanized id. */
+  label?: string
   status?: string
 }
 
@@ -17,6 +19,7 @@ function statusDotClass(status?: string): string {
   if (['failed', 'error'].includes(s)) return 'bg-rose-500'
   if (['running', 'queued', 'paused', 'pending'].includes(s)) return 'bg-sky-500'
   if (['cancelled', 'canceled'].includes(s)) return 'bg-ink-400'
+  if (s === 'skipped') return 'border border-dashed border-ink-400 bg-transparent'
   return 'bg-ink-300'
 }
 
@@ -65,13 +68,14 @@ export function PipelineStack({
       <ol className="space-y-1">
         {items.map((item, idx) => {
           const active = value != null && focusMatchesNode(value, item.id)
-          const label = humanNodeLabel(item.id)
+          const label = item.label || humanNodeLabel(item.id)
+          const statusText = item.status === 'skipped' ? 'skipped (not run)' : item.status
           return (
             <li key={item.id}>
               <button
                 type="button"
                 onClick={() => onChange(item.id)}
-                title={item.status ? `${label} · ${item.status}` : label}
+                title={statusText ? `${label} · ${statusText}` : label}
                 className={clsx(
                   'flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left transition',
                   active
@@ -87,13 +91,21 @@ export function PipelineStack({
                 >
                   {idx + 1}
                 </span>
-                <span className="min-w-0 flex-1 text-sm font-medium leading-snug text-ink-900">
+                <span
+                  className={clsx(
+                    'min-w-0 flex-1 text-sm font-medium leading-snug',
+                    item.status === 'skipped' ? 'text-ink-400' : 'text-ink-900',
+                  )}
+                >
                   {label}
+                  {item.status === 'skipped' ? (
+                    <span className="block text-[10px] font-normal text-ink-400">not run</span>
+                  ) : null}
                 </span>
                 {item.status ? (
                   <span
                     className={clsx('mt-1.5 h-2 w-2 shrink-0 rounded-full', statusDotClass(item.status))}
-                    aria-label={item.status}
+                    aria-label={statusText}
                   />
                 ) : null}
               </button>

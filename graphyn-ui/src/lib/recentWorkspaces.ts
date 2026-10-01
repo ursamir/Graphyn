@@ -10,6 +10,8 @@
  * header's "Back to X" chip both silently stopped working after one visit.
  */
 
+import { isWorkspaceKnownMissing } from './workspaceValidity'
+
 const KEY = 'graphyn.recentWorkspaces'
 const MAX = 5
 
@@ -24,7 +26,7 @@ export function readRecentWorkspaces(): string[] {
 
 export function noteRecentWorkspace(name: string) {
   const trimmed = name.trim()
-  if (!trimmed) return
+  if (!trimmed || isWorkspaceKnownMissing(trimmed)) return
   try {
     const next = [trimmed, ...readRecentWorkspaces().filter((n) => n !== trimmed)].slice(0, MAX)
     localStorage.setItem(KEY, JSON.stringify(next))
@@ -37,6 +39,19 @@ export function noteRecentWorkspace(name: string) {
 export function forgetRecentWorkspace(name: string) {
   try {
     localStorage.setItem(KEY, JSON.stringify(readRecentWorkspaces().filter((n) => n !== name)))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Keep only recents that still exist (`known` = every workspace name). */
+export function pruneRecentWorkspaces(known: Iterable<string>) {
+  const k = new Set(known)
+  const cur = readRecentWorkspaces()
+  const next = cur.filter((n) => k.has(n))
+  if (next.length === cur.length) return
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next))
   } catch {
     /* ignore */
   }

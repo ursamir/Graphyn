@@ -1,4 +1,5 @@
 import React from 'react'
+import { MousePointerClick as EmptyMousePointerClick, Package as EmptyPackage } from 'lucide-react'
 import clsx from 'clsx'
 import { Copy, Download, GitBranch, History, Play, RefreshCw, Workflow } from 'lucide-react'
 import { apiJson, downloadOutputFile, fetchOutputBlobUrl } from '../../api/client'
@@ -526,7 +527,7 @@ export default function ArtifactsView() {
         {items === null ? (
           <LoadingBlock />
         ) : items.length === 0 ? (
-          <EmptyState
+          <EmptyState icon={EmptyPackage}
             title={
               hasActiveFilters
                 ? 'No artifacts match these filters'
@@ -673,7 +674,7 @@ export default function ArtifactsView() {
         detail={
       <div className="space-y-3">
         {!selected ? (
-          <EmptyState
+          <EmptyState icon={EmptyMousePointerClick}
             title="Select an artifact"
             description="Inspect this output, download it, open Runs → Lineage, or jump to its run."
             action={

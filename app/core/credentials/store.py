@@ -23,6 +23,7 @@ from app.core.credentials.crypto import credentials_dir, seal, unseal
 from app.core.credentials.errors import CredentialError, CredentialNotFoundError
 from app.core.credentials.kinds import (
     redact_payload,
+    secret_fields_set,
     require_kind,
     validate_payload,
 )
@@ -76,10 +77,13 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
 
 def _row_meta(row: sqlite3.Row, *, include_redacted: bool = True) -> dict[str, Any]:
     payload: dict[str, Any] = {}
+    secrets_set: dict[str, bool] = {}
     if include_redacted and not row["revoked"]:
         try:
             raw = json.loads(unseal(row["sealed_payload"]).decode("utf-8"))
-            payload = redact_payload(row["kind"], raw if isinstance(raw, dict) else {})
+            raw = raw if isinstance(raw, dict) else {}
+            payload = redact_payload(row["kind"], raw)
+            secrets_set = secret_fields_set(row["kind"], raw)
         except Exception:
             payload = {"_error": "unreadable"}
     meta: dict[str, Any] = {}
@@ -97,6 +101,8 @@ def _row_meta(row: sqlite3.Row, *, include_redacted: bool = True) -> dict[str, A
         "updated_at": row["updated_at"],
         "meta": meta,
         "fields": payload,
+        # Secret values are never returned: set → "***", unset → "".
+        "secret_fields_set": secrets_set,
         "resource_version": row["updated_at"],
     }
 

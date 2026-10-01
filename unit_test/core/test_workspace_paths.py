@@ -2,6 +2,8 @@
 """Unit tests for rewire_graph_outputs."""
 from __future__ import annotations
 
+import pytest
+
 from app.core.paths.workspace_paths import artifact_slug, rewire_graph_outputs
 
 
@@ -394,24 +396,70 @@ class TestPublishLatest:
 
 
 class TestResolveIngestDir:
-    def test_missing_latest_falls_back_to_bundled_speech_commands(self, tmp_path, monkeypatch):
+    def _seed_bundled(self, tmp_path, monkeypatch):
         data = tmp_path / "examples" / "02_speech_commands" / "data"
-        data.mkdir(parents=True)
         yes = data / "yes"
-        yes.mkdir()
+        yes.mkdir(parents=True)
         (yes / "clip.wav").write_bytes(b"RIFF")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path / "workspace"))
         (tmp_path / "workspace").mkdir()
-        from app.core.paths.workspace_paths import resolve_ingest_dir
-        # monkeypatch examples_dir
         import app.core.templates.example_templates as et
+
         monkeypatch.setattr(et, "repo_root", lambda: tmp_path)
         monkeypatch.setattr(et, "examples_dir", lambda: tmp_path / "examples")
+        return data
+
+    def test_missing_produced_dataset_raises_instead_of_raw_clip_fallback(
+        self, tmp_path, monkeypatch
+    ):
+        """A missing Phase-1 dataset must not be masked by bundled raw clips."""
+        self._seed_bundled(tmp_path, monkeypatch)
+        monkeypatch.delenv("GRAPHYN_INGEST_EXAMPLE_FALLBACK", raising=False)
+        from app.core.paths.workspace_paths import resolve_ingest_dir
+
+        for raw in (
+            "workspace/artifacts/speech-commands/latest/dataset/speech_commands/v1",
+            "workspace/artifacts/speech-commands/dataset/speech_commands/v1",
+            "workspace/datasets/output/e06-verify-1/v1",
+        ):
+            with pytest.raises(FileNotFoundError, match="has not been produced yet"):
+                resolve_ingest_dir(raw)
+
+    def test_produced_dataset_example_fallback_is_opt_in(self, tmp_path, monkeypatch):
+        data = self._seed_bundled(tmp_path, monkeypatch)
+        monkeypatch.setenv("GRAPHYN_INGEST_EXAMPLE_FALLBACK", "1")
+        from app.core.paths.workspace_paths import resolve_ingest_dir
+
         found = resolve_ingest_dir(
             "workspace/artifacts/speech-commands/latest/dataset/speech_commands/v1"
         )
         assert found == data
+
+    def test_produced_dataset_is_used_when_present(self, tmp_path, monkeypatch):
+        self._seed_bundled(tmp_path, monkeypatch)
+        ds = tmp_path / "workspace" / "artifacts" / "speech-commands" / "dataset" / "speech_commands" / "v1"
+        (ds / "train" / "yes").mkdir(parents=True)
+        (ds / "train" / "yes" / "a.wav").write_bytes(b"RIFF")
+        from app.core.paths.workspace_paths import resolve_ingest_dir
+
+        assert resolve_ingest_dir(
+            "workspace/artifacts/speech-commands/dataset/speech_commands/v1"
+        ).resolve() == ds.resolve()
+        # latest/ maps onto the stable dataset tree.
+        assert resolve_ingest_dir(
+            "workspace/artifacts/speech-commands/latest/dataset/speech_commands/v1"
+        ).resolve() == ds.resolve()
+
+    def test_is_produced_dataset_path(self):
+        from app.core.paths.workspace_paths import is_produced_dataset_path
+
+        assert is_produced_dataset_path("workspace/artifacts/sc/dataset/x/v1")
+        assert is_produced_dataset_path("workspace/artifacts/sc/latest/dataset/x")
+        assert is_produced_dataset_path("workspace/datasets/output/proj/v1")
+        assert not is_produced_dataset_path("workspace/datasets/input/speech-commands/yes")
+        assert not is_produced_dataset_path("examples/02_speech_commands/data/yes")
+        assert not is_produced_dataset_path("")
 
     def test_empty_workspace_input_falls_back_to_examples_data(self, tmp_path, monkeypatch):
         data = tmp_path / "examples" / "02_speech_commands" / "data" / "yes"

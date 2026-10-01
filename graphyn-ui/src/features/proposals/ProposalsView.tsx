@@ -1,4 +1,5 @@
 import React from 'react'
+import { Bot as EmptyBot, FileQuestionMark as EmptyFileQuestionMark, MousePointerClick as EmptyMousePointerClick, SearchX as EmptySearchX } from 'lucide-react'
 import {
   Check,
   ExternalLink,
@@ -9,6 +10,7 @@ import {
   X,
 } from 'lucide-react'
 import { ApiError, apiJson, configuredActor } from '../../api/client'
+import { sharedFetch } from '../../lib/sharedFetch'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import { emptyGraph } from '../../types/graph'
@@ -184,7 +186,16 @@ export default function ProposalsView() {
         if (prev && list.some((p) => p.id === prev)) return prev
         return list[0]?.id ?? null
       })
-      const pendingPayload = await apiJson<{ proposals: ProposalSummary[] }>('/proposals?status=pending')
+      // When this list *is* the pending list, reuse it for the badge instead of a
+      // second identical GET; otherwise share the request with App's badge poller.
+      const pendingPayload =
+        filter === 'pending'
+          ? data
+          : await sharedFetch<{ proposals: ProposalSummary[] }>(
+              'proposals:pending',
+              () => apiJson<{ proposals: ProposalSummary[] }>('/proposals?status=pending'),
+              { fresh: true },
+            )
       const pendingCount = Array.isArray(pendingPayload?.proposals) ? pendingPayload.proposals.length : 0
       setPendingProposalCount(pendingCount)
     } catch (err) {
@@ -538,7 +549,7 @@ export default function ProposalsView() {
             <LoadingBlock label="Loading proposals…" />
           ) : !items?.length ? (
             <div className="p-4">
-              <EmptyState
+              <EmptyState icon={EmptyBot}
                 title="No proposals yet"
                 description={
                   filter === 'pending'
@@ -557,7 +568,7 @@ export default function ProposalsView() {
             </div>
           ) : visibleItems.length === 0 ? (
             <div className="p-4">
-              <EmptyState
+              <EmptyState icon={EmptySearchX}
                 title="No matching proposals"
                 description={`Nothing matches “${search.trim()}”. Try another actor, summary, or id.`}
               />
@@ -604,14 +615,14 @@ export default function ProposalsView() {
         detail={
         <section className="min-h-0 px-4 py-4 sm:px-6">
           {!selectedId ? (
-            <EmptyState
+            <EmptyState icon={EmptyMousePointerClick}
               title="Select a proposal"
               description="Review the diff summary, then Accept to load into Editor or Reject."
             />
           ) : detailLoading && !detail ? (
             <LoadingBlock label="Loading proposal…" />
           ) : !detail ? (
-            <EmptyState title="Proposal not found" description="It may have been removed." />
+            <EmptyState icon={EmptyFileQuestionMark} title="Proposal not found" description="It may have been removed." />
           ) : (
             <div className="mx-auto max-w-3xl space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-3">

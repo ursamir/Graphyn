@@ -49,6 +49,20 @@ optional_dependencies = ["torch>=2.0"]             # heavy deps — node must de
 runtime = "inprocess"                              # or "isolated" for conflicting stacks
 ```
 
+**Config schema (Builder form contract):** one `[config_schema.<node_type>]` table per node; each
+field is an inline table using JSON-Schema keywords. Keep it in sync with the node's Pydantic
+`Config` (same names, defaults, `Literal` ↔ `enum`, `Field(ge/le/gt/lt)` ↔
+`minimum/maximum/exclusiveMinimum/exclusiveMaximum`, `Field(pattern=…)` ↔ `pattern`) —
+`unit_test/plugins/test_example06_schema.py` enforces this for the Example 06 plugins.
+`ui.visible_if` hides a field unless every listed field matches (value, or any value of a list):
+
+```toml
+[config_schema.audio_conditioner]
+normalize_method = { type = "string", default = "peak", enum = ["peak", "rms", "lufs"], ui = { visible_if = { normalize = true } } }
+target_lufs      = { type = "number", default = -23.0, minimum = -70, maximum = 0, ui = { visible_if = { normalize = true, normalize_method = "lufs" } } }
+target_level_db  = { type = "number", default = -1.0, minimum = -96, maximum = 0, ui = { visible_if = { normalize_method = ["peak", "rms"] } } }
+```
+
 **Credentials:** declare kinds the plugin consumes; graphs bind by connection id only.
 
 ```toml

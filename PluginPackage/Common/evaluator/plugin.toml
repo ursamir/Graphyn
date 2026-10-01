@@ -29,9 +29,9 @@ runtime = "isolated"
 node_types = ["evaluator"]
 
 [config_schema.evaluator]
-output_path = { type = "string", title = "Output path", default = "workspace/artifacts/evaluation", description = "Write under workspace/artifacts (relative to the Graphyn workspace)." }
-plot_confusion_matrix = { type = "boolean", title = "Plot Confusion Matrix", default = true, description = "Enable plot confusion matrix." }
-plot_training_curves = { type = "boolean", title = "Plot Training Curves", default = true, description = "Enable plot training curves." }
-compute_roc = {  type = "boolean", title = "Compute ROC", default = true, description = "Compute ROC/AUC curves when binary labels are available (On/Off)."  }
-compute_fairness = { type = "boolean", title = "Compute Fairness", default = false, description = "Enable compute fairness." }
-fairness_attribute_key = { type = "string", title = "Fairness attribute key", default = "speaker_id", description = "Metadata key used to slice fairness metrics (e.g. gender)." }
+output_path = { type = "string", title = "Output path", default = "workspace/artifacts/evaluation", description = "Directory for metrics.json, confusion_matrix.png, training_curves.png, roc_curves.png (under workspace/artifacts)." }
+plot_confusion_matrix = { type = "boolean", title = "Plot Confusion Matrix", default = true, description = "Save confusion_matrix.png (needs matplotlib + seaborn) (On/Off)." }
+plot_training_curves = { type = "boolean", title = "Plot Training Curves", default = true, description = "Save training_curves.png from the trainer history (On/Off)." }
+compute_roc = {  type = "boolean", title = "Compute ROC", default = true, description = "Compute macro ROC AUC (one-vs-rest for multi-class, positive class for binary) and save roc_curves.png (On/Off)."  }
+compute_fairness = { type = "boolean", title = "Compute Fairness", default = false, description = "Per-group test accuracy sliced by fairness_attribute_key from dataset_builder test_metadata; warns when a group deviates > 10% (On/Off)." }
+fairness_attribute_key = { type = "string", title = "Fairness attribute key", default = "speaker_id", description = "Per-sample metadata key used to slice fairness metrics (e.g. speaker_id, gender). Samples without the key are ignored.", ui = { visible_if = { compute_fairness = true } } }

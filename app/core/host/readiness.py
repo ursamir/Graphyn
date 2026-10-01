@@ -4,13 +4,16 @@ Bounded Context:  BC6 — Observability & Storage (operational readiness)
 Responsibility:   Shared readiness snapshot (OPS-014 / PERS-021 / OPS-007):
                   registry readiness, store_corrupt markers at known index
                   paths, disk-full and project-dir writability probes.
-Owns:             readiness_snapshot(), clear_readiness_cache().
+Owns:             readiness_snapshot(), clear_readiness_cache(),
+                  catalog_summary() (non-blocking ``catalog`` section:
+                  installed vs bundled plugins, partial_catalog warning).
 Public Surface:   readiness_snapshot(max_age_s=None) -> dict; used by REST
                   /system/readiness, MCP readiness, and the PERS-020 store
                   guard (store_integrity.readiness_store_corrupt).
 Must NOT:         Import app.api / app.domain; recursively glob the workspace
                   (artifact trees can be huge) — only known index locations.
-Dependencies:     app.core.config, app.core.nodes, stdlib (os, shutil, time).
+Dependencies:     app.core.config, app.core.nodes, app.core.plugins (store /
+                  manifest, lazy), stdlib (os, shutil, time, tomllib).
 Reason To Change: New readiness signal, or index / quarantine file layout.
 
 Caching: guarded GETs call this on every request, so results are cached per
@@ -47,6 +50,104 @@ def clear_readiness_cache() -> None:
     """Drop cached snapshots (tests / after repairing a corrupt index)."""
     with _CACHE_LOCK:
         _CACHE.clear()
+        _CATALOG_CACHE.clear()
+
+
+_CATALOG_TTL_S = 30.0
+_CATALOG_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _bundled_manifest_summary(root: Path) -> tuple[int, set[str]]:
+    """(manifest count, declared node types) for ``PluginPackage/*/*/plugin.toml``."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - py<3.11
+        tomllib = None  # type: ignore[assignment]
+    from app.core.config import bundled_plugin_allowlist
+
+    allow = bundled_plugin_allowlist()
+    count = 0
+    node_types: set[str] = set()
+    try:
+        tomls = sorted(root.glob("*/*/plugin.toml")) if root.is_dir() else []
+    except OSError:
+        tomls = []
+    for path in tomls:
+        data: dict[str, Any] = {}
+        if tomllib is not None:
+            try:
+                data = tomllib.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+        plugin = data.get("plugin") if isinstance(data.get("plugin"), dict) else {}
+        name = str(plugin.get("name") or path.parent.name)
+        if allow is not None and name not in allow:
+            continue
+        count += 1
+        declared = plugin.get("node_types") or data.get("node_types") or []
+        if isinstance(declared, list):
+            node_types.update(str(n) for n in declared if n)
+    return count, node_types
+
+
+def catalog_summary(registered_node_types: int | None = None) -> dict[str, Any]:
+    """Informational catalog coverage — never affects ``ready``.
+
+    ``partial_catalog`` is True when fewer plugins are installed+enabled than
+    bundled manifests exist (after ``GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST``), or
+    the registry has fewer node types than the bundled manifests declare.
+    Cached for 30s (the PluginPackage glob is cheap but not free).
+    """
+    from app.core.config import plugin_package_dir
+
+    root = plugin_package_dir()
+    key = str(root)
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        hit = _CATALOG_CACHE.get(key)
+    if hit is not None and now - hit[0] <= _CATALOG_TTL_S:
+        base = copy.deepcopy(hit[1])
+    else:
+        bundled, declared = _bundled_manifest_summary(root)
+        installed = enabled = 0
+        try:
+            from app.core.plugins.store import PluginStore
+
+            records = PluginStore().list()
+            installed = len(records)
+            enabled = sum(1 for r in records if getattr(r, "enabled", False))
+        except Exception:
+            pass
+        base = {
+            "bundled_plugins": bundled,
+            "bundled_node_types": len(declared),
+            "installed_plugins": installed,
+            "enabled_plugins": enabled,
+            "plugin_package_dir": str(root),
+        }
+        with _CACHE_LOCK:
+            _CATALOG_CACHE[key] = (now, copy.deepcopy(base))
+    warnings: list[str] = []
+    if base["bundled_plugins"] and base["enabled_plugins"] < base["bundled_plugins"]:
+        warnings.append(
+            f"{base['enabled_plugins']} of {base['bundled_plugins']} bundled plugins are "
+            "installed+enabled; graphs using the others fail validation. "
+            "Set GRAPHYN_AUTO_INSTALL_PLUGINS=1 (installs every PluginPackage manifest at "
+            "startup) or install individually via POST /api/v1/plugins/install."
+        )
+    if (
+        registered_node_types is not None
+        and base["bundled_node_types"]
+        and registered_node_types < base["bundled_node_types"]
+    ):
+        warnings.append(
+            f"registry has {registered_node_types} node types; bundled manifests declare "
+            f"{base['bundled_node_types']}"
+        )
+    base["registered_node_types"] = registered_node_types
+    base["partial_catalog"] = bool(warnings)
+    base["warnings"] = warnings
+    return base
 
 
 def _any_match(directory: Path, pattern: str) -> bool:
@@ -157,6 +258,11 @@ def _compute_snapshot() -> dict[str, Any]:
 
     ready = bool(reg_ready) and not store_corrupt and not disk_full and writable
     status = "ready" if ready else ("failed" if (init_err or store_corrupt or disk_full) else "starting")
+    node_type_count = len(registry) if reg_ready else 0
+    try:
+        catalog = catalog_summary(node_type_count if reg_ready else None)
+    except Exception as exc:  # informational only — never fail readiness
+        catalog = {"error": str(exc)[:200], "partial_catalog": None, "warnings": []}
     return {
         "status": status,
         "ready": ready,
@@ -166,7 +272,9 @@ def _compute_snapshot() -> dict[str, Any]:
         "worker_count": worker_count,
         "registry_ready": reg_ready,
         "registry_init_error": init_err,
-        "node_type_count": len(registry) if reg_ready else 0,
+        "node_type_count": node_type_count,
+        # Informational (does not change ``ready``): installed vs bundled.
+        "catalog": catalog,
         "checks": {
             "runs_dir_exists": runs_dir().exists(),
             "cache_dir_exists": cache_dir().exists(),

@@ -403,6 +403,10 @@ stats = cache.clear()  # {"entries_deleted": N, "bytes_freed": N}
 
 `SHA-256(node_type + sorted_json(config) + combined_input_hash)` (plus node seed and node version) where `combined_input_hash` is `SHA-256` of all per-port input hashes concatenated (preserves port identity). Input values are digested by full content (Pydantic models field-by-field, ndarrays by dtype/shape/bytes, containers recursively); a value with no stable content representation makes the node uncacheable for that call (it re-executes). The orchestrator and the distributed backend key the cache off the **logical** node config (pre run-scoping), so run-scoped output paths do not defeat the cache.
 
+**Run-local hits** (`app/core/execution/cache_rescope.py`). A cached output may embed the recording run's paths (`…/artifacts/<slug>/runs/<old_id>/…`, e.g. `model_builder`'s compiled `.keras`). On a hit, every such path string (dicts / lists / tuples / `Path` / pydantic fields) is rewritten to the current run id and the referenced file/dir is copied into the current run's artifact dir. If that is impossible — the source was deleted, the path is inside free text, or one string names several runs — the hit is discarded and the node re-executes. Sequential, parallel and distributed paths all apply this.
+
+**Non-cacheable nodes never hit.** `cacheable` (plugin `NodeMetadata`, incl. isolated stubs whose metadata is read from the plugin's `NodeMetadata(...)` literal, merged with IR overrides via `resolve_capability`) is checked **before** `cache.load`, so an entry written while a node was wrongly cacheable is never served; such nodes also never save.
+
 ### Cache format
 
 ```

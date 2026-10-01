@@ -11,20 +11,59 @@ const PROJECT_STAMP_NODES = new Set([
   'export',
 ])
 
-/** Stamp project (+ optional version_tag) onto exporter/versioner nodes and metadata. */
+/** Exporter default `output_dir` (plugin Config default) — safe to retarget. */
+export const GENERIC_EXPORT_OUTPUT_DIR = 'workspace/datasets/output/audio_export'
+const DATASETS_OUTPUT_PREFIX = 'workspace/datasets/output/'
+
+function normPath(raw: unknown): string {
+  return typeof raw === 'string' ? raw.trim().replace(/\\/g, '/').replace(/\/+$/, '') : ''
+}
+
+/**
+ * True when an exporter's `output_dir` may be moved into the project's
+ * Library folder: unset, the plugin default, or already a Library export
+ * (`workspace/datasets/output/...`). Explicit artifact paths
+ * (`workspace/artifacts/<slug>/dataset/...`) are hand-off locations another
+ * template of the same example ingests from — they are never rewritten.
+ */
+export function isRetargetableExportDir(raw: unknown): boolean {
+  const p = normPath(raw)
+  if (!p) return true
+  if (p === GENERIC_EXPORT_OUTPUT_DIR) return true
+  return p.startsWith(DATASETS_OUTPUT_PREFIX)
+}
+
+/** Stable dataset hand-off trees (`workspace/artifacts/<slug>/dataset/...`). */
+function isArtifactDatasetPath(raw: unknown): boolean {
+  return /(^|\/)workspace\/artifacts\/[^/]+\/dataset(\/|$)/.test(normPath(raw))
+}
+
+/**
+ * Stamp project (+ optional version_tag) onto exporter/versioner nodes and metadata.
+ *
+ * Exporters only get `project` / `output_dir` when their output_dir is
+ * retargetable (see {@link isRetargetableExportDir}) — the exporter ignores
+ * output_dir once `project` is set, so stamping an explicit artifact path
+ * would break the Phase-1 → Phase-2 hand-off. Run attribution still comes
+ * from `metadata.project`. The backend (`graph_prepare`) never rewrites node
+ * paths for a project either.
+ */
 export function stampProjectOnGraph(graph: GraphIR, project: string, version?: string): GraphIR {
   const nodes = (graph.nodes ?? []).map((n) => {
     const cfg = { ...(n.config ?? {}) } as Record<string, unknown>
     let changed = false
     if (PROJECT_STAMP_NODES.has(n.node_type)) {
-      if (cfg.project !== project) {
-        cfg.project = project
-        changed = true
-      }
-      const next = `workspace/datasets/output/${project}`
-      if (cfg.output_dir !== next) {
-        cfg.output_dir = next
-        changed = true
+      const retarget = !!project && isRetargetableExportDir(cfg.output_dir)
+      if (retarget) {
+        if (cfg.project !== project) {
+          cfg.project = project
+          changed = true
+        }
+        const next = `${DATASETS_OUTPUT_PREFIX}${project}`
+        if (cfg.output_dir !== next) {
+          cfg.output_dir = next
+          changed = true
+        }
       }
       if (version) {
         if (cfg.version_tag === undefined || cfg.version_tag === null || cfg.version_tag === '') {
@@ -33,11 +72,14 @@ export function stampProjectOnGraph(graph: GraphIR, project: string, version?: s
         }
       }
     } else if (
+      project &&
       typeof cfg.output_dir === 'string' &&
-      cfg.output_dir.includes('workspace/artifacts/')
+      cfg.output_dir.includes('workspace/artifacts/') &&
+      !isArtifactDatasetPath(cfg.output_dir)
     ) {
       // Rewrite artifact sink paths for project isolation without injecting `project`
       // (caption_export / experiment_tracker declare output_dir but not project).
+      // Dataset hand-off trees (<slug>/dataset/...) are left alone.
       const next = `workspace/artifacts/${project}/${n.node_type}`
       if (cfg.output_dir !== next) {
         cfg.output_dir = next

@@ -1,4 +1,5 @@
 import React from 'react'
+import { GitCompare as EmptyGitCompare, MousePointerClick as EmptyMousePointerClick } from 'lucide-react'
 import { FlaskConical, GitBranch, RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
@@ -21,6 +22,8 @@ import { MetricBars } from '../../components/MetricBars'
 import { MasterDetail } from '../../layout'
 import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
+import { fetchRunGraph } from '../../lib/runGraph'
+import { compareHasRows, enrichCompareParams } from './compareEnrich'
 
 type ExperimentRun = {
   run_id: string
@@ -278,9 +281,21 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
     setCompareLoading(true)
     setError(null)
     try {
-      const data = await apiJson<ComparePayload>('/experiments/compare', {
+      const raw = await apiJson<ComparePayload>('/experiments/compare', {
         query: { run_ids: target.join(',') },
       })
+      // Node config params from each run's graph.json (node_id.field rows) —
+      // experiment.json params alone left Compare "No parameters recorded"
+      // for runs whose node configs differed.
+      const graphs = new Map(
+        await Promise.all(
+          (raw.runs || []).map(
+            async (r) =>
+              [r.run_id, await fetchRunGraph(r.run_id, null).catch(() => null)] as const,
+          ),
+        ),
+      )
+      const data = enrichCompareParams({ ...raw, runs: raw.runs || [], param_keys: raw.param_keys || [] }, graphs)
       setCompare(data)
       // Ensure the panel is visible even when the runs table is long.
       requestAnimationFrame(() => {
@@ -361,7 +376,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
             {loading && blocks === null ? (
               <LoadingBlock label="Loading runs…" />
             ) : !blocks || tableRuns.length === 0 ? (
-              <EmptyState
+              <EmptyState icon={EmptyGitCompare}
                 title="No runs to compare"
                 description="Run a few pipelines from the Editor, then return here."
                 action={
@@ -442,14 +457,14 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
         }
         detail={
           selectedIds.length < 2 ? (
-            <EmptyState
+            <EmptyState icon={EmptyMousePointerClick}
               title="Select runs to compare"
               description="Tick at least two runs on the left. Results (params, metrics, charts) appear here."
             />
           ) : compareLoading && !compare ? (
             <LoadingBlock label="Comparing…" />
           ) : !compare ? (
-            <EmptyState
+            <EmptyState icon={EmptyGitCompare}
               title="Ready to compare"
               description={`${selectedIds.length} runs selected.`}
               action={
@@ -470,6 +485,8 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                 <button
                   type="button"
                   className="btn-secondary"
+                  disabled={!compareHasRows(compare)}
+                  title={compareHasRows(compare) ? undefined : 'No parameters or metrics to export'}
                   onClick={() => {
                     downloadCompareCsv(compare)
                     pushToast('Compare CSV downloaded', 'success')
@@ -604,7 +621,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
       {loading && blocks === null ? (
         <LoadingBlock label="Loading runs…" />
       ) : !blocks || blocks.length === 0 || tableRuns.length === 0 ? (
-        <EmptyState
+        <EmptyState icon={EmptyGitCompare}
           title="Select two runs from History"
           description="Pick 2–5 runs in Runs → History, then compare params and metrics."
           action={
@@ -789,6 +806,8 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                     <button
                       type="button"
                       className="btn-secondary"
+                      disabled={!compareHasRows(compare)}
+                      title={compareHasRows(compare) ? undefined : 'No parameters or metrics to export'}
                       onClick={() => {
                         downloadCompareCsv(compare)
                         pushToast('Compare CSV downloaded', 'success')

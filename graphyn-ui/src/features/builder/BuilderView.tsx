@@ -32,8 +32,10 @@ import {
   X,
   Clock,
   Sparkles,
+  Undo2,
+  Redo2,
 } from 'lucide-react'
-import { apiFetch, apiJson, ApiError, getApiToken } from '../../api/client'
+import { apiFetch, apiJson, ApiError, getApiToken, parseError } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { goView } from '../../routes/nav'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
@@ -52,6 +54,40 @@ import GraphynNode, { ConfigFieldEditor, categoryLook, normalizeExecStatus, type
 import DeletableEdge from './DeletableEdge'
 import TriggersDock from './TriggersDock'
 import AgentDrawer from './AgentDrawer'
+import {
+  badgeFromServerStatus,
+  decorateNodeData,
+  defaultsFromSchema,
+  isTerminalBadge,
+  reconcileNodeStatuses,
+  rememberRunOutcome,
+  rememberedRunOutcome,
+  runStartErrorMessage,
+  runStartErrorTitle,
+  type ExecBadgeStatus,
+  type KnownRunOutcome,
+} from './builderRunState'
+import { openModeExplainer } from '../../lib/menus'
+import { registerNavigationGuard } from '../../lib/navigationGuard'
+import {
+  changeKey,
+  createHistory,
+  editorSnapshot,
+  historyShortcut,
+  pushHistory,
+  redoHistory,
+  snapshotSignature,
+  undoHistory,
+  type EditorSnapshot,
+  type History,
+} from './graphHistory'
+import {
+  formatConfigIssues,
+  isFieldVisible,
+  validateNodeConfigs,
+  type ConfigIssue,
+} from './configValidation'
+import { countErrorRows, dedupeErrorRows, isErrorRow } from './logDedupe'
 
 const nodeTypes = { graphyn: GraphynNode }
 const edgeTypes = { default: DeletableEdge }
@@ -166,24 +202,6 @@ function slugifyName(raw: string): string {
   return s || 'pipeline'
 }
 
-function defaultsFromSchema(entry?: NodeCatalogEntry): Record<string, unknown> {
-  const props = entry?.config_schema?.properties ?? {}
-  const cfg: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(props)) {
-    if (v && typeof v === 'object' && 'default' in v) cfg[k] = v.default
-  }
-  const nodeType = entry?.node_type || 'node'
-  for (const key of ['output_dir', 'output_path'] as const) {
-    if (key in props) {
-      const current = cfg[key]
-      if (current === undefined || current === null || current === '') {
-        cfg[key] = `workspace/artifacts/builder/${nodeType}`
-      }
-    }
-  }
-  return cfg
-}
-
 function BuilderInner() {
   const catalog = useAppStore((s) => s.catalog)
   const bootStatus = useAppStore((s) => s.bootStatus)
@@ -227,7 +245,10 @@ function BuilderInner() {
   const [catalogOpen, setCatalogOpen] = React.useState(() => readBoolPref(CATALOG_OPEN_KEY, true))
   const [logCollapsed, setLogCollapsed] = React.useState(() => readBoolPref(LOG_COLLAPSED_KEY, true))
   const [runHadErrors, setRunHadErrors] = React.useState(false)
-  const [runCancelled, setRunCancelled] = React.useState(false)
+  // Authoritative outcome for `lastRunId` (server status, or this session's own
+  // terminal event for that exact run id). Never defaults to succeeded.
+  const [serverBadge, setServerBadge] = React.useState<{ runId: string; status: ExecBadgeStatus } | null>(null)
+  const toastCount = useAppStore((s) => s.toasts.length)
   const [inspectorId, setInspectorId] = React.useState<string | null>(null)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   const [projectPipelineList, setProjectPipelineList] = React.useState<
@@ -340,7 +361,7 @@ function BuilderInner() {
           !hadPendingGraphAtMount &&
           !useAppStore.getState().pendingGraph
         ) {
-          void openPipelineEnv(autoPick)
+          void openPipelineEnv(autoPick, undefined, { confirm: false })
         }
       } catch {
         if (!cancelled) setProjectPipelineList([])
@@ -526,31 +547,102 @@ function BuilderInner() {
     [setNodes, executionOrderIds],
   )
 
+  /**
+   * Paint authoritative per-node statuses from journal events. `runStatus` is
+   * the server's run status: nodes with a terminal event keep it; nodes
+   * without one are only marked when the run status justifies it (see
+   * reconcileNodeStatuses) — e.g. a node the journal says completed is never
+   * shown cancelled just because the user pressed Cancel afterwards.
+   */
   const applyStatusesFromEvents = React.useCallback(
-    (events: Array<Record<string, unknown>>) => {
-      const order = executionOrderIds()
-      const byId = new Map<string, NodeExecStatus>()
+    (events: Array<Record<string, unknown>>, runStatus: ExecBadgeStatus = 'unknown') => {
+      const ids = nodesRef.current.map((n) => n.id)
+      const byId = reconcileNodeStatuses(ids, events, executionOrderIds(), runStatus)
+      // Node failure text lives in the event's error / error_message field.
+      const errors = new Map<string, string>()
       for (const ev of events) {
-        const t = String(ev.type ?? '')
-        const idx = Number(ev.node_index)
-        let nodeId = typeof ev.node_id === 'string' ? ev.node_id : undefined
-        let st: NodeExecStatus | null = null
-        if (t === 'node_start') st = 'running'
-        else if (t === 'node_end' || t === 'node_complete') st = 'succeeded'
-        else if (t === 'node_error') st = 'failed'
-        else if (t === 'node_skip') st = 'skipped'
-        if (!st) continue
-        if (!nodeId && order && !Number.isNaN(idx)) nodeId = order[idx]
-        if (nodeId) byId.set(nodeId, st)
+        if (String(ev.type ?? ev.event ?? '') !== 'node_error' || typeof ev.node_id !== 'string') continue
+        const msg = String(ev.error_message ?? ev.error ?? ev.message ?? '').trim()
+        if (msg) errors.set(ev.node_id, msg)
       }
       setNodes((nds) =>
         nds.map((n) => {
           const st = byId.get(n.id)
-          return st ? { ...n, data: { ...n.data, status: st } } : n
+          const err = st === 'failed' ? n.data.lastError || errors.get(n.id) : undefined
+          if (!st || (st === n.data.status && err === n.data.lastError)) return n
+          return { ...n, data: { ...n.data, status: st, lastError: err } }
         }),
       )
     },
     [setNodes, executionOrderIds],
+  )
+
+  /** Record a terminal outcome for a specific run id (survives Editor remounts). */
+  const finishOutcome = React.useCallback(
+    (runId: string | null, outcome: KnownRunOutcome) => {
+      rememberRunOutcome(runId, outcome)
+      setRunOutcome(outcome)
+      if (runId) setServerBadge({ runId, status: outcome })
+    },
+    [setRunOutcome],
+  )
+
+  /**
+   * Fetch `/runs/{id}/status` (optionally waiting up to `waitTerminalMs` for a
+   * terminal state) and `/runs/{id}` journal, then paint node statuses.
+   * `guardCanvas` skips painting when the run belongs to a different graph
+   * than the one on the canvas (mount hydrate of an arbitrary lastRunId).
+   */
+  const reconcileRunFromServer = React.useCallback(
+    async (
+      runId: string,
+      opts: { waitTerminalMs?: number; guardCanvas?: boolean; isStale?: () => boolean } = {},
+    ): Promise<ExecBadgeStatus> => {
+      const stale = opts.isStale ?? (() => false)
+      const deadline = Date.now() + (opts.waitTerminalMs ?? 0)
+      let badge: ExecBadgeStatus = 'unknown'
+      for (;;) {
+        try {
+          const st = await apiJson<{ status?: string }>(`/runs/${encodeURIComponent(runId)}/status`, {
+            retries: 0,
+          })
+          badge = badgeFromServerStatus(st?.status)
+        } catch (err) {
+          badge = err instanceof ApiError && err.status === 404 ? 'missing' : 'unknown'
+        }
+        if (stale()) return badge
+        if (isTerminalBadge(badge) || badge === 'missing' || Date.now() >= deadline) break
+        await new Promise((r) => setTimeout(r, 1000))
+        if (stale()) return badge
+      }
+      if (badge === 'missing') return badge
+      try {
+        const detail = await apiJson<{
+          logs?: Array<Record<string, unknown>>
+          meta?: { graph_name?: unknown }
+        }>(`/runs/${encodeURIComponent(runId)}`)
+        if (stale() || !Array.isArray(detail.logs)) return badge
+        const events = detail.logs.filter((l) => l && typeof l === 'object') as Array<Record<string, unknown>>
+        if (opts.guardCanvas) {
+          // Only paint statuses when this run belongs to the graph on the canvas:
+          // graph name must match (when recorded) and every node_id referenced
+          // by the run must exist on the canvas.
+          const runGraphName = typeof detail.meta?.graph_name === 'string' ? detail.meta.graph_name.trim() : ''
+          const canvasGraphName = graphNameRef.current.trim()
+          if (runGraphName && canvasGraphName && runGraphName !== canvasGraphName) return badge
+          const canvasIds = new Set(nodesRef.current.map((n) => n.id))
+          const runIds = events
+            .map((e) => (typeof e.node_id === 'string' ? e.node_id : null))
+            .filter((x): x is string => Boolean(x))
+          if (runIds.length === 0 || runIds.some((id) => !canvasIds.has(id))) return badge
+        }
+        applyStatusesFromEvents(events, badge)
+      } catch {
+        /* best-effort: badge still reflects the server status */
+      }
+      return badge
+    },
+    [applyStatusesFromEvents],
   )
 
   const currentGraph = React.useCallback(
@@ -569,6 +661,239 @@ function BuilderInner() {
     setGetCanvasGraph(() => currentGraph)
     return () => setGetCanvasGraph(null)
   }, [currentGraph, setGetCanvasGraph])
+
+  // ── Unsaved changes + undo/redo ────────────────────────────────────────
+  // The document snapshot excludes run status / selection / handlers, so a
+  // run painting node statuses never marks the graph dirty or adds history.
+  const snapshot = React.useMemo(
+    () => editorSnapshot(nodes, edges, graphName, seed),
+    [nodes, edges, graphName, seed],
+  )
+  const snapshotSig = React.useMemo(() => snapshotSignature(snapshot), [snapshot])
+  const snapshotSigRef = React.useRef(snapshotSig)
+  snapshotSigRef.current = snapshotSig
+  /** Signature of the last loaded / saved document (null until the first settle). */
+  const [baselineSig, setBaselineSig] = React.useState<string | null>(null)
+  const baselineSigRef = React.useRef<string | null>(null)
+  baselineSigRef.current = baselineSig
+  const historyRef = React.useRef<History<EditorSnapshot> | null>(null)
+  const [historyFlags, setHistoryFlags] = React.useState({ canUndo: false, canRedo: false })
+  const lastChangeRef = React.useRef<{ key: string | null; at: number }>({ key: null, at: 0 })
+  /** Bumped on undo/redo/load so uncontrolled inspector inputs (JSON textareas) remount. */
+  const [historyGen, setHistoryGen] = React.useState(0)
+  /**
+   * A load (reset) or undo/redo (restore) sets several pieces of state (nodes,
+   * edges, name, seed in the store). Wait until the canvas matches the
+   * expected signature (or a short timeout) before recording, so a partially
+   * applied update never becomes its own history step.
+   */
+  const awaitRef = React.useRef<{ mode: 'reset' | 'restore'; sig: string | null; until: number } | null>({
+    mode: 'reset',
+    sig: null,
+    until: 0,
+  })
+  /** Catalog re-decoration merged schema defaults — not a user edit. */
+  const rebaseRef = React.useRef(false)
+  const dragging = nodes.some((n) => n.dragging)
+
+  const syncHistoryFlags = React.useCallback(() => {
+    const h = historyRef.current
+    const next = { canUndo: Boolean(h && h.past.length), canRedo: Boolean(h && h.future.length) }
+    setHistoryFlags((prev) => (prev.canUndo === next.canUndo && prev.canRedo === next.canRedo ? prev : next))
+  }, [])
+
+  React.useEffect(() => {
+    if (dragging) return // record the move once, on drag end
+    const pending = awaitRef.current
+    if (pending) {
+      if (pending.sig && pending.sig !== snapshotSig && Date.now() < pending.until) return
+      awaitRef.current = null
+      rebaseRef.current = false
+      if (pending.mode === 'reset') {
+        historyRef.current = createHistory(snapshot)
+        lastChangeRef.current = { key: null, at: 0 }
+        setBaselineSig(snapshotSig)
+      } else if (historyRef.current) {
+        historyRef.current = { ...historyRef.current, present: snapshot }
+      }
+      syncHistoryFlags()
+      return
+    }
+    const h = historyRef.current
+    if (!h) {
+      historyRef.current = createHistory(snapshot)
+      syncHistoryFlags()
+      return
+    }
+    const prevSig = snapshotSignature(h.present)
+    if (rebaseRef.current) {
+      rebaseRef.current = false
+      const wasClean = baselineSigRef.current === prevSig
+      historyRef.current = { ...h, present: snapshot }
+      if (wasClean) setBaselineSig(snapshotSig)
+      return
+    }
+    if (prevSig === snapshotSig) {
+      historyRef.current = { ...h, present: snapshot }
+      return
+    }
+    const key = changeKey(h.present, snapshot)
+    const now = Date.now()
+    const coalesce = key !== null && key === lastChangeRef.current.key && now - lastChangeRef.current.at < 1500
+    historyRef.current = pushHistory(h, snapshot, { coalesce })
+    lastChangeRef.current = { key, at: now }
+    syncHistoryFlags()
+  }, [snapshot, snapshotSig, dragging, syncHistoryFlags])
+
+  /** Call right before a load replaces the canvas: the loaded graph becomes the clean baseline. */
+  const beginBaseline = React.useCallback((expectedSig: string | null) => {
+    awaitRef.current = { mode: 'reset', sig: expectedSig, until: Date.now() + 1500 }
+    setHistoryGen((g) => g + 1)
+  }, [])
+
+  const dirty = baselineSig !== null && snapshotSig !== baselineSig
+  const dirtyRef = React.useRef(dirty)
+  dirtyRef.current = dirty
+
+  const restoreSnapshot = React.useCallback(
+    (snap: EditorSnapshot) => {
+      awaitRef.current = { mode: 'restore', sig: snapshotSignature(snap), until: Date.now() + 1500 }
+      const byId = new Map(nodesRef.current.map((n) => [n.id, n]))
+      setNodes(
+        snap.nodes.map((sn) => {
+          const cur = byId.get(sn.id)
+          return attachHandlers({
+            ...(cur ?? {}),
+            id: sn.id,
+            type: 'graphyn',
+            position: { ...sn.position },
+            data: {
+              ...(sn.data as unknown as GraphynNodeData),
+              status: cur?.data.status ?? 'idle',
+              lastError: cur?.data.lastError,
+            },
+          })
+        }),
+      )
+      setEdges(
+        snap.edges.map((e) => ({
+          ...e,
+          sourceHandle: e.sourceHandle ?? undefined,
+          targetHandle: e.targetHandle ?? undefined,
+          ...defaultEdgeOptions,
+        })),
+      )
+      setGraphName(snap.graphName)
+      setSeed(snap.seed)
+      setInspectorId((id) => (id && snap.nodes.some((n) => n.id === id) ? id : null))
+      setSelectedEdgeId((id) => (id && snap.edges.some((e) => e.id === id) ? id : null))
+      setHistoryGen((g) => g + 1)
+    },
+    [attachHandlers, setNodes, setEdges, setSeed],
+  )
+
+  const undo = React.useCallback(() => {
+    const h = historyRef.current
+    if (!h || h.past.length === 0) return
+    const next = undoHistory(h)
+    historyRef.current = next
+    lastChangeRef.current = { key: null, at: 0 }
+    restoreSnapshot(next.present)
+    syncHistoryFlags()
+  }, [restoreSnapshot, syncHistoryFlags])
+
+  const redo = React.useCallback(() => {
+    const h = historyRef.current
+    if (!h || h.future.length === 0) return
+    const next = redoHistory(h)
+    historyRef.current = next
+    lastChangeRef.current = { key: null, at: 0 }
+    restoreSnapshot(next.present)
+    syncHistoryFlags()
+  }, [restoreSnapshot, syncHistoryFlags])
+
+  // Ctrl/Cmd+Z undo · Shift+Ctrl/Cmd+Z or Ctrl+Y redo. Never while typing in a
+  // field (the browser's own text undo wins there) — use the toolbar buttons.
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = historyShortcut(e)
+      if (!action) return
+      e.preventDefault()
+      if (action === 'undo') undo()
+      else redo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
+
+  const unsavedMessage = React.useCallback(
+    () => `You have unsaved changes to “${graphNameRef.current || 'pipeline'}” in the Editor — leave and discard them?`,
+    [],
+  )
+
+  // Browser reload / tab close.
+  React.useEffect(() => {
+    if (!dirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [dirty])
+
+  // In-app navigation (sidebar, command palette, goView, workspace switch).
+  React.useEffect(
+    () => registerNavigationGuard(() => (dirtyRef.current ? unsavedMessage() : false)),
+    [unsavedMessage],
+  )
+
+  /** Confirm before an in-Editor action replaces the canvas (open pipeline/env, import, external load). */
+  const confirmDiscard = React.useCallback(
+    (what: string) => {
+      if (!dirtyRef.current) return true
+      return window.confirm(
+        `${what} will replace the graph on the canvas. Your unsaved changes to “${graphNameRef.current || 'pipeline'}” will be lost. Continue?`,
+      )
+    },
+    [],
+  )
+
+  // ── Config validation (JSON-schema bounds / enum / pattern …) ───────────
+  const configIssues = React.useMemo(() => validateNodeConfigs(nodes, schemaFieldLabel), [nodes])
+  const issuesByNode = React.useMemo(() => {
+    const m = new Map<string, Map<string, ConfigIssue[]>>()
+    for (const i of configIssues) {
+      const byField = m.get(i.nodeId) ?? new Map<string, ConfigIssue[]>()
+      byField.set(i.field, [...(byField.get(i.field) ?? []), i])
+      m.set(i.nodeId, byField)
+    }
+    return m
+  }, [configIssues])
+  const displayNodes = React.useMemo(() => {
+    if (issuesByNode.size === 0) return nodes
+    return nodes.map((n) => {
+      const count = issuesByNode.get(n.id)?.size ?? 0
+      return count ? { ...n, data: { ...n.data, configIssues: count } } : n
+    })
+  }, [nodes, issuesByNode])
+
+  /** True (and shows a banner listing node › field › rule) when config is invalid. */
+  const blockOnInvalidConfig = (verb: 'run' | 'save') => {
+    if (configIssues.length === 0) return false
+    const nodeCount = new Set(configIssues.map((i) => i.nodeId)).size
+    const title = `Cannot ${verb} — invalid config`
+    const message = `${configIssues.length} invalid field${configIssues.length === 1 ? '' : 's'} on ${nodeCount} node${nodeCount === 1 ? '' : 's'}:\n${formatConfigIssues(configIssues)}`
+    setActionError({ title, message, detail: formatConfigIssues(configIssues, 200) })
+    setStatusMessage(title)
+    pushToast(`${title}: ${configIssues.length} field${configIssues.length === 1 ? '' : 's'} out of range — see the banner`, 'error')
+    const first = configIssues[0]
+    if (first) {
+      setInspectorId(first.nodeId)
+      setSelectedEdgeId(null)
+    }
+    return true
+  }
 
   const onConnect = React.useCallback(
     async (connection: Connection) => {
@@ -620,6 +945,7 @@ function BuilderInner() {
         inputs: ports.inputs,
         outputs: ports.outputs,
         status: 'idle',
+        catalogDecorated: true,
       },
     })
     setNodes((nds) => [...nds, node])
@@ -680,6 +1006,8 @@ function BuilderInner() {
           inputs: ports.inputs,
           outputs: ports.outputs,
           status: 'idle',
+          // false → re-decorated by the catalog effect below once it loads.
+          catalogDecorated: Boolean(entry),
         },
       })
     })
@@ -692,7 +1020,11 @@ function BuilderInner() {
       data: { condition: e.condition ?? null },
       ...defaultEdgeOptions,
     }))
-    setNodes(layoutLeftToRight(nextNodes, nextEdges, Object.keys(positions).length === 0))
+    const laidOut = layoutLeftToRight(nextNodes, nextEdges, Object.keys(positions).length === 0)
+    const seedVal = typeof graph.metadata?.seed === 'number' ? graph.metadata.seed : seed
+    // The loaded graph is the new clean baseline; history restarts here.
+    beginBaseline(snapshotSignature(editorSnapshot(laidOut, nextEdges, loadedName, seedVal)))
+    setNodes(laidOut)
     setEdges(nextEdges)
     setRunHadErrors(false)
   }
@@ -700,14 +1032,51 @@ function BuilderInner() {
   React.useEffect(() => {
     if (!pendingGraph) return
     const graph = useAppStore.getState().consumePendingGraph()
-    if (graph) loadGraph(graph)
+    if (!graph) return
+    if (!confirmDiscard('Opening this graph')) {
+      pushToast('Kept your unsaved Editor changes', 'info')
+      return
+    }
+    loadGraph(graph)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingGraph, catalog])
+
+  /**
+   * A graph can land on the canvas before the node catalog has loaded (direct
+   * URL load of /workspaces/<ws>/editor, auto-open of a saved pipeline, a
+   * pendingGraph consumed on mount). Those nodes were built without catalog
+   * data (generic icon, no config fields). When the catalog arrives — or gains
+   * entries — re-decorate them; defaults merge UNDER the user's config.
+   */
+  React.useEffect(() => {
+    if (catalog.length === 0) return
+    const byType = new Map(catalog.map((c) => [c.node_type, c]))
+    setNodes((nds) => {
+      let changed = false
+      const next = nds.map((n) => {
+        if (n.data.catalogDecorated) return n
+        const entry = byType.get(n.data.nodeType)
+        if (!entry) return n
+        const es = edgesRef.current
+        const usedIn = new Set(
+          es.filter((e) => e.target === n.id).map((e) => canonicalPort(e.targetHandle, 'input')),
+        )
+        const usedOut = new Set(
+          es.filter((e) => e.source === n.id).map((e) => canonicalPort(e.sourceHandle, 'output')),
+        )
+        changed = true
+        return { ...n, data: decorateNodeData(n.data, entry, usedIn, usedOut) }
+      })
+      // Schema defaults merged in by decoration are not a user edit.
+      if (changed) rebaseRef.current = true
+      return changed ? next : nds
+    })
+  }, [catalog, setNodes])
 
   React.useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<GraphIR>).detail
-      if (detail) loadGraph(detail)
+      if (detail && confirmDiscard('Loading this graph')) loadGraph(detail)
     }
     window.addEventListener('graphyn:load-graph', handler)
     return () => window.removeEventListener('graphyn:load-graph', handler)
@@ -739,14 +1108,80 @@ function BuilderInner() {
     }
   }
 
+  /**
+   * Run reached a terminal state: a node that was mid-flight gets `inFlight`
+   * (cancelled / failed); one that never started is "skipped" (not run) —
+   * never left blank/idle or pending.
+   */
+  const settleUnfinishedNodes = React.useCallback(
+    (inFlight: 'cancelled' | 'failed') => {
+      setNodes((nds) =>
+        nds.map((n) => {
+          const st = normalizeExecStatus(n.data.status)
+          if (st === 'running') return { ...n, data: { ...n.data, status: inFlight } }
+          if (st === 'pending') return { ...n, data: { ...n.data, status: 'skipped' } }
+          return n
+        }),
+      )
+    },
+    [setNodes],
+  )
+  const markUnfinishedCancelled = React.useCallback(() => settleUnfinishedNodes('cancelled'), [settleUnfinishedNodes])
+
+  /**
+   * After a cancel request / aborted stream: read the run's real outcome from
+   * the server instead of assuming "cancelled". A cancel that 404s
+   * (run_not_active) means the run already finished — possibly succeeded.
+   */
+  const settleAfterCancel = async (runId: string | null, opts: { cancelAccepted: boolean }) => {
+    if (!runId) {
+      // No run id was ever received — nothing on the server to ask.
+      markUnfinishedCancelled()
+      finishOutcome(null, 'cancelled')
+      setStatusMessage('Run cancelled')
+      addLog('Run cancelled before the server assigned a run id', 'warning')
+      return
+    }
+    setStatusMessage('Cancelling — checking run status…')
+    const badge = await reconcileRunFromServer(runId, {
+      // Give the server a few seconds to stop the in-flight node.
+      waitTerminalMs: opts.cancelAccepted ? 8000 : 2000,
+      // A newer run started meanwhile owns the canvas.
+      isStale: () => abortRef.current !== null,
+    })
+    if (abortRef.current !== null) return
+    if (isTerminalBadge(badge)) {
+      finishOutcome(runId, badge)
+      const msg =
+        badge === 'cancelled'
+          ? 'Run cancelled'
+          : badge === 'succeeded'
+            ? 'Run had already finished (succeeded) before the cancel arrived'
+            : 'Run had already finished (failed) before the cancel arrived'
+      setStatusMessage(msg)
+      addLog(msg, badge === 'succeeded' ? 'success' : 'warning')
+      if (badge === 'failed') setRunHadErrors(true)
+    } else {
+      setServerBadge({ runId, status: badge === 'missing' ? 'missing' : badge === 'running' ? 'running' : 'unknown' })
+      const msg =
+        badge === 'running'
+          ? 'Cancel requested — the server is still stopping the run'
+          : 'Cancel requested — could not confirm the final run status'
+      setStatusMessage(msg)
+      addLog(msg, 'warning')
+    }
+  }
+
   const handleCancel = async () => {
     const runId = runIdRef.current
+    let cancelAccepted = false
     if (runId) {
       try {
         await apiJson(`/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
+        cancelAccepted = true
       } catch (err) {
         // run_not_active/run_not_found (404) means it already finished server-side —
-        // that's fine, proceed to the local cancelled state below. Anything else
+        // settleAfterCancel reads the real final status. Anything else
         // (e.g. 503 run_active_on_another_worker) is surfaced so the user knows
         // the backend run may still be executing.
         const status = err instanceof ApiError ? err.status : null
@@ -761,27 +1196,24 @@ function BuilderInner() {
     abortRef.current?.abort()
     abortRef.current = null
     setIsRunning(false)
-    setNodes((nds) =>
-      nds.map((n) =>
-        normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
-          ? { ...n, data: { ...n.data, status: 'cancelled' } }
-          : n,
-      ),
-    )
-    setRunCancelled(true)
     setRunHadErrors(false)
-    setRunOutcome('cancelled')
-    setStatusMessage('Run cancelled')
-    addLog('Run cancelled by user', 'warning')
+    addLog(cancelAccepted ? 'Cancel requested by user' : 'Cancel requested — run may have already finished', 'warning')
+    await settleAfterCancel(runId, { cancelAccepted })
   }
 
   // Abort any in-flight run stream on unmount so a stale stream's callbacks
   // (which write to the global Zustand store) can never fire after the
   // Builder tab has moved on to a different graph or run.
+  // The server keeps executing after the stream closes (the producer thread is
+  // detached), so clear the in-flight flag: on return the Execution badge
+  // polls /runs/{id}/status for the real outcome instead of a stuck "running".
   React.useEffect(() => {
     return () => {
-      abortRef.current?.abort()
-      abortRef.current = null
+      if (abortRef.current) {
+        abortRef.current.abort()
+        abortRef.current = null
+        useAppStore.getState().setIsRunning(false)
+      }
     }
   }, [])
 
@@ -793,6 +1225,7 @@ function BuilderInner() {
   }, [currentGraph, activeProject, builderDataset])
 
   const handleRun = async () => {
+    if (blockOnInvalidConfig('run')) return
     // Light pre-run path check (empty DatasetIngest / input paths)
     const missingPaths = findMissingInputPaths(nodesRef.current)
     if (missingPaths.length > 0) {
@@ -800,9 +1233,8 @@ function BuilderInner() {
       const msg = `Missing path on: ${names}. Set a dataset/input path before Run (or Validate).`
       setActionError({ title: 'Cannot run — missing path', message: msg, detail: msg })
       setStatusMessage(msg)
-      setRunOutcome('failed')
+      // No run was started: don't touch runOutcome (it belongs to lastRunId).
       setRunHadErrors(true)
-      setRunCancelled(false)
       pushToast(msg, 'error')
       addLog(msg, 'error')
       return
@@ -810,7 +1242,6 @@ function BuilderInner() {
 
     clearLogs()
     setRunHadErrors(false)
-    setRunCancelled(false)
     setActionError(null)
     setLogCollapsed(false)
     setIsRunning(true)
@@ -821,6 +1252,7 @@ function BuilderInner() {
     abortRef.current = controller
     runIdRef.current = null
     let streamCancelled = false
+    let startError: { status: number; message: string } | null = null
     // A newer run (or Cancel / unmount) replaces abortRef.current; from then
     // on this invocation must not write run state, or it clobbers the new run.
     const isCurrent = () => abortRef.current === controller
@@ -834,21 +1266,13 @@ function BuilderInner() {
         headers: { 'Content-Type': 'application/json' },
       })
       if (!res.ok) {
-        let detail = `Run failed: HTTP ${res.status}`
-        try {
-          const body = await res.clone().json()
-          if (typeof body?.detail === 'string') detail = body.detail
-          else if (typeof body?.error === 'string') detail = body.error
-          else if (body?.detail != null) detail = JSON.stringify(body.detail)
-        } catch {
-          try {
-            const t = await res.clone().text()
-            if (t.trim()) detail = t.trim().slice(0, 500)
-          } catch {
-            /* keep status text */
-          }
+        // e.g. 503 draining / concurrency limit, 422 invalid graph. Nothing ran.
+        const apiErr = await parseError(res, '/pipelines/run')
+        startError = {
+          status: res.status,
+          message: runStartErrorMessage(apiErr.body, apiErr.message || `HTTP ${res.status}`),
         }
-        throw new ApiError(detail, res.status, '/pipelines/run')
+        throw apiErr
       }
       const headerRunId = res.headers.get('X-Run-Id') || res.headers.get('x-run-id')
       if (headerRunId?.trim()) {
@@ -912,14 +1336,11 @@ function BuilderInner() {
             }
             if (t === 'cancelled' || t === 'pipeline_cancelled') {
               wasCancelled = true
-              setNodes((nds) =>
-                nds.map((n) =>
-                  normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
-                    ? { ...n, data: { ...n.data, status: 'cancelled' } }
-                    : n,
-                ),
-              )
+              settleUnfinishedNodes('cancelled')
             }
+            // Terminal `error` that repeats a node_error the stream already showed
+            // (backend sets already_reported) — keep it for state, don't log it twice.
+            if (t === 'error' && ev.already_reported === true) continue
             let formatted = formatExecutionLine(trimmed)
             if ((t === 'done' || t === 'pipeline_done') && hadError) {
               formatted = { text: 'Pipeline finished with errors', level: 'error', raw: trimmed }
@@ -985,6 +1406,7 @@ function BuilderInner() {
             if (isCurrent() && Array.isArray(detail.logs)) {
               applyStatusesFromEvents(
                 detail.logs.filter((l) => l && typeof l === 'object') as Array<Record<string, unknown>>,
+                polledTerminal === 'completed' ? 'succeeded' : polledTerminal ?? 'unknown',
               )
             }
           } catch {
@@ -993,14 +1415,15 @@ function BuilderInner() {
         }
       }
       if (streamCancelled || wasCancelled) {
-        setRunCancelled(true)
+        settleUnfinishedNodes('cancelled')
         setRunHadErrors(false)
-        setRunOutcome('cancelled')
+        finishOutcome(runId, 'cancelled')
         setStatusMessage('Run cancelled')
       } else if (hadError) {
+        // Downstream nodes that never started read "skipped" (not run).
+        settleUnfinishedNodes('failed')
         setRunHadErrors(true)
-        setRunCancelled(false)
-        setRunOutcome('failed')
+        finishOutcome(runId, 'failed')
         setStatusMessage('Run failed')
         setActionError({
           title: 'Run failed',
@@ -1013,8 +1436,7 @@ function BuilderInner() {
         )
       } else {
         setRunHadErrors(false)
-        setRunCancelled(false)
-        setRunOutcome('succeeded')
+        finishOutcome(runId, 'succeeded')
         setStatusMessage('Run succeeded')
         pushToast('Run succeeded', 'success', {
           actionLabel: 'View outputs',
@@ -1030,35 +1452,57 @@ function BuilderInner() {
       if (!isCurrent()) return
       if (err instanceof DOMException && err.name === 'AbortError') {
         streamCancelled = true
-        setRunCancelled(true)
         setRunHadErrors(false)
-        setRunOutcome('cancelled')
-        setStatusMessage('Run cancelled')
-        setNodes((nds) =>
-          nds.map((n) =>
-            normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
-              ? { ...n, data: { ...n.data, status: 'cancelled' } }
-              : n,
-          ),
-        )
+        abortRef.current = null
+        setIsRunning(false)
+        // Don't assume cancelled: ask the server what actually happened.
+        await settleAfterCancel(runIdRef.current, { cancelAccepted: false })
         return
       }
       if (err instanceof ApiError && err.status === 0 && controller.signal.aborted) return
+      if (startError) {
+        // The run was never created — say so plainly (toast + banner + log),
+        // and put the nodes back to idle instead of painting them failed.
+        const title = runStartErrorTitle(startError.status)
+        const msg = `${startError.message} (HTTP ${startError.status})`
+        addLog(`${title}: ${msg}`, 'error')
+        setRunHadErrors(false)
+        setRunOutcome('idle')
+        setStatusMessage(title)
+        setActionError({ title, message: msg, detail: msg })
+        pushToast(`${title}: ${startError.message}`, 'error', { ttlMs: 15000 })
+        setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'idle' } })))
+        return
+      }
+      const knownRunId = runIdRef.current
+      if (knownRunId) {
+        // Stream broke mid-run (network error): the server may still be
+        // running or may have finished — reconcile instead of guessing.
+        const msg = err instanceof Error ? err.message : String(err)
+        addLog(`Stream error: ${msg} — checking run status`, 'warning')
+        const badge = await reconcileRunFromServer(knownRunId, { isStale: () => !isCurrent() })
+        if (!isCurrent()) return
+        if (isTerminalBadge(badge)) {
+          finishOutcome(knownRunId, badge)
+          setRunHadErrors(badge === 'failed')
+          setStatusMessage(badge === 'succeeded' ? 'Run succeeded' : badge === 'failed' ? 'Run failed' : 'Run cancelled')
+          return
+        }
+        if (badge === 'running') {
+          setServerBadge({ runId: knownRunId, status: 'running' })
+          setStatusMessage('Stream lost — run still executing on the server')
+          pushToast('Lost the run stream — the run is still executing; open it in Runs to follow.', 'info')
+          return
+        }
+      }
       const msg = err instanceof Error ? err.message : String(err)
       addLog(msg, 'error')
       setRunHadErrors(true)
-      setRunCancelled(false)
-      setRunOutcome('failed')
+      finishOutcome(knownRunId, 'failed')
       setStatusMessage('Run failed')
       setActionError({ title: 'Run failed', message: msg, detail: msg })
       pushToast(msg, 'error')
-      setNodes((nds) =>
-        nds.map((n) =>
-          normalizeExecStatus(n.data.status) === 'running' || normalizeExecStatus(n.data.status) === 'pending'
-            ? { ...n, data: { ...n.data, status: 'failed' } }
-            : n,
-        ),
-      )
+      settleUnfinishedNodes('failed')
     } finally {
       // Only the current run may clear shared run state — a finished/aborted
       // first run must not flip isRunning off under a second run.
@@ -1070,6 +1514,7 @@ function BuilderInner() {
   }
 
   const handleRunAsync = async () => {
+    if (blockOnInvalidConfig('run')) return
     setActionError(null)
     try {
       const graph = graphForRun()
@@ -1098,6 +1543,7 @@ function BuilderInner() {
   }
 
   const importIr = () => {
+    if (!confirmDiscard('Importing a graph')) return
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = '.json,application/json'
@@ -1120,6 +1566,7 @@ function BuilderInner() {
       pushToast('Template name must match [A-Za-z0-9_-]+', 'error')
       return
     }
+    if (blockOnInvalidConfig('save')) return
     try {
       const graph = currentGraph()
       const res = await apiJson<{ name: string; version?: string }>('/pipelines/templates', {
@@ -1148,12 +1595,16 @@ function BuilderInner() {
       pushToast('Pipeline name must match [A-Za-z0-9_-]+', 'error')
       return
     }
+    if (blockOnInvalidConfig('save')) return
     try {
       const graph = graphForRun()
+      // Edits made while the PUT is in flight stay dirty.
+      const savedSig = snapshotSigRef.current
       await apiJson(`/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(name)}`, {
         method: 'PUT',
         body: JSON.stringify(graph),
       })
+      setBaselineSig(savedSig)
       setTemplateName(name)
       pushToast(`Saved to project ${project} · ${name}`, 'success')
     } catch (err) {
@@ -1162,9 +1613,14 @@ function BuilderInner() {
   }
 
 
-  const openPipelineEnv = async (pipelineName: string, env?: 'draft' | 'staging' | 'prod') => {
+  const openPipelineEnv = async (
+    pipelineName: string,
+    env?: 'draft' | 'staging' | 'prod',
+    opts: { confirm?: boolean } = {},
+  ) => {
     const project = (activeProject || '').trim()
     if (!project || !pipelineName) return
+    if (opts.confirm !== false && !confirmDiscard(`Opening ${pipelineName}${env && env !== 'draft' ? ` (${env})` : ''}`)) return
     try {
       const query = env && env !== 'draft' ? { env } : undefined
       const graph = await apiJson<GraphIR>(
@@ -1227,14 +1683,34 @@ function BuilderInner() {
     )
   })
 
-  const prettyLogs = skipConsecutiveByText(logs, (l) => (showRawLogs ? l.raw || l.message : l.message))
-  const errorLogs = prettyLogs.filter((l) => l.level === 'error' || /fail|error/i.test(l.message))
+  // Pretty view: drop the pipeline-level `error` event that restates the
+  // preceding node_error ("X · failed · msg" then "msg"). Raw view stays intact.
+  const prettyLogs = showRawLogs
+    ? skipConsecutiveByText(logs, (l) => l.raw || l.message)
+    : dedupeErrorRows(
+        skipConsecutiveByText(logs, (l) => l.message),
+        (l) => l.message,
+        (l) => l.level,
+      )
+  const hasErrorLogs = prettyLogs.some((l) => isErrorRow(l.level, l.message))
+  const errorCount = hasErrorLogs
+    ? Math.max(
+        1,
+        countErrorRows(
+          showRawLogs
+            ? dedupeErrorRows(skipConsecutiveByText(logs, (l) => l.message), (l) => l.message, (l) => l.level)
+            : prettyLogs,
+          (l) => l.message,
+          (l) => l.level,
+        ),
+      )
+    : 0
 
   React.useEffect(() => {
     const el = logBodyRef.current
     if (!el || logCollapsed) return
     if (stickToBottomRef.current) el.scrollTop = el.scrollHeight
-  }, [logs, logCollapsed, showRawLogs, logHeight])
+  }, [logs, logCollapsed, showRawLogs, logHeight, toastCount])
 
   const focusLogErrors = () => {
     setLogCollapsed(false)
@@ -1268,40 +1744,53 @@ function BuilderInner() {
   }
 
 
+  /**
+   * Execution badge + node hydrate for `lastRunId` (bug: a cancelled run showed
+   * SUCCEEDED after leaving and returning to the Editor, because the badge was
+   * derived from component-local flags). Read the server's status on mount /
+   * when lastRunId changes; poll while the server says it's still live.
+   */
   React.useEffect(() => {
     if (!lastRunId || isRunning) return
     let cancelled = false
-    void (async () => {
-      try {
-        const detail = await apiJson<{
-          logs?: Array<Record<string, unknown>>
-          meta?: { graph_name?: unknown }
-        }>(`/runs/${encodeURIComponent(lastRunId)}`)
-        if (cancelled || !Array.isArray(detail.logs)) return
-        const events = detail.logs.filter((l) => l && typeof l === 'object') as Array<Record<string, unknown>>
-        // Only paint statuses when this run belongs to the graph on the canvas:
-        // graph name must match (when recorded) and every node_id referenced
-        // by the run must exist on the canvas. Otherwise another graph's run
-        // would be painted onto unrelated nodes.
-        const runGraphName = typeof detail.meta?.graph_name === 'string' ? detail.meta.graph_name.trim() : ''
-        const canvasGraphName = graphNameRef.current.trim()
-        if (runGraphName && canvasGraphName && runGraphName !== canvasGraphName) return
-        const canvasIds = new Set(nodesRef.current.map((n) => n.id))
-        const runIds = events
-          .map((e) => (typeof e.node_id === 'string' ? e.node_id : null))
-          .filter((x): x is string => Boolean(x))
-        if (runIds.length === 0 || runIds.some((id) => !canvasIds.has(id))) return
-        if (events.some((e) => typeof e.type === 'string' && String(e.type).startsWith('node_'))) {
-          applyStatusesFromEvents(events)
-        }
-      } catch {
-        /* optional inspect hydrate */
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const runId = lastRunId
+    const remembered = rememberedRunOutcome(runId)
+    setServerBadge((prev) =>
+      prev?.runId === runId && prev.status !== 'loading'
+        ? prev
+        : { runId, status: remembered ?? 'loading' },
+    )
+    const tick = async () => {
+      const badge = await reconcileRunFromServer(runId, { guardCanvas: true, isStale: () => cancelled })
+      if (cancelled) return
+      if (isTerminalBadge(badge)) {
+        // Also corrects the store's (un-keyed) runOutcome for the header chip.
+        finishOutcome(runId, badge)
+        return
       }
-    })()
+      if (badge === 'running') {
+        setServerBadge({ runId, status: 'running' })
+        timer = setTimeout(() => void tick(), 3000)
+        return
+      }
+      // unknown / missing: keep a remembered terminal outcome when we have one.
+      setServerBadge({ runId, status: remembered ?? badge })
+    }
+    void tick()
     return () => {
       cancelled = true
+      if (timer) clearTimeout(timer)
     }
-  }, [lastRunId, isRunning, applyStatusesFromEvents])
+  }, [lastRunId, isRunning, reconcileRunFromServer, finishOutcome])
+
+  const execBadge: ExecBadgeStatus | null = isRunning
+    ? 'running'
+    : lastRunId
+      ? serverBadge?.runId === lastRunId
+        ? serverBadge.status
+        : (rememberedRunOutcome(lastRunId) ?? 'loading')
+      : null
 
   const secondaryActions = (
     <>
@@ -1707,9 +2196,35 @@ function BuilderInner() {
             disabled={!activeProject}
             title={activeProject ? `Save Graph IR to workspace ${activeProject}` : 'Open a workspace to save'}
             onClick={() => void saveToProject()}
+            aria-label={dirty ? 'Save (unsaved changes)' : 'Save'}
           >
             <BookmarkPlus className="h-3.5 w-3.5" /> Save
+            {dirty ? (
+              <span className="ml-0.5 h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" title="Unsaved changes" />
+            ) : null}
           </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              className="btn-icon"
+              disabled={!historyFlags.canUndo}
+              onClick={undo}
+              aria-label="Undo"
+              title="Undo (Ctrl/Cmd+Z)"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              className="btn-icon"
+              disabled={!historyFlags.canRedo}
+              onClick={redo}
+              aria-label="Redo"
+              title="Redo (Shift+Ctrl/Cmd+Z or Ctrl+Y)"
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
           {/* The picker above chooses WHICH saved pipeline is loaded; this renames the graph
               currently in the canvas (used as the artifact slug on Run) — they can diverge (e.g.
               load "call-analytics" then rename before running a variant), so both showing the
@@ -1726,6 +2241,30 @@ function BuilderInner() {
               aria-label="Graph name"
             />
           </div>
+          {dirty ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-200"
+              title="The graph differs from the last loaded / saved version — Save to keep it"
+              role="status"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+              Unsaved
+            </span>
+          ) : null}
+          {configIssues.length > 0 ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-900 ring-1 ring-rose-200 hover:bg-rose-100"
+              title={formatConfigIssues(configIssues)}
+              onClick={() => {
+                setInspectorId(configIssues[0].nodeId)
+                setSelectedEdgeId(null)
+              }}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {configIssues.length} invalid field{configIssues.length === 1 ? '' : 's'}
+            </button>
+          ) : null}
           {runHadErrors && !isRunning && (
             <button
               type="button"
@@ -1845,7 +2384,12 @@ function BuilderInner() {
               const isValidateOrPath =
                 title.includes('validation') ||
                 title.includes('missing path') ||
-                title.startsWith('cannot run')
+                title.includes('invalid config') ||
+                title.startsWith('cannot run') ||
+                title.startsWith('cannot save')
+              // POST /pipelines/run rejected (503 busy, 422, …): nothing ran,
+              // so there are no outputs to view — Retry only.
+              const isStartRejected = title.startsWith('run not started')
               const isRunFailure =
                 !isValidateOrPath &&
                 (runHadErrors ||
@@ -1856,7 +2400,8 @@ function BuilderInner() {
               const showViewOutputs =
                 Boolean(lastRunId) &&
                 !isValidateOrPath &&
-                (runOutcome === 'succeeded' || isRunFailure)
+                !isStartRejected &&
+                (execBadge === 'succeeded' || runOutcome === 'succeeded' || isRunFailure)
               return (
                 <ErrorBanner
                   title={actionError.title}
@@ -1904,18 +2449,13 @@ function BuilderInner() {
                 type="button"
                 className="pointer-events-auto absolute right-3 top-3 z-10 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-950 shadow-sm hover:bg-amber-100"
                 title="Placement fields are present but Local mode ignores them"
-                onClick={() =>
-                  pushToast(
-                    'Placement ignored in Mode A — Header Mode chip explains Local vs Distributed',
-                    'info',
-                  )
-                }
+                onClick={() => openModeExplainer()}
               >
                 Placement ignored in Mode A
               </button>
             )}
           <ReactFlow
-            nodes={nodes}
+            nodes={displayNodes}
             edges={edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
@@ -2027,14 +2567,16 @@ function BuilderInner() {
                   {lastRunId || isRunning ? (
                     <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 bg-ink-50/70 px-3 py-1.5 text-[11px] text-ink-600">
                       <span className="font-semibold uppercase tracking-wide text-ink-400">Execution</span>
-                      {isRunning ? (
-                        <StatusBadge status="running" />
-                      ) : runCancelled ? (
-                        <StatusBadge status="cancelled" />
-                      ) : runHadErrors ? (
-                        <StatusBadge status="failed" />
-                      ) : lastRunId ? (
-                        <StatusBadge status="succeeded" />
+                      {execBadge === 'loading' ? (
+                        <span className="text-ink-400" aria-live="polite">
+                          checking…
+                        </span>
+                      ) : execBadge === 'missing' ? (
+                        <span className="text-ink-500" title="GET /runs/{id}/status returned 404">
+                          run not found
+                        </span>
+                      ) : execBadge ? (
+                        <StatusBadge status={execBadge} />
                       ) : null}
                       {lastRunId ? (
                         <>
@@ -2124,11 +2666,18 @@ function BuilderInner() {
 
                     {mode === 'node' && node && (
                       <>
-                        {normalizeExecStatus(node.data.status) !== 'idle' && (
-                          <div className="mb-1">
-                            <StatusBadge status={normalizeExecStatus(node.data.status)} />
-                          </div>
-                        )}
+                        {/* Node status (the run status is already in the Execution row above).
+                            A failed node shows the "Node failed" box instead of a second FAILED badge. */}
+                        {(() => {
+                          const st = normalizeExecStatus(node.data.status)
+                          if (st === 'idle' || st === 'failed') return null
+                          return (
+                            <div className="mb-1 flex items-center gap-1.5 text-[11px]">
+                              <span className="font-semibold uppercase tracking-wide text-ink-400">Node</span>
+                              <StatusBadge status={st === 'skipped' ? 'skipped · not run' : st} />
+                            </div>
+                          )
+                        })()}
                         {normalizeExecStatus(node.data.status) === 'failed' && (
                           <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-type-secondary text-rose-900">
                             <div className="font-semibold text-rose-950">Node failed</div>
@@ -2251,14 +2800,9 @@ function BuilderInner() {
                           <button
                             type="button"
                             className="text-[11px] font-medium text-accent-800 hover:underline"
-                            onClick={() => {
-                              pushToast(
-                                'Header Mode chip explains Local vs Distributed',
-                                'info',
-                              )
-                            }}
+                            onClick={() => openModeExplainer()}
                           >
-                            Header Mode chip explains Local vs Distributed
+                            Local vs Distributed — explain modes
                           </button>
                         </div>
                         )}
@@ -2271,8 +2815,14 @@ function BuilderInner() {
                         ) : null}
 
                         {(() => {
-                          const entries = Object.entries(node.data.schemaProps ?? {}) as [string, Record<string, unknown>][]
-                          if (entries.length === 0) return <div className="text-sm text-ink-400">No config fields</div>
+                          const props = (node.data.schemaProps ?? {}) as Record<string, Record<string, unknown>>
+                          const allEntries = Object.entries(props) as [string, Record<string, unknown>][]
+                          if (allEntries.length === 0) return <div className="text-sm text-ink-400">No config fields</div>
+                          const cfg = node.data.config ?? {}
+                          // ui.visible_if / depends_on: hide fields that don't apply to the current settings.
+                          const entries = allEntries.filter(([, def]) => isFieldVisible(def, cfg, props))
+                          const hiddenCount = allEntries.length - entries.length
+                          const nodeIssues = issuesByNode.get(node.id)
                           const normalizeGroup = (def: Record<string, unknown>) => {
                             const g = String(def.group ?? '').trim()
                             if (!g) return 'Basic'
@@ -2283,7 +2833,10 @@ function BuilderInner() {
                           }
                           const basic = entries.filter(([, def]) => normalizeGroup(def) !== 'Advanced')
                           const advanced = entries.filter(([, def]) => normalizeGroup(def) === 'Advanced')
-                          const renderField = ([key, def]: [string, Record<string, unknown>]) => (
+                          const advancedInvalid = advanced.filter(([k]) => nodeIssues?.has(k)).length
+                          const renderField = ([key, def]: [string, Record<string, unknown>]) => {
+                            const fieldIssues = nodeIssues?.get(key) ?? []
+                            return (
                             <label key={key} className="block text-[12px] text-ink-700" title={schemaFieldHint(def)}>
                               <span className="font-medium">{schemaFieldLabel(key, def)}</span>
                               {schemaFieldHint(def) ? (
@@ -2297,11 +2850,18 @@ function BuilderInner() {
                                 value={node.data.config?.[key] ?? def.default}
                                 onChange={(v) => node.data.onChangeConfig?.(key, v)}
                                 credentials={credentialsList}
+                                invalid={fieldIssues.length > 0}
                               />
+                              {fieldIssues.length > 0 ? (
+                                <span className="mt-0.5 block text-[10px] font-medium leading-snug text-rose-700" role="alert">
+                                  {fieldIssues.map((i) => i.message).join(' · ')}
+                                </span>
+                              ) : null}
                             </label>
-                          )
+                            )
+                          }
                           return (
-                            <>
+                            <div key={`${node.id}-${historyGen}`} className="space-y-2">
                               {basic.map(renderField)}
                               {advanced.length > 0 ? (
                                 <div className="mt-2 rounded-lg border border-ink-200 bg-ink-50/60">
@@ -2311,17 +2871,27 @@ function BuilderInner() {
                                     onClick={() => setAdvancedOpen((v) => !v)}
                                     aria-expanded={advancedOpen}
                                   >
-                                    <span>Advanced ({advanced.length})</span>
+                                    <span>
+                                      Advanced ({advanced.length})
+                                      {advancedInvalid > 0 ? (
+                                        <span className="ml-1 normal-case text-rose-700">· {advancedInvalid} invalid</span>
+                                      ) : null}
+                                    </span>
                                     {advancedOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                                   </button>
-                                  {advancedOpen ? (
+                                  {advancedOpen || advancedInvalid > 0 ? (
                                     <div className="space-y-2 border-t border-ink-200 px-2.5 py-2">
                                       {advanced.map(renderField)}
                                     </div>
                                   ) : null}
                                 </div>
                               ) : null}
-                            </>
+                              {hiddenCount > 0 ? (
+                                <p className="text-[10px] leading-snug text-ink-400">
+                                  {hiddenCount} field{hiddenCount === 1 ? '' : 's'} hidden — not applicable to the current settings.
+                                </p>
+                              ) : null}
+                            </div>
                           )
                         })()}
                       </>
@@ -2333,7 +2903,7 @@ function BuilderInner() {
           </aside>
         </div>
 
-        <div className="relative z-20 border-t border-ink-800 bg-[#12181f] text-ink-100">
+        <div data-toast-avoid className="relative z-20 border-t border-ink-800 bg-[#12181f] text-ink-100">
           <div
             className="absolute inset-x-0 -top-1 z-30 h-2 cursor-row-resize"
             onPointerDown={onLogResize}
@@ -2341,17 +2911,17 @@ function BuilderInner() {
           />
           <div className="flex items-center gap-2 px-3 py-1">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Execution log</div>
-            {errorLogs.length > 0 && (
+            {errorCount > 0 && (
               <button
                 type="button"
                 className="inline-flex items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-500/30"
                 onClick={focusLogErrors}
               >
-                {errorLogs.length} {errorLogs.length === 1 ? 'error' : 'errors'}
+                {errorCount} {errorCount === 1 ? 'error' : 'errors'}
               </button>
             )}
             <div className="ml-auto flex items-center gap-2">
-              {runHadErrors && !isRunning && lastRunId ? (
+              {execBadge === 'failed' && !isRunning && lastRunId ? (
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 rounded bg-rose-500/25 px-2 py-0.5 text-[11px] font-semibold text-rose-100 hover:bg-rose-500/40"
@@ -2388,14 +2958,20 @@ function BuilderInner() {
           {!logCollapsed && (
             <div
               ref={logBodyRef}
-              style={{ height: logHeight }}
+              // The global toast stack is fixed bottom-right over this panel;
+              // pad the scroll area while toasts are up so the last log lines
+              // can still be scrolled clear of them (auto-stick re-scrolls).
+              style={{
+                height: logHeight,
+                paddingBottom: toastCount > 0 ? Math.min(Math.round(logHeight * 0.6), 24 + toastCount * 64) : undefined,
+              }}
               className="overflow-y-auto px-3 pb-2 font-mono text-[11px]"
               onScroll={(e) => {
                 const el = e.currentTarget
                 stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32
               }}
             >
-              {errorLogs.length > 0 && (
+              {errorCount > 0 && (
                 <div className="sticky top-0 z-10 mb-1 rounded bg-rose-950/90 px-2 py-1 text-[11px] text-rose-100">
                   <button type="button" className="hover:underline" onClick={focusLogErrors}>
                     Jump to error
@@ -2406,7 +2982,7 @@ function BuilderInner() {
                 <div className="text-ink-500">No events yet.</div>
               ) : (
                 prettyLogs.map((l, i) => {
-                  const isErr = l.level === 'error' || /fail|error/i.test(l.message)
+                  const isErr = isErrorRow(l.level, l.message)
                   return (
                     <div
                       key={`${l.ts}-${i}`}

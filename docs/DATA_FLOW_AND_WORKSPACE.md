@@ -174,6 +174,14 @@ Filesystem write destinations are **config keys** (`output_path`, `output_dir`, 
 
 Read keys (`path`, `model_path`) are **not** created. Empty ingest folders would look like a successful dataset with zero wavs.
 
+Path side-effects enter run observability only through the generic
+`Node.publish_files(root, files)` API. After `process()`, the executor registers
+a platform `file_tree` artifact (`inventory.json` under ArtifactStore). Listing
+(`GET /runs/{id}/outputs`) reads ArtifactRecords via `handler.list_files` — it
+does not rediscover exporter trees or parse domain files such as `labels.csv`.
+Any node type (audio export, video, webhook dump, LLM transcript, inference
+bundle) can publish the same way.
+
 
 ---
 
@@ -223,7 +231,7 @@ The server writes one JSON object per line (NDJSON). The client reads the respon
 // Structured events
 {"type": "pipeline_start", "total_nodes": 5, "timestamp": "2024-01-01T00:00:00+00:00"}
 {"type": "node_start", "node_type": "InputNode", "node_index": 0, "total_nodes": 5, "timestamp": "..."}
-{"type": "node_end", "node_type": "InputNode", "node_index": 0, "duration": 0.123, "output_count": 42, "timestamp": "..."}
+{"type": "node_end", "node_type": "InputNode", "node_index": 0, "duration": 0.123, "output_count": 42, "output_counts": {"output": 42}, "timestamp": "..."}
 {"type": "node_error", "node_type": "CleanNode", "node_index": 1, "error_message": "...", "error_type": "ValueError", "timestamp": "..."}
 {"type": "pipeline_summary", "timestamp": "..."}
 {"type": "done", "timestamp": "2024-01-01T00:00:01+00:00"}

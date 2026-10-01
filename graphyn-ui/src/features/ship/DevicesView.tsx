@@ -1,4 +1,5 @@
 import React from 'react'
+import { Cpu as EmptyCpu } from 'lucide-react'
 import { AlertTriangle, Cpu, Radio } from 'lucide-react'
 import { EmptyState, PageHeader } from '../../components/ui'
 import { paths } from '../../routes/paths'
@@ -48,7 +49,7 @@ export default function DevicesView({
   const body = (
     <div className="space-y-3">
       {honesty}
-      <EmptyState
+      <EmptyState icon={EmptyCpu}
         title="No device registry yet"
         description="When the device API lands, inventory and OTA status will appear here. Until then this page stays an honest empty slot."
         action={

@@ -30,20 +30,20 @@ optional_dependencies = [
 node_types = ["audio_conditioner"]
 
 [config_schema.audio_conditioner]
-target_sample_rate = { type = "integer", title = "Target sample rate", default = 16000, description = "Resample audio to this rate (Hz).", ui = { group = "Basic" } }
+target_sample_rate = { type = "integer", title = "Target sample rate", default = 16000, minimum = 1000, maximum = 384000, description = "Resample audio to this rate (Hz).", ui = { group = "Basic" } }
 mono = { type = "boolean", title = "Mono", default = true, description = "Downmix to a single channel (On/Off).", ui = { group = "Basic" } }
-trim_silence = { type = "boolean", title = "Trim silence", default = true, description = "Trim leading/trailing silence using trim_threshold_db (On/Off).", ui = { group = "Basic" } }
-trim_threshold_db = { type = "number", title = "Trim threshold (dB)", default = 40.0, description = "Silence threshold in dB used when trim_silence is On.", ui = { group = "Advanced" } }
-normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize feature or audio amplitude (On/Off).", ui = { group = "Basic" } }
-normalize_method = { type = "string", title = "Normalize method", default = "peak", description = "Loudness normalization method. One of: peak, rms, lufs.", enum = ["peak", "rms", "lufs"], ui = { group = "Basic" } }
-target_level_db = { type = "number", title = "Target level (dB)", default = -1.0, description = "Peak/RMS target level in dB when normalize_method is peak or rms.", ui = { group = "Basic" } }
-target_lufs = { type = "number", title = "Target LUFS", default = -23.0, description = "EBU R128 integrated loudness target when normalize_method is lufs.", ui = { group = "Basic" } }
+trim_silence = { type = "boolean", title = "Trim silence", default = true, description = "Trim leading/trailing silence quieter than trim_threshold_db below the clip peak (On/Off).", ui = { group = "Basic" } }
+trim_threshold_db = { type = "number", title = "Trim threshold (dB below peak)", default = 40.0, exclusiveMinimum = 0, maximum = 120, description = "librosa top_db: frames quieter than (peak - this) dB count as silence. Higher = less audio trimmed.", ui = { group = "Advanced", visible_if = { trim_silence = true } } }
+normalize = { type = "boolean", title = "Normalize", default = true, description = "Normalize audio amplitude with normalize_method (On/Off).", ui = { group = "Basic" } }
+normalize_method = { type = "string", title = "Normalize method", default = "peak", description = "Loudness normalization method. One of: peak, rms, lufs (lufs needs pyloudnorm; falls back to rms at target_level_db).", enum = ["peak", "rms", "lufs"], ui = { group = "Basic", visible_if = { normalize = true } } }
+target_level_db = { type = "number", title = "Target level (dBFS)", default = -1.0, minimum = -96, maximum = 0, description = "Peak/RMS target level in dBFS when normalize_method is peak or rms (also the rms fallback for lufs without pyloudnorm).", ui = { group = "Basic", visible_if = { normalize = true, normalize_method = ["peak", "rms"] } } }
+target_lufs = { type = "number", title = "Target LUFS", default = -23.0, minimum = -70, maximum = 0, description = "EBU R128 integrated loudness target when normalize_method is lufs.", ui = { group = "Basic", visible_if = { normalize = true, normalize_method = "lufs" } } }
 remove_dc_offset = { type = "boolean", title = "Remove DC offset", default = true, description = "Subtract DC bias before further processing (On/Off).", ui = { group = "Basic" } }
 preemphasis = { type = "boolean", title = "Preemphasis", default = false, description = "Apply a high-frequency pre-emphasis filter (On/Off).", ui = { group = "Advanced" } }
-preemphasis_coeff = { type = "number", title = "Preemphasis coeff", default = 0.97, description = "First-order pre-emphasis coefficient (typical 0.97).", ui = { group = "Advanced" } }
+preemphasis_coeff = { type = "number", title = "Preemphasis coeff", default = 0.97, minimum = 0, maximum = 1, description = "First-order pre-emphasis coefficient in [0, 1] (typical 0.97).", ui = { group = "Advanced", visible_if = { preemphasis = true } } }
 compress = { type = "boolean", title = "Compress", default = false, description = "Enable dynamic-range compression (On/Off).", ui = { group = "Advanced" } }
-compress_threshold_db = { type = "number", title = "Compress threshold (dB)", default = -20.0, description = "Compression threshold in dB below which gain is reduced.", ui = { group = "Advanced" } }
-compress_ratio = { type = "number", title = "Compress ratio", default = 4.0, description = "Compression ratio (e.g. 4.0 means 4:1). Must be > 0.", ui = { group = "Advanced" } }
-limiter = { type = "boolean", title = "Limiter", default = true, description = "Brick-wall limiter to prevent clipping after processing (On/Off).", ui = { group = "Advanced" } }
-skip_clipped = { type = "boolean", title = "Skip clipped", default = false, description = "Skip samples that are already clipped instead of processing them (On/Off).", ui = { group = "Advanced" } }
-batch_size = { type = "integer", title = "Batch size", default = 0, description = "Process in batches of N (0 = all at once).", ui = { group = "Advanced" } }
+compress_threshold_db = { type = "number", title = "Compress threshold (dBFS)", default = -20.0, minimum = -96, maximum = 0, description = "Samples louder than this threshold (dBFS) are gain-reduced by compress_ratio.", ui = { group = "Advanced", visible_if = { compress = true } } }
+compress_ratio = { type = "number", title = "Compress ratio", default = 4.0, exclusiveMinimum = 0, description = "Compression ratio (e.g. 4.0 means 4:1). Must be > 0; values < 1 expand.", ui = { group = "Advanced", visible_if = { compress = true } } }
+limiter = { type = "boolean", title = "Limiter", default = true, description = "Hard-clip the processed output to [-1, 1] when it exceeds full scale (On/Off).", ui = { group = "Advanced" } }
+skip_clipped = { type = "boolean", title = "Skip clipped", default = false, description = "Drop samples whose processed output exceeds full scale (checked after normalization/compression, before the limiter) instead of limiting them (On/Off).", ui = { group = "Advanced" } }
+batch_size = { type = "integer", title = "Batch size", default = 0, minimum = 0, description = "Process in chunks of N samples (0 = all at once). Output is identical; only iteration changes.", ui = { group = "Advanced" } }

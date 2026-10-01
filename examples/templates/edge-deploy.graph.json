@@ -2,6 +2,7 @@
   "schema_version": "1.2",
   "metadata": {
     "name": "edge-deploy",
+    "title": "Edge deploy (starter)",
     "seed": 42,
     "description": "Edge deploy path: model path \u2192 edge_optimizer \u2192 deployment_packager. Point model_ref at a Keras SavedModel/.keras from trainer (workspace/artifacts/...). Outputs under workspace/artifacts/edge-deploy/.",
     "created_at": null,

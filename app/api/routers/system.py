@@ -302,11 +302,21 @@ class ScheduleEnabledBody(BaseModel):
 
 
 @router.get("/schedules", summary="List interval schedules")
-def get_schedules():
-    from app.core.pipelines.schedules import SchedulesDataError, list_schedules
+def get_schedules(
+    project: str | None = Query(None, description="Only schedules for this project"),
+):
+    from app.core.pipelines.schedules import (
+        SchedulesDataError,
+        list_schedules,
+        normalize_schedule,
+    )
 
     try:
-        return {"schedules": list_schedules()}
+        return {
+            "schedules": [
+                normalize_schedule(i) for i in list_schedules(project=project or None)
+            ]
+        }
     except SchedulesDataError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -315,7 +325,11 @@ def get_schedules():
 def post_schedule(body: ScheduleCreateBody, request: Request):
     """Create schedule. Honors Idempotency-Key (API-CONV-004)."""
     from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
-    from app.core.pipelines.schedules import SchedulesDataError, create_schedule
+    from app.core.pipelines.schedules import (
+        SchedulesDataError,
+        create_schedule,
+        normalize_schedule,
+    )
 
     cached = begin_idempotent(
         request, body=body.model_dump(), route="POST /api/v1/system/schedules"
@@ -333,6 +347,7 @@ def post_schedule(body: ScheduleCreateBody, request: Request):
                 enabled=body.enabled,
                 env=body.env,
             )
+            item = normalize_schedule(item)
         except SchedulesDataError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
@@ -404,7 +419,11 @@ def remove_schedule(schedule_id: str, request: Request):
 
 @router.post("/schedules/{schedule_id}/enable", summary="Enable or disable a schedule")
 def enable_schedule(schedule_id: str, body: ScheduleEnabledBody, request: Request):
-    from app.core.pipelines.schedules import SchedulesDataError, set_schedule_enabled
+    from app.core.pipelines.schedules import (
+        SchedulesDataError,
+        normalize_schedule,
+        set_schedule_enabled,
+    )
 
     try:
         item = set_schedule_enabled(schedule_id, body.enabled)
@@ -424,7 +443,7 @@ def enable_schedule(schedule_id: str, body: ScheduleEnabledBody, request: Reques
         )
     except Exception:
         pass
-    return item
+    return normalize_schedule(item)
 
 
 class ScheduleEnvBody(BaseModel):

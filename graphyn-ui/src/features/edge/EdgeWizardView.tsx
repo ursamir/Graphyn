@@ -1,4 +1,5 @@
 import React from 'react'
+import { PackageOpen as EmptyPackageOpen, Rocket as EmptyRocket } from 'lucide-react'
 import {
   Archive,
   Check,
@@ -51,6 +52,9 @@ const STEP_LABELS: Record<WizardStep, string> = {
   3: 'Package run',
   4: 'Download',
 }
+
+/** Placeholder model path. Never probed — it only exists if a run wrote there. */
+const DEFAULT_MODEL_PATH = 'workspace/artifacts/models/saved_model'
 
 type RegistryModel = {
   name: string
@@ -125,12 +129,14 @@ export default function EdgeWizardView() {
     }>
   >([])
   const [sourceArtifactId, setSourceArtifactId] = React.useState('')
+  /** Run id whose artifacts are in `sourceArtifacts` (null while loading / failed). */
+  const [sourceArtifactsRun, setSourceArtifactsRun] = React.useState<string | null>(null)
   const [registryModels, setRegistryModels] = React.useState<RegistryModel[]>([])
   const [pickedModel, setPickedModel] = React.useState('')
 
   const [step, setStep] = React.useState<WizardStep>(1)
   const [graph, setGraph] = React.useState<GraphIR | null>(null)
-  const [modelPath, setModelPath] = React.useState('workspace/artifacts/models/saved_model')
+  const [modelPath, setModelPath] = React.useState(DEFAULT_MODEL_PATH)
   const [labelsCsv, setLabelsCsv] = React.useState('yes, no, up, down, go, stop')
   const [backend, setBackend] = React.useState<EdgeBackend>('tflite')
   const [quantization, setQuantization] = React.useState<EdgeQuantization>('float32')
@@ -206,8 +212,10 @@ export default function EdgeWizardView() {
   React.useEffect(() => {
     let cancelled = false
     const path = modelPath.trim()
-    if (!path) {
+    if (!path || path === DEFAULT_MODEL_PATH) {
+      // The hardcoded placeholder is not a real location — don't fire a GET that 404s.
       setModelPathMissing(true)
+      setModelPathChecking(false)
       return
     }
     setModelPathChecking(true)
@@ -242,8 +250,12 @@ export default function EdgeWizardView() {
   React.useEffect(() => {
     let cancelled = false
     const path = resolvedPackagePath.trim()
-    if (!path) {
+    // Only probe a real package path (from a finished run) or the guessed default
+    // when this workspace has built packages before — otherwise the guess
+    // (`…/edge-deploy/latest/packages/<name>_edge.tar.gz`) just 404s on every visit.
+    if (!path || (!downloadPath && shipPackages.length === 0)) {
       setPackageExists(false)
+      setPackageChecking(false)
       return
     }
     setPackageChecking(true)
@@ -272,7 +284,7 @@ export default function EdgeWizardView() {
       cancelled = true
       window.clearTimeout(handle)
     }
-  }, [resolvedPackagePath, runStatus])
+  }, [resolvedPackagePath, runStatus, downloadPath, shipPackages.length])
 
   React.useEffect(() => {
     const apply = () => {
@@ -304,9 +316,15 @@ export default function EdgeWizardView() {
             metadata?: Record<string, unknown>
           }>
         >('/artifacts', { query: { run_id: rid } })
-        if (!cancelled) setSourceArtifacts(Array.isArray(arts) ? arts : [])
+        if (!cancelled) {
+          setSourceArtifacts(Array.isArray(arts) ? arts : [])
+          setSourceArtifactsRun(rid)
+        }
       } catch {
-        if (!cancelled) setSourceArtifacts([])
+        if (!cancelled) {
+          setSourceArtifacts([])
+          setSourceArtifactsRun(null)
+        }
       }
     })()
     return () => {
@@ -341,12 +359,64 @@ export default function EdgeWizardView() {
     }
   }, [linkedProject])
 
-  // Prefer a recent successful workspace run as the Ship source (don't leave blank / orphan to global).
+  /* Runs known to have produced a model: registry stage pointers (same logic
+     as ModelsView.modelRunIds) plus a light artifact probe of the few newest
+     successful runs. Ship used to preselect the newest *successful* run even
+     when it produced no model, then probe default paths that 404. */
+  const registryModelRunIds = React.useMemo(() => {
+    const ids = new Set<string>()
+    for (const m of registryModels) {
+      for (const st of Object.values(m.stages || {})) if (st?.run_id) ids.add(st.run_id)
+    }
+    return ids
+  }, [registryModels])
+  const [probedModelRuns, setProbedModelRuns] = React.useState<{ project: string; ids: string[] } | null>(null)
+  React.useEffect(() => {
+    const project = linkedProject.trim()
+    if (!project) return
+    let cancelled = false
+    const candidates = projectRuns
+      .filter((r) => isTerminalSuccess(r.status || '') && !registryModelRunIds.has(r.run_id))
+      .slice(0, 5)
+    void (async () => {
+      const found: string[] = []
+      for (const r of candidates) {
+        try {
+          const arts = unwrapList<Record<string, unknown>>(
+            await apiJson('/artifacts', { query: { run_id: r.run_id } }),
+          )
+          if (arts.some((a) => isModelLikeArtifact(a as Parameters<typeof isModelLikeArtifact>[0]))) {
+            found.push(r.run_id)
+          }
+        } catch {
+          /* skip */
+        }
+        if (cancelled) return
+      }
+      if (!cancelled) setProbedModelRuns({ project, ids: found })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [projectRuns, registryModelRunIds, linkedProject])
+  const modelRunIds = React.useMemo(() => {
+    const ids = new Set(registryModelRunIds)
+    if (probedModelRuns && probedModelRuns.project === linkedProject.trim()) {
+      for (const id of probedModelRuns.ids) ids.add(id)
+    }
+    return ids
+  }, [registryModelRunIds, probedModelRuns, linkedProject])
+  const modelRuns = React.useMemo(
+    () => projectRuns.filter((r) => modelRunIds.has(r.run_id)),
+    [projectRuns, modelRunIds],
+  )
+
+  // Preselect only a recent workspace run that actually has a model.
   React.useEffect(() => {
     if (sourceRunId.trim()) return
-    const ok = projectRuns.find((r) => isTerminalSuccess(r.status || ''))
+    const ok = modelRuns.find((r) => isTerminalSuccess(r.status || '')) ?? modelRuns[0]
     if (ok?.run_id) setSourceRunId(ok.run_id)
-  }, [projectRuns, sourceRunId])
+  }, [modelRuns, sourceRunId])
 
   // Prefer path workspace id; devices tab via pathname segment.
   // Do not mirror ?project= when /workspaces/:id/ship already carries the id.
@@ -516,6 +586,15 @@ export default function EdgeWizardView() {
       stagePath: uri && !isModelLikeArtifact(hit) ? null : uri || null,
     })
   }
+
+  // Source run artifacts arrived and the model path is still the placeholder:
+  // adopt the run's first model artifact instead of a guessed default path.
+  React.useEffect(() => {
+    if (modelPath !== DEFAULT_MODEL_PATH || sourceArtifactId) return
+    const first = sourceArtifacts.find(isModelLikeArtifact)
+    if (first?.artifact_id) applySourceArtifact(String(first.artifact_id))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceArtifacts])
 
   const configuredGraph = React.useMemo(() => {
     const base = graph ?? EDGE_DEPLOY_TEMPLATE
@@ -793,10 +872,13 @@ export default function EdgeWizardView() {
               placeholder="Select source run…"
               emptyLabel="Select source run…"
               mono
-              options={projectRuns.map((r) => ({
+              options={(modelRuns.length > 0 ? modelRuns : projectRuns).map((r) => ({
                 value: r.run_id,
                 label: `${r.run_id.slice(0, 8)} ${r.status || ''}`.trim(),
-                description: r.graph_name || undefined,
+                description:
+                  modelRuns.length > 0
+                    ? [r.graph_name, 'has model'].filter(Boolean).join(' · ')
+                    : [r.graph_name, 'no model artifacts found'].filter(Boolean).join(' · '),
               }))}
             />
             <input
@@ -885,12 +967,39 @@ export default function EdgeWizardView() {
               <h3 className="text-sm font-semibold text-ink-900">Graph</h3>
               <p className="text-sm text-ink-500">
                 This wizard is{' '}
-                <strong className="font-medium text-ink-700">optimize → package → download</strong>
-                — not collect/train. Set project + source train run in the lineage bar above, then
+                <strong className="font-medium text-ink-700">optimize → package → download</strong>{' '}
+                — not collect/train. Set workspace + source train run in the lineage bar above, then
                 load the edge template.
               </p>
-              {!linkedProject.trim() || !sourceRunId.trim() ? (
-                <EmptyState
+              {linkedProject.trim() && !sourceRunId.trim() ? (
+                <EmptyState icon={EmptyRocket}
+                  title={
+                    modelRuns.length > 0
+                      ? 'Pick a source run'
+                      : `No runs with a model in ${linkedProject.trim()} yet`
+                  }
+                  description={
+                    modelRuns.length > 0
+                      ? 'Choose the train run whose model you want to ship in the lineage bar above.'
+                      : 'Run a training pipeline (e.g. Speech commands E2E) first, then come back here to package its model.'
+                  }
+                  action={
+                    <div className="flex flex-wrap justify-center gap-2">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => goView('templates')}
+                      >
+                        Open Templates
+                      </button>
+                      <button type="button" className="btn-secondary" onClick={() => goView('runs')}>
+                        Runs
+                      </button>
+                    </div>
+                  }
+                />
+              ) : !linkedProject.trim() || !sourceRunId.trim() ? (
+                <EmptyState icon={EmptyRocket}
                   title="Workspace + source run required"
                   description="Open a workspace, run a train pipeline from Templates/Editor, then return here with that run_id in the lineage bar."
                   action={
@@ -923,6 +1032,16 @@ export default function EdgeWizardView() {
                       <code className="font-mono">{sourceRunId.slice(0, 8)}…</code>
                     </p>
                   </button>
+                  {sourceArtifactsRun === sourceRunId.trim() &&
+                  !modelRunIds.has(sourceRunId.trim()) &&
+                  !sourceArtifacts.some(isModelLikeArtifact) ? (
+                    <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      Run <code className="font-mono">{sourceRunId.slice(0, 8)}</code> produced no model
+                      artifacts. Pick a train run that registered or saved a model
+                      {modelRuns.length > 0 ? ` (${modelRuns.length} in this workspace)` : ''}, or set the
+                      model path by hand in the next step.
+                    </p>
+                  ) : null}
                   <button
                     type="button"
                     className="ide-quiet-btn text-[12px]"
@@ -1076,7 +1195,7 @@ export default function EdgeWizardView() {
                           / <code className="font-mono">{linkedVersion}</code>
                         </>
                       ) : null}{' '}
-                      — path comes from registry / run artifacts, not the project name.
+                      — path comes from registry / run artifacts, not the workspace name.
                     </span>
                   ) : null}
                   {!modelPathChecking && modelPathMissing ? (
@@ -1245,7 +1364,7 @@ export default function EdgeWizardView() {
             <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
               <h3 className="text-sm font-semibold text-ink-900">Download package</h3>
               {!packageExists && !packageChecking ? (
-                <EmptyState
+                <EmptyState icon={EmptyPackageOpen}
                   title="Run package step first"
                   description="No package artifact at the expected path yet. Finish Configure → Package run, or adjust the path if the packager wrote elsewhere."
                   action={

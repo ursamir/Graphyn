@@ -3,7 +3,13 @@
 Bounded Context:  BC6 — Observability & Storage / ops
 Responsibility:   Persist interval-based schedule jobs that execute project
                   pipelines (always-on lite — API process ticks while running).
-Owns:             list/create/update/delete/run_due schedules helpers.
+Owns:             list/create/update/delete/run_due schedules helpers;
+                  orphan handling (project deleted → schedules disabled with
+                  ``orphaned: true``) and auto-disable on permanent start
+                  errors (project / pipeline not found). Disabled / orphaned
+                  schedules carry ``next_run_at: null`` (recomputed on enable);
+                  :func:`normalize_schedule` gives the API view with stable
+                  ``orphaned``, ``disabled_reason``, ``orphaned_at`` keys.
 Public Surface:   Same helpers used by /system/schedules routes.
 Must NOT:         Import app.api; must not require croniter.
 Dependencies:     json, uuid, datetime, pathlib, app.core.persist.file_lock; project_pipelines; runtime_backend lazy.
@@ -14,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -23,7 +30,7 @@ from typing import Any, Callable, TypeVar
 logger = logging.getLogger(__name__)
 _lock = threading.RLock()
 
-_SAFE_NAME = __import__("re").compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 T = TypeVar("T")
 
@@ -131,13 +138,113 @@ def _mutate(
     return _with_file_lock(path, True, _do)
 
 
-def list_schedules(base_dir: str | Path | None = None) -> list[dict[str, Any]]:
+def list_schedules(
+    base_dir: str | Path | None = None, *, project: str | None = None
+) -> list[dict[str, Any]]:
+    """Return all schedules, optionally filtered to one ``project``."""
     path = schedules_path(base_dir)
 
     def _read() -> list[dict[str, Any]]:
         return list(_load(path))
 
-    return _with_file_lock(path, False, _read)
+    items = [_reported(i) for i in _with_file_lock(path, False, _read)]
+    if project:
+        items = [i for i in items if str(i.get("project") or "") == project]
+    return items
+
+
+def _reported(item: dict[str, Any]) -> dict[str, Any]:
+    """Copy of a stored row with ``next_run_at: None`` when disabled.
+
+    A disabled schedule never fires, so a timestamp would be misleading
+    (legacy rows written before this rule still carry one on disk).
+    """
+    out = dict(item)
+    if not out.get("enabled"):
+        out["next_run_at"] = None
+    return out
+
+
+def normalize_schedule(item: dict[str, Any]) -> dict[str, Any]:
+    """API view of one schedule: stable ``orphaned`` / ``disabled_reason`` /
+    ``orphaned_at`` keys (``False`` / ``None`` when unset) and
+    ``next_run_at: None`` for disabled schedules. Does not mutate ``item``.
+    """
+    out = _reported(item)
+    out["orphaned"] = bool(out.get("orphaned"))
+    out["disabled_reason"] = out.get("disabled_reason") or None
+    out["orphaned_at"] = out.get("orphaned_at") or None
+    return out
+
+
+def _next_run_iso(item: dict[str, Any], now: datetime | None = None) -> str:
+    mins = int(item.get("interval_minutes") or 60)
+    return ((now or _now()) + timedelta(minutes=mins)).isoformat()
+
+
+# Start errors that will never succeed on retry — the schedule is disabled
+# instead of failing on every tick.
+_PERMANENT_ERROR_PATTERNS = (
+    re.compile(r"^Project not found", re.IGNORECASE),
+    re.compile(r"^Pipeline '?[^']*'? not found", re.IGNORECASE),
+    re.compile(r"pipeline not found", re.IGNORECASE),
+)
+
+
+def is_permanent_schedule_error(exc: BaseException) -> bool:
+    """True when ``exc`` means the schedule target no longer exists."""
+    if not isinstance(exc, (FileNotFoundError, KeyError)):
+        return False
+    msg = str(exc.args[0]) if exc.args else str(exc)
+    return any(p.search(msg) for p in _PERMANENT_ERROR_PATTERNS)
+
+
+def _apply_error(it: dict[str, Any], exc: BaseException) -> None:
+    msg = str(exc.args[0] if exc.args else exc)[:500]
+    it["last_error"] = msg
+    it["last_error_at"] = _now().isoformat()
+    if is_permanent_schedule_error(exc):
+        it["enabled"] = False
+        it["next_run_at"] = None
+        it["disabled_reason"] = f"auto-disabled after permanent error: {msg}"
+        if msg.lower().startswith("project not found"):
+            it["orphaned"] = True
+            it["orphaned_at"] = it["last_error_at"]
+
+
+def disable_schedules_for_project(
+    project: str,
+    *,
+    reason: str | None = None,
+    base_dir: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Disable every schedule targeting ``project`` and mark it ``orphaned``.
+
+    Called when a project is deleted. No-op (and no file created) when no
+    ``schedules.json`` exists. Returns the updated schedules.
+    """
+    path = schedules_path(base_dir)
+    if not path.is_file():
+        return []
+    why = reason or f"Project deleted: {project}"
+    now = _now().isoformat()
+
+    def _orphan(
+        items: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        changed: list[dict[str, Any]] = []
+        for it in items:
+            if str(it.get("project") or "") != project:
+                continue
+            it["enabled"] = False
+            it["next_run_at"] = None
+            it["orphaned"] = True
+            it["disabled_reason"] = why
+            it["orphaned_at"] = now
+            changed.append({**it})
+        return items, changed
+
+    return _mutate(path, _orphan)
 
 
 def create_schedule(
@@ -173,7 +280,7 @@ def create_schedule(
         "last_run_at": None,
         "last_run_id": None,
         "last_error": None,
-        "next_run_at": (now + timedelta(minutes=minutes)).isoformat(),
+        "next_run_at": (now + timedelta(minutes=minutes)).isoformat() if enabled else None,
     }
     path = schedules_path(base_dir)
 
@@ -206,6 +313,15 @@ def set_schedule_enabled(
         for item in items:
             if item.get("id") == schedule_id:
                 item["enabled"] = bool(enabled)
+                if enabled:
+                    # Re-enabling is an explicit operator decision; the next
+                    # tick re-disables it if the target is still missing.
+                    item.pop("orphaned", None)
+                    item.pop("orphaned_at", None)
+                    item.pop("disabled_reason", None)
+                    item["next_run_at"] = _next_run_iso(item)
+                else:
+                    item["next_run_at"] = None
                 return items, item
         raise KeyError(schedule_id)
 
@@ -294,7 +410,7 @@ def run_schedule_now(schedule_id: str, base_dir: str | Path | None = None) -> di
         ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             for it in items:
                 if it.get("id") == schedule_id:
-                    it["last_error"] = str(exc)[:500]
+                    _apply_error(it, exc)
                     return items, {**it}
             raise KeyError(schedule_id)
 
@@ -308,8 +424,8 @@ def run_schedule_now(schedule_id: str, base_dir: str | Path | None = None) -> di
                 it["last_run_at"] = now.isoformat()
                 it["last_run_id"] = run_id
                 it["last_error"] = None
-                mins = int(it.get("interval_minutes") or 60)
-                it["next_run_at"] = (now + timedelta(minutes=mins)).isoformat()
+                # Manual "run now" on a disabled schedule must not re-arm it.
+                it["next_run_at"] = _next_run_iso(it, now) if it.get("enabled") else None
                 return items, {**it}
         raise KeyError(schedule_id)
 
@@ -412,7 +528,7 @@ def tick_due_schedules(base_dir: str | Path | None = None) -> list[dict[str, Any
             ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 for it in items:
                     if it.get("id") == sid:
-                        it["last_error"] = str(exc)[:500]
+                        _apply_error(it, exc)
                         return items, {**it}
                 return items, {**snap, "last_error": str(exc)[:500]}
 

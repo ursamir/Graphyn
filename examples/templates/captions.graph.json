@@ -2,6 +2,7 @@
   "schema_version": "1.2",
   "metadata": {
     "name": "captions",
+    "title": "Captions (local Whisper)",
     "seed": 42,
     "description": "Captions: ingest audio, local_whisper ASR with word timings, export SRT/VTT/JSON. Free local path (faster-whisper).",
     "created_at": null,

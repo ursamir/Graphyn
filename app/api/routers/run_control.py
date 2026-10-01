@@ -208,6 +208,14 @@ def cancel_run(run_id: str, request: Request):
                         with os.fdopen(fd, "w", encoding="utf-8") as f:
                             json.dump(meta, f, indent=2)
                         os.replace(tmp, meta_path)
+                        from app.core.runs.run_notify import notify_run_terminal
+
+                        notify_run_terminal(
+                            "cancelled",
+                            run_id,
+                            graph_name=meta.get("graph_name") if isinstance(meta.get("graph_name"), str) else None,
+                            project=meta.get("project") if isinstance(meta.get("project"), str) else None,
+                        )
             except Exception:
                 pass
             try:

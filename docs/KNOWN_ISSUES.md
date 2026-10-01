@@ -6,6 +6,19 @@
 
 ## Resolved recently
 
+### (resolved 2026-10-01) UI-REVIEW-BACKEND — orphan schedules, run-output attribution, cancel events
+
+Found in a live console review. These are source fixes; a running API container needs a rebuild to pick them up.
+
+- **Orphan schedules** (`app/core/pipelines/schedules.py`, `ProjectManager.delete`): deleting a project disables its schedules (`orphaned: true`, `disabled_reason`). A permanent start error (`Project not found` / `Pipeline '…' not found`) auto-disables the schedule instead of failing every hour. `GET /system/schedules?project=` filters by project.
+- **Run outputs** (`app/core/runs/run_outputs.py`): ProjectManager metadata under `datasets/output/<project>/` (`project.json`, `spec.md`, `pipelines/`, `snapshots/`, …) is no longer attributed to `audio_exporter_*`. Exporter configs with `version_tag` attribute only `<dir>/<version_tag>/`. Truncation is visible through the `X-Graphyn-Outputs-Truncated` header, `?with_meta=1` (`truncated_by_node: {node: {shown, total}}`), and `?node_id=&limit=&offset=` paging. The 400 cap is filled run-level → models/metrics/small summaries → bulk files, round-robin per node, and source-node (ingest) input files are not listed as outputs (`inputs_by_node`).
+- **Notifications**: cancelled runs now emit `pipeline_cancelled` (webhook, email, in-app `warning`). Before, nothing was emitted, even though the map pointed `cancelled` at `pipeline_failed`.
+- **Credentials**: responses add `secret_fields_set: {field: bool}`, so `""` (never set) and `"***"` (set, redacted) are no longer ambiguous.
+- **Readiness**: the new `catalog` section (`bundled_plugins`, `installed_plugins`, `partial_catalog`, `warnings`) is informational and does not change `ready`.
+- **Templates**: starter templates carry `metadata.title`. Template summaries and example discovery expose a unique `title`, and `ex-NN-*` copies get an `(example NN)` suffix.
+- **Run → saved pipeline**: `POST /pipelines/run` never writes `pipelines/*.graph.json` (regression test added). The file seen in the review came from the console's "open template in workspace" flow, which PUTs the template as a project pipeline.
+- **503 on /pipelines/run**: the only server-side source is `draining` (shutdown). It now carries `retryable: true` and `Retry-After: 30`. No 503 appeared in the API or nginx logs for that session.
+
 ### (resolved 2026-09-30) STORE-CONCURRENCY — file-backed stores lost updates / double-executed under concurrency
 
 - **Project files** (`app/domain/project_manager.py`): every write (project.json, links, taxonomy, contract, spec, annotations.jsonl, curation) is atomic (unique same-dir tmp + fsync + `os.replace`), and every read-modify-write holds a per-project lock (`<project>/.graphyn.lock`, threads + `fcntl`). Concurrent annotation POSTs no longer truncate each other (2000 → 8 repro); GETs never see a half-written file.
@@ -42,6 +55,147 @@ Linear materialize scoring tied on `list[AudioSample]` for `output` vs `rejected
 ---
 
 ## Open — Fix This Sprint
+
+### AUDIT-2026-10 — Backend contract gaps (outputs inventory follow-on)
+
+Found by a wider backend logical-gap audit after the generic `publish_files` / `file_tree` / `list_files` redesign. Not style issues — ownership and runtime holes.
+
+#### AUDIT-ISOLATED-PUBLISH-1 (P0) — `publish_files` lost across isolated workers
+
+**Evidence:** [`app/core/plugins/worker.py`](app/core/plugins/worker.py) pickles only `node.process()` return value; never drains `node.take_published_file_trees()`. Host [`NodeExecutor._process`](app/core/execution/node_executor.py) returns worker outputs only. Path-writing isolated plugins (`evaluator`, `edge_optimizer`, `trainer`, … — `runtime = "isolated"` in their `plugin.toml`) cannot announce `file_tree` artifacts even if they call `publish_files`.  
+**Impact:** After listing stopped scavenging graph `output_dir` trees, metrics/plots/tflite from isolated nodes may not appear in `GET /runs/{id}/outputs` unless also present as typed port artifacts.  
+**Fix direction:** Worker returns `{outputs, published_file_trees}`; host applies trees onto the Node (or registers them in executor) before artifact drain.
+
+#### AUDIT-PUBLISH-ADOPTION-1 (P1) — Only `audio_exporter` calls `publish_files`
+
+**Evidence:** Grep of `PluginPackage/` — sole `publish_files` call site is `PluginPackage/Audio/audio_exporter/nodes.py`. Writers such as `edge_optimizer`, `evaluator`, `trainer`, `deployment_packager`, vision exporters still write trees without announcing them.  
+**Fix direction:** Adopt `publish_files` (or return `file_tree`-shaped port data) on every path-writing node; prefer after ISOLATED-PUBLISH-1 so isolated nodes work.
+
+#### AUDIT-CACHE-PUBLISH-1 (P1) — Cache hits skip `file_tree` registration
+
+**Evidence:** [`app/core/execution/executor.py`](app/core/execution/executor.py) / orchestrator drain `publish_files` only when `not cache_hit`. Cached nodes re-emit port artifacts but not path inventories for the new run_id.  
+**Fix direction:** Persist published-tree summary in cache payload, or re-register `file_tree` from cache metadata on hit.
+
+#### AUDIT-RUN-OUTPUTS-DEAD-1 (P1) — Domain walk / audio heuristics still in `run_outputs`
+
+**Evidence:** [`app/core/runs/run_outputs.py`](app/core/runs/run_outputs.py) still defines `_DATASET_AUDIO_SUFFIXES`, `_DATASET_META_NAMES`, `_collect_artifact_data_dir` / summarize helpers (`labels.csv` / wav summarization, ~76–82, ~493–569, ~788–838) plus ProjectManager meta / `version_tag` layout sniffing (~109–124, ~900–914) while primary listing uses `handler.list_files`.  
+**Risk:** Listing contract and implementation disagree; easy to re-wire scavenger paths.  
+**Fix direction:** Delete unused helpers; attribute only via ArtifactRecord / `publish_files`.
+
+#### AUDIT-PATH-RESOLVE-DUP-1 (P2) — `workspace/` path normalisation triplicated
+
+**Evidence:** Same “strip `workspace/` then `project_dir()`” logic in `app/core/artifacts/file_tree.py`, `app/core/runs/run_outputs.py` (`_resolve_artifact_data_dir`), `app/core/paths/workspace_paths.py`.  
+**Risk:** Divergent jail/edge-case behaviour (absolute vs relative, symlink).  
+**Fix direction:** One helper in `app.core.paths` used by all three.
+
+#### AUDIT-MCP-INPUTS-WALK-1 (P2) — MCP input listing full-tree `rglob`
+
+**Evidence:** [`app/mcp/handlers/workspace.py`](app/mcp/handlers/workspace.py) `list_data_inputs_handler` counts with `path.rglob("*")`.  
+**Risk:** Slow/OOM on large input trees; same scavenger class as the outputs bug.  
+**Fix direction:** Shallow count or cached manifest; stop-at-budget. Share helper with data API once LG-03 is fixed.
+
+#### AUDIT-DATA-INVENTORY-1 (P0) — Data API scavenges `labels.csv` + `rglob("*.wav")`
+
+**Evidence (scavenger audit):** [`app/api/routers/data.py`](app/api/routers/data.py) merge (~511–557), input walks (~107–174), output detail prefers labels else wav-tree (~299–339, ~415–427).  
+**Impact:** API layer owns audio dataset layout; duplicates ProjectManager/exporter inventories; dual sources drift; non-wav assets missed.  
+**Fix direction:** Domain/ProjectManager owns inventory read/write; API only calls that; drop wav-tree fallback when inventory exists.
+
+#### AUDIT-RUN-DIR-JAIL-1 (P1) — `run_control` resolves run dirs without the jail used by `runs`
+
+**Evidence:** [`app/api/routers/run_control.py`](app/api/routers/run_control.py) `_run_dir` (~48–49) vs jailed `_run_dir` in [`app/api/routers/runs.py`](app/api/routers/runs.py); MCP artifacts handler also has its own resolve.  
+**Impact:** Same semantic, divergent safety — control endpoints weaker than history/download.  
+**Fix direction:** One shared `safe_run_dir()` for API + MCP.
+
+#### AUDIT-CAPABILITY-DUP-1 (P1) — MCP reimplements `resolve_capability`
+
+**Evidence:** Local `_resolve_capability` in [`app/mcp/handlers/discovery.py`](app/mcp/handlers/discovery.py) (~105–143) vs `app.core.host.registry_runtime.resolve_capability`.  
+**Impact:** Capability field sets can drift from IRCapabilityMetadata defaults (AGENTS.md: import from `registry_runtime`).  
+**Fix direction:** Call `registry_runtime.resolve_capability` only.
+
+#### AUDIT-PROMOTE-PRESENCE-DUP-1 (P1) — Duplicate “has artifacts?” walks
+
+**Evidence:** Local `_dir_has_file` in [`app/api/routers/runs.py`](app/api/routers/runs.py) promote (~471–485) and `run_dir_has_artifacts` in [`app/core/paths/workspace_paths.py`](app/core/paths/workspace_paths.py) (~739–751).  
+**Fix direction:** Promote calls `run_dir_has_artifacts` only.
+
+#### AUDIT-DOMAIN-IN-CORE-TEMPLATES-1 (P1) — Materializer / slug encode audio layouts
+
+**Evidence:** `AudioSample` + speech-commands `.wav` seeds in [`app/core/templates/pipeline_template_materializer.py`](app/core/templates/pipeline_template_materializer.py); `speech-commands-e2e` special-case in [`app/core/paths/workspace_paths.py`](app/core/paths/workspace_paths.py) `artifact_slug`.  
+**Fix direction:** Seed/alias maps from template or pack metadata, not hardcoded platform path logic.
+
+#### AUDIT-SUFFIX-ALLOWLIST-DUP-1 (P2) — Three competing “path is a file” suffix sets
+
+**Evidence:** `run_outputs.ALLOWED_SUFFIXES`, `write_paths._FILE_SUFFIXES`, `workspace_paths` suffix set — e.g. `.flac` only in some.  
+**Fix direction:** Single shared helper under `app.core.paths`.
+
+#### AUDIT-PUBLISH-REGISTER-DUP-1 (P2) — `file_tree` drain duplicated in executor + orchestrator
+
+**Evidence:** [`app/core/execution/executor.py`](app/core/execution/executor.py) (~393–414) and [`orchestrator.py`](app/core/execution/orchestrator.py) (~830–852).  
+**Fix direction:** One `register_published_file_trees(...)` helper.
+
+Source audit: [Audit scavenger smells](5b1cb9a4-f321-453d-a87b-0b623af9f247) (LG-01..LG-15; domain `project_manager` wav walks left as in-domain).
+
+---
+
+## Open — Cancel fencing / runtime integrity (AUDIT-2026-10-B)
+
+From [Audit runtime failures](ebaf6289-81f1-4bde-bd4a-b03a942034ff). Durable `cancel_requested` exists, but status APIs / artifact commit / offline ack / MCP do not always treat it as truth. Not restating DIST-CANCEL-1 (mid-`process()`).
+
+#### CANCEL-ARTIFACT-THROTTLE (P1) — Artifact commit uses throttled `is_cancelled`
+
+**Evidence:** [`run_journal.py`](app/core/runs/run_journal.py) `is_cancelled` (~445–459) can return `False` for ≤0.5s without probing; `register_artifact` (~586–603) gates on that, and the meta fallback checks `status == cancelled` not the marker. Marker-only cancel can still commit artifacts.  
+**Fix:** `register_artifact` / cancel_check → `poll_cancelled()` (or always honour marker).
+
+#### CANCEL-STATUS-MARKER-BLIND (P1) — Status APIs ignore `cancel_requested`
+
+**Evidence:** [`run_status.py`](app/core/runs/run_status.py) `load_durable_status` (~140–154) reads only `meta.json`; used by runs + run_control. Marker present + meta still `running` → Observe/control treat run as live.  
+**Fix:** Teach `load_durable_status` to treat marker as cancelled (or pending-cancel).
+
+#### CANCEL-OFFLINE-META-RACE (P1) — Offline cancel meta RMW unlocked
+
+**Evidence:** [`run_control.py`](app/api/routers/run_control.py) (~189–210) unlocked meta rewrite; journal `_write_meta_field` uses in-process lock only. Concurrent executor write can restore `running`.  
+**Fix:** Flock meta; CAS “first terminal wins” across processes.
+
+#### CANCEL-OFFLINE-FALSE-ACK (P1) — Offline cancel acks even if durable writes fail
+
+**Evidence:** [`run_control.py`](app/api/routers/run_control.py) (~183–188, ~219–233) swallows marker/meta errors then returns `{"status":"cancelled"}`.  
+**Fix:** Fail HTTP unless marker (and ideally meta) write succeeded.
+
+#### MCP-CANCEL-NO-OFFLINE (P1) — MCP cancel only works for in-process active runs
+
+**Evidence:** [`mcp/handlers/run_control.py`](app/mcp/handlers/run_control.py) (~110–119) vs API offline path (~170–233). Queued/other-process → `run_not_active`; no marker.  
+**Fix:** Mirror API offline durable cancel in MCP.
+
+#### CACHEABLE-FAIL-OPEN (P1) — Registry errors treat nodes as cacheable
+
+**Evidence:** [`cache_rescope.py`](app/core/execution/cache_rescope.py) `node_is_cacheable` (~45–59) `except: return True`.  
+**Fix:** Fail closed (`return False`).
+
+#### RUN-META-WIPE-ON-BAD-READ (P1) — Corrupt meta → `{}` then one-field rewrite
+
+**Evidence:** [`run_journal.py`](app/core/runs/run_journal.py) (~126–135, ~202–219).  
+**Fix:** Fail closed on corrupt meta; never replace full meta with a single field without merge under flock.
+
+#### ARTIFACT-FORBIDDEN-SWALLOWED (P2) — `ArtifactCommitForbidden` does not fail the node
+
+**Evidence:** orchestrator/executor `except Exception` around `register_artifact` logs and continues.  
+**Fix:** Re-raise / fail node on `ArtifactCommitForbidden`.
+
+#### CANCEL-CHECK-THROTTLED (P2) — Mode A cancel_check uses throttled probe
+
+**Evidence:** orchestrator wires `run.is_cancelled` not `poll_cancelled` for isolated kill (~505–511).  
+**Fix:** Use `poll_cancelled` for cancel_check / node boundaries.
+
+#### WEBHOOK-CONFIG-RMW (P2) / PROPOSAL-CROSS-PROC (P2) — JSON stores without cross-process lock
+
+**Evidence:** `notify/webhook.py` save; `agentic/proposals.py` thread lock only.  
+**Fix:** Same atomic+flock pattern as schedules (STORE-CONCURRENCY).
+
+#### MCP/REPLAY-MARK-FAILED-SILENT (P2) — Swallowed `mark_failed` can leave ghost running
+
+**Evidence:** MCP execution done-callback / artifacts replay (~170–182 / ~209–218).  
+**Fix:** Surface durable terminal write failures; retry or escalate.
+
+---
 
 ### TEST-SUITE-1 — Full pytest suite residuals (2026-09-16)
 

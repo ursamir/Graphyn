@@ -23,5 +23,5 @@ optional_dependencies = [
 node_types = ["augmentation_pipeline"]
 
 [config_schema.augmentation_pipeline]
-copies_per_sample = { type = "integer", title = "Copies per sample", default = 1, description = "How many augmented copies to emit per input sample." }
-augmentations = { type = "array", title = "Augmentations", default = [], description = "Ordered list of augmentation specs (type + params). Node defaults apply when empty.", widget = "json" }
+copies_per_sample = { type = "integer", title = "Copies per sample", default = 1, minimum = 0, description = "Augmented copies emitted per input sample in addition to the original (0 = pass originals through only)." }
+augmentations = { type = "array", title = "Augmentations", default = [{ type = "gain", apply_prob = 0.5, gain_db = [-6, 6] }, { type = "pitch_shift", apply_prob = 0.3, semitones = [-2, 2] }, { type = "time_stretch", apply_prob = 0.3, rate = [0.9, 1.1] }, { type = "speed_perturb", apply_prob = 0.3, speed_factor = [0.9, 1.1] }, { type = "codec_degrade", apply_prob = 0.2, codec = "mp3", bitrate = 32 }, { type = "eq", apply_prob = 0.2, bands = [{ freq = 1000, gain_db = 3, q = 1.0 }] }], description = "Ordered list of augmentation specs {type, apply_prob in [0,1], params}. Types: gain(gain_db=[min,max]), pitch_shift(semitones), time_stretch(rate>0), speed_perturb(speed_factor>0), reverb(impulse_response_path dir), noise_inject(snr_db), codec_degrade(codec, bitrate), eq(bands), audiomentations(transform). An empty list makes every copy an unmodified duplicate.", widget = "json" }

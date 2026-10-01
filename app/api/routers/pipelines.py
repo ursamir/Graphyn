@@ -197,6 +197,37 @@ _STREAM_QUEUE_MAX = 512
 _TERMINAL_EVENT_TYPES = frozenset({"done", "error"})
 
 
+def _terminal_error_event(
+    run_id: str, exc: BaseException, node_error: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Terminal ``error`` event for the NDJSON stream.
+
+    Always carries ``error`` (canonical) and ``message`` (legacy). When the
+    failure is the node failure already streamed as ``node_error``, the event
+    adds ``node_id`` / ``node_type`` and ``already_reported: true`` so
+    consumers render the error once (the node_error line) and treat this
+    event only as end-of-stream.
+    """
+    msg = str(exc)
+    event: dict[str, Any] = {
+        "type": "error",
+        "run_id": run_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "error_type": type(exc).__name__,
+        "message": msg,
+        "error": msg,
+    }
+    if node_error:
+        node_msg = str(node_error.get("error") or "")
+        if node_msg and (node_msg == msg or node_msg in msg):
+            event["already_reported"] = True
+            if node_error.get("node_id"):
+                event["node_id"] = node_error["node_id"]
+            if node_error.get("node_type"):
+                event["node_type"] = node_error["node_type"]
+    return event
+
+
 class _RunEventChannel:
     """Bounded, never-blocking producer → NDJSON consumer channel.
 
@@ -218,6 +249,9 @@ class _RunEventChannel:
         self._closed = False
         self.dropped = 0
         self.terminal_seen: str | None = None
+        # Last node_error seen ({node_id, node_type, error}) so the terminal
+        # error event can say it repeats an already-reported node failure.
+        self.last_node_error: dict[str, Any] | None = None
 
     @staticmethod
     def _is_terminal(item: Any) -> bool:
@@ -228,6 +262,12 @@ class _RunEventChannel:
             if self._closed or self._finished:
                 return
             terminal = self._is_terminal(item)
+            if isinstance(item, dict) and item.get("type") == "node_error":
+                self.last_node_error = {
+                    "node_id": item.get("node_id"),
+                    "node_type": item.get("node_type"),
+                    "error": str(item.get("error") or item.get("error_message") or ""),
+                }
             if terminal and self.terminal_seen is None:
                 self.terminal_seen = str(item.get("type"))
             if len(self._items) >= self._maxsize:
@@ -273,6 +313,27 @@ class _RunEventChannel:
             return False, None
 
 
+_DRAIN_RETRY_AFTER_S = 30
+
+
+def _draining_error() -> HTTPException:
+    """The only 503 the run routes emit: graceful shutdown in progress.
+
+    Clients should retry against the restarted control plane after
+    ``Retry-After`` seconds (``retryable: true``).
+    """
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "draining",
+            "message": "Control plane is shutting down; refusing new runs. Retry after restart.",
+            "retryable": True,
+            "retry_after_s": _DRAIN_RETRY_AFTER_S,
+        },
+        headers={"Retry-After": str(_DRAIN_RETRY_AFTER_S)},
+    )
+
+
 @router.post("/run", summary="Run a pipeline and stream log events")
 def run_pipeline_stream(request: Request, payload: dict = Body(...)):
     """Execute a pipeline and stream NDJSON log events as they occur.
@@ -288,10 +349,7 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
     from app.core.host.shutdown import is_draining
 
     if is_draining():
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "draining", "message": "Control plane is shutting down; refusing new runs"},
-        )
+        raise _draining_error()
     try:
         graph, deprecation_header = _build_graph_from_payload(payload)
         graph, project_fields = _stamp_graph_project(graph, payload)
@@ -334,13 +392,9 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
             except Exception:
                 pass
             if channel.terminal_seen != "error":
-                terminal = {
-                    "type": "error",
-                    "run_id": run_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                }
+                terminal = _terminal_error_event(
+                    run_id, exc, channel.last_node_error
+                )
             if not isinstance(exc, Exception):
                 raise
         finally:
@@ -436,10 +490,7 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
     from app.core.host.shutdown import is_draining
 
     if is_draining():
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "draining", "message": "Control plane is shutting down; refusing new runs"},
-        )
+        raise _draining_error()
     from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
 
     cached = begin_idempotent(
