@@ -69,7 +69,7 @@ describe('stampProjectOnGraph', () => {
       { id: 'ds', node_type: 'some_writer', config: { output_dir: `${PHASE1_DIR}` } },
     ])
     const stamped = stampProjectOnGraph(g, 'proj')
-    expect(cfg(stamped, 'cap').output_dir).toBe('workspace/artifacts/proj/caption_export')
+    expect(cfg(stamped, 'cap').output_dir).toBe('workspace/artifacts/proj/cap')
     expect(cfg(stamped, 'ds').output_dir).toBe(PHASE1_DIR)
   })
 

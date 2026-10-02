@@ -61,7 +61,7 @@
         "dropout_rate": 0.25,
         "learning_rate": 0.001,
         "backend": "keras",
-        "output_path": "workspace/artifacts/speech-commands/models"
+        "output_path": "workspace/artifacts/speech-commands/model_builder"
       },
       "label": null,
       "capability_metadata": null,
@@ -75,7 +75,7 @@
         "device": "auto",
         "epochs": 50,
         "batch_size": 32,
-        "output_path": "workspace/artifacts/speech-commands",
+        "output_path": "workspace/artifacts/speech-commands/trainer",
         "patience": 15
       },
       "label": null,
@@ -86,7 +86,7 @@
       "id": "evaluator_0",
       "node_type": "evaluator",
       "config": {
-        "output_path": "workspace/artifacts/speech-commands",
+        "output_path": "workspace/artifacts/speech-commands/evaluation",
         "plot_confusion_matrix": true,
         "plot_training_curves": true
       },

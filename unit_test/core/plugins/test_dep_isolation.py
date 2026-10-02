@@ -623,8 +623,8 @@ def test_isolated_model_builder_input_pickle_does_not_explode(tmp_path: Path) ->
             seed=0,
             inputs={"dataset": art, "model": None},
         )
-    assert result == {"ok": True}
-    assert trainer_result == {"ok": True}
+    assert result.outputs == {"ok": True}
+    assert trainer_result.outputs == {"ok": True}
     dumped = captured["inputs"]["dataset"]
     assert dumped.__class__ is DatasetArtifact
     assert dumped.__class__.__module__ == "app.models.dataset_artifact"
@@ -811,7 +811,7 @@ def test_isolated_worker_timeout_is_finite(monkeypatch, tmp_path: Path) -> None:
         result = iso.run_isolated_node(
             spec, node_type="t", config={}, seed=1, inputs={}, timeout=None
         )
-    assert result == {"ok": True}
+    assert result.outputs == {"ok": True}
     assert captured["timeout"] == 12.0
 
 

@@ -60,16 +60,13 @@ Linear materialize scoring tied on `list[AudioSample]` for `output` vs `rejected
 
 Found by a wider backend logical-gap audit after the generic `publish_files` / `file_tree` / `list_files` redesign. Not style issues — ownership and runtime holes.
 
-#### AUDIT-ISOLATED-PUBLISH-1 (P0) — `publish_files` lost across isolated workers
+#### AUDIT-ISOLATED-PUBLISH-1 (P0) — `publish_files` lost across isolated workers — **FIXED 2026-10**
 
-**Evidence:** [`app/core/plugins/worker.py`](app/core/plugins/worker.py) pickles only `node.process()` return value; never drains `node.take_published_file_trees()`. Host [`NodeExecutor._process`](app/core/execution/node_executor.py) returns worker outputs only. Path-writing isolated plugins (`evaluator`, `edge_optimizer`, `trainer`, … — `runtime = "isolated"` in their `plugin.toml`) cannot announce `file_tree` artifacts even if they call `publish_files`.  
-**Impact:** After listing stopped scavenging graph `output_dir` trees, metrics/plots/tflite from isolated nodes may not appear in `GET /runs/{id}/outputs` unless also present as typed port artifacts.  
-**Fix direction:** Worker returns `{outputs, published_file_trees}`; host applies trees onto the Node (or registers them in executor) before artifact drain.
+Worker envelope + host `IsolatedResult` / `Node.accept_published_file_trees`. See `docs/WORKLOG_OUTPUTS_AND_VIEWERS.md`.
 
-#### AUDIT-PUBLISH-ADOPTION-1 (P1) — Only `audio_exporter` calls `publish_files`
+#### AUDIT-PUBLISH-ADOPTION-1 (P1) — Only `audio_exporter` calls `publish_files` — **PARTIAL 2026-10**
 
-**Evidence:** Grep of `PluginPackage/` — sole `publish_files` call site is `PluginPackage/Audio/audio_exporter/nodes.py`. Writers such as `edge_optimizer`, `evaluator`, `trainer`, `deployment_packager`, vision exporters still write trees without announcing them.  
-**Fix direction:** Adopt `publish_files` (or return `file_tree`-shaped port data) on every path-writing node; prefer after ISOLATED-PUBLISH-1 so isolated nodes work.
+`evaluator` + `edge_optimizer` now publish; other path writers (trainer, packagers, …) still pending.
 
 #### AUDIT-CACHE-PUBLISH-1 (P1) — Cache hits skip `file_tree` registration
 

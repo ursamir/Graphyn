@@ -201,7 +201,7 @@ class TestModelBuilder:
     @pytest.mark.parametrize("arch,n_layers,params", [
         ("ds_cnn", 4, (20_000, 25_000)),   # README: ~22K params
         ("ds_cnn", 1, (5_000, 9_000)),
-        ("mobilenet", 1, (50_000, 70_000)),
+        ("mobilenet", 1, (50_000, 70_000)),  # MobileNetV2 IR, expansion 6, stem stride 2
         ("simple_cnn", 4, (70_000, 80_000)),  # ignores num_layers
     ])
     def test_architectures(self, tf_mod, small_ds, tmp_path, arch, n_layers, params):
@@ -213,6 +213,32 @@ class TestModelBuilder:
         assert model.output_shape == (None, 6)
         assert params[0] <= model.count_params() <= params[1]
         assert out.labels == LABELS
+
+    def test_custom_layers_from_preset_export(self, tf_mod, small_ds, tmp_path):
+        import importlib.util
+        import keras
+
+        arch_path = ROOT / "PluginPackage" / "Common" / "trainer" / "model_architecture.py"
+        spec = importlib.util.spec_from_file_location("ma_export", arch_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        layers = mod.export_layer_specs("ds_cnn", filters=32, num_layers=2)
+        cls = _load("trainer", "model_builder")
+        out = cls(
+            config={
+                "architecture": "custom",
+                "layers": layers,
+                "dropout_rate": 0.2,
+                "output_path": str(tmp_path),
+            }
+        ).process({"input": small_ds})["output"]
+        model = keras.models.load_model(out.model_path)
+        assert model.output_shape == (None, 6)
+
+    def test_custom_without_layers_rejected(self, tf_mod, tmp_path):
+        cls = _load("trainer", "model_builder")
+        with pytest.raises(Exception, match="layers"):
+            cls(config={"architecture": "custom", "layers": [], "output_path": str(tmp_path)})
 
     def test_learning_rate_and_dropout_compiled(self, tf_mod, small_ds, tmp_path):
         import keras

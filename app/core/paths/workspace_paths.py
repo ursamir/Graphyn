@@ -563,6 +563,9 @@ def scope_outputs_to_run(graph: Any, run_id: str) -> Any:
     paths already under ``/runs/``, and ``workspace/datasets/input`` ingest
     paths unchanged. Dataset trees under artifacts stay at the stable
     ``<slug>/dataset/`` location (never rewritten into ``runs/<id>/``).
+
+    After scoping, nodes that still share an identical ``output_path`` /
+    ``output_dir`` get ``/{node_id}`` appended so writers never collide.
     """
     rid = str(run_id).strip()
     if not rid:
@@ -577,11 +580,50 @@ def scope_outputs_to_run(graph: Any, run_id: str) -> Any:
         data = dump_ir(graph)
 
     rewritten = _scope_value("", data, rid)
+    rewritten = _ensure_unique_write_paths(rewritten)
     if is_dict:
         return rewritten
     from app.core.ir.loader import load_ir
 
     return load_ir(rewritten)
+
+
+def _ensure_unique_write_paths(graph: dict[str, Any]) -> dict[str, Any]:
+    """Append ``/{node_id}`` when two nodes share the same output sink path."""
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return graph
+    for key in ("output_path", "output_dir"):
+        buckets: dict[str, list[dict[str, Any]]] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            cfg = node.get("config")
+            if not isinstance(cfg, dict):
+                continue
+            raw = cfg.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            posix = raw.replace("\\", "/").rstrip("/")
+            if not posix.startswith(f"{ARTIFACTS_PREFIX}/"):
+                continue
+            if "/dataset/" in f"/{posix}/" or posix.endswith("/dataset"):
+                continue
+            buckets.setdefault(posix, []).append(node)
+        for posix, group in buckets.items():
+            if len(group) < 2:
+                continue
+            for node in group:
+                nid = str(node.get("id") or "").strip()
+                if not nid:
+                    continue
+                cfg = node.get("config")
+                if not isinstance(cfg, dict):
+                    continue
+                if posix.endswith(f"/{nid}") or f"/{nid}/" in f"{posix}/":
+                    continue
+                cfg[key] = f"{posix}/{nid}"
+    return graph
 
 
 def read_metrics_json(directory: Path | str | None) -> dict[str, Any] | None:

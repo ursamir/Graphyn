@@ -10,6 +10,8 @@ Branch `test/example-06-plugins` keeps 14 plugins (Example 06 plus `deployment-p
 For full config fields, port specs, and capability details → **[PluginPackage/NODES.md](../PluginPackage/NODES.md)**  
 For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECTURE.md](../PluginPackage/ARCHITECTURE.md)**
 
+`GET /nodes` (Builder catalog) exposes `input_ports` / `output_ports` from `NodeMetadata`. `NodeRegistry.register` fills those from the node class when metadata was registered without them (common for isolated stubs), so catalog-drag shows the same named handles as template graphs.
+
 ---
 
 ## Audio Plugins — `PluginPackage/Audio/` (19 nodes)
@@ -41,7 +43,7 @@ For architecture, data flow, and install patterns → **[PluginPackage/ARCHITECT
 | node_type | Category | Key Dependencies |
 |---|---|---|
 | `dataset_builder` | ML | numpy, scikit-learn; optional: tensorflow, torch |
-| `model_builder` | ML | ships inside the `trainer` plugin (same pack) |
+| `model_builder` | ML | ships inside the `trainer` plugin (same pack); architectures: `ds_cnn` / `mobilenet` / `simple_cnn` / `custom` (+ `layers` JSON) |
 | `trainer` | ML | optional: tensorflow/keras, torch |
 | `evaluator` | ML | scikit-learn, numpy; optional: matplotlib, seaborn |
 | `edge_optimizer` | ML | optional: tensorflow, onnx, tf2onnx |

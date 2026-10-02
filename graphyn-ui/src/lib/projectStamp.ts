@@ -80,7 +80,9 @@ export function stampProjectOnGraph(graph: GraphIR, project: string, version?: s
       // Rewrite artifact sink paths for project isolation without injecting `project`
       // (caption_export / experiment_tracker declare output_dir but not project).
       // Dataset hand-off trees (<slug>/dataset/...) are left alone.
-      const next = `workspace/artifacts/${project}/${n.node_type}`
+      // Use node id (not only node_type) so two trainers / evaluators never share a dir.
+      const sink = n.id || n.node_type
+      const next = `workspace/artifacts/${project}/${sink}`
       if (cfg.output_dir !== next) {
         cfg.output_dir = next
         changed = true

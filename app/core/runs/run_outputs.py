@@ -46,7 +46,9 @@ ALLOWED_SUFFIXES = frozenset(
         ".gif",
         ".webp",
         ".svg",
+        ".bmp",
         ".json",
+        ".jsonl",
         ".keras",
         ".tflite",
         ".zip",
@@ -55,15 +57,33 @@ ALLOWED_SUFFIXES = frozenset(
         ".txt",
         ".npy",
         ".npz",
+        ".npzz",
         ".index",
         ".onnx",
         ".ckpt",
+        ".pt",
+        ".pth",
+        ".pkl",
+        ".pickle",
         ".csv",
         ".wav",
         ".flac",
         ".mp3",
+        ".ogg",
+        ".m4a",
+        ".aac",
         ".webm",
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".avi",
         ".md",
+        ".log",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".html",
+        ".htm",
     }
 )
 
@@ -240,6 +260,9 @@ def is_under_jail(resolved: Path) -> bool:
 
 def _allowed_file(path: Path) -> bool:
     if not path.is_file():
+        return False
+    # Internal run-cache files are not console downloadables.
+    if path.name.lower() in {"outputs_index.json"}:
         return False
     suffix = path.suffix.lower()
     # ArtifactStore data.json often holds dumped tensors (hundreds of MB). Those
@@ -857,24 +880,133 @@ def _match_node_hint(name: str, nodes: list[str], hints: tuple[str, ...]) -> str
     return None
 
 
-def _hint_node_for_path(path: Path, nodes: list[str]) -> str | None:
-    """Attribute shared-run-dir files to a node via basename/dirname conventions."""
+def _node_output_roots(graph: dict[str, Any]) -> dict[str, list[str]]:
+    """Map node_id → normalized output_path/output_dir prefixes from the run graph."""
+    from app.core.paths.write_paths import _resolve_under_project
+
+    out: dict[str, list[str]] = {}
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        nid = str(node.get("id") or "").strip()
+        if not nid:
+            continue
+        cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+        roots: list[str] = []
+        for key in ("output_path", "output_dir"):
+            raw = cfg.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            posix = raw.replace("\\", "/").rstrip("/")
+            roots.append(posix)
+            if posix.startswith("workspace/"):
+                roots.append(posix[len("workspace/") :])
+            try:
+                resolved = _resolve_under_project(posix)
+            except Exception:
+                resolved = None
+            if resolved is None:
+                try:
+                    text = posix
+                    if text.startswith("workspace/"):
+                        text = text[len("workspace/") :]
+                    resolved = (project_dir() / text).resolve()
+                except Exception:
+                    resolved = None
+            if resolved is not None:
+                try:
+                    roots.append(str(resolved.resolve()).replace("\\", "/"))
+                except OSError:
+                    roots.append(str(resolved).replace("\\", "/"))
+            elif posix.startswith("/"):
+                roots.append(posix)
+        if roots:
+            out[nid] = list(dict.fromkeys(roots))
+    return out
+
+
+def _hint_node_for_path(
+    path: Path,
+    nodes: list[str],
+    *,
+    graph: dict[str, Any] | None = None,
+) -> str | None:
+    """Attribute shared-run-dir files to a node via basename/dirname conventions.
+
+    When several nodes match a hint (two evaluators), prefer the one whose
+    configured ``output_path`` is a parent of ``path``.
+    """
     if not nodes:
         return None
     lower_name = path.name.lower()
+    posix = str(path).replace("\\", "/")
+    roots = _node_output_roots(graph) if graph else {}
+
+    def _disambiguate(hits: list[str]) -> str | None:
+        if not hits:
+            return None
+        if len(hits) == 1:
+            return hits[0]
+        scored: list[tuple[int, str]] = []
+        for nid in hits:
+            best = -1
+            for root in roots.get(nid, []):
+                if not root:
+                    continue
+                if posix == root or posix.startswith(root.rstrip("/") + "/"):
+                    best = max(best, len(root))
+            if best >= 0:
+                scored.append((best, nid))
+        if scored:
+            scored.sort(reverse=True)
+            return scored[0][1]
+        return None
+
     for names, hints in _NODE_BASENAME_HINTS:
         if lower_name in names:
+            hits = [n for n in nodes if n and any(h in n.lower() for h in hints)]
+            hit = _disambiguate(hits)
+            if hit:
+                return hit
             hit = _match_node_hint(lower_name, nodes, hints)
             if hit:
                 return hit
+    # compiled_<uuid>.keras hand-off from ModelBuilder (exact name not fixed).
+    if lower_name.startswith("compiled_") and lower_name.endswith(".keras"):
+        hits = [n for n in nodes if n and "model_builder" in n.lower()]
+        hit = _disambiguate(hits) or _match_node_hint(lower_name, nodes, ("model_builder",))
+        if hit:
+            return hit
     for part in path.parts:
         low = part.lower()
         for names, hints in _NODE_DIRNAME_HINTS:
             if low in names:
+                hits = [n for n in nodes if n and any(h in n.lower() for h in hints)]
+                hit = _disambiguate(hits)
+                if hit:
+                    return hit
                 hit = _match_node_hint(low, nodes, hints)
                 if hit:
                     return hit
     return None
+
+
+def _resolve_attributed_node(
+    path: Path,
+    attributed: str | None,
+    nodes: list[str],
+    graph: dict[str, Any],
+) -> str | None:
+    """Prefer basename/dir producer hints over shared-folder path stamps.
+
+    Shared ``output_path`` between trainer+evaluator used to stamp eval plots
+    onto the trainer (trainers win ``_attr_priority``). Basename hints correct
+    that when the file is clearly an evaluator / edge / trainer product.
+    """
+    hinted = _hint_node_for_path(path, nodes, graph=graph)
+    if hinted:
+        return hinted
+    return attributed or None
 
 
 def _looks_like_output_path(key: str, value: str) -> bool:
@@ -980,6 +1112,87 @@ def _load_run_graph(run_dir: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _iter_configured_write_roots(graph: dict[str, Any]) -> list[tuple[str, Path]]:
+    """Node id + resolved write roots from IR config (WRITE_CONFIG_KEYS).
+
+    This is not scavenger rediscovery: only paths the graph declared as write
+    destinations for a named node. Bridges runs that finished before
+    ``publish_files`` / isolated envelope (plots, tflite, …).
+    """
+    from app.core.paths.write_paths import WRITE_CONFIG_KEYS, _resolve_under_project
+
+    out: list[tuple[str, Path]] = []
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        nid = str(node.get("id") or "").strip()
+        if not nid:
+            continue
+        cfg = node.get("config")
+        if not isinstance(cfg, dict):
+            continue
+        for key in WRITE_CONFIG_KEYS:
+            raw = cfg.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            try:
+                root = _resolve_under_project(raw.strip())
+            except Exception:
+                root = None
+            if root is None:
+                try:
+                    text = raw.strip().replace("\\", "/")
+                    if text.startswith("workspace/"):
+                        text = text[len("workspace/") :]
+                    root = (project_dir() / text).resolve()
+                except Exception:
+                    continue
+            if root.is_dir() and is_under_jail(root):
+                out.append((nid, root))
+    return out
+
+
+def _collect_configured_write_files(
+    graph: dict[str, Any],
+    *,
+    seen_keys: set[str],
+    collected: list[Path],
+    attribution: dict[str, str],
+    node_ids: list[str],
+    per_root_cap: int = 64,
+) -> None:
+    """Merge allowed files from graph-declared write dirs into the listing."""
+    for nid, root in _iter_configured_write_roots(graph):
+        if nid not in node_ids:
+            node_ids.append(nid)
+        count = 0
+        try:
+            children = sorted(root.rglob("*"), key=natural_sort_key)
+        except OSError:
+            continue
+        for child in children:
+            if count >= per_root_cap:
+                break
+            try:
+                if not child.is_file():
+                    continue
+                resolved = child.resolve()
+            except OSError:
+                continue
+            if is_project_metadata_path(resolved):
+                continue
+            if not is_under_jail(resolved) or not _allowed_file(resolved):
+                continue
+            key = str(resolved)
+            if key in seen_keys:
+                attribution.setdefault(key, nid)
+                continue
+            seen_keys.add(key)
+            collected.append(resolved)
+            attribution[key] = nid
+            count += 1
 
 
 def _dedupe_files(paths: Iterable[Path], *, limit: int = _MAX_LISTED_FILES) -> list[Path]:
@@ -1500,17 +1713,28 @@ def _list_run_outputs(
         if total > 32:
             ctx.capped = True
 
-    node_of: dict[str, str | None] = {}
-    for path in collected:
-        key = str(path)
-        node_of[key] = attribution.get(key) or _hint_node_for_path(path, node_ids)
     graph = _load_run_graph(run_dir)
+    _collect_configured_write_files(
+        graph,
+        seen_keys=seen_keys,
+        collected=collected,
+        attribution=attribution,
+        node_ids=node_ids,
+    )
+
     order = [
         str(n["id"])
         for n in (graph.get("nodes") or [])
         if isinstance(n, dict) and n.get("id")
     ]
     order.extend(n for n in node_ids if n not in order)
+    all_nodes = list(dict.fromkeys([*order, *node_ids]))
+    node_of: dict[str, str | None] = {}
+    for path in collected:
+        key = str(path)
+        node_of[key] = _resolve_attributed_node(
+            path, attribution.get(key), all_nodes, graph
+        )
     selected = _select_listing(collected, node_of, order, run_dir, _MAX_LISTED_FILES)
     if len(selected) < len(collected):
         ctx.capped = True
@@ -1525,8 +1749,10 @@ def list_run_output_files(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
       (a) journal files under workspace/runs/<run_id>/
       (b) ArtifactStore records for this run_id, expanded via
           ``ArtifactTypeHandler.list_files`` (or a shallow data_dir fallback)
-    Does not walk sibling run folders, graph ``output_dir`` trees, or
-    ProjectManager metadata (see :func:`is_project_metadata_path`).
+      (c) graph-declared write dirs (``WRITE_CONFIG_KEYS``) — config bridge for
+          plots/models written before ``publish_files`` adoption
+    Does not walk sibling run folders or ProjectManager metadata
+    (see :func:`is_project_metadata_path`).
 
     Each entry may include ``node_id`` from the ArtifactRecord. The list is
     capped (400 entries) — use :func:`list_run_output_files_detail` for

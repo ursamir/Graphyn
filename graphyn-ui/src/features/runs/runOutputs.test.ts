@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   executionOrderFromRun,
+  guessNodeFromPath,
+  isInternalRunFile,
+  looksLikeOpaqueId,
   naturalCompare,
   normalizeOutputsResponse,
   orderOutputGroups,
   runHasModelOutput,
+  shortOutputPath,
   sortFilesNatural,
 } from './runOutputs'
 
@@ -75,6 +79,61 @@ describe('execution order + group order', () => {
       ['run', 'audio_conditioner_1', 'dataset_ingest_0', 'zzz'],
     )
     expect(order).toEqual(['dataset_ingest_0', 'audio_conditioner_1', 'segmenter_2', 'zzz', 'run'])
+  })
+
+  it('drops opaque hex ids from group order', () => {
+    const order = orderOutputGroups(
+      ['realtime_inference_4'],
+      ['run', 'c63a89bfa4dd45fd9aa6d2a55abcdef0', 'realtime_inference_4'],
+    )
+    expect(order).toEqual(['realtime_inference_4', 'run'])
+  })
+})
+
+describe('guessNodeFromPath', () => {
+  const runId = 'c63a89bfa4dd45fd9aa6d2a55abcdef0'
+
+  it('does not treat outputs_index.json as /out under the run id', () => {
+    expect(
+      guessNodeFromPath(`runs/${runId}/outputs_index.json`, [], undefined, { runId }),
+    ).toBe('run')
+    expect(
+      guessNodeFromPath(`workspace/runs/${runId}/outputs_index.json`, [], undefined, { runId }),
+    ).toBe('run')
+  })
+
+  it('keeps stamped node_id and real node path segments', () => {
+    expect(
+      guessNodeFromPath('artifacts/x/0.wav', [], { node_id: 'realtime_inference_4' }, { runId }),
+    ).toBe('realtime_inference_4')
+    expect(guessNodeFromPath('nodes/audio_exporter_3/out/a.wav', [], undefined, { runId })).toBe(
+      'audio_exporter_3',
+    )
+  })
+
+  it('maps opaque API node_id to run', () => {
+    expect(looksLikeOpaqueId(runId)).toBe(true)
+    expect(
+      guessNodeFromPath(`runs/${runId}/meta.json`, [], { node_id: runId }, { runId }),
+    ).toBe('run')
+  })
+})
+
+describe('internal files + short paths', () => {
+  const runId = 'c63a89bfa4dd45fd9aa6d2a55abcdef0'
+
+  it('hides outputs_index.json from listings', () => {
+    expect(isInternalRunFile(`runs/${runId}/outputs_index.json`)).toBe(true)
+    const out = normalizeOutputsResponse([
+      { name: 'outputs_index.json', path: `runs/${runId}/outputs_index.json`, size: 1, kind: 'json' },
+      { name: 'meta.json', path: `runs/${runId}/meta.json`, size: 1, kind: 'json' },
+    ])
+    expect(out.files.map((f) => f.name)).toEqual(['meta.json'])
+  })
+
+  it('shortens runs/<id>/… paths for card subtitles', () => {
+    expect(shortOutputPath(`workspace/runs/${runId}/meta.json`, { runId })).toBe('meta.json')
+    expect(shortOutputPath(`runs/${runId}/outputs_index.json`)).toBe('outputs_index.json')
   })
 })
 

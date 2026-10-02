@@ -2,7 +2,8 @@
 """
 Bounded Context:  BC3 — Node Catalog
 Responsibility:   Thread-safe singleton registry mapping node_type strings to
-                  Node classes and NodeMetadata.
+                  Node classes and NodeMetadata. On register(), empty metadata
+                  ports are filled from the node class (isolated stubs).
 Owns:             NodeRegistry — register, unregister, get_class, get_metadata,
                   list_nodes, find_compatible_nodes, to_json, get_config_schema,
                   get_port_schema.
@@ -70,6 +71,28 @@ class NodeRegistry:
         early for already-registered class objects.
         """
         with self._lock:
+            # Ensure API/catalog see port names even when callers pass bare
+            # NodeMetadata (isolated stubs historically omitted ports on meta).
+            if not metadata.input_ports or not metadata.output_ports:
+                from app.core.nodes.discovery import _port_to_dict
+
+                updates: dict[str, Any] = {}
+                if not metadata.input_ports:
+                    try:
+                        updates["input_ports"] = {
+                            k: _port_to_dict(v) for k, v in node_class.input_ports.items()
+                        }
+                    except Exception:
+                        updates["input_ports"] = {}
+                if not metadata.output_ports:
+                    try:
+                        updates["output_ports"] = {
+                            k: _port_to_dict(v) for k, v in node_class.output_ports.items()
+                        }
+                    except Exception:
+                        updates["output_ports"] = {}
+                if updates:
+                    metadata = metadata.model_copy(update=updates)
             self._classes[node_type] = node_class
             self._metadata[node_type] = metadata
             # F4 fix: auto-register port data types so that catalogue.resolve()

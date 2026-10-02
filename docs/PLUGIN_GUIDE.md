@@ -13,6 +13,8 @@ For architecture and data flow → **[PluginPackage/ARCHITECTURE.md](../PluginPa
 
 `AutoDiscovery` scans `plugins/` (or `GRAPHYN_PLUGINS_DIR`) at startup. Any directory with a `plugin.toml` manifest is loaded via `PluginLoader`, which validates the manifest, checks dependencies, imports entry points, and registers node types in `NodeRegistry`.
 
+`NodeRegistry.register` fills empty `NodeMetadata.input_ports` / `output_ports` from the node class when callers pass bare metadata (isolated stubs historically omitted ports on meta). The Builder catalog (`GET /nodes`) therefore advertises the same named handles for catalog-drag as for template-imported graphs.
+
 ---
 
 ## Plugin Structure
@@ -62,6 +64,17 @@ normalize_method = { type = "string", default = "peak", enum = ["peak", "rms", "
 target_lufs      = { type = "number", default = -23.0, minimum = -70, maximum = 0, ui = { visible_if = { normalize = true, normalize_method = "lufs" } } }
 target_level_db  = { type = "number", default = -1.0, minimum = -96, maximum = 0, ui = { visible_if = { normalize_method = ["peak", "rms"] } } }
 ```
+
+**model_builder architectures** (`PluginPackage/Common/trainer/`):
+
+| `architecture` | Source | Tunables (topology fixed) |
+|---|---|---|
+| `ds_cnn` | Hello Edge / DS-CNN (Zhang et al., 2017) | `filters`, `num_layers`, `dropout_rate`, `learning_rate` |
+| `mobilenet` | MobileNetV2 (Sandler et al., 2018) | `filters`, `num_layers`, `expansion_factor` (default 6), `stem_stride` (default 2), dropout/LR |
+| `simple_cnn` | Non-paper baseline | `filters`, dropout/LR |
+| `custom` | User-owned | `layers` JSON list (`widget = "json"`); Builder **Load layers from preset** seeds from a paper body |
+
+Layer `type` values for `custom`: `conv2d`, `depthwise_conv2d`, `batch_norm`, `relu`, `relu6`, `max_pool2d`, `avg_pool2d`, `global_avg_pool2d`, `dropout`, `dense`, `inverted_residual`, `ds_separable_block`. Implementation: `model_architecture.py` (`export_layer_specs` / `build_keras_model`). Preset fixtures live under `trainer/presets/*.layers.json`.
 
 **Credentials:** declare kinds the plugin consumes; graphs bind by connection id only.
 

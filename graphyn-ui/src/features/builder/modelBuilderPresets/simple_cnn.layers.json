@@ -1,0 +1,33 @@
+{
+  "architecture": "simple_cnn",
+  "filters": 64,
+  "num_layers": 4,
+  "expansion_factor": 6,
+  "stem_stride": 2,
+  "dropout_rate": 0.25,
+  "layers": [
+    {
+      "type": "conv2d",
+      "filters": 64,
+      "kernel_size": 3,
+      "padding": "same",
+      "activation": "relu"
+    },
+    {
+      "type": "max_pool2d",
+      "pool_size": 2
+    },
+    {
+      "type": "conv2d",
+      "filters": 128,
+      "kernel_size": 3,
+      "padding": "same",
+      "activation": "relu"
+    },
+    {
+      "type": "max_pool2d",
+      "pool_size": 2
+    }
+  ],
+  "references": "Non-paper baseline (two conv+pool stacks)"
+}

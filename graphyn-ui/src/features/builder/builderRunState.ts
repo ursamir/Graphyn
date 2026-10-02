@@ -151,6 +151,95 @@ export function defaultsFromSchema(entry?: NodeCatalogEntry): Record<string, unk
   return cfg
 }
 
+/**
+ * Ensure catalog-added writers do not share a plugin-default sink
+ * (e.g. both trainer + model_builder defaulting to workspace/artifacts/models).
+ * Dataset hand-off trees under ``…/dataset/`` are left alone.
+ */
+export function isolateNodeWritePath(path: string, nodeId: string): string {
+  const id = String(nodeId || '').trim()
+  const p = String(path || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+  if (!id || !p.startsWith('workspace/artifacts/')) return path
+  if (/(^|\/)dataset(\/|$)/.test(p)) return path
+  if (p.endsWith(`/${id}`) || p.includes(`/${id}/`)) return p
+  return `${p}/${id}`
+}
+
+/** Apply {@link isolateNodeWritePath} to output_path / output_dir on a config object. */
+export function isolateNodeWriteConfig(
+  config: Record<string, unknown>,
+  nodeId: string,
+): Record<string, unknown> {
+  const next = { ...config }
+  for (const key of ['output_path', 'output_dir'] as const) {
+    if (typeof next[key] === 'string') {
+      next[key] = isolateNodeWritePath(String(next[key]), nodeId)
+    }
+  }
+  return next
+}
+
+/** When copying a node, retarget write sinks from the source id to the clone id. */
+export function rebindNodeWriteConfig(
+  config: Record<string, unknown>,
+  fromId: string,
+  toId: string,
+): Record<string, unknown> {
+  const next = { ...config }
+  const from = String(fromId || '').trim()
+  const to = String(toId || '').trim()
+  for (const key of ['output_path', 'output_dir'] as const) {
+    if (typeof next[key] !== 'string') continue
+    let p = String(next[key]).trim().replace(/\\/g, '/').replace(/\/+$/, '')
+    if (from && to && p.endsWith(`/${from}`)) {
+      p = `${p.slice(0, -(from.length + 1))}/${to}`
+    } else if (from && to && p.includes(`/${from}/`)) {
+      p = p.replace(`/${from}/`, `/${to}/`)
+    } else {
+      p = isolateNodeWritePath(p, to)
+    }
+    next[key] = p
+  }
+  return next
+}
+
+/**
+ * If several canvas nodes share the same artifact sink, append ``/{nodeId}``
+ * so trainer/evaluator/model_builder never overwrite each other.
+ */
+export function uniquifyWriteConfigsAmongNodes<
+  T extends { id: string; data: { config?: Record<string, unknown> } },
+>(nodes: T[]): T[] {
+  const result = nodes.map((n) => ({
+    ...n,
+    data: { ...n.data, config: { ...(n.data.config ?? {}) } },
+  }))
+  for (const key of ['output_path', 'output_dir'] as const) {
+    const buckets = new Map<string, T[]>()
+    for (const n of result) {
+      const raw = n.data.config?.[key]
+      if (typeof raw !== 'string' || !raw.trim()) continue
+      const p = raw.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+      if (!p.startsWith('workspace/artifacts/')) continue
+      if (/(^|\/)dataset(\/|$)/.test(p)) continue
+      const list = buckets.get(p) || []
+      list.push(n)
+      buckets.set(p, list)
+    }
+    for (const [p, group] of buckets) {
+      if (group.length < 2) continue
+      for (const n of group) {
+        if (p.endsWith(`/${n.id}`) || p.includes(`/${n.id}/`)) continue
+        n.data.config![key] = `${p}/${n.id}`
+      }
+    }
+  }
+  return result
+}
+
 export type DecoratableNodeData = {
   nodeType: string
   label: string
@@ -173,6 +262,30 @@ function mergePorts(catalog: PortDef[], existing: PortDef[], used: Set<string>, 
     out.push(p)
   }
   return out
+}
+
+/**
+ * True when canvas ports are the bare SISO fallback but the catalog declares
+ * real named ports (common for isolated plugins before metadata ports were filled).
+ */
+export function portsNeedResync(
+  data: { inputs?: PortDef[]; outputs?: PortDef[] },
+  entry: NodeCatalogEntry,
+): boolean {
+  const ports = catalogPorts(entry)
+  const inNames = new Set((data.inputs ?? []).map((p) => p.name))
+  const outNames = new Set((data.outputs ?? []).map((p) => p.name))
+  const catalogIn = ports.inputs.map((p) => p.name)
+  const catalogOut = ports.outputs.map((p) => p.name)
+  const onlyFallbackIn =
+    inNames.size <= 1 && (inNames.size === 0 || inNames.has('input'))
+  const onlyFallbackOut =
+    outNames.size <= 1 && (outNames.size === 0 || outNames.has('output'))
+  if (onlyFallbackIn && catalogIn.some((n) => n !== 'input')) return true
+  if (onlyFallbackOut && catalogOut.some((n) => n !== 'output')) return true
+  for (const n of catalogIn) if (!inNames.has(n)) return true
+  for (const n of catalogOut) if (!outNames.has(n)) return true
+  return false
 }
 
 /**

@@ -4,6 +4,7 @@
  */
 import { Layers } from 'lucide-react'
 import { humanNodeLabel, focusMatchesNode } from '../../lib/format'
+import { looksLikeOpaqueId } from './runOutputs'
 import clsx from 'clsx'
 
 export type PipelineStackItem = {
@@ -35,7 +36,10 @@ export function PipelineStack({
   onChange: (id: string | null) => void
   className?: string
 }) {
-  if (items.length === 0) return null
+  const visible = items.filter(
+    (item) => !looksLikeOpaqueId(item.id) && !looksLikeOpaqueId(String(item.label || '')),
+  )
+  if (visible.length === 0) return null
 
   return (
     <nav
@@ -66,9 +70,12 @@ export function PipelineStack({
         <span className="min-w-0 flex-1 text-sm font-semibold leading-snug text-ink-900">All</span>
       </button>
       <ol className="space-y-1">
-        {items.map((item, idx) => {
+        {visible.map((item, idx) => {
           const active = value != null && focusMatchesNode(value, item.id)
-          const label = item.label || humanNodeLabel(item.id)
+          const label =
+            item.label && !looksLikeOpaqueId(item.label)
+              ? item.label
+              : humanNodeLabel(item.id)
           const statusText = item.status === 'skipped' ? 'skipped (not run)' : item.status
           return (
             <li key={item.id}>

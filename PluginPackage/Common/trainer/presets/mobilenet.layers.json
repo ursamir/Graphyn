@@ -1,0 +1,57 @@
+{
+  "architecture": "mobilenet",
+  "filters": 64,
+  "num_layers": 4,
+  "expansion_factor": 6,
+  "stem_stride": 2,
+  "dropout_rate": 0.25,
+  "layers": [
+    {
+      "type": "conv2d",
+      "filters": 64,
+      "kernel_size": 3,
+      "strides": 2,
+      "padding": "same",
+      "use_bias": false
+    },
+    {
+      "type": "batch_norm"
+    },
+    {
+      "type": "relu6"
+    },
+    {
+      "type": "inverted_residual",
+      "filters": 64,
+      "expansion_factor": 6,
+      "stride": 1,
+      "kernel_size": 3,
+      "use_bias": false
+    },
+    {
+      "type": "inverted_residual",
+      "filters": 128,
+      "expansion_factor": 6,
+      "stride": 2,
+      "kernel_size": 3,
+      "use_bias": false
+    },
+    {
+      "type": "inverted_residual",
+      "filters": 128,
+      "expansion_factor": 6,
+      "stride": 1,
+      "kernel_size": 3,
+      "use_bias": false
+    },
+    {
+      "type": "inverted_residual",
+      "filters": 256,
+      "expansion_factor": 6,
+      "stride": 2,
+      "kernel_size": 3,
+      "use_bias": false
+    }
+  ],
+  "references": "MobileNetV2 (Sandler et al., 2018)"
+}

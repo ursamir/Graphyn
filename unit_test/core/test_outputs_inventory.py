@@ -201,3 +201,87 @@ def test_listing_uses_artifact_inventory_not_labels_csv(tmp_workspace: Path, mon
     monkeypatch.setattr(ro, "_MAX_LISTED_FILES", 3)
     capped = ro.list_run_output_files_detail(run_id, run_dir)
     assert capped["truncated_by_node"]["llm_dump_0"]["total"] == 6
+
+
+def test_shared_folder_plots_attribute_to_evaluator(tmp_workspace, monkeypatch):
+    """Evaluator plots in a shared trainer dir must not stay stamped on trainer."""
+    import json
+    from unittest.mock import patch
+
+    import app.core.runs.run_outputs as ro
+
+    run_id = "sharedattr001"
+    run_dir = tmp_workspace / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    art = tmp_workspace / "artifacts" / "speech-commands" / "runs" / run_id
+    art.mkdir(parents=True)
+    (art / "model.keras").write_bytes(b"model")
+    (art / "confusion_matrix.png").write_bytes(b"\x89PNG")
+    (art / "metrics.json").write_text('{"test_accuracy": 0.5}', encoding="utf-8")
+    (art / "roc_curves.png").write_bytes(b"\x89PNG")
+    (art / "training_curves.png").write_bytes(b"\x89PNG")
+    graph = {
+        "nodes": [
+            {
+                "id": "trainer_0",
+                "node_type": "trainer",
+                "config": {"output_path": str(art)},
+            },
+            {
+                "id": "evaluator_0",
+                "node_type": "evaluator",
+                "config": {"output_path": str(art)},
+            },
+        ]
+    }
+    (run_dir / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    (run_dir / "meta.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+
+    with patch("app.core.artifacts.artifact_store.ArtifactStore") as store_cls:
+        store_cls.return_value.list.return_value = []
+        entries = {e["name"]: e.get("node_id") for e in ro.list_run_output_files(run_id, run_dir)}
+    assert entries.get("model.keras") == "trainer_0"
+    assert entries.get("confusion_matrix.png") == "evaluator_0"
+    assert entries.get("metrics.json") == "evaluator_0"
+    assert entries.get("roc_curves.png") == "evaluator_0"
+    assert entries.get("training_curves.png") == "evaluator_0"
+
+
+def test_shared_models_dir_trainer_vs_model_builder(tmp_workspace, monkeypatch):
+    import json
+    from unittest.mock import patch
+
+    import app.core.runs.run_outputs as ro
+
+    run_id = "sharedattr002"
+    run_dir = tmp_workspace / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    art = tmp_workspace / "artifacts" / "models" / "runs" / run_id
+    art.mkdir(parents=True)
+    (art / "model.keras").write_bytes(b"trained")
+    (art / "compiled_abc.keras").write_bytes(b"compiled")
+    (art / "checkpoints").mkdir()
+    (art / "checkpoints" / "best.keras").write_bytes(b"best")
+    graph = {
+        "nodes": [
+            {
+                "id": "model_builder_x",
+                "node_type": "model_builder",
+                "config": {"output_path": str(art)},
+            },
+            {
+                "id": "trainer_y",
+                "node_type": "trainer",
+                "config": {"output_path": str(art)},
+            },
+        ]
+    }
+    (run_dir / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
+    (run_dir / "meta.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+
+    with patch("app.core.artifacts.artifact_store.ArtifactStore") as store_cls:
+        store_cls.return_value.list.return_value = []
+        entries = {e["name"]: e.get("node_id") for e in ro.list_run_output_files(run_id, run_dir)}
+    assert entries.get("model.keras") == "trainer_y"
+    assert entries.get("best.keras") == "trainer_y"
+    assert entries.get("compiled_abc.keras") == "model_builder_x"

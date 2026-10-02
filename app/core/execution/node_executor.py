@@ -311,7 +311,7 @@ class NodeExecutor:
                 elif isinstance(raw_cfg, dict):
                     config = dict(raw_cfg)
             seed = int(getattr(node, "seed", 42) or 42)
-            return run_isolated_node(
+            result = run_isolated_node(
                 spec,
                 node_type=str(node_type),
                 config=config,
@@ -319,6 +319,10 @@ class NodeExecutor:
                 inputs=inputs,
                 cancel_check=self.is_cancel_requested,
             )
+            # Worker drained publish_files into the envelope — restore onto the
+            # host Node so executor/orchestrator can register file_tree artifacts.
+            node.accept_published_file_trees(result.published_file_trees)
+            return result.outputs
         return node.process(inputs)
 
     async def execute_stream(

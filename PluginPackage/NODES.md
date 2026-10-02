@@ -380,8 +380,15 @@ checkpoint_path: str = ""
 **Package:** ships in `trainer` (`PluginPackage/Common/trainer/`) — not a separate plugin folder.
 
 ```python
-architecture: str = "ds_cnn"   # "ds_cnn" | "mobilenet" | "simple_cnn"
-backend: str = "auto"          # "keras" | "pytorch" | "auto"
+architecture: str = "ds_cnn"   # "ds_cnn" | "mobilenet" | "simple_cnn" | "custom"
+# Presets (paper topology; depth/width tunable):
+#   ds_cnn     — Hello Edge / DS-CNN (Zhang et al., 2017)
+#   mobilenet  — MobileNetV2 inverted residuals (Sandler et al., 2018);
+#                expansion_factor (default 6), stem_stride (default 2)
+#   simple_cnn — non-paper two-conv baseline
+# custom — layers: list[{type, ...}] JSON body; Builder "Load layers from preset"
+# See PluginPackage/Common/trainer/model_architecture.py
+backend: str = "auto"          # "keras" | "auto"
 # additional arch hyperparams in Config — see trainer/nodes.py ModelBuilderNode
 ```
 

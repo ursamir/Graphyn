@@ -360,7 +360,7 @@ Unconnected optional ports receive `None`.
 
 ### Logical vs materialized graph
 
-Before execution the graph is **run-scoped** (`_scope_graph_to_run` → `workspace_paths.scope_outputs_to_run`: output paths are rewritten under `workspace/artifacts/<slug>/runs/<run_id>/`). Because that materialized graph embeds the run id, its hash changes on every run. Therefore:
+Before execution the graph is **run-scoped** (`_scope_graph_to_run` → `workspace_paths.scope_outputs_to_run`: output paths are rewritten under `workspace/artifacts/<slug>/runs/<run_id>/`). Nodes that still share an identical `output_path` / `output_dir` after scoping get `/{node_id}` appended so writers never collide. Because that materialized graph embeds the run id, its hash changes on every run. Therefore:
 
 | Key | Derived from |
 |---|---|

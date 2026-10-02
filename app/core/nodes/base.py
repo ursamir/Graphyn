@@ -202,6 +202,12 @@ class Node(Generic[InputT, OutputT]):
         self._published_file_trees.clear()
         return trees
 
+    def accept_published_file_trees(self, trees: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> None:
+        """Re-queue inventories returned from an isolated worker (host-side)."""
+        for item in trees or ():
+            if isinstance(item, dict) and item.get("root"):
+                self._published_file_trees.append(item)
+
     # ── SISO wrapper installation ─────────────────────────────────────────────
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

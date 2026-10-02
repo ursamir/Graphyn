@@ -15,11 +15,29 @@ export function startCase(key: string): string {
 }
 
 export function humanNodeLabel(name: string): string {
-  let s = stripIsolatedPrefix(name)
+  const raw = String(name || '').trim()
+  if (!raw) return name
+  // Opaque run/artifact ids — never title-case into a fake step name.
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    return 'Run journal'
+  }
+  if (/^[0-9a-f]{16,}$/i.test(raw)) {
+    return 'Run journal'
+  }
+  let s = stripIsolatedPrefix(raw)
   s = s.replace(/Node$/, '')
   // Graph instance ids are type_N (trainer_0) — drop the trailing index for display.
+  // Keep short hex tails (trainer_b66a5330) so dual instances stay distinguishable.
   s = s.replace(/_\d+$/, '')
-  return startCase(s) || name
+  return startCase(s) || raw
+}
+
+/** Bare type key for focus matching: trainer_0 / trainer_b66a5330 → trainer. */
+function focusTypeKey(name: string): string {
+  let s = stripIsolatedPrefix(String(name || '').trim()).toLowerCase()
+  s = s.replace(/_[0-9a-f]{6,}$/i, '')
+  s = s.replace(/_\d+$/, '')
+  return s
 }
 
 /** True when a Focus value refers to the same node as `candidate` (id, type, or label). */
@@ -33,8 +51,14 @@ export function focusMatchesNode(
   if (f === c) return true
   const fl = f.toLowerCase()
   const cl = c.toLowerCase()
-  if (fl === cl || fl.includes(cl) || cl.includes(fl)) return true
-  return humanNodeLabel(f).toLowerCase() === humanNodeLabel(c).toLowerCase()
+  if (fl === cl) return true
+  // Graph instance ids (trainer_0 / trainer_b66a5330) are exact-only: never
+  // soft-match another instance or a bare type label ("Trainer"), or dual
+  // Trainers/Evaluators collapse when focusing the hex-suffix copy.
+  const instanceLike = (s: string) => /_[0-9a-f]+$/i.test(s) || /_\d+$/.test(s)
+  if (instanceLike(f)) return false
+  // Bare type/label focus (logs filters) still matches any instance of that type.
+  return focusTypeKey(f) === focusTypeKey(c)
 }
 
 export function schemaFieldLabel(key: string, def?: Record<string, unknown>): string {

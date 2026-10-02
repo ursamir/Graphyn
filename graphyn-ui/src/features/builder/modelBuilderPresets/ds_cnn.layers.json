@@ -1,0 +1,49 @@
+{
+  "architecture": "ds_cnn",
+  "filters": 64,
+  "num_layers": 4,
+  "expansion_factor": 6,
+  "stem_stride": 2,
+  "dropout_rate": 0.25,
+  "layers": [
+    {
+      "type": "conv2d",
+      "filters": 64,
+      "kernel_size": 3,
+      "strides": 1,
+      "padding": "same",
+      "use_bias": true
+    },
+    {
+      "type": "batch_norm"
+    },
+    {
+      "type": "relu"
+    },
+    {
+      "type": "ds_separable_block",
+      "filters": 64,
+      "kernel_size": 3,
+      "padding": "same"
+    },
+    {
+      "type": "ds_separable_block",
+      "filters": 64,
+      "kernel_size": 3,
+      "padding": "same"
+    },
+    {
+      "type": "ds_separable_block",
+      "filters": 64,
+      "kernel_size": 3,
+      "padding": "same"
+    },
+    {
+      "type": "ds_separable_block",
+      "filters": 64,
+      "kernel_size": 3,
+      "padding": "same"
+    }
+  ],
+  "references": "Hello Edge / DS-CNN (Zhang et al., 2017)"
+}

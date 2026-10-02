@@ -1,9 +1,10 @@
 import { Handle, Position, type NodeProps } from 'reactflow'
 import clsx from 'clsx'
 import type { NodePlacement, PortDef } from '../../types/graph'
-import { AudioLines, Box, Brain, GitBranch, Pencil, Sparkles, X } from 'lucide-react'
+import { AudioLines, Box, Brain, Copy, GitBranch, Pencil, Sparkles, X } from 'lucide-react'
 import { schemaFieldHint } from '../../lib/format'
 import { numberInputAttrs } from './configValidation'
+import { LayersEditor } from './LayersEditor'
 
 export type GraphynNodeData = {
   nodeType: string
@@ -29,6 +30,7 @@ export type GraphynNodeData = {
   onChangeConfig?: (key: string, value: unknown) => void
   onChangePlacement?: (next: NodePlacement | null) => void
   onDelete?: () => void
+  onDuplicate?: () => void
   onValidateConfig?: () => void
   onOpenInspector?: () => void
 }
@@ -256,6 +258,12 @@ function fieldEditor(
         </p>
       </div>
     )
+  }
+
+  // model_builder `layers`: structured list editor (Add / reorder / typed fields).
+  // Other widget=json fields keep the compact textarea.
+  if (key === 'layers' && (widget === 'json' || type === 'array' || Array.isArray(value))) {
+    return <LayersEditor value={value} onChange={onChange} invalid={invalid} />
   }
 
   if (widget === 'textarea' || widget === 'json') {
@@ -582,6 +590,20 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
               }}
             >
               <Pencil className="h-3 w-3" />
+            </button>
+          )}
+          {data.onDuplicate && (
+            <button
+              type="button"
+              className="btn-icon h-6 w-6"
+              title="Copy node"
+              aria-label="Copy node"
+              onClick={(e) => {
+                e.stopPropagation()
+                data.onDuplicate?.()
+              }}
+            >
+              <Copy className="h-3 w-3" />
             </button>
           )}
           {data.onDelete && (

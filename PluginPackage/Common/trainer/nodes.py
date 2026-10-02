@@ -12,8 +12,8 @@ Migrated from app/core/nodes/ml/model_trainer.py and expanded with:
 
 import logging
 from pathlib import Path
-from typing import ClassVar, Literal
-from pydantic import Field
+from typing import Any, ClassVar, Literal
+from pydantic import Field, model_validator
 from uuid import uuid4
 
 import numpy as np
@@ -766,25 +766,25 @@ class TrainerNode(Node):
 
 
 class ModelBuilderNode(Node):
-    """Build a compiled Keras or PyTorch model from a DatasetArtifact.
+    """Build a compiled Keras model from a DatasetArtifact.
 
     Reads ``input_shape`` and ``n_classes`` from the incoming DatasetArtifact
     and constructs a model ready for training. This node bridges the gap between
     ``DatasetBuilderNode`` and ``TrainerNode`` in a fully pipeline-based workflow.
 
-    Architectures (Keras):
-        - ``ds_cnn``    — Depthwise Separable CNN (lightweight, edge-deployable)
-        - ``mobilenet`` — MobileNet-V2 style (wider, higher accuracy)
-        - ``simple_cnn`` — 2-layer CNN (fast baseline)
+    Architectures (Keras) — paper presets keep paper block topology; depth/width
+    remain user-tunable. Non-paper topologies use ``custom`` + ``layers`` JSON:
+
+        - ``ds_cnn``     — Hello Edge / DS-CNN (Zhang et al., 2017)
+        - ``mobilenet``  — MobileNetV2 inverted residuals (Sandler et al., 2018)
+        - ``simple_cnn`` — non-paper two-conv baseline
+        - ``custom``     — explicit layer list (Builder: Load from preset → edit)
 
     Config:
-        architecture (str): "ds_cnn" | "mobilenet" | "simple_cnn". Default: "ds_cnn"
-        filters (int): Base filter count. Default: 64
-        num_layers (int): Number of DS blocks (ds_cnn) or inverted residuals (mobilenet). Default: 4
-        dropout_rate (float): Dropout before final Dense layer. Default: 0.25
-        learning_rate (float): Adam learning rate. Default: 0.001
-        backend (str): "keras" | "auto". Default: "auto"
-        output_path (str): Directory for compiled .keras files. Default: "workspace/artifacts/models"
+        architecture (str): preset or \"custom\". Default: \"ds_cnn\"
+        filters / num_layers / expansion_factor / stem_stride: preset scale knobs
+        layers (list): required when architecture=custom
+        dropout_rate, learning_rate, backend, output_path
     """
 
     node_type: ClassVar[str] = "model_builder"
@@ -794,11 +794,13 @@ class ModelBuilderNode(Node):
         label="Model Builder",
         description=(
             "Build a compiled Keras model from a DatasetArtifact. "
-            "Supports DS-CNN, MobileNet, and simple CNN architectures."
+            "Presets: ds_cnn (Hello Edge 2017), mobilenet (MobileNetV2 2018), "
+            "simple_cnn baseline. Use architecture=custom + layers JSON for "
+            "layer-wise control (Load from preset in the Builder)."
         ),
         category="ML",
-        version="1.0.0",
-        tags=["ml", "model", "keras", "ds_cnn", "mobilenet", "common"],
+        version="1.1.0",
+        tags=["ml", "model", "keras", "ds_cnn", "mobilenet", "custom", "common"],
         requires_gpu=False,
         supports_cpu=True,
         supports_edge=False,
@@ -827,86 +829,85 @@ class ModelBuilderNode(Node):
     }
 
     class Config(NodeConfig):
-        architecture: Literal["ds_cnn", "mobilenet", "simple_cnn"] = Field(default='ds_cnn', title="Architecture", description="ds_cnn = depthwise-separable blocks; mobilenet = inverted residuals; simple_cnn = fixed 2-layer CNN (ignores num_layers).")
-        filters: int = Field(default=64, ge=1, title="Filters", description="Base convolution filter count.")
-        num_layers: int = Field(default=4, ge=0, title="Num Layers", description="Number of DS blocks (ds_cnn) or inverted-residual blocks (mobilenet). Ignored by simple_cnn.")
+        architecture: Literal["ds_cnn", "mobilenet", "simple_cnn", "custom"] = Field(
+            default="ds_cnn",
+            title="Architecture",
+            description=(
+                "ds_cnn = Hello Edge DS-CNN (Zhang 2017); "
+                "mobilenet = MobileNetV2 inverted residuals (Sandler 2018); "
+                "simple_cnn = two-conv baseline; "
+                "custom = layers JSON (layer-wise)."
+            ),
+        )
+        filters: int = Field(default=64, ge=1, title="Filters", description="Base convolution filter / width count (presets).")
+        num_layers: int = Field(
+            default=4,
+            ge=0,
+            title="Num Layers",
+            description="Number of DS blocks (ds_cnn) or inverted-residual blocks (mobilenet). Ignored by simple_cnn/custom.",
+        )
+        expansion_factor: int = Field(
+            default=6,
+            ge=1,
+            title="Expansion factor",
+            description="MobileNetV2 inverted-residual expansion (paper default 6).",
+        )
+        stem_stride: int = Field(
+            default=2,
+            ge=1,
+            title="Stem stride",
+            description="MobileNetV2 stem Conv2D stride (paper default 2).",
+        )
+        layers: list[dict[str, Any]] = Field(
+            default=[],
+            title="Layers",
+            description=(
+                "Custom architecture body as a JSON list of {type, ...} specs. "
+                "Required when architecture=custom. Types: conv2d, depthwise_conv2d, "
+                "batch_norm, relu, relu6, max_pool2d, avg_pool2d, global_avg_pool2d, "
+                "dropout, dense, inverted_residual, ds_separable_block."
+            ),
+        )
         dropout_rate: float = Field(default=0.25, ge=0, lt=1, title="Dropout Rate", description="Dropout probability before the classifier head.")
         learning_rate: float = Field(default=0.001, gt=0, title="Learning Rate", description="Adam learning rate compiled into the model (used by trainer unless trainer.learning_rate is set).")
-        backend: Literal["keras", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: keras, auto.")
-        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Directory for the compiled_<uuid>.keras hand-off file.")
+        backend: Literal["keras", "auto"] = Field(default="auto", title="Backend", description="Implementation backend. One of: keras, auto.")
+        output_path: str = Field(default="workspace/artifacts/models", title="Output path", description="Directory for the compiled_<uuid>.keras hand-off file.")
+
+        @model_validator(mode="after")
+        def _custom_requires_layers(self):
+            if self.architecture == "custom" and not self.layers:
+                raise ValueError(
+                    "architecture='custom' requires a non-empty layers list. "
+                    "Use Load from preset in the Builder, or paste layer JSON."
+                )
+            return self
 
     def _build_keras_model(self, input_shape: tuple, n_classes: int):
-        """Build and compile a Keras model."""
-        import keras
+        """Build and compile a Keras model via model_architecture helpers."""
+        # Path import — plugin nodes.py is often loaded without a package prefix.
+        import importlib.util
+        from pathlib import Path
 
-        arch = self.config.architecture
-        filters = self.config.filters
-        n_layers = self.config.num_layers
-        dropout = self.config.dropout_rate
-        lr = self.config.learning_rate
-
-        inputs = keras.Input(shape=input_shape)
-
-        if arch == "ds_cnn":
-            x = keras.layers.Conv2D(filters, (3, 3), padding="same")(inputs)
-            x = keras.layers.BatchNormalization()(x)
-            x = keras.layers.ReLU()(x)
-            for _ in range(n_layers):
-                x = keras.layers.DepthwiseConv2D((3, 3), padding="same")(x)
-                x = keras.layers.BatchNormalization()(x)
-                x = keras.layers.ReLU()(x)
-                x = keras.layers.Conv2D(filters, (1, 1), padding="same")(x)
-                x = keras.layers.BatchNormalization()(x)
-                x = keras.layers.ReLU()(x)
-
-        elif arch == "mobilenet":
-            x = keras.layers.Conv2D(filters, (3, 3), padding="same")(inputs)
-            x = keras.layers.BatchNormalization()(x)
-            x = keras.layers.ReLU(6.0)(x)
-            for _ in range(n_layers):
-                # Inverted residual block (simplified)
-                expanded = filters * 6
-                shortcut = x
-                x = keras.layers.Conv2D(expanded, (1, 1), padding="same")(x)
-                x = keras.layers.BatchNormalization()(x)
-                x = keras.layers.ReLU(6.0)(x)
-                x = keras.layers.DepthwiseConv2D((3, 3), padding="same")(x)
-                x = keras.layers.BatchNormalization()(x)
-                x = keras.layers.ReLU(6.0)(x)
-                x = keras.layers.Conv2D(filters, (1, 1), padding="same")(x)
-                x = keras.layers.BatchNormalization()(x)
-                if shortcut.shape == x.shape:
-                    x = keras.layers.Add()([shortcut, x])
-
-        elif arch == "simple_cnn":
-            x = keras.layers.Conv2D(filters, (3, 3), padding="same", activation="relu")(inputs)
-            x = keras.layers.MaxPooling2D((2, 2))(x)
-            x = keras.layers.Conv2D(filters * 2, (3, 3), padding="same", activation="relu")(x)
-            x = keras.layers.MaxPooling2D((2, 2))(x)
-
-        else:
-            raise ValueError(
-                f"ModelBuilderNode: unknown architecture '{arch}'. "
-                "Choose from: ds_cnn, mobilenet, simple_cnn"
-            )
-
-        x = keras.layers.GlobalAveragePooling2D()(x)
-        x = keras.layers.Dropout(dropout)(x)
-        outputs = keras.layers.Dense(n_classes, activation="softmax")(x)
-
-        model = keras.Model(inputs, outputs)
-        model.compile(
-            optimizer=keras.optimizers.Adam(learning_rate=lr),
-            loss="sparse_categorical_crossentropy",
-            metrics=["accuracy"],
+        arch_path = Path(__file__).resolve().parent / "model_architecture.py"
+        spec = importlib.util.spec_from_file_location(
+            "graphyn_trainer_model_architecture", arch_path
         )
-
-        n_params = model.count_params()
-        log.info(
-            "ModelBuilderNode: built %s — input_shape=%s n_classes=%d params=%d",
-            arch, input_shape, n_classes, n_params,
+        if spec is None or spec.loader is None:
+            raise ImportError(f"ModelBuilderNode: cannot load {arch_path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.build_keras_model(
+            architecture=self.config.architecture,
+            input_shape=input_shape,
+            n_classes=n_classes,
+            filters=self.config.filters,
+            num_layers=self.config.num_layers,
+            expansion_factor=self.config.expansion_factor,
+            stem_stride=self.config.stem_stride,
+            dropout_rate=self.config.dropout_rate,
+            learning_rate=self.config.learning_rate,
+            layers=self.config.layers,
         )
-        return model
 
     def process(self, inputs: dict) -> dict:
         """Build a model from the dataset's input_shape and n_classes.

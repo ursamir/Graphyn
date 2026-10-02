@@ -226,16 +226,26 @@ export async function fetchAuthenticatedBlobUrl(staticPath: string): Promise<str
 export async function fetchInputBlobUrl(filePath: string): Promise<string> {
   const res = await apiFetch('/data/inputs/file', { query: { path: filePath }, timeoutMs: 120000 })
   if (!res.ok) throw new ApiError(`Failed to load file (${res.status})`, res.status, filePath)
-  const blob = await res.blob()
-  return URL.createObjectURL(blob)
+  return blobUrlWithMime(res, filePath)
 }
 
 /** Authenticated blob URL for a jailed output file (caller must revoke). */
 export async function fetchOutputBlobUrl(filePath: string): Promise<string> {
   const res = await apiFetch('/outputs/file', { query: { path: filePath }, timeoutMs: 120000 })
   if (!res.ok) throw await parseError(res, '/outputs/file')
-  const blob = await res.blob()
-  return URL.createObjectURL(blob)
+  return blobUrlWithMime(res, filePath)
+}
+
+async function blobUrlWithMime(res: Response, filePath: string): Promise<string> {
+  const { guessMimeType } = await import('../lib/fileKind')
+  const buf = await res.arrayBuffer()
+  const serverType = (res.headers.get('Content-Type') || '').split(';')[0].trim()
+  const guessed = guessMimeType(filePath)
+  const type =
+    guessed && (!serverType || serverType === 'application/octet-stream')
+      ? guessed
+      : serverType || guessed || 'application/octet-stream'
+  return URL.createObjectURL(new Blob([buf], { type }))
 }
 
 function triggerBlobDownload(url: string, filePath: string, filename?: string): void {

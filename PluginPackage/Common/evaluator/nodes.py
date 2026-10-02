@@ -565,6 +565,8 @@ class EvaluatorNode(Node):
                     exc,
                 )
 
+        self._publish_eval_tree(out_path)
+
         # ── Return enriched artifact ──────────────────────────────────────────
         # Keep upstream hand-off keys (e.g. keras_model_path) so edge_optimizer
         # can still locate the .keras / calibration data next to the model.
@@ -581,3 +583,26 @@ class EvaluatorNode(Node):
                 metrics=metrics,
             )
         }
+
+    def _publish_eval_tree(self, out_path: Path) -> None:
+        """Announce metrics/plots via Node.publish_files (generic inventory)."""
+        names = (
+            "metrics.json",
+            "confusion_matrix.png",
+            "training_curves.png",
+            "roc_curves.png",
+        )
+        files: list[dict] = []
+        for name in names:
+            p = out_path / name
+            if p.is_file():
+                try:
+                    files.append({"path": name, "size": int(p.stat().st_size)})
+                except OSError:
+                    files.append({"path": name})
+        if not files:
+            return
+        try:
+            self.publish_files(out_path, files, total=len(files))
+        except Exception as exc:
+            log.warning("EvaluatorNode: publish_files failed: %s", exc)

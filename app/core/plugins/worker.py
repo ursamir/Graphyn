@@ -69,13 +69,25 @@ def _run(job: dict[str, Any]) -> None:
         except Exception:
             pass
 
+    # Drain path inventories before teardown state is lost — host registers
+    # file_tree artifacts after unpickle (AUDIT-ISOLATED-PUBLISH-1).
+    published_file_trees = node.take_published_file_trees()
+
     # Recast dynamic ``_graphyn_plugin_*`` types onto ``app.models`` (or plain
     # dicts) before pickle so the host RestrictedUnpickler can load outputs.
-    from app.core.plugins.isolated_executor import recast_plugin_types
+    from app.core.plugins.isolated_executor import (
+        ISOLATED_ENVELOPE_MARK,
+        recast_plugin_types,
+    )
 
     outputs = recast_plugin_types(outputs)
+    payload = {
+        ISOLATED_ENVELOPE_MARK: 1,
+        "outputs": outputs,
+        "published_file_trees": published_file_trees,
+    }
     with outputs_path.open("wb") as fh:
-        pickle.dump(outputs, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 def main(argv: list[str] | None = None) -> int:

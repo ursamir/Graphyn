@@ -38,6 +38,9 @@ import { PipelineStack } from './PipelineStack'
 import ExperimentsView, { type ExperimentsViewHandle } from '../experiments/ExperimentsView'
 import {
   executionOrderFromRun,
+  guessNodeFromPath,
+  looksLikeOpaqueId,
+  shortOutputPath,
   normalizeOutputsResponse,
   orderOutputGroups,
   runHasModelOutput,
@@ -86,24 +89,6 @@ interface OutputFile {
   node_id?: string | null
 }
 
-function guessNodeFromPath(path: string, arts: RunArtifact[], file?: OutputFile): string {
-  const fromApi = String(file?.node_id || '').trim()
-  if (fromApi) return fromApi
-  const lower = path.toLowerCase()
-  for (const a of arts) {
-    const dp = String(a.data_path || a.path || '').toLowerCase()
-    if (dp && (lower.includes(dp) || dp.includes(lower) || lower.endsWith(dp.split('/').pop() || '___'))) {
-      return String(a.node_id || a.node_type || 'unknown')
-    }
-    const nid = String(a.node_id || '').toLowerCase()
-    if (nid && lower.includes(nid)) return String(a.node_id)
-  }
-  // Heuristic: .../nodes/<id>/... or .../<node_id>/...
-  const m = path.match(/nodes?\/([^/]+)/i) || path.match(/\/([a-zA-Z0-9_-]+)\/(?:out|output|artifacts)/i)
-  return m ? m[1] : 'run'
-}
-
-/** Classify a downloadable path as node input vs output (heuristic). */
 function classifyOutputRole(path: string, arts: RunArtifact[]): 'input' | 'output' {
   const lower = path.toLowerCase()
   if (/(^|\/)inputs?(\/|$)/.test(lower) || /(?:^|[_\-/])input(?:[_\-./]|$)/.test(lower)) {
@@ -1143,7 +1128,7 @@ export default function RunsView() {
     const seenLabel = new Set(items.map((i) => i.label.toLowerCase()))
     const push = (raw?: unknown) => {
       const id = String(raw || '').trim()
-      if (!id || seen.has(id)) return
+      if (!id || seen.has(id) || looksLikeOpaqueId(id) || id === 'run') return
       const label = humanNodeLabel(id)
       if (seenLabel.has(label.toLowerCase())) return
       seen.add(id)
@@ -1152,7 +1137,7 @@ export default function RunsView() {
     }
     for (const a of runArtifacts) push(a.node_id || a.node_type)
     for (const f of outputFiles) {
-      const g = guessNodeFromPath(f.path, runArtifacts, f)
+      const g = guessNodeFromPath(f.path, runArtifacts, f, { runId: selected })
       if (g !== 'run') push(g)
     }
     return items
@@ -2202,22 +2187,21 @@ export default function RunsView() {
                   // their (capped) entries from the run-wide listing.
                   const expandedIds = new Set(Object.keys(expandedNodeFiles))
                   const allFiles: OutputFile[] = [
-                    ...outputFiles.filter((f) => !expandedIds.has(guessNodeFromPath(f.path, runArtifacts, f))),
+                    ...outputFiles.filter(
+                      (f) => !expandedIds.has(guessNodeFromPath(f.path, runArtifacts, f, { runId: selected })),
+                    ),
                     ...Object.entries(expandedNodeFiles).flatMap(([nid, fs]) =>
                       fs.map((f) => ({ ...f, node_id: f.node_id || nid })),
                     ),
                   ]
                   for (const f of allFiles) {
-                    const g = guessNodeFromPath(f.path, runArtifacts, f)
+                    const g = guessNodeFromPath(f.path, runArtifacts, f, { runId: selected })
                     if (focusNodeId) {
                       // Node focus: only that node's files — never run-level journal files.
+                      // Match on group id only (not humanNodeLabel): label soft-match
+                      // would re-merge dual Trainers/Evaluators (trainer_b66a5330 → "Trainer").
                       if (g === 'run') continue
-                      if (
-                        !focusMatchesNode(focusNodeId, g) &&
-                        !focusMatchesNode(focusNodeId, humanNodeLabel(g))
-                      ) {
-                        continue
-                      }
+                      if (!focusMatchesNode(focusNodeId, g)) continue
                     }
                     const list = groups.get(g) || []
                     list.push(f)
@@ -2272,14 +2256,21 @@ export default function RunsView() {
                   }
 
                   const renderTruncation = (nid: string, shownCount: number) => {
+                    if (nid === 'run' || looksLikeOpaqueId(nid)) return null
                     const t = outputsMeta.byNode[nid]
                     if (!t || t.total <= shownCount) return null
                     const more = t.total - shownCount
                     const expanded = Boolean(expandedNodeFiles[nid])
                     return (
-                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-ink-200 px-2.5 py-1.5 text-[11px] text-ink-500">
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-ink-200 bg-ink-50/80 px-2.5 py-1.5 text-[11px] text-ink-600">
                         <span>
+                          <span className="font-medium text-ink-800">{humanNodeLabel(nid)}</span>
+                          {' · '}
                           +{more.toLocaleString()} more {more === 1 ? 'file' : 'files'} not listed
+                          {' '}
+                          <span className="text-ink-400">
+                            ({shownCount.toLocaleString()} of {t.total.toLocaleString()})
+                          </span>
                         </span>
                         {!expanded ? (
                           <button
@@ -2321,7 +2312,12 @@ export default function RunsView() {
                               }}
                             >
                               <div className="truncate text-sm font-medium text-ink-900">{f.name}</div>
-                              <div className="truncate font-mono text-[10px] text-ink-400">{f.path}</div>
+                              <div
+                                className="truncate font-mono text-[10px] text-ink-400"
+                                title={f.path}
+                              >
+                                {shortOutputPath(f.path, { runId: selected })}
+                              </div>
                               <div className="text-[11px] text-ink-500">
                                 {f.kind} · {formatBytes(f.size)}
                               </div>
@@ -2367,9 +2363,11 @@ export default function RunsView() {
                           </button>
                         )}
                       </div>
-                      {outputsMeta.truncated && Object.keys(outputsMeta.byNode).length === 0 ? (
+                      {outputsMeta.truncated ? (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] text-amber-950">
-                          The file listing was capped by the server — use Download all for every file.
+                          {Object.keys(outputsMeta.byNode).filter((k) => !looksLikeOpaqueId(k)).length > 0
+                            ? 'Some steps have more files than shown below — use Show all on that step, or Download all.'
+                            : 'The file listing was capped by the server — use Download all for every file.'}
                         </div>
                       ) : null}
                       {order.length === 0 ? (

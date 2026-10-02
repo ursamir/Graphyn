@@ -94,3 +94,56 @@ class TestRegistryJsonRoundTrip:
     def test_from_json_invalid_raises_value_error(self):
         with pytest.raises(ValueError):
             NodeRegistry.from_json("not valid json {{{")
+
+
+class TestRegistryFillsEmptyMetadataPorts:
+    """register() copies class ports onto bare NodeMetadata (isolated stubs)."""
+
+    def test_empty_meta_ports_filled_from_class(self, fresh_registry, minimal_node_cls, minimal_meta):
+        assert minimal_meta.input_ports == {}
+        assert minimal_meta.output_ports == {}
+        fresh_registry.register("_minimal_test_node", minimal_node_cls, minimal_meta)
+        meta = fresh_registry.get_metadata("_minimal_test_node")
+        assert "input" in meta.input_ports
+        assert "output" in meta.output_ports
+
+    def test_multi_port_class_fills_named_ports(self, fresh_registry):
+        from typing import ClassVar
+
+        from app.core.nodes.base import Node
+        from app.core.nodes.config import NodeConfig
+        from app.core.nodes.metadata import NodeMetadata
+        from app.core.nodes.ports import InputPort, OutputPort
+
+        class _MultiPort(Node):
+            node_type: ClassVar[str] = "_multi_port_test"
+            input_ports: ClassVar[dict] = {
+                "model": InputPort(name="model", data_type=object),
+                "dataset": InputPort(name="dataset", data_type=object),
+            }
+            output_ports: ClassVar[dict] = {
+                "output": OutputPort(name="output", data_type=object),
+            }
+            metadata: ClassVar[NodeMetadata] = NodeMetadata(
+                node_type="_multi_port_test",
+                label="Multi",
+                description="Multi-port test node.",
+                category="Test",
+            )
+
+            class Config(NodeConfig):
+                pass
+
+            def process(self, inputs):  # noqa: ARG002
+                return {}
+
+        bare = NodeMetadata(
+            node_type="_multi_port_test",
+            label="Multi",
+            description="Multi-port test node.",
+            category="Test",
+        )
+        fresh_registry.register("_multi_port_test", _MultiPort, bare)
+        meta = fresh_registry.get_metadata("_multi_port_test")
+        assert set(meta.input_ports) == {"model", "dataset"}
+        assert set(meta.output_ports) == {"output"}

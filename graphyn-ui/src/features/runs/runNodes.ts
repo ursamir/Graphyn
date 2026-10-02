@@ -15,6 +15,7 @@
 import { humanNodeLabel } from '../../lib/format'
 import { normalizeRunStatus } from '../../lib/runStatus'
 import { statusesFromEvents } from '../builder/builderRunState'
+import { looksLikeOpaqueId } from './runOutputs'
 
 export type RunGraphLike = {
   nodes?: Array<{ id?: unknown; node_type?: unknown; label?: unknown; config?: unknown }> | null
@@ -123,23 +124,25 @@ export function pipelineNodesFromRun(input: {
   const run = normalizeRunStatus(input.runStatus)
   const terminalNotOk = run === 'failed' || run === 'cancelled'
   const terminal = terminalNotOk || run === 'completed'
-  return order.map((id) => {
-    const g = byGraph.get(id)
-    const s = byStats.get(id)
-    const nodeType = str(g?.node_type) || str(s?.node_type) || undefined
-    let status = normalizeNodeStatus(fromEvents.get(id)) ?? normalizeNodeStatus(s?.status ?? s?.state)
-    // A node still "running" in a finished run never completed.
-    if (status === 'running' && terminal) status = run === 'cancelled' ? 'cancelled' : run === 'failed' ? 'failed' : status
-    if (!status || status === 'pending') {
-      if (terminalNotOk) status = 'skipped'
-    }
-    return {
-      id,
-      label: str(g?.label) || humanNodeLabel(nodeType || id),
-      nodeType,
-      status,
-    }
-  })
+  return order
+    .filter((id) => id && !looksLikeOpaqueId(id))
+    .map((id) => {
+      const g = byGraph.get(id)
+      const s = byStats.get(id)
+      const nodeType = str(g?.node_type) || str(s?.node_type) || undefined
+      let status = normalizeNodeStatus(fromEvents.get(id)) ?? normalizeNodeStatus(s?.status ?? s?.state)
+      // A node still "running" in a finished run never completed.
+      if (status === 'running' && terminal) status = run === 'cancelled' ? 'cancelled' : run === 'failed' ? 'failed' : status
+      if (!status || status === 'pending') {
+        if (terminalNotOk) status = 'skipped'
+      }
+      return {
+        id,
+        label: str(g?.label) || humanNodeLabel(nodeType || id),
+        nodeType,
+        status,
+      }
+    })
 }
 
 export type RunFailure = { nodeId: string | null; nodeType: string | null; error: string }

@@ -3,6 +3,10 @@ import {
   _resetRememberedOutcomes,
   badgeFromServerStatus,
   decorateNodeData,
+  isolateNodeWritePath,
+  portsNeedResync,
+  rebindNodeWriteConfig,
+  uniquifyWriteConfigsAmongNodes,
   reconcileNodeStatuses,
   rememberRunOutcome,
   rememberedRunOutcome,
@@ -127,6 +131,83 @@ describe('catalog re-decoration', () => {
     )
     expect(out.label).toBe('My cutter')
     expect(out.inputs.map((p) => p.name)).toEqual(['samples', 'input'])
+  })
+})
+
+describe('portsNeedResync', () => {
+  const trainer = {
+    node_type: 'trainer',
+    label: 'Trainer',
+    category: 'ml',
+    input_ports: {
+      model: { name: 'model', data_type: 'ModelArtifact' },
+      dataset: { name: 'dataset', data_type: 'DatasetArtifact' },
+    },
+    output_ports: {
+      output: { name: 'output', data_type: 'ModelArtifact' },
+    },
+  }
+
+  it('detects bare SISO fallback when catalog has named multi-ports', () => {
+    expect(
+      portsNeedResync({ inputs: [{ name: 'input' }], outputs: [{ name: 'output' }] }, trainer),
+    ).toBe(true)
+  })
+
+  it('is false when canvas already matches catalog port names', () => {
+    expect(
+      portsNeedResync(
+        {
+          inputs: [
+            { name: 'model', data_type: 'ModelArtifact' },
+            { name: 'dataset', data_type: 'DatasetArtifact' },
+          ],
+          outputs: [{ name: 'output', data_type: 'ModelArtifact' }],
+        },
+        trainer,
+      ),
+    ).toBe(false)
+  })
+
+  it('detects a missing catalog port even when some named ports exist', () => {
+    expect(
+      portsNeedResync(
+        { inputs: [{ name: 'model' }], outputs: [{ name: 'output' }] },
+        trainer,
+      ),
+    ).toBe(true)
+  })
+})
+
+describe('write-path isolation', () => {
+  it('appends node id under workspace/artifacts sinks', () => {
+    expect(isolateNodeWritePath('workspace/artifacts/models', 'trainer_ab12')).toBe(
+      'workspace/artifacts/models/trainer_ab12',
+    )
+    expect(isolateNodeWritePath('workspace/artifacts/models/trainer_ab12', 'trainer_ab12')).toBe(
+      'workspace/artifacts/models/trainer_ab12',
+    )
+    expect(isolateNodeWritePath('workspace/artifacts/sc/dataset/v1', 'trainer_x')).toBe(
+      'workspace/artifacts/sc/dataset/v1',
+    )
+  })
+
+  it('uniquifies colliding sinks across canvas nodes', () => {
+    const nodes = uniquifyWriteConfigsAmongNodes([
+      { id: 'trainer_0', data: { config: { output_path: 'workspace/artifacts/speech-commands' } } },
+      { id: 'evaluator_0', data: { config: { output_path: 'workspace/artifacts/speech-commands' } } },
+    ])
+    expect(nodes[0].data.config.output_path).toBe('workspace/artifacts/speech-commands/trainer_0')
+    expect(nodes[1].data.config.output_path).toBe('workspace/artifacts/speech-commands/evaluator_0')
+  })
+
+  it('rebinds write paths when copying a node', () => {
+    const cfg = rebindNodeWriteConfig(
+      { output_path: 'workspace/artifacts/models/trainer_old' },
+      'trainer_old',
+      'trainer_new',
+    )
+    expect(cfg.output_path).toBe('workspace/artifacts/models/trainer_new')
   })
 })
 

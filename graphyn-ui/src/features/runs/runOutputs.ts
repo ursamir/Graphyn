@@ -34,14 +34,19 @@ function toInt(v: unknown): number | null {
  * Also tolerates `files` / `outputs` and `total_by_node: {nid: total}`.
  */
 export function normalizeOutputsResponse<F extends OutputFileLike = OutputFileLike>(raw: unknown): NormalizedOutputs<F> {
-  if (Array.isArray(raw)) return { files: raw as F[], truncated: false, truncatedByNode: {} }
+  if (Array.isArray(raw)) {
+    const files = (raw as F[]).filter((f) => !isInternalRunFile(f.path, f.name))
+    return { files, truncated: false, truncatedByNode: {} }
+  }
   if (!raw || typeof raw !== 'object') return { files: [], truncated: false, truncatedByNode: {} }
   const o = raw as Record<string, unknown>
-  const list = (Array.isArray(o.items) ? o.items : Array.isArray(o.files) ? o.files : Array.isArray(o.outputs) ? o.outputs : []) as F[]
+  const rawList = (Array.isArray(o.items) ? o.items : Array.isArray(o.files) ? o.files : Array.isArray(o.outputs) ? o.outputs : []) as F[]
+  const list = rawList.filter((f) => !isInternalRunFile(f.path, f.name))
   const truncatedByNode: Record<string, NodeTruncation> = {}
   const tbn = o.truncated_by_node
   if (tbn && typeof tbn === 'object') {
     for (const [nid, v] of Object.entries(tbn as Record<string, unknown>)) {
+      if (!nid || looksLikeOpaqueId(nid) || nid === 'run') continue
       if (!v || typeof v !== 'object') continue
       const total = toInt((v as Record<string, unknown>).total)
       const shown = toInt((v as Record<string, unknown>).shown)
@@ -52,6 +57,7 @@ export function normalizeOutputsResponse<F extends OutputFileLike = OutputFileLi
   const totals = o.total_by_node
   if (totals && typeof totals === 'object') {
     for (const [nid, v] of Object.entries(totals as Record<string, unknown>)) {
+      if (!nid || looksLikeOpaqueId(nid) || nid === 'run') continue
       const total = toInt(v)
       if (total == null || truncatedByNode[nid]) continue
       const shown = list.filter((f) => f.node_id === nid).length
@@ -69,6 +75,98 @@ export function sortFilesNatural<F extends { name: string; path: string }>(files
   return [...files].sort((x, y) => naturalCompare(x.name, y.name) || naturalCompare(x.path, y.path))
 }
 
+/** True for opaque run/artifact hex ids that must not appear as pipeline step titles. */
+export function looksLikeOpaqueId(id: string): boolean {
+  const s = String(id || '').trim()
+  if (!s) return false
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return true
+  if (/^[0-9a-f]{16,}$/i.test(s)) return true
+  return false
+}
+
+/** Internal run-cache files — never show as downloadable console outputs. */
+export function isInternalRunFile(path: string, name?: string): boolean {
+  const base = String(name || path.replace(/\\/g, '/').split('/').pop() || '')
+    .trim()
+    .toLowerCase()
+  return base === 'outputs_index.json'
+}
+
+/**
+ * Shorter path for the file-card subtitle: drop ``workspace/``, collapse
+ * ``runs/<opaque-id>/…`` to the trailing relative path.
+ */
+export function shortOutputPath(path: string, opts?: { runId?: string | null }): string {
+  let p = String(path || '').replace(/\\/g, '/').replace(/^workspace\//, '')
+  if (!p) return path
+  const runId = String(opts?.runId || '').trim()
+  if (runId) {
+    const needle = `runs/${runId}/`
+    const i = p.toLowerCase().indexOf(needle.toLowerCase())
+    if (i >= 0) {
+      const rest = p.slice(i + needle.length)
+      return rest || p
+    }
+  }
+  const m = p.match(/(?:^|\/)runs\/([0-9a-f]{16,}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\/(.+)$/i)
+  if (m?.[2]) return m[2]
+  return p
+}
+
+/**
+ * Group key for a downloadable file: graph node id, or ``run`` for journal /
+ * run-dir files. Never returns a raw run id (that used to happen when
+ * ``…/runs/<run_id>/outputs_index.json`` matched a loose ``/out`` regex).
+ */
+export function guessNodeFromPath(
+  path: string,
+  arts: Array<{ node_id?: string | null; node_type?: string | null; data_path?: string | null; path?: string | null }>,
+  file?: { node_id?: string | null },
+  opts?: { runId?: string | null },
+): string {
+  const runId = String(opts?.runId || '').trim()
+  const fromApi = String(file?.node_id || '').trim()
+  if (fromApi) {
+    if (looksLikeOpaqueId(fromApi) || (runId && fromApi === runId)) return 'run'
+    return fromApi
+  }
+
+  const posix = path.replace(/\\/g, '/')
+  const lower = posix.toLowerCase()
+
+  // workspace/runs/<run_id>/<file> → run-level journal (graph, meta, outputs_index, …)
+  const journal = posix.match(/(?:^|\/)runs\/([^/]+)\/([^/]+)$/i)
+  if (journal) {
+    const rid = journal[1]
+    if ((runId && rid === runId) || looksLikeOpaqueId(rid)) return 'run'
+  }
+  if (runId) {
+    const needle = `/runs/${runId.toLowerCase()}/`
+    if (lower.includes(needle) || lower.startsWith(`runs/${runId.toLowerCase()}/`)) {
+      return 'run'
+    }
+  }
+
+  for (const a of arts) {
+    const dp = String(a.data_path || a.path || '').toLowerCase()
+    if (dp && (lower.includes(dp) || dp.includes(lower) || lower.endsWith(dp.split('/').pop() || '___'))) {
+      const nid = String(a.node_id || a.node_type || '').trim()
+      if (!nid || looksLikeOpaqueId(nid)) continue
+      return nid
+    }
+    const nid = String(a.node_id || '').trim()
+    if (nid && !looksLikeOpaqueId(nid) && lower.includes(nid.toLowerCase())) return nid
+  }
+
+  // Path segments only — require a boundary after out|output|artifacts so
+  // ``outputs_index.json`` does not match ``out``.
+  const m =
+    posix.match(/(?:^|\/)nodes?\/([^/]+)(?:\/|$)/i) ||
+    posix.match(/\/([A-Za-z][A-Za-z0-9_-]*)\/(?:out|output|artifacts)(?:\/|$)/i)
+  if (m?.[1] && !looksLikeOpaqueId(m[1])) return m[1]
+  return 'run'
+}
+
 /**
  * Node ids in execution order. Sources in priority order:
  *  1. `node_stats[].node_index` (debug report / run summary)
@@ -83,7 +181,7 @@ export function executionOrderFromRun(input: {
   const out: string[] = []
   const push = (id: unknown) => {
     const s = typeof id === 'string' ? id.trim() : ''
-    if (s && !out.includes(s)) out.push(s)
+    if (s && !out.includes(s) && !looksLikeOpaqueId(s)) out.push(s)
   }
   const stats = Array.isArray(input.nodeStats) ? input.nodeStats : []
   const indexed = stats
@@ -103,7 +201,7 @@ export function executionOrderFromRun(input: {
  * remaining file groups in natural order, `run` (run-level) last.
  */
 export function orderOutputGroups(executionOrder: string[], groupKeys: Iterable<string>): string[] {
-  const keys = [...groupKeys]
+  const keys = [...groupKeys].filter((k) => k === 'run' || !looksLikeOpaqueId(k))
   const order: string[] = []
   for (const id of executionOrder) if (id !== 'run' && !order.includes(id)) order.push(id)
   const rest = keys.filter((k) => k !== 'run' && !order.includes(k)).sort(naturalCompare)

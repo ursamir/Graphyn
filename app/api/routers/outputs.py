@@ -24,17 +24,72 @@ _MEDIA_TYPES = {
     ".gif": "image/gif",
     ".webp": "image/webp",
     ".svg": "image/svg+xml",
+    ".bmp": "image/bmp",
     ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
     ".zip": "application/zip",
     ".tflite": "application/octet-stream",
     ".keras": "application/octet-stream",
     ".h5": "application/octet-stream",
     ".pb": "application/octet-stream",
-    ".txt": "text/plain",
+    ".onnx": "application/octet-stream",
+    ".pt": "application/octet-stream",
+    ".pth": "application/octet-stream",
+    ".pkl": "application/octet-stream",
+    ".pickle": "application/octet-stream",
     ".npy": "application/octet-stream",
     ".npz": "application/octet-stream",
-    ".onnx": "application/octet-stream",
+    ".npzz": "application/octet-stream",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".csv": "text/csv",
+    ".log": "text/plain",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".webm": "video/webm",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
 }
+
+# Prefer inline so <audio>/<video>/<img> and blob URLs get a usable MIME.
+_INLINE_SUFFIXES = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".svg",
+        ".bmp",
+        ".wav",
+        ".mp3",
+        ".flac",
+        ".ogg",
+        ".m4a",
+        ".aac",
+        ".webm",
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".json",
+        ".txt",
+        ".md",
+        ".csv",
+        ".html",
+        ".htm",
+    }
+)
 
 
 @router.get("/file", summary="Download a jailed output file")
@@ -45,10 +100,12 @@ def download_output_file(path: str = Query(..., description="Filesystem path of 
     except OutputPathError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    media = _MEDIA_TYPES.get(resolved.suffix.lower(), "application/octet-stream")
+    suffix = resolved.suffix.lower()
+    media = _MEDIA_TYPES.get(suffix, "application/octet-stream")
+    disposition = "inline" if suffix in _INLINE_SUFFIXES else "attachment"
     return FileResponse(
         path=str(resolved),
         media_type=media,
         filename=resolved.name,
-        content_disposition_type="attachment",
+        content_disposition_type=disposition,
     )

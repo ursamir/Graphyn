@@ -36,17 +36,32 @@ import signal
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+# Worker → host envelope marker (avoid colliding with a port named "outputs").
+ISOLATED_ENVELOPE_MARK = "__graphyn_isolated_envelope__"
+
+
+@dataclass(frozen=True)
+class IsolatedResult:
+    """Port outputs plus optional ``publish_files`` inventories from the worker."""
+
+    outputs: dict[str, Any]
+    published_file_trees: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 from app.core.plugins.hydrate import coerce_node_inputs, hydrate_platform_models
 from app.core.plugins.runtime_registry import IsolatedPluginSpec
 
 __all__ = [
+    "ISOLATED_ENVELOPE_MARK",
+    "IsolatedResult",
     "RestrictedUnpickler",
     "coerce_node_inputs",
     "hydrate_platform_models",
     "load_isolated_outputs",
+    "load_isolated_result",
     "recast_plugin_types",
     "run_isolated_node",
 ]
@@ -375,15 +390,33 @@ def _run_isolated_subprocess(
     return result
 
 
-def load_isolated_outputs(path: Path) -> dict[str, Any]:
-    """Load worker outputs with RestrictedUnpickler; must be a dict."""
+def load_isolated_result(path: Path) -> IsolatedResult:
+    """Load worker pickle (legacy port-dict or envelope) via RestrictedUnpickler."""
     with path.open("rb") as fh:
-        outputs = RestrictedUnpickler(fh).load()
-    if not isinstance(outputs, dict):
+        raw = RestrictedUnpickler(fh).load()
+    if not isinstance(raw, dict):
         raise RuntimeError(
-            f"Isolated worker returned non-dict outputs: {type(outputs)}"
+            f"Isolated worker returned non-dict outputs: {type(raw)}"
         )
-    return outputs
+    if raw.get(ISOLATED_ENVELOPE_MARK):
+        outputs = raw.get("outputs")
+        if not isinstance(outputs, dict):
+            raise RuntimeError(
+                f"Isolated envelope outputs must be a dict, got {type(outputs)}"
+            )
+        trees_raw = raw.get("published_file_trees") or []
+        trees: list[dict[str, Any]] = []
+        if isinstance(trees_raw, (list, tuple)):
+            for item in trees_raw:
+                if isinstance(item, dict) and item.get("root"):
+                    trees.append(item)
+        return IsolatedResult(outputs=outputs, published_file_trees=tuple(trees))
+    return IsolatedResult(outputs=raw, published_file_trees=())
+
+
+def load_isolated_outputs(path: Path) -> dict[str, Any]:
+    """Load worker port outputs only (unwraps envelope when present)."""
+    return load_isolated_result(path).outputs
 
 
 def run_isolated_node(
@@ -395,9 +428,10 @@ def run_isolated_node(
     inputs: dict[str, Any],
     timeout: float | None = None,
     cancel_check: Callable[[], bool] | None = None,
-) -> dict[str, Any]:
-    """Execute *node_type* in the plugin venv worker; return process outputs.
+) -> IsolatedResult:
+    """Execute *node_type* in the plugin venv worker.
 
+    Returns port outputs plus any ``publish_files`` trees drained in the worker.
     ``cancel_check`` — optional callable polled during the subprocess wait; when
     it returns True the worker process group is terminated (mid-flight cancel).
     """
@@ -467,7 +501,7 @@ def run_isolated_node(
             raise RuntimeError(
                 f"Isolated worker for '{node_type}' produced no outputs file"
             )
-        return load_isolated_outputs(outputs_path)
+        return load_isolated_result(outputs_path)
     finally:
         # Best-effort cleanup
         for p in (inputs_path, outputs_path, job_path):

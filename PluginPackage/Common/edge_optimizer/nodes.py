@@ -504,12 +504,35 @@ class EdgeOptimizerNode(Node):
         log.info("EdgeOptimizerNode: using backend: %s", backend)
 
         if backend == "tflite":
-            return self._export_tflite(artifact, out_path)
-        if backend == "onnx":
-            return self._export_onnx(artifact, out_path)
-        # Additive backends (tflm / executorch / ultralytics_export): stub package
-        # unless optional deps present — prefer dedicated TinyML/Vision nodes.
-        return self._export_stub_backend(artifact, out_path, backend)
+            result = self._export_tflite(artifact, out_path)
+        elif backend == "onnx":
+            result = self._export_onnx(artifact, out_path)
+        else:
+            # Additive backends (tflm / executorch / ultralytics_export): stub package
+            # unless optional deps present — prefer dedicated TinyML/Vision nodes.
+            result = self._export_stub_backend(artifact, out_path, backend)
+        self._publish_opt_tree(out_path)
+        return result
+
+    def _publish_opt_tree(self, out_path: Path) -> None:
+        """Announce optimized model files via Node.publish_files."""
+        files: list[dict] = []
+        if not out_path.is_dir():
+            return
+        for sub in out_path.rglob("*"):
+            if not sub.is_file():
+                continue
+            rel = str(sub.relative_to(out_path)).replace("\\", "/")
+            try:
+                files.append({"path": rel, "size": int(sub.stat().st_size)})
+            except OSError:
+                files.append({"path": rel})
+        if not files:
+            return
+        try:
+            self.publish_files(out_path, files, total=len(files))
+        except Exception as exc:
+            log.warning("EdgeOptimizerNode: publish_files failed: %s", exc)
 
     def _export_stub_backend(self, artifact, out_path: Path, backend: str):
         """Minimal DeploymentArtifact for additive backends without heavy deps."""

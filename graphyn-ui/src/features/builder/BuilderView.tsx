@@ -38,6 +38,11 @@ import {
 import { apiFetch, apiJson, ApiError, getApiToken, parseError } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { goView } from '../../routes/nav'
+import {
+  exportLayerSpecs,
+  loadPresetIntoConfig,
+  type ModelBuilderPreset,
+} from './modelBuilderPresets'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import { normalizeRunStatus } from '../../lib/runStatus'
 import { ConfirmButton, EmptyState, ErrorBanner, NeedProjectPrompt, StatusBadge } from '../../components/ui'
@@ -57,7 +62,11 @@ import AgentDrawer from './AgentDrawer'
 import {
   badgeFromServerStatus,
   decorateNodeData,
+  portsNeedResync,
   defaultsFromSchema,
+  isolateNodeWriteConfig,
+  rebindNodeWriteConfig,
+  uniquifyWriteConfigsAmongNodes,
   isTerminalBadge,
   reconcileNodeStatuses,
   rememberRunOutcome,
@@ -101,6 +110,7 @@ const defaultEdgeOptions = {
 }
 
 const CATALOG_OPEN_KEY = 'graphyn.builder.catalogOpen'
+const INSPECTOR_OPEN_KEY = 'graphyn.builder.inspectorOpen'
 const LOG_COLLAPSED_KEY = 'graphyn.builder.logCollapsed'
 
 function readBoolPref(key: string, defaultValue: boolean): boolean {
@@ -243,6 +253,7 @@ function BuilderInner() {
   const [showRawLogs, setShowRawLogs] = React.useState(false)
   const [logHeight, setLogHeight] = React.useState(148)
   const [catalogOpen, setCatalogOpen] = React.useState(() => readBoolPref(CATALOG_OPEN_KEY, true))
+  const [inspectorOpen, setInspectorOpen] = React.useState(() => readBoolPref(INSPECTOR_OPEN_KEY, true))
   const [logCollapsed, setLogCollapsed] = React.useState(() => readBoolPref(LOG_COLLAPSED_KEY, true))
   const [runHadErrors, setRunHadErrors] = React.useState(false)
   // Authoritative outcome for `lastRunId` (server status, or this session's own
@@ -251,6 +262,7 @@ function BuilderInner() {
   const toastCount = useAppStore((s) => s.toasts.length)
   const [inspectorId, setInspectorId] = React.useState<string | null>(null)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
+  const [loadPresetArch, setLoadPresetArch] = React.useState<ModelBuilderPreset>('ds_cnn')
   const [projectPipelineList, setProjectPipelineList] = React.useState<
     Array<{
       name: string
@@ -270,6 +282,7 @@ function BuilderInner() {
 
   React.useEffect(() => {
     setAdvancedOpen(false)
+    setLoadPresetArch('ds_cnn')
   }, [inspectorId])
 
   React.useEffect(() => {
@@ -404,8 +417,17 @@ function BuilderInner() {
   }, [catalogOpen])
 
   React.useEffect(() => {
+    writeBoolPref(INSPECTOR_OPEN_KEY, inspectorOpen)
+  }, [inspectorOpen])
+
+  React.useEffect(() => {
     writeBoolPref(LOG_COLLAPSED_KEY, logCollapsed)
   }, [logCollapsed])
+
+  // Selecting a node/edge expands the inspector so config is reachable.
+  React.useEffect(() => {
+    if (inspectorId || selectedEdgeId) setInspectorOpen(true)
+  }, [inspectorId, selectedEdgeId])
 
   React.useEffect(() => {
     if (!moreOpen) return
@@ -422,6 +444,10 @@ function BuilderInner() {
       window.removeEventListener('keydown', onKey)
     }
   }, [moreOpen])
+
+  const attachHandlersRef = React.useRef<
+    (node: Node<GraphynNodeData>) => Node<GraphynNodeData>
+  >((n) => n)
 
   const attachHandlers = React.useCallback(
     (node: Node<GraphynNodeData>): Node<GraphynNodeData> => ({
@@ -449,6 +475,33 @@ function BuilderInner() {
           setEdges((eds) => eds.filter((e) => e.source !== node.id && e.target !== node.id))
           setInspectorId((id) => (id === node.id ? null : id))
         },
+        onDuplicate: () => {
+          const source = nodesRef.current.find((n) => n.id === node.id) || node
+          const newId = `${source.data.nodeType}_${crypto.randomUUID().slice(0, 8)}`
+          const clone = attachHandlersRef.current({
+            ...source,
+            id: newId,
+            position: {
+              x: source.position.x + 40,
+              y: source.position.y + 40,
+            },
+            selected: false,
+            data: {
+              ...source.data,
+              // Drop transient run chrome; keep type/ports/config/placement.
+              status: 'idle',
+              lastError: undefined,
+              configIssues: undefined,
+              label: source.data.label,
+              config: rebindNodeWriteConfig({ ...(source.data.config ?? {}) }, source.id, newId),
+              inputs: [...(source.data.inputs ?? [])],
+              outputs: [...(source.data.outputs ?? [])],
+              catalogDecorated: source.data.catalogDecorated,
+            },
+          })
+          setNodes((nds) => [...nds.map((n) => ({ ...n, selected: false })), { ...clone, selected: true }])
+          setInspectorId(newId)
+        },
         onOpenInspector: () => setInspectorId(node.id),
         onValidateConfig: () => {
           void (async () => {
@@ -472,6 +525,7 @@ function BuilderInner() {
     }),
     [setNodes, setEdges, pushToast],
   )
+  attachHandlersRef.current = attachHandlers
 
 
   /**
@@ -940,7 +994,7 @@ function BuilderInner() {
         label: entry.label || humanNodeLabel(entry.node_type),
         category: entry.category,
         runtime: entry.runtime,
-        config: defaultsFromSchema(entry),
+        config: isolateNodeWriteConfig(defaultsFromSchema(entry), id),
         schemaProps: entry.config_schema?.properties ?? {},
         inputs: ports.inputs,
         outputs: ports.outputs,
@@ -1020,7 +1074,11 @@ function BuilderInner() {
       data: { condition: e.condition ?? null },
       ...defaultEdgeOptions,
     }))
-    const laidOut = layoutLeftToRight(nextNodes, nextEdges, Object.keys(positions).length === 0)
+    const laidOut = layoutLeftToRight(
+      uniquifyWriteConfigsAmongNodes(nextNodes),
+      nextEdges,
+      Object.keys(positions).length === 0,
+    )
     const seedVal = typeof graph.metadata?.seed === 'number' ? graph.metadata.seed : seed
     // The loaded graph is the new clean baseline; history restarts here.
     beginBaseline(snapshotSignature(editorSnapshot(laidOut, nextEdges, loadedName, seedVal)))
@@ -1042,11 +1100,10 @@ function BuilderInner() {
   }, [pendingGraph, catalog])
 
   /**
-   * A graph can land on the canvas before the node catalog has loaded (direct
-   * URL load of /workspaces/<ws>/editor, auto-open of a saved pipeline, a
-   * pendingGraph consumed on mount). Those nodes were built without catalog
-   * data (generic icon, no config fields). When the catalog arrives — or gains
-   * entries — re-decorate them; defaults merge UNDER the user's config.
+   * Re-decorate nodes that landed before the catalog loaded, and fix ports when
+   * the catalog now has real named ports (isolated stubs used to advertise only
+   * a bare ``input``/``output`` fallback — template edges hid that; catalog add
+   * did not).
    */
   React.useEffect(() => {
     if (catalog.length === 0) return
@@ -1054,9 +1111,10 @@ function BuilderInner() {
     setNodes((nds) => {
       let changed = false
       const next = nds.map((n) => {
-        if (n.data.catalogDecorated) return n
         const entry = byType.get(n.data.nodeType)
         if (!entry) return n
+        const needsDecorate = !n.data.catalogDecorated || portsNeedResync(n.data, entry)
+        if (!needsDecorate) return n
         const es = edgesRef.current
         const usedIn = new Set(
           es.filter((e) => e.target === n.id).map((e) => canonicalPort(e.targetHandle, 'input')),
@@ -2330,7 +2388,11 @@ function BuilderInner() {
                     type="button"
                     className={`btn-quiet w-full justify-start ${agentOpen ? 'bg-accent-50' : ''}`}
                     onClick={() => {
-                      setAgentOpen((v) => !v)
+                      setAgentOpen((v) => {
+                        const next = !v
+                        if (next) setInspectorOpen(true)
+                        return next
+                      })
                       setTriggersOpen(false)
                       setMoreOpen(false)
                     }}
@@ -2519,7 +2581,29 @@ function BuilderInner() {
           ) : null}
           </div>
           </div>
-          <aside className="relative z-20 flex w-[clamp(15rem,28vw,21.25rem)] shrink-0 min-h-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur">
+          <aside
+            className={
+              inspectorOpen
+                ? 'relative z-20 flex w-[clamp(15rem,28vw,21.25rem)] shrink-0 min-h-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur'
+                : 'relative z-20 flex w-10 shrink-0 min-h-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur'
+            }
+          >
+            <div className="flex items-center justify-between gap-1 border-b border-ink-100 px-1.5 py-1">
+              {inspectorOpen ? (
+                <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Inspector</div>
+              ) : null}
+              <button
+                type="button"
+                className="btn-icon ml-auto"
+                aria-label={inspectorOpen ? 'Collapse inspector' : 'Expand inspector'}
+                title={inspectorOpen ? 'Collapse inspector' : 'Expand inspector'}
+                onClick={() => setInspectorOpen((v) => !v)}
+              >
+                {inspectorOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+              </button>
+            </div>
+            {inspectorOpen ? (
+            <>
             <AgentDrawer open={agentOpen} onClose={() => setAgentOpen(false)} />
             {!agentOpen && (() => {
               const node = inspectorId ? nodes.find((n) => n.id === inspectorId) : null
@@ -2862,6 +2946,55 @@ function BuilderInner() {
                           }
                           return (
                             <div key={`${node.id}-${historyGen}`} className="space-y-2">
+                              {String(node.data.nodeType || '') === 'model_builder' ? (
+                                <div className="rounded-lg border border-ink-200 bg-ink-50/80 px-2.5 py-2">
+                                  <div className="text-[11px] font-semibold text-ink-700">Load layers from preset</div>
+                                  <p className="mt-0.5 text-[10px] leading-snug text-ink-400">
+                                    Seeds architecture=custom with a paper body (ds_cnn / mobilenet / simple_cnn)
+                                    using this node&apos;s current filters / depth / MobileNet knobs. Edit layers
+                                    in the list below after loading.
+                                  </p>
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                                    <select
+                                      className="field-control max-w-[10rem] py-1 text-[11px]"
+                                      value={loadPresetArch}
+                                      onChange={(e) => setLoadPresetArch(e.target.value as ModelBuilderPreset)}
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                    >
+                                      <option value="ds_cnn">ds_cnn (Hello Edge)</option>
+                                      <option value="mobilenet">mobilenet (MobileNetV2)</option>
+                                      <option value="simple_cnn">simple_cnn</option>
+                                    </select>
+                                    <button
+                                      type="button"
+                                      className="rounded-md border border-ink-300 bg-white px-2 py-1 text-[11px] font-semibold text-ink-800 hover:bg-ink-50"
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                      onClick={() => {
+                                        const cfg = (node.data.config ?? {}) as Record<string, unknown>
+                                        const next = loadPresetIntoConfig(loadPresetArch, cfg)
+                                        setNodes((nds) =>
+                                          nds.map((n) =>
+                                            n.id === node.id
+                                              ? { ...n, data: { ...n.data, config: { ...n.data.config, ...next } } }
+                                              : n,
+                                          ),
+                                        )
+                                        pushToast(
+                                          `Loaded ${loadPresetArch} layers (${exportLayerSpecs(loadPresetArch, {
+                                            filters: Number(cfg.filters ?? 64),
+                                            numLayers: Number(cfg.num_layers ?? 4),
+                                            expansionFactor: Number(cfg.expansion_factor ?? 6),
+                                            stemStride: Number(cfg.stem_stride ?? 2),
+                                          }).length} ops) → custom`,
+                                          'success',
+                                        )
+                                      }}
+                                    >
+                                      Apply
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : null}
                               {basic.map(renderField)}
                               {advanced.length > 0 ? (
                                 <div className="mt-2 rounded-lg border border-ink-200 bg-ink-50/60">
@@ -2900,6 +3033,8 @@ function BuilderInner() {
                 </>
               )
             })()}
+            </>
+            ) : null}
           </aside>
         </div>
 

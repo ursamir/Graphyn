@@ -108,10 +108,13 @@ def test_trainer_model_json_schema_exposes_enums() -> None:
     builder = mod.ModelBuilderNode.Config.model_json_schema()["properties"]
     assert trainer["backend"]["enum"] == ["keras", "pytorch", "auto"]
     assert trainer["device"]["enum"] == ["auto", "cpu", "gpu"]
-    assert builder["architecture"]["enum"] == ["ds_cnn", "mobilenet", "simple_cnn"]
+    assert builder["architecture"]["enum"] == ["ds_cnn", "mobilenet", "simple_cnn", "custom"]
     assert builder["backend"]["enum"] == ["keras", "auto"]
     assert trainer["epochs"]["type"] == "integer"
     assert trainer["mixed_precision"]["type"] == "boolean"
+    assert "expansion_factor" in builder
+    assert "stem_stride" in builder
+    assert "layers" in builder
 
 
 def test_nodes_py_field_is_imported() -> None:

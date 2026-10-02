@@ -310,6 +310,44 @@ class TestScopeOutputsToRun:
             "workspace/artifacts/speech-commands/runs/abc123/tflite/model.tflite"
         )
 
+    def test_uniquifies_shared_output_paths_after_scope(self):
+        graph = _graph(
+            [
+                {
+                    "id": "trainer_0",
+                    "node_type": "trainer",
+                    "config": {"output_path": "workspace/artifacts/speech-commands"},
+                },
+                {
+                    "id": "evaluator_0",
+                    "node_type": "evaluator",
+                    "config": {"output_path": "workspace/artifacts/speech-commands"},
+                },
+                {
+                    "id": "model_builder_x",
+                    "node_type": "model_builder",
+                    "config": {"output_path": "workspace/artifacts/models"},
+                },
+                {
+                    "id": "trainer_y",
+                    "node_type": "trainer",
+                    "config": {"output_path": "workspace/artifacts/models"},
+                },
+            ]
+        )
+        from app.core.paths.workspace_paths import scope_outputs_to_run
+
+        out = scope_outputs_to_run(graph, "abc123")
+        paths = {
+            n["id"]: n["config"]["output_path"] for n in out["nodes"]
+        }
+        assert paths["trainer_0"].endswith("/trainer_0")
+        assert paths["evaluator_0"].endswith("/evaluator_0")
+        assert paths["trainer_0"] != paths["evaluator_0"]
+        assert paths["model_builder_x"].endswith("/model_builder_x")
+        assert paths["trainer_y"].endswith("/trainer_y")
+        assert paths["model_builder_x"] != paths["trainer_y"]
+
     def test_leaves_latest_and_examples_data_alone(self):
         graph = _graph(
             [
