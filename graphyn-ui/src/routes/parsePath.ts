@@ -16,6 +16,13 @@ export type ParsedPath = {
   shipTab?: 'package' | 'devices'
   compareIds?: string[]
   /**
+   * Legacy `/library/artifacts?artifactId=` — App resolves via GET /artifacts/{id}
+   * then replaces onto Runs → Lineage (or outputs when `legacyArtifactsOutputs`).
+   */
+  resolveArtifactId?: string
+  /** When set with resolveArtifactId, land on Run outputs instead of Lineage. */
+  legacyArtifactsOutputs?: boolean
+  /**
    * Set when the requested pathname is an alias for a route that has its own
    * canonical spelling — `/` and any unmatched path both render the workspaces
    * picker, so `/`, `/workspaces` and `/nonsense` were three URLs for one page
@@ -36,7 +43,8 @@ const PANEL_SET = new Set<RunPanel>(['logs', 'outputs', 'lineage', 'details', 'c
 export function panelToFocus(panel?: RunPanel): 'logs' | 'artifacts' | 'lineage' | 'debug' | 'checkpoints' | null {
   if (!panel) return null
   if (panel === 'outputs') return 'artifacts'
-  if (panel === 'details') return 'debug'
+  // Legacy /details (old Summary) → Overview (lineage panel).
+  if (panel === 'details') return 'lineage'
   return panel
 }
 
@@ -107,7 +115,43 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
       return { view: 'projects', canonical: '/workspaces' }
     }
     if (b === 'plugins') return { view: 'plugins' }
-    if (b === 'artifacts') return { view: 'artifacts' }
+    if (b === 'artifacts') {
+      // Library Artifacts removed — redirect to Runs (resolve artifact id in App).
+      const runId = (qs.get('run_id') || qs.get('runId') || '').trim() || undefined
+      const artifactId =
+        (qs.get('artifactId') || qs.get('artifact_id') || '').trim() || undefined
+      let W: string | undefined
+      try {
+        W = localStorage.getItem('graphyn.activeProject')?.trim() || undefined
+      } catch {
+        W = undefined
+      }
+      if (runId && W) {
+        return {
+          view: 'runs',
+          workspaceId: W,
+          runId,
+          panel: 'outputs',
+          canonical: `/workspaces/${encodeURIComponent(W)}/runs/${encodeURIComponent(runId)}/outputs`,
+        }
+      }
+      if (artifactId) {
+        // No canonical yet — App must resolve the id first. A premature
+        // replace to /runs?artifactId= drops the /library/artifacts path and
+        // never triggers resolve (workspace /runs ignores that query).
+        return {
+          view: W ? 'runs' : 'projects',
+          workspaceId: W,
+          resolveArtifactId: artifactId,
+          legacyArtifactsOutputs: true,
+        }
+      }
+      return {
+        view: W ? 'runs' : 'projects',
+        workspaceId: W,
+        canonical: W ? `/workspaces/${encodeURIComponent(W)}/runs` : '/workspaces',
+      }
+    }
   }
   if (a === 'deploy') {
     if (b === 'ship') {
@@ -129,7 +173,6 @@ export function parsePathname(pathname: string, search = ''): ParsedPath {
 /** Global routes that need no workspace, keyed by the words people type. */
 const GLOBAL_ROUTE_ALIASES: Array<{ words: string[]; path: string; label: string }> = [
   { words: ['plugins', 'plugin', 'packs', 'nodes'], path: '/library/plugins', label: 'Plugins' },
-  { words: ['artifacts', 'artifact', 'registry'], path: '/library/artifacts', label: 'Artifacts' },
   { words: ['datasets', 'dataset', 'data', 'inputs', 'outputs'], path: '/library/datasets', label: 'Datasets library' },
   { words: ['credentials', 'credential', 'secrets', 'secret', 'connections'], path: '/admin/credentials', label: 'Credentials' },
   { words: ['ops', 'system', 'schedules', 'schedule', 'webhooks', 'audit', 'health'], path: '/admin/ops', label: 'Ops' },
@@ -143,7 +186,7 @@ const GLOBAL_ROUTE_ALIASES: Array<{ words: string[]; path: string; label: string
 /** Workspace-scoped routes (need an open workspace). */
 const WORKSPACE_ROUTE_ALIASES: Array<{ words: string[]; seg: string; label: string }> = [
   { words: ['editor', 'builder', 'canvas', 'graph'], seg: 'editor', label: 'Editor' },
-  { words: ['runs', 'run', 'history', 'live', 'trace', 'lineage'], seg: 'runs', label: 'Runs' },
+  { words: ['runs', 'run', 'history', 'live', 'trace', 'lineage', 'artifacts', 'outputs'], seg: 'runs', label: 'Runs' },
   { words: ['compare', 'experiments'], seg: 'runs/compare', label: 'Compare runs' },
   { words: ['models', 'model'], seg: 'models', label: 'Models' },
   { words: ['ship', 'edge', 'deploy', 'devices'], seg: 'ship', label: 'Ship' },

@@ -1,11 +1,11 @@
 import React from 'react'
-import { Download } from 'lucide-react'
+import { FileJson } from 'lucide-react'
 import { apiJson } from '../api/client'
 import { useAppStore } from '../store/appStore'
 
 /**
- * Client-side “repro pack” — downloads JSON of run meta + trace + catalog versions.
- * Full env freeze ZIP is needs-API (B7); this is the product-shaped interim.
+ * Client-side meta export — JSON of run detail + trace + readiness.
+ * Not a full frozen env / wheels pack (that needs a server endpoint).
  */
 export function ReproPackButton({ runId }: { runId: string }) {
   const pushToast = useAppStore((s) => s.pushToast)
@@ -23,7 +23,7 @@ export function ReproPackButton({ runId }: { runId: string }) {
         schema: 'graphyn.repro_pack.v0',
         created_at: new Date().toISOString(),
         run_id: runId,
-        note: 'Client-assembled pack. Full frozen env/plugin wheels need a server endpoint (plan B7).',
+        note: 'Client-assembled meta JSON (run + trace + readiness). Not a frozen env or plugin wheels pack.',
         run,
         trace,
         readiness,
@@ -34,7 +34,7 @@ export function ReproPackButton({ runId }: { runId: string }) {
       a.download = `graphyn-repro-${runId.slice(0, 8)}.json`
       a.click()
       URL.revokeObjectURL(a.href)
-      pushToast('Repro pack downloaded (meta JSON)', 'success')
+      pushToast('Exported run meta JSON', 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     } finally {
@@ -43,8 +43,14 @@ export function ReproPackButton({ runId }: { runId: string }) {
   }
 
   return (
-    <button type="button" className="btn-secondary" disabled={busy || !runId} onClick={() => void download()}>
-      <Download className="h-3.5 w-3.5" /> Repro pack
+    <button
+      type="button"
+      className="btn-quiet !px-2 !py-1 text-[11px]"
+      disabled={busy || !runId}
+      title="Download run + lineage + readiness as JSON (not a full environment freeze)"
+      onClick={() => void download()}
+    >
+      <FileJson className="h-3.5 w-3.5" /> {busy ? 'Exporting…' : 'Export meta'}
     </button>
   )
 }

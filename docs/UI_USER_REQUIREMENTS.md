@@ -111,7 +111,7 @@ Same canvas. Nodes with IR `placement` (auto/worker/pool/gpu) wait for matching 
 | Element | Expected behavior |
 |---|---|
 | **Node catalog search** (shipped) | Placeholder “Search nodes…”; `/` or ⌘/Ctrl+K focuses it on Builder. |
-| **Category filter** (shipped) | Select “All categories (N)” + per-category counts. |
+| **Category filter** (shipped) | Select “All nodes (N)” + per-category counts. |
 | **Catalog list** (shipped) | Grouped by category; click adds node; `iso` chip for isolated runtime. |
 | **Empty catalog** (shipped) | Auth: “Sign in to load nodes” → **Open Settings**. Else “No plugins installed” → **Open Plugins** / **Open Data** / **Open Projects**. |
 | **No nodes match** (shipped) | Soft empty when filter too narrow. |

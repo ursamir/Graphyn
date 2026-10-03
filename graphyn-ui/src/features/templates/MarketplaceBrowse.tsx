@@ -1,10 +1,12 @@
 import React from 'react'
+import clsx from 'clsx'
 import { SearchX as EmptySearchX } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
 import { EmptyState, ErrorBanner } from '../../components/ui'
+import { MasterDetail } from '../../layout'
 import {
   filterMarketplaceCatalog,
   loadMarketplaceCatalog,
@@ -21,10 +23,13 @@ const PAGE_SIZE = 48
 export function MarketplaceBrowse({
   search,
   onStats,
+  embedded = false,
 }: {
   search: string
   /** Report matched / loaded / catalog total so the parent chrome can show honest counts. */
   onStats?: (stats: { matched: number; loaded: number; total: number }) => void
+  /** Shorter min-height when stacked under workspace starters on the All tab. */
+  embedded?: boolean
 }) {
   const pushToast = useAppStore((s) => s.pushToast)
   const activeProject = useAppStore((s) => s.activeProject)
@@ -37,6 +42,7 @@ export function MarketplaceBrowse({
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [opening, setOpening] = React.useState(false)
+  const [selectedId, setSelectedId] = React.useState<string | null>(null)
 
   const load = React.useCallback(async () => {
     setBusy(true)
@@ -75,6 +81,16 @@ export function MarketplaceBrowse({
     onStats?.({ matched, loaded, total })
   }, [matched, loaded, total, onStats])
 
+  React.useEffect(() => {
+    if (items.length === 0) {
+      setSelectedId(null)
+      return
+    }
+    if (!selectedId || !items.some((t) => String(t.id ?? '') === selectedId)) {
+      setSelectedId(String(items[0].id ?? ''))
+    }
+  }, [items, selectedId])
+
   const openTemplate = async (templateId: string, st?: string) => {
     if (st === 'needs-api') {
       pushToast(
@@ -102,14 +118,84 @@ export function MarketplaceBrowse({
   const from = matched === 0 ? 0 : safePage * PAGE_SIZE + 1
   const to = Math.min(matched, safePage * PAGE_SIZE + loaded)
 
+  const selected =
+    selectedId != null ? items.find((t) => String(t.id ?? '') === selectedId) : undefined
+
+  const renderDetail = (tpl: MarketplaceCatalogItem) => {
+    const id = String(tpl.id ?? '')
+    const st = String(tpl.status ?? '')
+    const needsApi = st === 'needs-api'
+    return (
+      <article
+        className="flex flex-col gap-3 rounded-lg border border-ink-200 bg-white p-4 shadow-sm"
+        data-testid="marketplace-card"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold text-ink-950" title={String(tpl.name ?? id)}>
+              {String(tpl.name ?? id)}
+            </h2>
+            <div className="mt-0.5 font-mono text-[11px] text-ink-400">{id}</div>
+          </div>
+          <span
+            className={
+              needsApi
+                ? 'shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900'
+                : 'shrink-0 rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-medium text-ink-600'
+            }
+          >
+            {st || 'catalog'}
+          </span>
+        </div>
+        <p className="text-[13px] text-ink-600">
+          {String(tpl.value_prop || tpl.description || '')}
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {tpl.pack ? (
+            <span className="rounded bg-accent-50 px-1.5 py-0.5 text-[10px] text-accent-800">{tpl.pack}</span>
+          ) : null}
+          {(tpl.tags ?? []).map((tag) => (
+            <span key={tag} className="rounded bg-ink-50 px-1.5 py-0.5 text-[10px] text-ink-500">
+              {tag}
+            </span>
+          ))}
+        </div>
+        {needsApi ? (
+          <p
+            className="rounded border border-dashed border-amber-200 bg-amber-50/70 px-2 py-1 text-[11px] text-amber-950"
+            data-testid="marketplace-needs-api"
+          >
+            needs-api — no live device flash/OTA in this product build.
+          </p>
+        ) : null}
+        <div className="border-t border-ink-100 pt-3">
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={opening || !id}
+            onClick={() => void openTemplate(id, st)}
+          >
+            Open in Editor
+          </button>
+        </div>
+      </article>
+    )
+  }
+
   return (
-    <div className="mb-3 space-y-3" data-testid="marketplace-browse">
-      <div className="rounded-lg border border-ink-200 bg-ink-50/70 px-3 py-2 text-[11px] leading-snug text-ink-600">
+    <div
+      className={clsx(
+        'flex flex-col gap-3',
+        embedded ? 'min-h-[min(60vh,520px)]' : 'min-h-0 flex-1',
+      )}
+      data-testid="marketplace-browse"
+    >
+      <div className="shrink-0 rounded-lg border border-ink-200 bg-ink-50/70 px-3 py-2 text-[11px] leading-snug text-ink-600">
         Marketplace catalog ({total ?? '…'} templates). Filter and page locally —{' '}
         <strong>Open in Editor</strong> materializes Graph IR. Cards marked{' '}
         <span className="font-semibold">needs-api</span> stay honesty-only (no fake MCU flash).
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
         <select
           className="field-control w-auto text-[12px]"
           value={pack}
@@ -171,71 +257,54 @@ export function MarketplaceBrowse({
       {allMatched && allMatched.length === 0 && !busy ? (
         <EmptyState icon={EmptySearchX} title="No marketplace matches" description="Try another pack, status, or search term." />
       ) : null}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {items.map((tpl) => {
-          const id = String(tpl.id ?? '')
-          const st = String(tpl.status ?? '')
-          const needsApi = st === 'needs-api'
-          return (
-            <article
-              key={id}
-              className="flex flex-col rounded-xl border border-ink-200 bg-white p-3 shadow-sm"
-              data-testid="marketplace-card"
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-ink-950" title={String(tpl.name ?? id)}>
-                    {String(tpl.name ?? id)}
-                  </div>
-                  <div className="mt-0.5 font-mono text-[10px] text-ink-400">{id}</div>
-                </div>
-                <span
-                  className={
-                    needsApi
-                      ? 'shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900'
-                      : 'shrink-0 rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-medium text-ink-600'
-                  }
-                >
-                  {st || 'catalog'}
-                </span>
-              </div>
-              <p className="mt-2 line-clamp-2 text-[11px] text-ink-500">
-                {String(tpl.value_prop || tpl.description || '')}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {tpl.pack ? (
-                  <span className="rounded bg-accent-50 px-1.5 py-0.5 text-[10px] text-accent-800">{tpl.pack}</span>
-                ) : null}
-                {(tpl.tags ?? []).slice(0, 4).map((tag) => (
-                  <span key={tag} className="rounded bg-ink-50 px-1.5 py-0.5 text-[10px] text-ink-500">
-                    {tag}
-                  </span>
-                ))}
-              </div>
-              {needsApi ? (
-                <p
-                  className="mt-2 rounded border border-dashed border-amber-200 bg-amber-50/70 px-2 py-1 text-[10px] text-amber-950"
-                  data-testid="marketplace-needs-api"
-                >
-                  needs-api — no live device flash/OTA in this product build.
-                </p>
-              ) : null}
-              <div className="mt-auto flex gap-2 pt-3">
-                <button
-                  type="button"
-                  className="btn-primary"
-                  disabled={opening || !id}
-                  onClick={() => void openTemplate(id, st)}
-                >
-                  Open in Editor
-                </button>
-              </div>
-            </article>
-          )
-        })}
-      </div>
+      {items.length > 0 ? (
+        <MasterDetail
+          className="min-h-0 flex-1"
+          listLabel="marketplace templates"
+          collapsible
+          defaultSize={300}
+          masterClassName="!bg-transparent"
+          detailClassName="!pl-4"
+          master={
+            <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white">
+              {items.map((tpl) => {
+                const id = String(tpl.id ?? '')
+                const active = id === selectedId
+                const st = String(tpl.status ?? '')
+                return (
+                  <li key={id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(id)}
+                      className={clsx(
+                        'ide-row w-full flex-col items-start gap-0.5 !py-2 !px-3',
+                        active && 'is-active',
+                      )}
+                    >
+                      <span className="w-full truncate font-medium text-ink-950">
+                        {String(tpl.name ?? id)}
+                      </span>
+                      <span className="w-full truncate font-mono text-[11px] text-ink-400" title={id}>
+                        {id}
+                        {st ? ` · ${st}` : ''}
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          }
+          detail={
+            selected ? (
+              renderDetail(selected)
+            ) : (
+              <p className="text-sm text-ink-500">Select a marketplace template.</p>
+            )
+          }
+        />
+      ) : null}
       {pageCount > 1 ? (
-        <div className="flex justify-center gap-2 pt-1">
+        <div className="flex shrink-0 justify-center gap-2 pt-1">
           <button
             type="button"
             className="btn-secondary text-[12px]"

@@ -40,7 +40,9 @@ Do not re-litigate these decisions without reading this file. Class/schema OOP m
 
 - Expanded `ALLOWED_SUFFIXES` (video, pickle, pt/pth, …)
 - `/outputs/file` correct media types; **inline** for audio/image/video so players work
-- Client `blobUrlWithMime` forces extension MIME when server sent `octet-stream` (audio player fix)
+- Client `blobUrlWithMime` prefers extension MIME for audio/video/image when server sent `octet-stream`, a generic download type, or a mismatched family; normalizes `audio/x-wav` → `audio/wav` (browser blob playback)
+- `lib/wavPlayable.ts` converts IEEE-float32 (and 32-bit PCM) WAV → 16-bit PCM for `<audio>`; AudioViewer applies this before play
+- CSP: `media-src 'self' blob: data:` on `graphyn-ui/index.html` (blob/data media otherwise blocked by `default-src 'self'`)
 
 ### Runs UI
 

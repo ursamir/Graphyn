@@ -66,7 +66,7 @@ export function FileViewer({ path, name, size, className, source = 'outputs' }: 
       setLoading(true)
       try {
         if (kind === 'image' || kind === 'audio' || kind === 'video') {
-          const url = await fetchBlobUrl(path)
+          const url = await fetchBlobUrl(path, { signal: controller.signal })
           if (cancelled) {
             URL.revokeObjectURL(url)
             return
@@ -189,26 +189,25 @@ export function FileViewer({ path, name, size, className, source = 'outputs' }: 
   return (
     <>
       <div className={clsx('flex h-full min-h-[12rem] flex-col rounded-xl border border-ink-200 bg-white', className)}>
-        <div className="flex flex-wrap items-center gap-2 border-b border-ink-100 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-ink-100 px-2.5 py-1.5">
           <KindIcon kind={kind} />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-ink-900">{label}</div>
-            <div className="truncate font-mono text-[10px] text-ink-400">{path}</div>
-          </div>
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-900" title={path}>
+            {label}
+          </span>
           {size != null ? (
-            <span className="text-[11px] tabular-nums text-ink-500">{formatBytes(size)}</span>
+            <span className="shrink-0 text-[11px] tabular-nums text-ink-500">{formatBytes(size)}</span>
           ) : null}
-          <span className="rounded-md bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
+          <span className="shrink-0 rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600">
             {plugin?.label || kind}
           </span>
-          <button type="button" className="btn-secondary" title="Open larger" onClick={() => setPopup(true)}>
+          <button type="button" className="btn-quiet !px-1.5 !py-1" title="Open larger" onClick={() => setPopup(true)}>
             <Expand className="h-3.5 w-3.5" />
           </button>
-          <button type="button" className="btn-secondary" onClick={download}>
-            <Download className="h-3.5 w-3.5" /> Download
+          <button type="button" className="btn-quiet !px-1.5 !py-1" title="Download" onClick={download}>
+            <Download className="h-3.5 w-3.5" />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-3">{body}</div>
+        <div className="min-h-0 flex-1 overflow-auto p-2.5">{body}</div>
       </div>
       {popup ? (
         <div

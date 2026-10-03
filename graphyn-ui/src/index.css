@@ -26,10 +26,8 @@ body,
 body {
   margin: 0;
   font-family: Inter, system-ui, sans-serif;
-  background:
-    radial-gradient(1200px 600px at 10% -10%, rgba(21, 146, 136, 0.06), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, rgba(26, 33, 41, 0.04), transparent 50%),
-    #f3f5f8;
+  /* Flat workbench surface — gradients only on login / empty gates */
+  background: #f0f2f5;
   color: #1a2129;
   -webkit-font-smoothing: antialiased;
   letter-spacing: -0.011em;
@@ -149,10 +147,10 @@ textarea:focus-visible {
     @apply bg-ink-950 text-white shadow-sm hover:bg-ink-800 hover:text-white;
   }
   .surface-card {
-    @apply rounded-2xl border border-ink-200/60 bg-white shadow-sm;
+    @apply rounded-lg border border-ink-200/70 bg-white shadow-sm;
   }
   .editorial-card {
-    @apply rounded-2xl border border-ink-200/50 bg-white p-4 shadow-sm transition;
+    @apply rounded-lg border border-ink-200/60 bg-white p-3.5 shadow-sm transition;
     box-shadow: var(--shadow-sm);
   }
   .editorial-card:hover {
@@ -160,10 +158,25 @@ textarea:focus-visible {
     border-color: rgba(26, 33, 41, 0.12);
   }
   .page-shell-header {
-    @apply shrink-0 border-b border-ink-200/50 bg-white/70 px-5 pt-5 pb-3 backdrop-blur-md;
+    @apply shrink-0 border-b border-ink-200/80 bg-white px-4 py-2;
+  }
+  .workbench-scroll {
+    @apply h-full min-h-0 overflow-y-auto px-4 py-3;
   }
   .empty-state-shell {
-    @apply flex flex-col items-center justify-center rounded-2xl border border-dashed border-ink-200/70 bg-gradient-to-b from-white to-[#f7f9fb] px-8 py-16 text-center;
+    @apply flex flex-col items-center justify-center rounded-lg border border-dashed border-ink-200/80 bg-white px-6 py-10 text-center;
+  }
+  .empty-state-shell-compact {
+    @apply px-4 py-6;
+  }
+  .ide-tabs {
+    @apply flex flex-wrap gap-0 border-b border-ink-200/80;
+  }
+  .ide-tab {
+    @apply -mb-px border-b-2 border-transparent px-3 py-1.5 text-[12px] font-medium text-ink-500 transition hover:text-ink-800;
+  }
+  .ide-tab-on {
+    @apply border-accent-600 text-accent-900;
   }
   .ide-row {
     @apply flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition;

@@ -76,6 +76,32 @@ export function sortFilesNatural<F extends { name: string; path: string }>(files
 }
 
 /** True for opaque run/artifact hex ids that must not appear as pipeline step titles. */
+/** Plain-language title + hint for run-journal files (graph/meta/logs/prove…). */
+export function runLevelFileCue(name: string): { title: string; hint: string } {
+  const base = String(name || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    ?.trim() || String(name || '').trim()
+  const n = base.toLowerCase()
+  if (n === 'graph.json') {
+    return { title: 'Pipeline graph', hint: 'How steps were wired for this run' }
+  }
+  if (n === 'meta.json') {
+    return { title: 'Run summary', hint: 'Status, timing, and per-step stats' }
+  }
+  if (n === 'logs.json') {
+    return { title: 'Event log', hint: 'Raw execution events (same story as Logs)' }
+  }
+  if (n === 'prove.json') {
+    return { title: 'Reproducibility record', hint: 'Versions, hashes, and seed for replay' }
+  }
+  if (n === 'outputs_index.json') {
+    return { title: 'Outputs index', hint: 'Internal inventory of written files' }
+  }
+  return { title: base || 'Run file', hint: 'Run journal file' }
+}
+
 export function looksLikeOpaqueId(id: string): boolean {
   const s = String(id || '').trim()
   if (!s) return false
@@ -210,15 +236,21 @@ export function orderOutputGroups(executionOrder: string[], groupKeys: Iterable<
   return order
 }
 
-const MODEL_ARTIFACT_RE = /\b(model|checkpoint|weights|saved_model|keras|tflite|onnx|classifier|estimator)\b/i
-const TRAIN_NODE_RE = /(train|fit|finetune|fine_tune|distill)/i
-const TRAIN_METRIC_RE = /^(val_|train_|test_)?(acc|accuracy|loss|auc|roc_auc|f1|precision|recall|mae|mse|rmse|top\d+)/i
+const MODEL_ARTIFACT_RE = /\b(model|weights|saved_model|keras|tflite|onnx|classifier|estimator)\b/i
+
+function isModelFile(pathOrName: string, kind?: string): boolean {
+  if (String(kind || '').toLowerCase() === 'model') return true
+  return detectFileKind(pathOrName) === 'model'
+}
+
+function isModelArtifactType(artifactType: string): boolean {
+  return MODEL_ARTIFACT_RE.test(String(artifactType || '').replace(/[_-]/g, ' '))
+}
 
 /**
- * Should Runs show "Promote model" for this run? Only when the run produced
- * something model-like: a model file, a model-typed artifact, a training
- * node, training-style metrics, or a model already registered from it.
- * A preprocess-only run (ingest → condition → segment) gets no button.
+ * Should Runs show "Promote"? Only when this run actually produced a
+ * model artifact/file (or already registered one). A graph is a workflow —
+ * trainers, metrics, or "checkpoint" path noise alone do not imply a model.
  */
 export function runHasModelOutput(input: {
   files?: Array<{ name?: string; path?: string; kind?: string }>
@@ -229,19 +261,119 @@ export function runHasModelOutput(input: {
 }): boolean {
   if ((input.registeredModels ?? 0) > 0) return true
   for (const f of input.files ?? []) {
-    if (String(f.kind || '').toLowerCase() === 'model') return true
-    if (detectFileKind(f.path || f.name || '') === 'model') return true
+    if (isModelFile(f.path || f.name || '', f.kind)) return true
   }
   for (const a of input.artifacts ?? []) {
-    if (MODEL_ARTIFACT_RE.test(String(a.artifact_type || '').replace(/[_-]/g, ' '))) return true
-    if (TRAIN_NODE_RE.test(String(a.node_type || a.node_id || ''))) return true
-    if (detectFileKind(String(a.data_path || a.path || '')) === 'model') return true
-  }
-  for (const n of input.nodeStats ?? []) {
-    if (TRAIN_NODE_RE.test(String(n.node_type || n.node_id || ''))) return true
-  }
-  for (const k of Object.keys(input.metrics ?? {})) {
-    if (TRAIN_METRIC_RE.test(k)) return true
+    if (isModelArtifactType(String(a.artifact_type || ''))) return true
+    if (isModelFile(String(a.data_path || a.path || ''))) return true
   }
   return false
+}
+
+/**
+ * Extract the workspace artifact **pack** slug from a path like
+ * ``artifacts/optimized/runs/<run_id>/model.tflite`` or
+ * ``workspace/artifacts/speech-commands/latest``.
+ * Skips content-addressed blob dirs (``artifacts/<hex>/data``).
+ */
+export function artifactSlugFromPath(path: string): string | undefined {
+  const p = String(path || '')
+    .replace(/\\/g, '/')
+    .replace(/^workspace\//, '')
+  const m = p.match(/^artifacts\/([^/]+)\/(?:runs|latest|staging|prod)(?:\/|$)/i)
+  if (!m?.[1]) return undefined
+  const slug = m[1]
+  if (looksLikeOpaqueId(slug) || /^[0-9a-f]{24,}$/i.test(slug)) return undefined
+  return slug
+}
+
+/** One model-producing branch/output inside a run (dual Model Builder / Trainer). */
+export type RunModelCandidate = {
+  /** Stable key: node id, or `file:<path>` when ungrouped. */
+  id: string
+  label: string
+  nodeId?: string
+  /** Best path hint for the model file / artifact. */
+  pathHint?: string
+  /** Workspace pack slug for POST /models (e.g. speech-commands, optimized). */
+  artifactSlug?: string
+  artifactType?: string
+}
+
+/**
+ * Discover model outputs in a run, grouped by producing node when known.
+ * Dual-branch graphs yield one candidate per Model Builder / Trainer instance.
+ */
+export function listRunModelCandidates(input: {
+  files?: Array<{ name?: string; path?: string; kind?: string; node_id?: string }>
+  artifacts?: Array<{ artifact_type?: string; node_type?: string; node_id?: string; data_path?: string; path?: string }>
+  /** Optional label lookup (pipeline stack). */
+  labelFor?: (nodeId: string) => string | undefined
+}): RunModelCandidate[] {
+  const byNode = new Map<string, RunModelCandidate>()
+  const loose: RunModelCandidate[] = []
+
+  const touch = (nodeId: string | undefined, pathHint?: string, artifactType?: string) => {
+    const nid = String(nodeId || '').trim()
+    const slug = pathHint ? artifactSlugFromPath(pathHint) : undefined
+    if (nid && !looksLikeOpaqueId(nid) && nid !== 'run') {
+      const prev = byNode.get(nid)
+      if (prev) {
+        // Prefer pack-layout paths (have a slug) over content-addressed blobs.
+        if (pathHint && (!prev.pathHint || (!prev.artifactSlug && slug))) {
+          prev.pathHint = pathHint
+        }
+        if (slug && !prev.artifactSlug) prev.artifactSlug = slug
+        if (!prev.artifactType && artifactType) prev.artifactType = artifactType
+        return
+      }
+      byNode.set(nid, {
+        id: nid,
+        nodeId: nid,
+        label: input.labelFor?.(nid) || displayLabelFromId(nid),
+        pathHint,
+        artifactSlug: slug,
+        artifactType,
+      })
+      return
+    }
+    if (pathHint) {
+      const id = `file:${pathHint}`
+      if (!loose.some((c) => c.id === id)) {
+        loose.push({
+          id,
+          label: pathHint.split('/').pop() || pathHint,
+          pathHint,
+          artifactSlug: slug,
+          artifactType,
+        })
+      }
+    }
+  }
+
+  for (const f of input.files ?? []) {
+    const path = String(f.path || f.name || '')
+    if (!isModelFile(path, f.kind)) continue
+    touch(f.node_id, path)
+  }
+  for (const a of input.artifacts ?? []) {
+    const path = String(a.data_path || a.path || '')
+    const at = String(a.artifact_type || '')
+    if (!isModelArtifactType(at) && !isModelFile(path)) continue
+    touch(a.node_id || a.node_type, path || undefined, at || undefined)
+  }
+
+  return [...byNode.values(), ...loose]
+}
+
+function displayLabelFromId(id: string): string {
+  // Local import avoided — keep this file free of format.ts cycles; callers
+  // usually pass labelFor from the pipeline stack.
+  const raw = String(id || '').trim()
+  const m = raw.match(/^(.*)_([0-9a-f]{6,}|[0-9]+)$/i)
+  if (m) {
+    const base = m[1].replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    return `${base} #${m[2].slice(0, 8)}`
+  }
+  return raw.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) || raw
 }

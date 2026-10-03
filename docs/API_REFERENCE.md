@@ -566,7 +566,7 @@ Pipeline graphs should write under `workspace/artifacts/<name>/` or other jailed
 
 ### `GET /api/v1/runs/{run_id}/outputs/zip`
 
-Zip of the listed files as an attachment.
+Zip of prioritised output files (higher file cap than the UI listing; ArtifactStore inventories are expanded without the UI’s 32-sample preview cap) as an attachment. Members are packed under ``<node_id>/<filename>`` (``run/`` when unattributed) so same basenames from dual Trainers do not collide. Headers: ``X-Graphyn-Outputs-Zip-Truncated: true|false``, ``X-Graphyn-Outputs-Zip-Count`` (members packed). Truncation means the prioritised selection or the 512 MiB zip budget omitted some files — not a guaranteed full dump of every wav when a node has thousands.
 
 ---
 

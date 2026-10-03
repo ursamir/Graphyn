@@ -433,17 +433,27 @@ def list_run_outputs(
 
 @router.get("/{run_id}/outputs/zip", summary="Download run outputs as a zip")
 def download_run_outputs_zip(run_id: str):
-    """Zip listed output files for one-click download."""
-    run_path = _run_dir(run_id)
-    from app.core.runs.run_outputs import list_run_output_files, pack_outputs_zip
+    """Zip output files under ``<node_id>/<filename>`` (``run/`` when unattributed).
 
-    entries = list_run_output_files(run_id, run_path)
-    payload = pack_outputs_zip(entries)
+    Uses a higher prioritised file cap than the UI listing. Headers:
+    ``X-Graphyn-Outputs-Zip-Truncated`` when the listing or byte budget omitted
+    files; ``X-Graphyn-Outputs-Zip-Count`` is the number of members packed.
+    """
+    run_path = _run_dir(run_id)
+    from app.core.runs.run_outputs import list_run_output_files_for_zip, pack_outputs_zip
+
+    entries, list_capped = list_run_output_files_for_zip(run_id, run_path)
+    payload, byte_capped, packed = pack_outputs_zip(entries)
     filename = f"{run_id}-outputs.zip"
+    truncated = bool(list_capped or byte_capped)
     return Response(
         content=payload,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Graphyn-Outputs-Zip-Truncated": "true" if truncated else "false",
+            "X-Graphyn-Outputs-Zip-Count": str(packed),
+        },
     )
 
 

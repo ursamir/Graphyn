@@ -26,10 +26,46 @@ export function humanNodeLabel(name: string): string {
   }
   let s = stripIsolatedPrefix(raw)
   s = s.replace(/Node$/, '')
-  // Graph instance ids are type_N (trainer_0) — drop the trailing index for display.
-  // Keep short hex tails (trainer_b66a5330) so dual instances stay distinguishable.
+  // Graph instance ids (trainer_0 / trainer_b66a5330) → bare type for display.
+  // Dual-branch clarity uses displayNodeLabel / instanceIdCue (`#0` / `#c3f15543`).
+  s = s.replace(/_[a-f0-9]{6,}$/i, '')
   s = s.replace(/_\d+$/, '')
   return startCase(s) || raw
+}
+
+/**
+ * Short instance cue for dual-branch nodes — same rules as the builder canvas
+ * (`#0` / `#c3f15543`). Null when the id is the bare type (no suffix).
+ */
+export function instanceIdCue(id: string, nodeType?: string | null): string | null {
+  const raw = String(id || '').trim()
+  if (!raw) return null
+  const type = String(nodeType || '').trim()
+  if (type && raw.startsWith(`${type}_`)) {
+    const rest = raw.slice(type.length + 1)
+    return rest ? rest.slice(0, 8) : null
+  }
+  const mHex = raw.match(/_([a-f0-9]{6,})$/i)
+  if (mHex) return mHex[1].slice(0, 8)
+  const mNum = raw.match(/_(\d+)$/)
+  if (mNum) return mNum[1]
+  return null
+}
+
+/**
+ * Human label, optionally with `#cue` so dual Trainers / Model Builders stay distinct.
+ * `withCue: true` always appends when a cue exists; `'auto'` is for list post-pass use.
+ */
+export function displayNodeLabel(
+  id: string,
+  opts?: { label?: string | null; nodeType?: string | null; withCue?: boolean },
+): string {
+  const base =
+    (opts?.label && String(opts.label).trim()) ||
+    humanNodeLabel(opts?.nodeType || id)
+  if (!opts?.withCue) return base
+  const cue = instanceIdCue(id, opts?.nodeType)
+  return cue ? `${base} #${cue}` : base
 }
 
 /** Bare type key for focus matching: trainer_0 / trainer_b66a5330 → trainer. */
@@ -70,6 +106,18 @@ export function schemaFieldHint(def?: Record<string, unknown>): string | undefin
   if (!def) return undefined
   const d = def.description
   return typeof d === 'string' && d.trim() ? d : undefined
+}
+
+/** Short inspector blurb — full text stays on the field `title` tooltip. */
+export function schemaFieldHintBrief(
+  def?: Record<string, unknown>,
+  maxLen = 96,
+): string | undefined {
+  const full = schemaFieldHint(def)
+  if (!full) return undefined
+  const first = full.split(/(?<=\.)\s+/)[0]?.trim() || full.trim()
+  if (first.length <= maxLen) return first
+  return `${first.slice(0, Math.max(1, maxLen - 1)).trimEnd()}…`
 }
 
 function durationLabel(ev: Record<string, unknown>): string | null {
@@ -464,7 +512,7 @@ export function pickStatusFacts(data: unknown, max = 6): Array<{ key: string; va
   return out.slice(0, max)
 }
 
-/** Pick one human metric from a run's metrics.json (accuracy preferred). */
+/** Pick one human metric from a run's metrics (accuracy/loss preferred, else any number). */
 export function formatRunMetric(metrics: unknown): string | null {
   if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) return null
   const o = metrics as Record<string, unknown>
@@ -477,6 +525,12 @@ export function formatRunMetric(metrics: unknown): string | null {
   const loss = o.loss
   if (typeof loss === 'number' && Number.isFinite(loss)) {
     return `loss ${loss.toFixed(3)}`
+  }
+  // Workflow-agnostic fallback (counts, durations, custom scalars — not ML-only).
+  for (const [k, v] of Object.entries(o)) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue
+    const pretty = k.replace(/_/g, ' ')
+    return Number.isInteger(v) ? `${pretty} ${v}` : `${pretty} ${v.toFixed(3)}`
   }
   return null
 }

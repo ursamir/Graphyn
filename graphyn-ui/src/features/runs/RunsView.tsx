@@ -1,5 +1,6 @@
 import React from 'react'
-import { Download, Pause, Play, RefreshCw, Workflow } from 'lucide-react'
+import clsx from 'clsx'
+import { Download, Pause, Play, RefreshCw, SlidersHorizontal, Workflow } from 'lucide-react'
 import { ApiError, apiJson, apiUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { emptyGraph } from '../../types/graph'
@@ -13,7 +14,17 @@ import {
   normalizeRunStatus,
   statusMatchesFilter,
 } from '../../lib/runStatus'
-import { ConfirmButton, CollapsibleJson, EmptyState, ErrorBanner, LoadingBlock, NeedProjectPrompt, SlimProgress, StatusBadge } from '../../components/ui'
+import {
+  ConfirmButton,
+  CollapsibleJson,
+  EmptyState,
+  ErrorBanner,
+  LoadingBlock,
+  IdeTabs,
+  NeedProjectPrompt,
+  SlimProgress,
+  StatusBadge,
+} from '../../components/ui'
 import { FieldSelect } from '../../components/FieldSelect'
 import { SplitPane } from '../../components/SplitPane'
 import { FileViewer } from '../../components/FileViewer'
@@ -25,6 +36,7 @@ import {
   formatRelativeTime,
   formatRunMetric,
   humanizeTemplateName,
+  displayNodeLabel,
   humanNodeLabel,
   focusMatchesNode,
   shortRunId,
@@ -43,23 +55,42 @@ import {
   shortOutputPath,
   normalizeOutputsResponse,
   orderOutputGroups,
+  artifactSlugFromPath,
+  listRunModelCandidates,
   runHasModelOutput,
+  runLevelFileCue,
   sortFilesNatural,
   type NodeTruncation,
+  type RunModelCandidate,
 } from './runOutputs'
-import { extractRunFailure, failureProposalSummary, pipelineNodesFromRun } from './runNodes'
+import {
+  computePipelineShape,
+  disambiguatePipelineLabels,
+  extractRunFailure,
+  failureProposalSummary,
+  isMultiTrackShape,
+  pipelineNodesFromRun,
+} from './runNodes'
 import { dedupeErrorRows } from '../builder/logDedupe'
 
 /** Run ids whose GET /runs/{id} returned 404 this session — never auto-reopened. */
 const MISSING_RUN_IDS = new Set<string>()
 
-type DetailPanel = 'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage'
+type DetailPanel = 'logs' | 'checkpoints' | 'artifacts' | 'lineage'
 
 /** Store panel value → URL panel segment (paths.runPanel). */
 function panelToPath(panel: DetailPanel): RunPanel {
   if (panel === 'artifacts') return 'outputs'
-  if (panel === 'debug') return 'details'
   return panel
+}
+
+/** Normalize legacy Summary (`debug`) focus onto Overview (`lineage`). */
+function normalizePanel(
+  p: DetailPanel | 'debug' | null | undefined,
+): DetailPanel | null {
+  if (!p) return null
+  if (p === 'debug') return 'lineage'
+  return p
 }
 
 /** Fetch the outputs listing with per-node truncation info when the API supports it. */
@@ -164,8 +195,7 @@ function runDisplayName(r: Pick<RunSummary, 'graph_name'>): string {
 const PANEL_LABELS: Record<string, string> = {
   logs: 'Logs',
   artifacts: 'Run outputs',
-  lineage: 'Lineage',
-  debug: 'Summary',
+  lineage: 'Overview',
   checkpoints: 'Checkpoints',
 }
 
@@ -184,6 +214,26 @@ const LIVE_STATUSES = new Set(['running', 'queued', 'paused'])
 
 function isLiveStatus(status?: string | null): boolean {
   return LIVE_STATUSES.has(normalizeRunStatus(status))
+}
+
+/** Short list-friendly status text (StatusBadge otherwise echoes raw API casing). */
+function shortStatusLabel(status?: string | null): string {
+  switch (normalizeRunStatus(status)) {
+    case 'completed':
+      return 'Done'
+    case 'failed':
+      return 'Failed'
+    case 'cancelled':
+      return 'Cancelled'
+    case 'running':
+      return 'Running'
+    case 'paused':
+      return 'Paused'
+    case 'queued':
+      return 'Queued'
+    default:
+      return String(status || 'Unknown')
+  }
 }
 
 function metricNumeric(metrics: Record<string, unknown> | undefined, name: string): number | null {
@@ -232,12 +282,50 @@ function waveBucketsFromNodeStats(
 const LOG_ROW_PX = 20
 const LOG_VIEWPORT_PX = 448
 
+/** Short local clock from PipelineLogger `timestamp` / `time` ISO fields. */
+function formatLogClock(raw: unknown): string {
+  if (raw == null) return ''
+  const s = String(raw).trim()
+  if (!s) return ''
+  const t = Date.parse(s)
+  if (!Number.isFinite(t)) {
+    // Already HH:MM:SS…
+    const m = s.match(/^(\d{1,2}:\d{2}:\d{2})/)
+    return m ? m[1] : ''
+  }
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date(t))
+  } catch {
+    return new Date(t).toISOString().slice(11, 19)
+  }
+}
+
+function extractLogTimestamp(log: Record<string, unknown>, rawMessage: string): string {
+  const direct = formatLogClock(log.timestamp ?? log.time ?? log.ts)
+  if (direct) return direct
+  try {
+    const ev = JSON.parse(rawMessage.trim()) as Record<string, unknown>
+    if (ev && typeof ev === 'object') {
+      return formatLogClock(ev.timestamp ?? ev.time ?? ev.ts)
+    }
+  } catch {
+    /* plain text */
+  }
+  return ''
+}
+
 type FormattedLogRow = {
   i: number
   l: Record<string, unknown>
   line: ReturnType<typeof formatExecutionLine>
   nodeHint: string | null
   failed: boolean
+  clock: string
 }
 
 function VirtualRunLogList({
@@ -277,19 +365,30 @@ function VirtualRunLogList({
       ) : (
         <div style={{ height: totalH, position: 'relative' }}>
           <div style={{ transform: `translateY(${offsetY}px)` }}>
-            {slice.map(({ i, line, nodeHint, failed }) => {
+            {slice.map(({ i, line, nodeHint, failed, clock }) => {
               const hintLabel = nodeHint ? humanNodeLabel(nodeHint) : ''
               const showHint =
                 Boolean(hintLabel) &&
                 !line.text.toLowerCase().startsWith(hintLabel.toLowerCase())
               return (
-              <div key={i} style={{ height: LOG_ROW_PX }} className={failed ? 'text-rose-300' : ''}>
+              <div
+                key={i}
+                style={{ height: LOG_ROW_PX }}
+                className={`flex min-w-0 items-baseline gap-1.5 overflow-hidden whitespace-nowrap ${
+                  failed ? 'text-rose-300' : ''
+                }`}
+              >
+                {clock ? (
+                  <span className="shrink-0 tabular-nums text-ink-500" title={clock}>
+                    {clock}
+                  </span>
+                ) : null}
                 {showHint ? (
-                  <span className="mr-1.5 rounded bg-ink-800 px-1 text-[10px] text-accent-300">
+                  <span className="shrink-0 rounded bg-ink-800 px-1 text-[10px] text-accent-300">
                     {hintLabel}
                   </span>
                 ) : null}
-                {line.text}
+                <span className="min-w-0 truncate">{line.text}</span>
               </div>
               )
             })}
@@ -327,128 +426,110 @@ function NodeStatusWave({ buckets }: { buckets: WaveBucket[] }) {
   )
 }
 
-function RunsTopTabs({
-  active,
-  onHistory,
-  onLive,
-  onCompare,
-}: {
-  active: 'history' | 'live' | 'compare'
-  onHistory: () => void
-  onLive: () => void
-  onCompare: () => void
-}) {
-  return (
-    <div className="flex rounded-xl bg-ink-100/80 p-1">
-      <button type="button" className={active === 'history' ? 'tab-pill tab-pill-on' : 'tab-pill'} onClick={onHistory}>
-        History
-      </button>
-      <button type="button" className={active === 'live' ? 'tab-pill tab-pill-on' : 'tab-pill'} onClick={onLive}>
-        Live
-      </button>
-      <button type="button" className={active === 'compare' ? 'tab-pill tab-pill-on' : 'tab-pill'} onClick={onCompare}>
-        Compare
-      </button>
-    </div>
-  )
-}
-
-/** Shared top chrome so History / Live / Compare look the same. */
-function RunsChrome({
+/** Compare mode: Back + title + Refresh (not a peer of History/Live). */
+function CompareRunsTab({
   description,
-  active,
-  onHistory,
-  onLive,
-  onCompare,
-  onRefresh,
-  children,
+  onBack,
 }: {
-  description: string
-  active: 'history' | 'live' | 'compare'
-  onHistory: () => void
-  onLive: () => void
-  onCompare: () => void
-  onRefresh?: () => void
-  children: React.ReactNode
+  description?: string
+  onBack: () => void
 }) {
+  const experimentsRef = React.useRef<ExperimentsViewHandle>(null)
   return (
     <ViewShell
-      title="Runs"
+      title="Compare"
       description={description}
+      inlineToolbar
       actions={
         <>
-          <RunsTopTabs active={active} onHistory={onHistory} onLive={onLive} onCompare={onCompare} />
-          {onRefresh ? (
-            <button type="button" onClick={onRefresh} className="btn-secondary">
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
-            </button>
-          ) : null}
+          <button type="button" className="btn-secondary" onClick={onBack}>
+            Back to runs
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => experimentsRef.current?.refresh()}
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
         </>
       }
     >
-      {children}
+      <ExperimentsView ref={experimentsRef} embedded />
     </ViewShell>
   )
 }
 
-/** Compare tab: same chrome Refresh as History/Live, wired to ExperimentsView.refresh. */
-function CompareRunsTab({
-  description,
-  onHistory,
-  onLive,
-  onCompare,
-}: {
-  description: string
-  onHistory: () => void
-  onLive: () => void
-  onCompare: () => void
-}) {
-  const experimentsRef = React.useRef<ExperimentsViewHandle>(null)
-  return (
-    <RunsChrome
-      description={description}
-      active="compare"
-      onHistory={onHistory}
-      onLive={onLive}
-      onCompare={onCompare}
-      onRefresh={() => experimentsRef.current?.refresh()}
-    >
-      <ExperimentsView ref={experimentsRef} embedded />
-    </RunsChrome>
-  )
-}
-
-/** History / Live: chrome + list|detail — shared app master divider. */
+/**
+ * One layout always: MasterDetail edge-to-edge (sidebar already says Runs).
+ * No ViewShell title strip — selecting a run must not change the outer chrome.
+ */
 function RunsShell({
-  description,
-  active,
-  onHistory,
-  onLive,
-  onCompare,
-  onRefresh,
   list,
   detail,
 }: {
-  description: string
-  active: 'history' | 'live' | 'compare'
-  onHistory: () => void
-  onLive: () => void
-  onCompare: () => void
-  onRefresh?: () => void
   list: React.ReactNode
   detail: React.ReactNode
 }) {
   return (
-    <RunsChrome
-      description={description}
-      active={active}
-      onHistory={onHistory}
-      onLive={onLive}
-      onCompare={onCompare}
-      onRefresh={onRefresh}
-    >
-      <MasterDetail master={list} detail={detail} collapsible />
-    </RunsChrome>
+    <div className="flex h-full min-h-0 flex-col bg-[var(--surface-muted)]">
+      <MasterDetail
+        listLabel="runs"
+        master={list}
+        detail={detail}
+        collapsible
+        detailClassName="!flex !flex-col !overflow-hidden !p-0"
+        masterClassName="!overflow-y-auto !p-0 [scrollbar-gutter:stable]"
+      />
+    </div>
+  )
+}
+
+/** Compact in-flight monitor (was Live-tab detail) — shown under run chrome when status is live. */
+function LiveRunMonitor({
+  nodeStats,
+  workers,
+}: {
+  nodeStats: Array<Record<string, unknown>>
+  workers: Array<[string, string]>
+}) {
+  const wave = waveBucketsFromNodeStats(nodeStats)
+  if (wave.length === 0 && workers.length === 0 && nodeStats.length === 0) return null
+  return (
+    <div className="shrink-0 space-y-2 border-b border-ink-100 bg-ink-50/60 px-3 py-2">
+      {wave.length > 0 ? <NodeStatusWave buckets={wave} /> : null}
+      {workers.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5 text-[11px] text-ink-600">
+          {workers.map(([nid, wid]) => (
+            <span
+              key={nid}
+              className="rounded-md bg-white px-1.5 py-0.5 font-mono text-ink-800 ring-1 ring-ink-200/80"
+              title={`Node ${nid}`}
+            >
+              {humanNodeLabel(nid)} → {wid}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {nodeStats.length > 0 ? (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-ink-500">
+          <span className="font-semibold uppercase tracking-wide text-ink-400">Nodes</span>
+          {nodeStats.slice(0, 8).map((n, i) => (
+            <span key={i} className="inline-flex items-center gap-1">
+              <span className="font-medium text-ink-800">
+                {humanNodeLabel(String(n.node_type || n.node_id || `node-${i}`))}
+              </span>
+              {n.status != null ? (
+                <span className="font-mono text-[10px] text-ink-400">{String(n.status)}</span>
+              ) : null}
+            </span>
+          ))}
+          {nodeStats.length > 8 ? (
+            <span className="text-ink-400">+{nodeStats.length - 8} more</span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -493,7 +574,7 @@ export default function RunsView() {
   const [runArtifacts, setRunArtifacts] = React.useState<RunArtifact[]>([])
   const [selectedOutputPath, setSelectedOutputPath] = React.useState<string | null>(null)
   const [focusNodeId, setFocusNodeId] = React.useState<string | null>(null)
-  const [panel, setPanel] = React.useState<'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage'>('logs')
+  const [panel, setPanel] = React.useState<DetailPanel>('logs')
   const [error, setError] = React.useState<string | null>(null)
   const [statusFilter, setStatusFilter] = React.useState<string>('all')
   const [nameQuery, setNameQuery] = React.useState('')
@@ -501,6 +582,8 @@ export default function RunsView() {
   const [metricMin, setMetricMin] = React.useState('')
   const [promoteAlias, setPromoteAlias] = React.useState<'latest' | 'staging' | 'prod'>('latest')
   const [promoteOpen, setPromoteOpen] = React.useState(false)
+  /** Which model branch to register when a run has multiple builders/trainers. */
+  const [promoteCandidateId, setPromoteCandidateId] = React.useState<string | null>(null)
   const [regModelName, setRegModelName] = React.useState('')
   const [regModelSlug, setRegModelSlug] = React.useState('')
   const [registerBusy, setRegisterBusy] = React.useState(false)
@@ -509,39 +592,36 @@ export default function RunsView() {
   const [askAgentOpen, setAskAgentOpen] = React.useState(false)
   /** The run's Graph IR (GET /runs/{id}/graph or graph.json) when the detail doesn't embed it. */
   const [runGraph, setRunGraph] = React.useState<GraphIR | null>(null)
-  const [liveRuns, setLiveRuns] = React.useState<RunSummary[] | null>(null)
-  const [liveSelected, setLiveSelected] = React.useState<string | null>(null)
-  const [liveDetail, setLiveDetail] = React.useState<Record<string, unknown> | null>(null)
-  const [liveStatus, setLiveStatus] = React.useState<Record<string, unknown> | null>(null)
-  const [liveDebug, setLiveDebug] = React.useState<Record<string, unknown> | null>(null)
-  const [liveError, setLiveError] = React.useState<string | null>(null)
+  /** Multi-select for Compare action (2–5). */
+  const [compareIds, setCompareIds] = React.useState<string[]>([])
+  /** Metric/min filters — collapsed by default so the list strip stays one row. */
+  const [moreFilters, setMoreFilters] = React.useState(false)
   const [runModels, setRunModels] = React.useState<
     Array<{ name: string; stages?: Record<string, { run_id?: string; slug?: string; updated_at?: string }> }>
   >([])
   const limit = 50
-  const pendingPanelRef = React.useRef<'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage' | null>(null)
+  const pendingPanelRef = React.useRef<DetailPanel | null>(null)
   const wasLiveRunRef = React.useRef(false)
   const focusSeededForRun = React.useRef<string | null>(null)
 
-  const goHistoryTab = React.useCallback(() => {
+  const goBackToRuns = React.useCallback(() => {
     setFocusRunsTab('history')
     if (activeProject) navigatePath(paths.runs(activeProject))
   }, [activeProject, setFocusRunsTab])
 
-  const goLiveTab = React.useCallback(() => {
-    setFocusRunsTab('live')
-    if (activeProject) navigatePath(paths.runsLive(activeProject))
-  }, [activeProject, setFocusRunsTab])
-
-  const goCompareTab = React.useCallback(() => {
-    openExperiments(selected ? { runIds: [selected] } : {})
-  }, [openExperiments, selected])
+  // /runs?status=active (and /runs/live alias) seeds the Active filter once.
+  React.useEffect(() => {
+    const qs = new URLSearchParams(window.location.search)
+    if (qs.get('status') === 'active') setStatusFilter('active')
+  }, [])
 
   // Tab focus comes from store / pathname (/runs/live, /runs/compare) via App — no hash sync.
   React.useEffect(() => {
     if (!focusRunPanel) return
-    pendingPanelRef.current = focusRunPanel
-    setPanel(focusRunPanel)
+    const next = normalizePanel(focusRunPanel)
+    if (!next) return
+    pendingPanelRef.current = next
+    setPanel(next)
     setFocusRunsTab('history')
     clearFocusRunPanel()
   }, [focusRunPanel, clearFocusRunPanel, setFocusRunsTab])
@@ -591,6 +671,14 @@ export default function RunsView() {
     void load()
   }, [load])
 
+  // Poll the list while the filter can show in-flight runs (Active / Running / Queued / Paused).
+  const listPollLive =
+    statusFilter === 'active' ||
+    statusFilter === 'running' ||
+    statusFilter === 'queued' ||
+    statusFilter === 'paused'
+  usePolling(load, 3000, { enabled: listPollLive && focusRunsTab === 'history', resetKey: load })
+
   React.useEffect(() => {
     // The address bar wins (deep link /runs/<id>[/<panel>]); otherwise fall
     // back to the store's focus / last run — but never auto-reopen a run we
@@ -614,7 +702,7 @@ export default function RunsView() {
         const parsed = parsePathname(window.location.pathname, window.location.search)
         if (parsed.view !== 'runs' || parsed.runsTab !== 'history') return
         if (parsed.runId) {
-          const p = panelToFocus(parsed.panel)
+          const p = normalizePanel(panelToFocus(parsed.panel))
           if (parsed.runId !== selectedRef.current) {
             if (p) {
               pendingPanelRef.current = p
@@ -670,11 +758,28 @@ export default function RunsView() {
     setSelectedOutputPath(null)
     setFocusNodeId(null)
     setPromoteOpen(false)
+    setPromoteCandidateId(null)
     setAskAgentOpen(false)
     if (switching) setRunGraph(null)
     setNotFoundRunId(null)
     focusSeededForRun.current = null
     setError(null)
+    // Seed the landing panel immediately from the list row (before await) so the
+    // URL effect does not briefly pin a stale Logs panel from the prior selection.
+    if (switching && !pendingPanelRef.current) {
+      const listSt = String(runs?.find((r) => r.run_id === id)?.status ?? '').toLowerCase()
+      if (
+        listSt.includes('fail') ||
+        listSt === 'running' ||
+        listSt === 'paused' ||
+        listSt === 'cancelled' ||
+        listSt === 'canceled'
+      ) {
+        setPanel('logs')
+      } else if (listSt) {
+        setPanel('lineage')
+      }
+    }
     try {
       // Detail first: a 404 here means the run doesn't exist (deleted, or a
       // stale deep link) — show one clear "not found" state, not a detail
@@ -702,15 +807,23 @@ export default function RunsView() {
       }
       if (stale()) return
       const embedded = (d?.graph ?? (d?.meta as { graph?: unknown } | undefined)?.graph) as GraphIR | undefined
-      const hasEmbedded = Boolean(embedded && Array.isArray(embedded.nodes) && Array.isArray(embedded.edges))
+      // Empty edges[] still counts as Array.isArray — fetch the real graph so Lineage
+      // can show from→to. Prefer embedded only when it has both nodes and edges.
+      const embeddedUsable = Boolean(
+        embedded &&
+          Array.isArray(embedded.nodes) &&
+          embedded.nodes.length > 0 &&
+          Array.isArray(embedded.edges) &&
+          embedded.edges.length > 0,
+      )
       const [st, dbg, cps, outs, arts, g] = await Promise.all([
         apiJson<Record<string, unknown>>(`/runs/${id}/status`).catch(() => null),
         apiJson<Record<string, unknown>>(`/runs/${id}/debug-report`).catch(() => null),
         apiJson<string[]>(`/runs/${id}/checkpoints`).catch(() => []),
         fetchRunOutputs(id),
         apiJson<RunArtifact[]>(`/runs/${id}/artifacts`).catch(() => []),
-        // Node list (incl. nodes that never ran) comes from the run's graph.
-        hasEmbedded ? Promise.resolve(null) : fetchRunGraph(id, null).catch(() => null),
+        // Node list + edges (incl. nodes that never ran) come from the run's graph.
+        embeddedUsable ? Promise.resolve(null) : fetchRunGraph(id, null).catch(() => null),
       ])
       if (stale()) return
       setRunGraph(g)
@@ -726,14 +839,14 @@ export default function RunsView() {
       // Only pick a default panel when opening a different run (or a forced pending panel).
       // Reloading the same run must not yank the user off Logs / Outputs / Lineage.
       if (pendingPanelRef.current) {
-        setPanel(pendingPanelRef.current)
+        setPanel(normalizePanel(pendingPanelRef.current) || 'lineage')
         pendingPanelRef.current = null
       } else if (switching) {
         const stStr = String(st?.status ?? meta?.status ?? d?.status ?? '').toLowerCase()
         if (stStr.includes('fail') || stStr === 'running' || stStr === 'paused' || stStr === 'cancelled') {
           setPanel('logs')
         } else {
-          setPanel('debug')
+          setPanel('lineage')
         }
       }
     } catch (err) {
@@ -775,6 +888,10 @@ export default function RunsView() {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
       if (!res.ok) throw new Error(`Download failed (${res.status})`)
+      const truncated =
+        (res.headers.get('X-Graphyn-Outputs-Zip-Truncated') || '').toLowerCase() === 'true'
+      const countRaw = res.headers.get('X-Graphyn-Outputs-Zip-Count')
+      const count = countRaw && /^\d+$/.test(countRaw) ? Number(countRaw) : null
       const blob = await res.blob()
       const obj = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -784,7 +901,21 @@ export default function RunsView() {
       a.click()
       a.remove()
       URL.revokeObjectURL(obj)
-      pushToast('Zip download started', 'success')
+      if (truncated) {
+        pushToast(
+          count != null
+            ? `Zip saved (${count} files in step folders) — some bulk files omitted (size/listing cap)`
+            : 'Zip saved with step folders — some bulk files omitted (size/listing cap)',
+          'info',
+        )
+      } else {
+        pushToast(
+          count != null
+            ? `Zip downloaded (${count} files, one folder per step)`
+            : 'Zip downloaded (one folder per step)',
+          'success',
+        )
+      }
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -894,9 +1025,17 @@ export default function RunsView() {
   const registerModelFromRun = async () => {
     if (!selected) return
     const name = regModelName.trim()
-    const slug = regModelSlug.trim() || name || 'model'
+    const slug =
+      regModelSlug.trim() ||
+      selectedPromoteCandidate?.artifactSlug ||
+      runArtifactSlug ||
+      ''
     if (!name) {
       pushToast('Enter a model name', 'error')
+      return
+    }
+    if (!slug) {
+      pushToast('Pick a branch with an artifact pack (or enter the pack slug)', 'error')
       return
     }
     setRegisterBusy(true)
@@ -1038,7 +1177,8 @@ export default function RunsView() {
         const line = formatExecutionLine(raw)
         const nodeHint = extractLogNodeHint(l, line.text, raw)
         const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
-        return { i, l, line, nodeHint, failed }
+        const clock = extractLogTimestamp(l, raw)
+        return { i, l, line, nodeHint, failed, clock }
       }),
       (row) => row.line.text,
     ),
@@ -1084,8 +1224,14 @@ export default function RunsView() {
           ? detailMeta.node_stats
           : []
   ) as Array<Record<string, unknown>>
-  // "Promote model" only for runs that produced something model-like — a
-  // preprocess-only run (ingest → condition → segment) has nothing to stage.
+  const runWorkerMap =
+    (detailMeta?.distributed_node_workers as Record<string, string> | undefined) ||
+    (status as { distributed_node_workers?: Record<string, string> } | null)?.distributed_node_workers ||
+    null
+  const runWorkerEntries: Array<[string, string]> =
+    runWorkerMap && typeof runWorkerMap === 'object' ? Object.entries(runWorkerMap) : []
+  // Promote only when this run actually wrote a model artifact — a graph is a
+  // workflow; trainers/metrics alone do not imply something to stage.
   const runProducedModel = runHasModelOutput({
     files: outputFiles,
     artifacts: runArtifacts,
@@ -1093,6 +1239,14 @@ export default function RunsView() {
     nodeStats: runNodeStats,
     registeredModels: runModels.length,
   })
+  const runMetrics = (selectedSummary?.metrics ?? detailMeta?.metrics ?? null) as
+    | Record<string, unknown>
+    | null
+  const showCheckpointsTab =
+    checkpoints.length > 0 || isLiveRunStatus(runStatus) || panel === 'checkpoints'
+  const detailPanelOptions = (
+    ['lineage', 'artifacts', 'logs', 'checkpoints'] as const
+  ).filter((p) => p !== 'checkpoints' || showCheckpointsTab)
   const sourceRunId = String(
     (detail?.meta as { source_run_id?: string } | undefined)?.source_run_id ??
       detail?.source_run_id ??
@@ -1108,7 +1262,11 @@ export default function RunsView() {
     | GraphIR
     | undefined
   const stackGraph =
-    embeddedGraph && Array.isArray(embeddedGraph.nodes) && Array.isArray(embeddedGraph.edges)
+    embeddedGraph &&
+    Array.isArray(embeddedGraph.nodes) &&
+    embeddedGraph.nodes.length > 0 &&
+    Array.isArray(embeddedGraph.edges) &&
+    embeddedGraph.edges.length > 0
       ? embeddedGraph
       : runGraph
   /**
@@ -1123,37 +1281,95 @@ export default function RunsView() {
       nodeStats: runNodeStats,
       events: logs,
       runStatus,
-    }).map((n) => ({ id: n.id, label: n.label, status: n.status }))
+    }).map((n) => ({ id: n.id, label: n.label, nodeType: n.nodeType, status: n.status }))
     const seen = new Set(items.map((i) => i.id))
-    const seenLabel = new Set(items.map((i) => i.label.toLowerCase()))
     const push = (raw?: unknown) => {
       const id = String(raw || '').trim()
       if (!id || seen.has(id) || looksLikeOpaqueId(id) || id === 'run') return
-      const label = humanNodeLabel(id)
-      if (seenLabel.has(label.toLowerCase())) return
       seen.add(id)
-      seenLabel.add(label.toLowerCase())
-      items.push({ id, label, status: undefined })
+      // Base label only — disambiguatePipelineLabels adds #cue for duplicates.
+      items.push({ id, label: humanNodeLabel(id), nodeType: undefined, status: undefined })
     }
     for (const a of runArtifacts) push(a.node_id || a.node_type)
     for (const f of outputFiles) {
       const g = guessNodeFromPath(f.path, runArtifacts, f, { runId: selected })
       if (g !== 'run') push(g)
     }
-    return items
+    return disambiguatePipelineLabels(items).map(({ id, label, status }) => ({ id, label, status }))
   })()
+
+  const pipelineShape = computePipelineShape(
+    pipelineStackItems.map((i) => i.id),
+    stackGraph && Array.isArray(stackGraph.edges) ? stackGraph.edges : null,
+  )
+
+  const focusLabel = focusNodeId
+    ? pipelineStackItems.find((i) => focusMatchesNode(focusNodeId, i.id))?.label ||
+      displayNodeLabel(focusNodeId, { withCue: true })
+    : ''
+
+  const modelCandidates = React.useMemo(() => {
+    if (!runProducedModel) return [] as RunModelCandidate[]
+    const labelFor = (nodeId: string) =>
+      pipelineStackItems.find((i) => focusMatchesNode(nodeId, i.id))?.label
+    // Stamp node_id on files via guess when missing so dual trainers split.
+    const files = outputFiles.map((f) => ({
+      ...f,
+      node_id:
+        f.node_id ||
+        (() => {
+          const g = guessNodeFromPath(f.path, runArtifacts, f, { runId: selected })
+          return g === 'run' ? undefined : g
+        })(),
+    }))
+    return listRunModelCandidates({ files, artifacts: runArtifacts, labelFor })
+  }, [runProducedModel, outputFiles, runArtifacts, pipelineStackItems, selected])
+
+  const selectedPromoteCandidate =
+    modelCandidates.find((c) => c.id === promoteCandidateId) || modelCandidates[0] || null
+
+  /** Run-wide pack slug from meta (fallback when a branch path has no pack). */
+  const runArtifactSlug = React.useMemo(() => {
+    const dir =
+      (typeof detail?.artifacts_dir === 'string' && detail.artifacts_dir) ||
+      ((detail?.meta as { artifacts_dir?: string } | undefined)?.artifacts_dir) ||
+      ''
+    return artifactSlugFromPath(String(dir)) || ''
+  }, [detail])
+
+  const applyPromoteCandidate = React.useCallback(
+    (c: RunModelCandidate) => {
+      setPromoteCandidateId(c.id)
+      const base =
+        (c.nodeId || c.label || 'model')
+          .replace(/[^A-Za-z0-9_-]+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 48) || 'model'
+      setRegModelName(base)
+      // POST /models slug must be the workspace pack (speech-commands, optimized),
+      // not the node id — register looks up artifacts/<slug>/runs/<run_id>.
+      setRegModelSlug(c.artifactSlug || runArtifactSlug || '')
+    },
+    [runArtifactSlug],
+  )
+
+  React.useEffect(() => {
+    if (!promoteOpen || modelCandidates.length === 0) return
+    if (promoteCandidateId && modelCandidates.some((c) => c.id === promoteCandidateId)) return
+    applyPromoteCandidate(modelCandidates[0])
+  }, [promoteOpen, modelCandidates, promoteCandidateId, applyPromoteCandidate])
 
   const canOpenGraph = Boolean(
     selected &&
       (graphName ||
-        (embeddedGraph && Array.isArray(embeddedGraph.nodes) && Array.isArray(embeddedGraph.edges))),
+        (stackGraph && Array.isArray(stackGraph.nodes) && stackGraph.nodes.length > 0)),
   )
 
   const openGraphInBuilder = async () => {
     if (!selected) return
     try {
-      if (embeddedGraph && Array.isArray(embeddedGraph.nodes) && Array.isArray(embeddedGraph.edges)) {
-        loadGraphIntoBuilder(embeddedGraph)
+      if (stackGraph && Array.isArray(stackGraph.nodes) && stackGraph.nodes.length > 0) {
+        loadGraphIntoBuilder(stackGraph)
         pushToast('Opened graph in Editor', 'success')
         return
       }
@@ -1217,63 +1433,26 @@ export default function RunsView() {
     setMetricMin('')
   }, [])
 
-  const loadLive = React.useCallback(async () => {
-    if (!activeProject) return
-    try {
-      const rows = await apiJson<RunSummary[]>('/runs', {
-        query: { project: activeProject, limit: 50 },
-      })
-      const live = (Array.isArray(rows) ? rows : []).filter((r) => isLiveStatus(r.status))
-      setLiveRuns(live)
-      setLiveError(null)
-      setLiveSelected((prev) => {
-        if (prev && live.some((r) => r.run_id === prev)) return prev
-        return live[0]?.run_id ?? null
-      })
-    } catch (err) {
-      setLiveError(err instanceof Error ? err.message : String(err))
-      setLiveRuns([])
-    }
-  }, [activeProject])
-
-  usePolling(loadLive, 3000, { enabled: focusRunsTab === 'live', resetKey: loadLive })
-
+  // Active filter + nothing selected → auto-follow newest in-flight run.
   React.useEffect(() => {
-    if (focusRunsTab !== 'live' || !liveSelected) {
-      setLiveDetail(null)
-      setLiveStatus(null)
-      setLiveDebug(null)
-    }
-  }, [focusRunsTab, liveSelected])
+    if (statusFilter !== 'active' || selected || !filteredRuns?.length) return
+    const first = filteredRuns.find((r) => isLiveStatus(r.status))
+    if (first) void open(first.run_id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, filteredRuns, selected])
 
-  const liveSelectedRef = React.useRef(liveSelected)
-  liveSelectedRef.current = liveSelected
-  usePolling(
-    async () => {
-      const id = liveSelected
-      if (!id) return
-      const cancelled = () => liveSelectedRef.current !== id
-      try {
-        const [d, st, dbg] = await Promise.all([
-          apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}`),
-          apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}/status`).catch(() => null),
-          apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}/debug-report`).catch(() => null),
-        ])
-        if (cancelled()) return
-        setLiveDetail(d)
-        setLiveStatus(st)
-        setLiveDebug(dbg)
-      } catch {
-        if (!cancelled()) {
-          setLiveDetail(null)
-          setLiveStatus(null)
-          setLiveDebug(null)
-        }
-      }
-    },
-    3000,
-    { enabled: focusRunsTab === 'live' && Boolean(liveSelected), resetKey: liveSelected },
-  )
+  const toggleCompareId = React.useCallback((runId: string) => {
+    setCompareIds((prev) => {
+      if (prev.includes(runId)) return prev.filter((id) => id !== runId)
+      if (prev.length >= 5) return prev
+      return [...prev, runId]
+    })
+  }, [])
+
+  const startCompare = React.useCallback(() => {
+    if (compareIds.length < 2) return
+    openExperiments({ runIds: compareIds.slice(0, 5) })
+  }, [compareIds, openExperiments])
 
   if (!activeProject) {
     return (
@@ -1285,267 +1464,109 @@ export default function RunsView() {
     )
   }
 
-  if (focusRunsTab === 'live') {
-    const liveNodeStats = Array.isArray(liveDebug?.node_stats)
-      ? (liveDebug!.node_stats as Array<Record<string, unknown>>)
-      : Array.isArray((liveDetail?.meta as { node_stats?: unknown } | undefined)?.node_stats)
-        ? ((liveDetail!.meta as { node_stats: Array<Record<string, unknown>> }).node_stats)
-        : []
-    const currentNode = liveStatus?.current_node != null ? String(liveStatus.current_node) : null
-    const wave = waveBucketsFromNodeStats(liveNodeStats)
-    const workers =
-      (liveDetail?.meta as { distributed_node_workers?: Record<string, string> } | undefined)
-        ?.distributed_node_workers ||
-      (liveStatus as { distributed_node_workers?: Record<string, string> } | null)?.distributed_node_workers
-    const workerEntries = workers && typeof workers === 'object' ? Object.entries(workers) : []
-
-    return (
-      <RunsShell
-        description={`Live running / pending for ${activeProject}. Polls every 3s.`}
-        active="live"
-        onHistory={goHistoryTab}
-        onLive={goLiveTab}
-        onCompare={goCompareTab}
-        onRefresh={() => void loadLive()}
-        list={
-          <>
-            {liveError && <ErrorBanner message={liveError} onRetry={() => void loadLive()} />}
-            {liveRuns === null ? (
-              <LoadingBlock label="Loading live runs…" />
-            ) : liveRuns.length === 0 ? (
-              <EmptyState
-                title="No running or pending runs"
-                description="Start a run from the Editor — active jobs appear here while they execute."
-                action={
-                  <button type="button" className="btn-primary" onClick={() => goView('builder')}>
-                    Open Editor
-                  </button>
-                }
-              />
-            ) : (
-              <ul className="space-y-1.5">
-                {liveRuns.map((r) => (
-                  <li key={r.run_id}>
-                    <button
-                      type="button"
-                      onClick={() => setLiveSelected(r.run_id)}
-                      className={`flex w-full min-w-0 flex-col gap-1 rounded-xl border px-3 py-2.5 text-left shadow-sm transition ${
-                        liveSelected === r.run_id
-                          ? 'border-accent-200 bg-accent-50/80 shadow-soft'
-                          : 'border-ink-200/70 bg-white hover:border-ink-300'
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1 truncate text-sm font-medium text-ink-900">
-                          {runDisplayName(r)}
-                        </div>
-                        <StatusBadge status={String(r.status ?? 'unknown')} />
-                      </div>
-                      <div className="flex items-center justify-between gap-2 text-[11px] text-ink-500">
-                        <span className="font-mono text-ink-400">{shortRunId(r.run_id)}</span>
-                        <span title={formatLocaleDateTime(r.created_at)}>
-                          {formatRelativeTime(r.created_at)}
-                        </span>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
-        }
-        detail={
-          !liveSelected ? (
-            <EmptyState
-              title="Select a live run"
-              description="Pick a running or pending run on the left to watch progress, node wave, and workers."
-            />
-          ) : (
-            <>
-              <div className="rounded-2xl border border-ink-200/80 bg-white px-4 py-3 shadow-sm space-y-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <StatusBadge
-                    status={String(
-                      liveStatus?.status ??
-                        (liveDetail?.meta as { status?: string } | undefined)?.status ??
-                        liveRuns?.find((r) => r.run_id === liveSelected)?.status ??
-                        'unknown',
-                    )}
-                  />
-                  {liveStatus?.progress_pct != null && <SlimProgress pct={Number(liveStatus.progress_pct)} />}
-                  {currentNode ? (
-                    <span className="text-sm text-ink-600">
-                      Current{' '}
-                      <span className="font-medium text-ink-900">{humanNodeLabel(currentNode)}</span>
-                    </span>
-                  ) : null}
-                </div>
-                {wave.length > 0 ? (
-                  <div>
-                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                      Node status wave
-                    </div>
-                    <NodeStatusWave buckets={wave} />
-                  </div>
-                ) : (
-                  <p className="text-xs text-ink-500">No node_stats yet — wave appears as nodes report status.</p>
-                )}
-                {workerEntries.length > 0 ? (
-                  <div>
-                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                      Worker map
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 text-[11px] text-ink-600">
-                      {workerEntries.map(([nid, wid]) => (
-                        <span
-                          key={nid}
-                          className="rounded-md bg-ink-100 px-1.5 py-0.5 font-mono text-ink-800"
-                          title={`Node ${nid}`}
-                        >
-                          {humanNodeLabel(nid)} → {wid}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-              {liveNodeStats.length > 0 ? (
-                <div className="overflow-hidden rounded-xl border border-ink-200 bg-white">
-                  <div className="border-b border-ink-100 bg-ink-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                    Nodes in flight
-                  </div>
-                  <ul className="divide-y divide-ink-100">
-                    {liveNodeStats.map((n, i) => (
-                      <li key={i} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-                        <span className="font-medium text-ink-900">
-                          {humanNodeLabel(String(n.node_type || n.node_id || `node-${i}`))}
-                        </span>
-                        <span className="font-mono text-[11px] text-ink-400">{String(n.node_id || '')}</span>
-                        {n.status != null ? <StatusBadge status={String(n.status)} /> : null}
-                        {n.duration_ms != null ? (
-                          <span className="tabular-nums text-[11px] text-ink-500">{String(n.duration_ms)} ms</span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => {
-                    setFocusRunsTab('history')
-                    if (activeProject) navigatePath(paths.run(activeProject, liveSelected))
-                    void open(liveSelected)
-                  }}
-                >
-                  Open full run (History)
-                </button>
-                <button type="button" className="btn-secondary" onClick={() => goView('builder')}>
-                  Open Editor
-                </button>
-              </div>
-            </>
-          )
-        }
-      />
-    )
-  }
-
   if (focusRunsTab === 'compare') {
     return (
       <CompareRunsTab
         description={`Pick 2–5 runs on the left, then compare params and metrics${activeProject ? ` for ${activeProject}` : ''}.`}
-        onHistory={goHistoryTab}
-        onLive={goLiveTab}
-        onCompare={goCompareTab}
+        onBack={goBackToRuns}
       />
     )
   }
 
   return (
     <RunsShell
-      description={`History for ${activeProject}. Open a run on the left — Logs, outputs, lineage, and summary on the right.`}
-      active="history"
-      onHistory={goHistoryTab}
-      onLive={goLiveTab}
-      onCompare={goCompareTab}
-      onRefresh={() => void load()}
       list={
-        <>
+        <div className="flex h-full min-h-0 flex-col">
+        <div className="shrink-0 space-y-1.5 border-b border-ink-100 bg-white px-2.5 py-1.5 pr-9">
         {error && <ErrorBanner message={error} onRetry={() => void load()} />}
-        {runs && runs.length > 0 ? (
-          <div className="mb-3 flex flex-wrap items-end gap-2">
-            <label className="text-[11px] font-medium text-ink-500">
-              Status
-              <FieldSelect
-                className="mt-0.5 w-[9.5rem]"
-                allowEmpty={false}
-                value={statusFilter}
-                onChange={setStatusFilter}
-                aria-label="Status filter"
-                options={[
-                  { value: 'all', label: 'All' },
-                  { value: 'running', label: 'Running' },
-                  { value: 'completed', label: 'Completed' },
-                  { value: 'failed', label: 'Failed' },
-                  { value: 'cancelled', label: 'Cancelled' },
-                  { value: 'paused', label: 'Paused' },
-                  { value: 'queued', label: 'Queued' },
-                ]}
-                triggerClassName="!mt-0 rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-800"
-              />
-            </label>
-            <label className="min-w-[12rem] flex-1 text-[11px] font-medium text-ink-500">
-              Graph / search
-              <input
-                value={nameQuery}
-                onChange={(e) => setNameQuery(e.target.value)}
-                placeholder="Filter by graph name or run id"
-                className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-              />
-            </label>
-            <label className="min-w-[7rem] text-[11px] font-medium text-ink-500">
-              Metric
+        <div className="flex min-w-0 items-center gap-1.5">
+            <FieldSelect
+              className="w-[7.25rem] shrink-0"
+              allowEmpty={false}
+              value={statusFilter}
+              onChange={setStatusFilter}
+              aria-label="Status filter"
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'active', label: 'Active' },
+                { value: 'running', label: 'Running' },
+                { value: 'completed', label: 'Done' },
+                { value: 'failed', label: 'Failed' },
+                { value: 'cancelled', label: 'Cancelled' },
+                { value: 'paused', label: 'Paused' },
+                { value: 'queued', label: 'Queued' },
+              ]}
+              triggerClassName="!mt-0 !py-1 rounded-md border border-ink-200 bg-white px-2 text-[12px] text-ink-800"
+            />
+            <input
+              value={nameQuery}
+              onChange={(e) => setNameQuery(e.target.value)}
+              placeholder="Filter runs…"
+              aria-label="Filter by graph name or run id"
+              className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-[12px]"
+            />
+            <button
+              type="button"
+              className={clsx(
+                'btn-quiet shrink-0 !px-1.5 !py-1',
+                (moreFilters || metricName.trim()) && 'text-accent-800',
+              )}
+              title="Metric filters"
+              aria-pressed={moreFilters || Boolean(metricName.trim())}
+              onClick={() => setMoreFilters((v) => !v)}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              className="btn-quiet shrink-0 !px-1.5 !py-1"
+              title="Refresh runs"
+              onClick={() => void load()}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {moreFilters || metricName.trim() ? (
+            <div className="flex min-w-0 items-center gap-1.5">
               <input
                 value={metricName}
                 onChange={(e) => setMetricName(e.target.value)}
-                placeholder="e.g. accuracy"
+                placeholder="Metric"
+                aria-label="Metric name"
                 list="run-metric-keys"
-                className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
+                className="min-w-0 flex-1 rounded-md border border-ink-200 px-2 py-1 text-[12px]"
               />
-            </label>
-            <label className="w-[5.5rem] text-[11px] font-medium text-ink-500">
-              Min
               <input
                 type="number"
                 value={metricMin}
                 onChange={(e) => setMetricMin(e.target.value)}
                 placeholder="≥"
+                aria-label="Minimum metric"
                 disabled={!metricName.trim()}
-                className="mt-0.5 block w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm disabled:opacity-50"
+                className="w-14 shrink-0 rounded-md border border-ink-200 px-2 py-1 text-[12px] disabled:opacity-50"
               />
-            </label>
-            <datalist id="run-metric-keys">
-              {Array.from(
-                new Set(
-                  (runs || []).flatMap((r) => Object.keys((r.metrics as Record<string, unknown>) || {})),
-                ),
-              )
-                .sort()
-                .map((k) => (
-                  <option key={k} value={k} />
-                ))}
-            </datalist>
-          </div>
-        ) : null}
+              <datalist id="run-metric-keys">
+                {Array.from(
+                  new Set(
+                    (runs || []).flatMap((r) => Object.keys((r.metrics as Record<string, unknown>) || {})),
+                  ),
+                )
+                  .sort()
+                  .map((k) => (
+                    <option key={k} value={k} />
+                  ))}
+              </datalist>
+            </div>
+          ) : null}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 [scrollbar-gutter:stable]">
         {runs === null ? (
           <LoadingBlock />
         ) : runs.length === 0 ? (
           <EmptyState
+            compact
             title="No runs in this workspace yet"
-            description="Open the Editor and run a graph — History, Run outputs, Lineage, and Compare live here."
+            description="Open the Editor and run a graph — inspect logs, outputs, and lineage here."
             action={
               <button
                 type="button"
@@ -1558,6 +1579,7 @@ export default function RunsView() {
           />
         ) : !filteredRuns || filteredRuns.length === 0 ? (
           <EmptyState
+            compact
             title="No runs match these filters"
             description="Clear the status or search filter to see every run in this workspace."
             action={
@@ -1571,15 +1593,60 @@ export default function RunsView() {
             }
           />
         ) : (
-          <ul className="space-y-1.5">
+          <>
+          {compareIds.length > 0 ? (
+            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-[12px]">
+              <span className="font-medium text-ink-800">
+                {compareIds.length} selected
+              </span>
+              <button
+                type="button"
+                className="btn-quiet !px-2 !py-0.5 text-[11px]"
+                onClick={() => setCompareIds([])}
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                className="btn-secondary !px-2 !py-0.5 text-[11px]"
+                disabled={compareIds.length < 2 || compareIds.length > 5}
+                title={
+                  compareIds.length < 2
+                    ? 'Select at least 2 runs to compare'
+                    : compareIds.length > 5
+                      ? 'Compare supports at most 5 runs'
+                      : 'Compare selected runs'
+                }
+                onClick={startCompare}
+              >
+                Compare{compareIds.length >= 2 ? ` (${compareIds.length})` : ''}
+              </button>
+            </div>
+          ) : null}
+          <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200/70">
             {filteredRuns.map((r) => {
               const metric = formatRunMetric(r.metrics)
               const foreignProject =
                 r.project && String(r.project).trim() && String(r.project) !== activeProject
                   ? String(r.project)
                   : null
+              const checked = compareIds.includes(r.run_id)
               return (
-              <li key={r.run_id}>
+              <li key={r.run_id} className="flex min-w-0 items-stretch">
+                <label
+                  className="flex shrink-0 items-center border-r border-ink-100 px-2"
+                  title="Select for compare"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-ink-300"
+                    checked={checked}
+                    disabled={!checked && compareIds.length >= 5}
+                    onChange={() => toggleCompareId(r.run_id)}
+                    aria-label={`Select ${shortRunId(r.run_id)} for compare`}
+                  />
+                </label>
                 <button
                   type="button"
                   onClick={() => {
@@ -1587,44 +1654,32 @@ export default function RunsView() {
                     void open(r.run_id)
                   }}
                   aria-current={selected === r.run_id ? 'true' : undefined}
-                  className={`flex w-full min-w-0 flex-col gap-1 rounded-xl border px-3 py-2.5 text-left shadow-sm transition ${
+                  className={
                     selected === r.run_id
-                      ? 'border-accent-200 bg-accent-50/80 shadow-soft'
-                      : 'border-ink-200/70 bg-white hover:border-ink-300 hover:bg-ink-50/80'
-                  }`}
+                      ? 'ide-row is-active min-w-0 flex-1 flex-col items-stretch gap-0.5 !px-2.5 !py-2'
+                      : 'ide-row min-w-0 flex-1 flex-col items-stretch gap-0.5 !px-2.5 !py-2'
+                  }
                 >
-                  <div className="flex min-w-0 items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div
-                        className="truncate text-sm font-medium text-ink-900"
-                        title={String(r.graph_name ?? '') || undefined}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div
+                      className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-900"
+                      title={String(r.graph_name ?? '') || undefined}
+                    >
+                      {runDisplayName(r)}
+                    </div>
+                    <StatusBadge status={shortStatusLabel(r.status)} />
+                    {isStaleRunning(r.status, r.created_at) ? (
+                      <span
+                        className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900"
+                        title={`Still RUNNING after ${formatRelativeTime(r.created_at)} — may be a zombie journal`}
                       >
-                        {runDisplayName(r)}
-                      </div>
-                      {foreignProject ? (
-                        <span
-                          className="mt-0.5 inline-block max-w-full truncate rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-medium text-ink-600"
-                          title={foreignProject}
-                        >
-                          {foreignProject}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <StatusBadge status={String(r.status ?? 'unknown')} />
-                      {isStaleRunning(r.status, r.created_at) && (
-                        <span
-                          className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900"
-                          title={`Still RUNNING after ${formatRelativeTime(r.created_at)} — may be a zombie journal`}
-                        >
-                          Stale
-                        </span>
-                      )}
-                    </div>
+                        Stale
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-ink-500">
-                    <span className="min-w-0 truncate tabular-nums" title={metric || undefined}>
-                      {metric || '\u00a0'}
+                    <span className="min-w-0 truncate tabular-nums" title={metric || foreignProject || undefined}>
+                      {metric || foreignProject || '\u00a0'}
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       <span title={formatLocaleDateTime(r.created_at)}>
@@ -1639,6 +1694,7 @@ export default function RunsView() {
               </li>
             )})}
           </ul>
+          </>
         )}
         <div className="mt-3 flex items-center gap-2">
           <button
@@ -1663,14 +1719,17 @@ export default function RunsView() {
             </span>
           ) : null}
         </div>
-        </>
+        </div>
+        </div>
       }
       detail={
         <>
         {!selected ? (
+          <div className="flex h-full min-h-0 items-center justify-center bg-white p-6">
           <EmptyState
+            compact
             title="Select a run"
-            description="Select a run on the left to inspect Logs, Run outputs, Lineage, or Summary."
+            description="Overview, outputs, and logs for any workflow run appear here."
             action={
               runs && runs.length > 0 ? (
                 <button type="button" className="btn-secondary" onClick={() => void open(runs[0].run_id)}>
@@ -1687,8 +1746,11 @@ export default function RunsView() {
               )
             }
           />
+          </div>
         ) : notFoundRunId === selected ? (
+          <div className="p-4">
           <EmptyState
+            compact
             title={`Run ${shortRunId(selected)} not found`}
             description="It may have been deleted, or the link points at a run from another API instance."
             action={
@@ -1704,12 +1766,13 @@ export default function RunsView() {
               </button>
             }
           />
+          </div>
         ) : (
-          <>
+          <div className="flex h-full min-h-0 flex-col">
             {selectedHiddenByFilters && (
               <div
                 role="status"
-                className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] text-amber-950"
+                className="mx-3 mt-3 flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] text-amber-950"
               >
                 <span>Selected run hidden by filters</span>
                 <button type="button" className="btn-secondary !px-2 !py-0.5 text-[11px]" onClick={clearRunFilters}>
@@ -1724,53 +1787,65 @@ export default function RunsView() {
               const cancelled = st === 'cancelled' || st === 'canceled'
               const live = isLiveRunStatus(runStatus)
               return (
-            <div className="sticky top-0 z-10 -mx-1 space-y-2 bg-white/90 px-1 pb-2 backdrop-blur-sm">
-              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-200/80 bg-white px-3 py-2 shadow-sm">
-                <StatusBadge status={runStatus} />
+            <div className="shrink-0 space-y-1 border-b border-ink-100 bg-white px-3 py-1.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <StatusBadge status={shortStatusLabel(runStatus)} />
                 {isStaleRunning(
                   runStatus,
                   selectedSummary?.created_at ??
                     (detail?.meta as { created_at?: string } | undefined)?.created_at,
                 ) && (
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-900">
+                  <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
                     Stale
                   </span>
                 )}
-                <div className="min-w-0 flex-1">
-                  <div
-                    className="truncate text-sm font-semibold text-ink-950"
-                    title={selected || undefined}
-                  >
-                    {graphName ? humanizeTemplateName(graphName) : shortRunId(selected || '')}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-ink-500">
-                    <span
-                      title={formatLocaleDateTime(
-                        selectedSummary?.created_at ??
-                          (detail?.meta as { created_at?: string } | undefined)?.created_at,
-                      )}
+                <span
+                  className="min-w-0 max-w-[14rem] truncate text-[13px] font-semibold text-ink-950 sm:max-w-[20rem]"
+                  title={selected || undefined}
+                >
+                  {graphName ? humanizeTemplateName(graphName) : shortRunId(selected || '')}
+                </span>
+                <span
+                  className="text-[11px] text-ink-500"
+                  title={formatLocaleDateTime(
+                    selectedSummary?.created_at ??
+                      (detail?.meta as { created_at?: string } | undefined)?.created_at,
+                  )}
+                >
+                  {formatRelativeTime(
+                    selectedSummary?.created_at ??
+                      (detail?.meta as { created_at?: string } | undefined)?.created_at,
+                  )}
+                </span>
+                {graphName ? (
+                  <span className="font-mono text-[11px] text-ink-400" title={selected || undefined}>
+                    {shortRunId(selected || '')}
+                  </span>
+                ) : null}
+                {live && status?.progress_pct != null ? (
+                  <SlimProgress pct={Number(status.progress_pct)} />
+                ) : null}
+                {live && status?.current_node != null ? (
+                  <span className="text-[11px] text-ink-600">
+                    {humanNodeLabel(String(status.current_node))}
+                  </span>
+                ) : null}
+                {sourceRunId ? (
+                  <span className="text-[11px] text-ink-500">
+                    Source{' '}
+                    <button
+                      type="button"
+                      className="font-mono text-accent-800 underline-offset-2 hover:underline"
+                      onClick={() => {
+                        pendingPanelRef.current = 'lineage'
+                        void open(sourceRunId)
+                      }}
                     >
-                      {formatRelativeTime(
-                        selectedSummary?.created_at ??
-                          (detail?.meta as { created_at?: string } | undefined)?.created_at,
-                      )}
-                    </span>
-                    {graphName ? (
-                      <span className="font-mono text-ink-400" title={selected || undefined}>
-                        {shortRunId(selected || '')}
-                      </span>
-                    ) : null}
-                    {live && status?.progress_pct != null ? (
-                      <SlimProgress pct={Number(status.progress_pct)} />
-                    ) : null}
-                    {live && status?.current_node != null ? (
-                      <span className="text-ink-600">
-                        {humanNodeLabel(String(status.current_node))}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-1">
+                      {shortRunId(sourceRunId)}
+                    </button>
+                  </span>
+                ) : null}
+                <div className="ml-auto flex shrink-0 flex-wrap items-center gap-0.5">
                   {canOpenGraph ? (
                     <button
                       type="button"
@@ -1781,25 +1856,25 @@ export default function RunsView() {
                       <Workflow className="h-3.5 w-3.5" /> Editor
                     </button>
                   ) : null}
-                  <details className="relative">
-                    <summary
-                      className="btn-quiet !px-2 !py-1 text-[11px] cursor-pointer list-none [&::-webkit-details-marker]:hidden"
-                      title="Pause, resume, cancel, or delete this run"
-                    >
-                      Manage
-                    </summary>
-                    <div className="absolute right-0 z-30 mt-1 flex min-w-[10rem] flex-col gap-1 rounded-xl border border-ink-200 bg-white p-2 shadow-lg">
-                      {['running'].includes(st) && (
-                        <button type="button" className="btn-secondary w-full justify-start" onClick={() => void control(selected, 'pause')}>
-                          <Pause className="h-3.5 w-3.5" /> Pause
-                        </button>
-                      )}
-                      {['paused'].includes(st) && (
-                        <button type="button" className="btn-secondary w-full justify-start" onClick={() => void control(selected, 'resume')}>
-                          <Play className="h-3.5 w-3.5" /> Resume
-                        </button>
-                      )}
-                      {['running', 'paused'].includes(st) && (
+                  {['running', 'paused'].includes(st) ? (
+                    <details className="relative">
+                      <summary
+                        className="btn-quiet !px-2 !py-1 text-[11px] cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+                        title="Pause, resume, or cancel this run"
+                      >
+                        Manage
+                      </summary>
+                      <div className="absolute right-0 z-30 mt-1 flex min-w-[10rem] flex-col gap-1 rounded-xl border border-ink-200 bg-white p-2 shadow-lg">
+                        {st === 'running' && (
+                          <button type="button" className="btn-secondary w-full justify-start" onClick={() => void control(selected, 'pause')}>
+                            <Pause className="h-3.5 w-3.5" /> Pause
+                          </button>
+                        )}
+                        {st === 'paused' && (
+                          <button type="button" className="btn-secondary w-full justify-start" onClick={() => void control(selected, 'resume')}>
+                            <Play className="h-3.5 w-3.5" /> Resume
+                          </button>
+                        )}
                         <ConfirmButton
                           label={
                             isStaleRunning(
@@ -1814,62 +1889,64 @@ export default function RunsView() {
                           danger
                           onConfirm={() => void control(selected, 'cancel')}
                         />
-                      )}
-                      {!['running', 'paused'].includes(st) && (
-                        <ConfirmButton
-                          label="Delete run"
-                          confirmLabel={`Delete ${selected}?`}
-                          danger
-                          onConfirm={() => void deleteRun()}
-                        />
-                      )}
-                    </div>
-                  </details>
+                      </div>
+                    </details>
+                  ) : null}
                   {succeeded && runProducedModel ? (
                     <button
                       type="button"
                       className={
-                        promoteOpen
+                        promoteOpen && panel === 'lineage'
                           ? 'btn-secondary !px-2 !py-1 text-[11px]'
                           : 'btn-quiet !px-2 !py-1 text-[11px]'
                       }
-                      title="Point a model registry alias (latest / staging / prod) at this run’s artifacts"
-                      onClick={() => setPromoteOpen((v) => !v)}
+                      aria-expanded={promoteOpen && panel === 'lineage'}
+                      title={
+                        promoteOpen && panel === 'lineage'
+                          ? 'Hide the register / stage form'
+                          : 'Open register / stage form on Overview'
+                      }
+                      onClick={() => {
+                        setPromoteOpen((v) => {
+                          const next = !v
+                          if (next) {
+                            setPromoteCandidateId(null)
+                            setRegModelName('')
+                            setRegModelSlug('')
+                            setPanel('lineage')
+                          }
+                          return next
+                        })
+                      }}
                     >
-                      Promote model
+                      {promoteOpen && panel === 'lineage' ? 'Close register' : 'Register model'}
                     </button>
+                  ) : null}
+                  {!['running', 'paused'].includes(st) ? (
+                    <ConfirmButton
+                      label="Delete"
+                      confirmLabel={`Delete ${selected}?`}
+                      danger
+                      className="!px-2 !py-1 text-[11px]"
+                      onConfirm={() => void deleteRun()}
+                    />
                   ) : null}
                 </div>
               </div>
 
-              <div className="flex min-w-0 flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1">
-                {(['logs', 'artifacts', 'lineage', 'debug', 'checkpoints'] as const).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className={panel === p ? 'tab-pill tab-pill-on' : 'tab-pill'}
-                    onClick={() => setPanel(p)}
-                  >
-                    {PANEL_LABELS[p]}
-                  </button>
-                ))}
-              </div>
-
-              {sourceRunId ? (
-                <p className="text-[11px] text-ink-500">
-                  Source{' '}
-                  <button
-                    type="button"
-                    className="font-mono text-accent-800 underline-offset-2 hover:underline"
-                    onClick={() => {
-                      pendingPanelRef.current = 'lineage'
-                      void open(sourceRunId)
-                    }}
-                  >
-                    {shortRunId(sourceRunId)}
-                  </button>
-                </p>
-              ) : null}
+              <IdeTabs
+                aria-label="Run detail"
+                value={panel}
+                options={detailPanelOptions.map((p) => ({
+                  id: p,
+                  label: PANEL_LABELS[p],
+                }))}
+                onChange={(next) => {
+                  setPanel(next as DetailPanel)
+                  // Register/stage form lives on Overview — close when leaving that tab.
+                  if (next !== 'lineage' && promoteOpen) setPromoteOpen(false)
+                }}
+              />
 
               {isStaleRunning(
                 runStatus,
@@ -1951,14 +2028,25 @@ export default function RunsView() {
                 </div>
               ) : null}
 
-              {succeeded && runProducedModel && promoteOpen ? (
+              {succeeded && runProducedModel && promoteOpen && panel === 'lineage' ? (
                 <div id="run-promote-panel" className="rounded-xl border border-accent-200/70 bg-white px-3 py-2.5 shadow-sm space-y-2">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-semibold text-ink-900">Register / stage</div>
+                      <p className="mt-0.5 text-[11px] text-ink-500">
+                        Stage this run’s artifact pack, then register one model branch by name for Models / Ship.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-quiet shrink-0 !px-2 !py-1 text-[11px]"
+                      onClick={() => setPromoteOpen(false)}
+                    >
+                      Close
+                    </button>
+                  </div>
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-[12px] text-ink-600">
-                      Stage this run’s artifacts under a registry alias
-                      <span className="text-ink-400"> (latest → staging → prod)</span>
-                      — same path Models uses.
-                    </p>
+                    <span className="text-[11px] font-medium text-ink-600">Stage artifact pack</span>
                     <div className="flex flex-wrap items-center gap-2">
                       <FieldSelect
                         className="w-[7.5rem]"
@@ -1973,57 +2061,133 @@ export default function RunsView() {
                         ]}
                         triggerClassName="!mt-0 rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
                       />
-                      <button type="button" className="btn-primary" onClick={() => void promote()}>
-                        Promote model
+                      <button type="button" className="btn-primary !px-2 !py-1 text-[11px]" onClick={() => void promote()}>
+                        Stage alias
                       </button>
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-end gap-2 border-t border-ink-100 pt-2">
-                    <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
-                      Name
-                      <input
-                        className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
-                        value={regModelName}
-                        onChange={(e) => setRegModelName(e.target.value)}
-                        placeholder="my-model"
-                      />
-                    </label>
-                    <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
-                      Slug
-                      <input
-                        className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
-                        value={regModelSlug}
-                        onChange={(e) => setRegModelSlug(e.target.value)}
-                        placeholder="artifact slug"
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      disabled={registerBusy}
-                      onClick={() => void registerModelFromRun()}
-                    >
-                      {registerBusy ? 'Registering…' : 'Register'}
-                    </button>
-                  </div>
+                  {modelCandidates.length > 0 ? (
+                    <div className="space-y-1.5 border-t border-ink-100 pt-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                        Register a model branch
+                        {modelCandidates.length > 1 ? ` (${modelCandidates.length})` : ''}
+                      </div>
+                      {modelCandidates.length > 1 ? (
+                        <ul
+                          className="max-h-36 space-y-1 overflow-y-auto [scrollbar-gutter:stable]"
+                          role="radiogroup"
+                          aria-label="Model branch"
+                        >
+                          {modelCandidates.map((c) => {
+                            const active = (selectedPromoteCandidate?.id || '') === c.id
+                            return (
+                              <li key={c.id}>
+                                <label
+                                  className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] ${
+                                    active
+                                      ? 'border-accent-300 bg-accent-50/60'
+                                      : 'border-ink-200 hover:bg-ink-50'
+                                  }`}
+                                >
+                                  <input
+                                    type="radio"
+                                    className="mt-0.5"
+                                    name="promote-model-branch"
+                                    checked={active}
+                                    onChange={() => applyPromoteCandidate(c)}
+                                  />
+                                  <span className="min-w-0">
+                                    <span className="font-medium text-ink-900">{c.label}</span>
+                                    {c.pathHint || c.artifactSlug ? (
+                                      <span
+                                        className="mt-0.5 block truncate font-mono text-[11px] text-ink-400"
+                                        title={c.pathHint || c.artifactSlug}
+                                      >
+                                        {c.artifactSlug ? `${c.artifactSlug} · ` : ''}
+                                        {c.pathHint
+                                          ? c.pathHint.split('/').pop()
+                                          : 'artifact pack'}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </label>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      ) : (
+                        <p className="text-[12px] text-ink-600">
+                          {modelCandidates[0].label}
+                          {modelCandidates[0].pathHint
+                            ? ` · ${modelCandidates[0].pathHint.split('/').pop()}`
+                            : ''}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
+                          Name
+                          <input
+                            className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                            value={regModelName}
+                            onChange={(e) => setRegModelName(e.target.value)}
+                            placeholder="my-model"
+                          />
+                        </label>
+                        <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
+                          Artifact pack
+                          <input
+                            className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                            value={regModelSlug}
+                            onChange={(e) => setRegModelSlug(e.target.value)}
+                            placeholder="speech-commands"
+                            title="Workspace pack under artifacts/<slug>/runs/<run_id>"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          disabled={registerBusy}
+                          onClick={() => void registerModelFromRun()}
+                        >
+                          {registerBusy ? 'Registering…' : 'Register'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                   {runModels.length > 0 ? (
-                    <ul className="space-y-1">
-                      {runModels.map((m) => {
-                        const stages = m.stages || {}
-                        const stageBits = Object.entries(stages)
-                          .map(([k, v]) => `${k}${v?.slug ? `:${v.slug}` : ''}`)
-                          .join(' · ')
-                        return (
-                          <li
-                            key={m.name}
-                            className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-ink-50 px-2 py-1 text-[12px]"
-                          >
-                            <span className="font-medium text-ink-900">{m.name}</span>
-                            <span className="font-mono text-[11px] text-ink-500">{stageBits || 'registered'}</span>
-                          </li>
-                        )
-                      })}
-                    </ul>
+                    <div className="space-y-1.5 border-t border-ink-100 pt-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+                          Registered from this run
+                        </div>
+                        <button
+                          type="button"
+                          className="btn-quiet !px-1.5 !py-0.5 text-[11px]"
+                          onClick={() => goView('models')}
+                        >
+                          Open Models
+                        </button>
+                      </div>
+                      <ul className="space-y-1">
+                        {runModels.map((m) => {
+                          const stages = m.stages || {}
+                          const stageBits = Object.entries(stages)
+                            .map(([k, v]) => `${k}${v?.slug ? `:${v.slug}` : ''}`)
+                            .join(' · ')
+                          return (
+                            <li
+                              key={m.name}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-ink-50 px-2 py-1 text-[12px]"
+                            >
+                              <span className="font-medium text-ink-900">{m.name}</span>
+                              <span className="font-mono text-[11px] text-ink-500">
+                                {stageBits || 'registered'}
+                              </span>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </div>
                   ) : null}
                 </div>
               ) : null}
@@ -2038,119 +2202,80 @@ export default function RunsView() {
               )
             })()}
 
-            <div className="flex min-h-0 min-w-0 gap-3">
+            {isLiveRunStatus(runStatus) ? (
+              <LiveRunMonitor nodeStats={runNodeStats} workers={runWorkerEntries} />
+            ) : null}
+
+            <div className="flex min-h-0 flex-1 gap-3 overflow-hidden px-3 py-2">
               <PipelineStack
                 items={pipelineStackItems}
                 value={focusNodeId}
                 onChange={setFocusNodeId}
-                className="sticky top-[7.5rem] max-h-[calc(100vh-14rem)] self-start"
+                laneOf={isMultiTrackShape(pipelineShape) ? pipelineShape.laneOf : null}
+                className="min-h-0 max-h-full [scrollbar-gutter:stable]"
               />
-              <div className="min-w-0 flex-1 space-y-3">
+              <div
+                className={clsx(
+                  'min-h-0 min-w-0 flex-1 [scrollbar-gutter:stable]',
+                  panel === 'artifacts'
+                    ? 'flex flex-col overflow-hidden'
+                    : 'space-y-3 overflow-y-auto',
+                )}
+              >
             {panel === 'logs' && (
               <div className="space-y-2">
+                {visibleLogs.length > 0 ? (
+                  <p className="text-[11px] text-ink-500">
+                    {`${visibleLogs.length.toLocaleString()} line${visibleLogs.length === 1 ? '' : 's'}`}
+                    {focusNodeId ? (
+                      <>
+                        {' '}
+                        · <span className="font-medium text-ink-700">{focusLabel}</span>
+                      </>
+                    ) : isMultiTrackShape(pipelineShape) ? (
+                      <> · {pipelineShape.branches.length} paths in this run</>
+                    ) : null}
+                  </p>
+                ) : null}
                 <VirtualRunLogList
                   rows={visibleLogs}
                   emptyLabel={
                     focusNodeId
-                      ? `No logs for ${humanNodeLabel(focusNodeId)} — try All.`
+                      ? `No logs for ${focusLabel} — try All.`
                       : 'No logs recorded for this run.'
                   }
                 />
               </div>
             )}
-            {panel === 'debug' && (
-              <div className="space-y-3">
-                {!debug ? (
-                  <div className="text-sm text-ink-500">No summary report yet.</div>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-xl border border-ink-100 bg-white px-3 py-2 text-[12px]">
-                      {(
-                        [
-                          ['Artifacts', debug.artifact_count],
-                          ['Provenance', debug.provenance_count],
-                          ['Checkpoints', debug.checkpoint_count],
-                          ['Errors', debug.error_count],
-                        ] as Array<[string, unknown]>
-                      ).map(([label, val]) => (
-                        <div key={label} className="flex items-baseline gap-1.5">
-                          <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                            {label}
-                          </span>
-                          <span
-                            className={`tabular-nums font-semibold ${
-                              label === 'Errors' && Number(val || 0) > 0
-                                ? 'text-rose-700'
-                                : 'text-ink-900'
-                            }`}
-                          >
-                            {String(val ?? 0)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    {Number(debug.error_count || 0) > 0 ? (
-                      <button type="button" className="btn-primary" onClick={() => setPanel('logs')}>
-                        Jump to errors
-                      </button>
-                    ) : null}
-                    {Array.isArray(debug.recent_errors) && (debug.recent_errors as unknown[]).length > 0 && (
-                      <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Recent errors</div>
-                        <ul className="mt-1 space-y-1 font-mono text-[11px] text-rose-900">
-                          {(debug.recent_errors as Array<Record<string, unknown>>).slice(-5).map((e, i) => (
-                            <li key={i}>{String(e.message || JSON.stringify(e))}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {Array.isArray(debug.node_stats) && (debug.node_stats as unknown[]).length > 0 && (
-                      <div className="overflow-hidden rounded-xl border border-ink-200">
-                        <div className="border-b border-ink-100 bg-ink-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                          {focusNodeId ? 'Timing' : 'Slowest nodes'}
-                        </div>
-                        <ul className="divide-y divide-ink-100">
-                          {(debug.node_stats as Array<Record<string, unknown>>)
-                            .filter((n) => {
-                              if (!focusNodeId) return true
-                              return (
-                                focusMatchesNode(focusNodeId, String(n.node_id || '')) ||
-                                focusMatchesNode(focusNodeId, String(n.node_type || ''))
-                              )
-                            })
-                            .slice()
-                            .sort((a, b) => Number(b.duration_ms || 0) - Number(a.duration_ms || 0))
-                            .slice(0, focusNodeId ? 3 : 8)
-                            .map((n, i) => {
-                              const label = humanNodeLabel(String(n.node_type || n.node_id || `node-${i}`))
-                              return (
-                                <li
-                                  key={i}
-                                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm"
-                                  title={String(n.node_id || n.node_type || '')}
-                                >
-                                  <span className="min-w-0 truncate font-medium text-ink-900">{label}</span>
-                                  {n.duration_ms != null ? (
-                                    <span className="shrink-0 tabular-nums text-[11px] text-ink-500">
-                                      {Number(n.duration_ms).toLocaleString()} ms
-                                    </span>
-                                  ) : null}
-                                </li>
-                              )
-                            })}
-                        </ul>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
             {panel === 'checkpoints' && (
               <div className="space-y-2">
-                {checkpoints.length === 0 ? (
-                  <div className="text-sm text-ink-500">No checkpoints for this run.</div>
-                ) : (
-                  checkpoints.map((c) => {
+                {(() => {
+                  const visible = focusNodeId
+                    ? checkpoints.filter((c) => focusMatchesNode(focusNodeId, c))
+                    : checkpoints
+                  if (checkpoints.length === 0) {
+                    return (
+                      <div className="space-y-1 text-sm text-ink-500">
+                        <p>
+                          {focusNodeId
+                            ? `No checkpoints for ${focusLabel}.`
+                            : 'No resume checkpoints for this run.'}
+                        </p>
+                        <p className="text-[12px] text-ink-400">
+                          Optional — many workflows (preprocess, export, one-shot graphs) never write
+                          them. Use Run outputs for the files this run produced.
+                        </p>
+                      </div>
+                    )
+                  }
+                  if (visible.length === 0) {
+                    return (
+                      <div className="text-sm text-ink-500">
+                        No checkpoints for {focusLabel} — select All or another step.
+                      </div>
+                    )
+                  }
+                  return visible.map((c) => {
                     const active = focusMatchesNode(focusNodeId, c)
                     return (
                       <button
@@ -2164,16 +2289,16 @@ export default function RunsView() {
                           void loadCheckpointSamples(c)
                         }}
                       >
-                        {humanNodeLabel(c)}
+                        {displayNodeLabel(c, { withCue: true })}
                       </button>
                     )
                   })
-                )}
+                })()}
                 {samples != null && <CollapsibleJson value={samples} label="Samples" />}
               </div>
             )}
             {panel === 'artifacts' && (
-              <div className="space-y-3">
+              <div className="flex min-h-0 flex-1 flex-col gap-3">
                 {(() => {
                   const artifactsDir =
                     (typeof detail?.artifacts_dir === 'string' && detail.artifacts_dir) ||
@@ -2224,10 +2349,13 @@ export default function RunsView() {
                         groups.keys(),
                       ).filter((k) => k !== 'run')
                     : orderOutputGroups(execOrder, groups.keys())
-                  const firstWithFiles = order.find((g) => (groups.get(g) || []).length > 0)
+                  // Only files visible for the current focus — never keep a prior step's
+                  // selection (e.g. 7.wav) while showing "No file outputs" for another node.
+                  const visibleFiles = order.flatMap((g) => groups.get(g) || [])
                   const selectedFile =
-                    allFiles.find((f) => f.path === selectedOutputPath) ||
-                    (firstWithFiles ? (groups.get(firstWithFiles) || [])[0] : undefined)
+                    (selectedOutputPath
+                      ? visibleFiles.find((f) => f.path === selectedOutputPath)
+                      : undefined) || visibleFiles[0]
 
                   const showAllForNode = async (nid: string) => {
                     if (!selected) return
@@ -2285,23 +2413,26 @@ export default function RunsView() {
                         <button
                           type="button"
                           className="font-medium text-accent-800 hover:underline"
+                          title="Zip with one folder per pipeline step (prioritised; huge wav trees may be capped)"
                           onClick={() => void downloadZip()}
                         >
-                          Download all
+                          Download zip
                         </button>
                       </div>
                     )
                   }
 
+                  const activePath = selectedFile?.path ?? null
                   const renderFileList = (files: OutputFile[], group: string) => (
                     <ul className="space-y-1">
                       {files.map((f) => {
-                        const active = selectedOutputPath === f.path
+                        const active = activePath === f.path
+                        const cue = group === 'run' ? runLevelFileCue(f.name) : null
                         return (
                           <li key={`${f.path}-${f.name}`}>
                             <button
                               type="button"
-                              className={`w-full rounded-lg border px-2.5 py-2 text-left transition ${
+                              className={`w-full min-w-0 rounded-lg border px-2.5 py-2 text-left transition ${
                                 active
                                   ? 'border-accent-400 bg-accent-50/60 shadow-sm'
                                   : 'border-ink-100 bg-white hover:border-ink-200'
@@ -2311,16 +2442,26 @@ export default function RunsView() {
                                 if (group !== 'run') setFocusNodeId(group)
                               }}
                             >
-                              <div className="truncate text-sm font-medium text-ink-900">{f.name}</div>
+                              <div className="truncate text-sm font-medium text-ink-900">
+                                {cue ? cue.title : f.name}
+                              </div>
+                              {cue ? (
+                                <div className="truncate text-[11px] text-ink-500" title={cue.hint}>
+                                  {cue.hint}
+                                </div>
+                              ) : null}
                               <div
                                 className="truncate font-mono text-[10px] text-ink-400"
                                 title={f.path}
                               >
-                                {shortOutputPath(f.path, { runId: selected })}
+                                {cue ? f.name : shortOutputPath(f.path, { runId: selected })}
+                                {cue ? ` · ${formatBytes(f.size)}` : null}
                               </div>
-                              <div className="text-[11px] text-ink-500">
-                                {f.kind} · {formatBytes(f.size)}
-                              </div>
+                              {!cue ? (
+                                <div className="text-[11px] text-ink-500">
+                                  {f.kind} · {formatBytes(f.size)}
+                                </div>
+                              ) : null}
                             </button>
                           </li>
                         )
@@ -2330,64 +2471,71 @@ export default function RunsView() {
 
                   return (
                     <>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          {displayPath ? (
-                            <div className="truncate font-mono text-[11px] text-ink-500">{displayPath}</div>
-                          ) : null}
-                          {isLatest ? (
-                            <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                              Latest
-                            </span>
-                          ) : null}
-                          {focusNodeId ? (
-                            <div className="mt-1 text-[11px] text-ink-500">
-                              Showing files for{' '}
-                              <span className="font-medium text-ink-800">
-                                {humanNodeLabel(focusNodeId)}
-                              </span>
-                              {' · '}
-                              <button
-                                type="button"
-                                className="text-accent-800 underline-offset-2 hover:underline"
-                                onClick={() => setFocusNodeId(null)}
-                              >
-                                Show all
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                        {outputFiles.length > 0 && (
-                          <button type="button" className="btn-secondary" onClick={() => void downloadZip()}>
-                            <Download className="h-3.5 w-3.5" /> Download all
+                      <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-ink-500">
+                        {displayPath ? (
+                          <span className="min-w-0 truncate font-mono" title={displayPath}>
+                            {displayPath}
+                          </span>
+                        ) : null}
+                        {isLatest ? (
+                          <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                            Latest
+                          </span>
+                        ) : null}
+                        {focusNodeId ? (
+                          <span className="shrink-0">
+                            {focusLabel}
+                            {' · '}
+                            <button
+                              type="button"
+                              className="font-medium text-accent-800 underline-offset-2 hover:underline"
+                              onClick={() => setFocusNodeId(null)}
+                            >
+                              Show all
+                            </button>
+                          </span>
+                        ) : null}
+                        {outputFiles.length > 0 ? (
+                          <button
+                            type="button"
+                            className="btn-quiet ml-auto !px-2 !py-0.5 text-[11px]"
+                            title="Zip with one folder per pipeline step (prioritised; huge wav trees may be capped)"
+                            onClick={() => void downloadZip()}
+                          >
+                            <Download className="h-3.5 w-3.5" /> Download zip
                           </button>
-                        )}
+                        ) : null}
                       </div>
-                      {outputsMeta.truncated ? (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] text-amber-950">
+                      {outputsMeta.truncated && !(focusNodeId && visibleFiles.length === 0) ? (
+                        <p className="shrink-0 truncate text-[11px] text-amber-900">
                           {Object.keys(outputsMeta.byNode).filter((k) => !looksLikeOpaqueId(k)).length > 0
-                            ? 'Some steps have more files than shown below — use Show all on that step, or Download all.'
-                            : 'The file listing was capped by the server — use Download all for every file.'}
-                        </div>
+                            ? 'Some steps have more files than shown — Show all on that step, or Download zip.'
+                            : 'Listing capped here — Download zip packs more (still prioritised; not every wav).'}
+                        </p>
                       ) : null}
-                      {order.length === 0 ? (
+                      {order.length === 0 || (focusNodeId && visibleFiles.length === 0) ? (
                         <div className="text-sm text-ink-500">
                           {focusNodeId
-                            ? `No file outputs for ${humanNodeLabel(focusNodeId)} (in-memory only) — select All or another step on the left.`
+                            ? `No file outputs for ${focusLabel} — data stayed in memory. Choose All or another step.`
                             : 'No downloadable files for this run.'}
                         </div>
                       ) : (
                         <SplitPane
-                          className="min-h-[20rem] rounded-xl border border-ink-200"
-                          defaultSize={280}
-                          minSize={200}
-                          maxSize={420}
+                          className="min-h-0 flex-1 rounded-xl border border-ink-200"
+                          defaultSize={240}
+                          minSize={180}
+                          maxSize={320}
+                          secondaryMinSize={320}
                           storageKey="graphyn.layout.nested"
+                          paneOverflow="hidden"
                         >
                           {[
-                            <div key="list" className="space-y-3 p-2">
+                            <div key="list" className="h-full min-w-0 space-y-3 overflow-x-hidden overflow-y-auto p-2 [scrollbar-gutter:stable]">
                               {order.map((group) => {
                                 const files = groups.get(group) || []
+                                const groupLabel =
+                                  pipelineStackItems.find((it) => focusMatchesNode(group, it.id))
+                                    ?.label || displayNodeLabel(group, { withCue: true })
                                 if (group === 'run') {
                                   return (
                                     <div
@@ -2395,10 +2543,10 @@ export default function RunsView() {
                                       className="rounded-xl border border-dashed border-ink-200 bg-ink-50/50 p-2"
                                     >
                                       <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                                        Run-level
+                                        Whole run
                                       </div>
                                       <p className="mb-2 text-[11px] text-ink-400">
-                                        Journal / graph / summary for the whole run — not a node’s I/O.
+                                        Graph, summary, and replay records for the entire run — not one step’s files.
                                       </p>
                                       {renderFileList(files, 'run')}
                                     </div>
@@ -2408,13 +2556,13 @@ export default function RunsView() {
                                   return (
                                     <div key={group} className="space-y-1">
                                       <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                                        {humanNodeLabel(group)}
+                                        {groupLabel}
                                       </div>
                                       <p
                                         className="rounded-lg border border-dashed border-ink-200 px-2.5 py-1.5 text-[11px] text-ink-400"
                                         title="This step passed its results to the next node in memory and wrote no files"
                                       >
-                                        No file outputs (in-memory)
+                                        Passed data in memory (no files)
                                       </p>
                                     </div>
                                   )
@@ -2433,7 +2581,7 @@ export default function RunsView() {
                                         className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 hover:text-ink-800"
                                         onClick={() => setFocusNodeId(group)}
                                       >
-                                        {humanNodeLabel(group)}
+                                        {groupLabel}
                                       </button>
                                     ) : null}
                                     {outputs.length > 0 ? (
@@ -2457,7 +2605,7 @@ export default function RunsView() {
                                 )
                               })}
                             </div>,
-                            <div key="preview" className="p-2">
+                            <div key="preview" className="h-full min-w-0 overflow-x-hidden overflow-y-auto p-2 [scrollbar-gutter:stable]">
                               {selectedFile ? (
                                 <FileViewer
                                   path={selectedFile.path}
@@ -2486,11 +2634,48 @@ export default function RunsView() {
                     : null) ||
                   (detail as Record<string, unknown> | null)
                 }
+                outputFiles={outputFiles}
+                fileTotalsByNode={Object.fromEntries(
+                  Object.entries(outputsMeta.byNode).map(([nid, t]) => [nid, t.total]),
+                )}
+                orderedNodeIds={pipelineStackItems.map((i) => i.id)}
+                graphEdges={
+                  stackGraph && Array.isArray(stackGraph.edges) && stackGraph.edges.length > 0
+                    ? (stackGraph.edges as Array<{ src_id?: unknown; dst_id?: unknown }>)
+                    : null
+                }
+                labelFor={(id) =>
+                  pipelineStackItems.find((i) => focusMatchesNode(id, i.id))?.label
+                }
+                onFocusStep={setFocusNodeId}
+                onBrowseOutputs={(nodeId) => {
+                  setFocusNodeId(nodeId || null)
+                  setPanel('artifacts')
+                }}
+                overview={{
+                  artifactCount:
+                    typeof debug?.artifact_count === 'number' ? debug.artifact_count : undefined,
+                  provenanceCount:
+                    typeof debug?.provenance_count === 'number' ? debug.provenance_count : undefined,
+                  checkpointCount:
+                    typeof debug?.checkpoint_count === 'number' ? debug.checkpoint_count : undefined,
+                  errorCount: typeof debug?.error_count === 'number' ? debug.error_count : undefined,
+                  metrics: runMetrics,
+                  recentErrors: Array.isArray(debug?.recent_errors)
+                    ? (debug.recent_errors as Array<Record<string, unknown>>)
+                    : undefined,
+                  nodeStats: Array.isArray(debug?.node_stats)
+                    ? (debug.node_stats as Array<Record<string, unknown>>)
+                    : runNodeStats,
+                  // Chrome "Register model" is the single entry — no duplicate Overview banner.
+                  showRegisterCta: false,
+                  onJumpLogs: () => setPanel('logs'),
+                }}
               />
             ) : null}
               </div>
             </div>
-          </>
+          </div>
         )}
         </>
       }

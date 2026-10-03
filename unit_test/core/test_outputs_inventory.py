@@ -285,3 +285,115 @@ def test_shared_models_dir_trainer_vs_model_builder(tmp_workspace, monkeypatch):
     assert entries.get("model.keras") == "trainer_y"
     assert entries.get("best.keras") == "trainer_y"
     assert entries.get("compiled_abc.keras") == "model_builder_x"
+
+
+def test_pack_outputs_zip_uses_node_subfolders(tmp_workspace, monkeypatch):
+    """Zip members are ``<node_id>/<filename>`` so same basenames do not collide."""
+    import io
+    import zipfile
+    from unittest.mock import patch
+
+    import app.core.runs.run_outputs as ro
+
+    run_id = "zipnodes001"
+    run_dir = tmp_workspace / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    a = tmp_workspace / "artifacts" / "a" / "best.keras"
+    b = tmp_workspace / "artifacts" / "b" / "best.keras"
+    a.parent.mkdir(parents=True)
+    b.parent.mkdir(parents=True)
+    a.write_bytes(b"model-a")
+    b.write_bytes(b"model-b")
+    (run_dir / "meta.json").write_text('{"run_id":"%s","status":"completed"}' % run_id)
+    (run_dir / "graph.json").write_text("{}", encoding="utf-8")
+
+    entries = [
+        {"name": "best.keras", "path": str(a), "kind": "file", "size": 7, "node_id": "trainer_0"},
+        {"name": "best.keras", "path": str(b), "kind": "file", "size": 7, "node_id": "trainer_b66a5330"},
+    ]
+
+    def _resolve(raw: str):
+        return Path(raw).resolve()
+
+    with patch.object(ro, "resolve_download_path", side_effect=_resolve):
+        payload, truncated, packed = ro.pack_outputs_zip(entries)
+    assert truncated is False
+    assert packed == 2
+    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+        names = sorted(zf.namelist())
+        assert names == ["trainer_0/best.keras", "trainer_b66a5330/best.keras"]
+        assert zf.read("trainer_0/best.keras") == b"model-a"
+        assert zf.read("trainer_b66a5330/best.keras") == b"model-b"
+
+
+def test_zip_listing_expands_beyond_ui_sample_cap(tmp_workspace, monkeypatch):
+    """UI sample_cap=32 must not starve zip of Dataset Ingest clips."""
+    import json
+    from unittest.mock import MagicMock, patch
+
+    import app.core.runs.run_outputs as ro
+    from app.core.artifacts.artifact_serializer import FileListing, FileListingEntry
+
+    run_id = "zipsample001"
+    run_dir = tmp_workspace / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "meta.json").write_text(json.dumps({"run_id": run_id, "status": "completed"}))
+    (run_dir / "graph.json").write_text("{}", encoding="utf-8")
+    data = tmp_workspace / "artifacts" / "ingest" / "data"
+    data.mkdir(parents=True)
+    (data / "manifest.json").write_text("{}", encoding="utf-8")
+    paths = []
+    for i in range(80):
+        p = data / f"{i}.wav"
+        p.write_bytes(b"RIFF")
+        paths.append(p)
+
+    listing = FileListing(
+        total=81,
+        entries=[FileListingEntry(path=data / "manifest.json", name="manifest.json")]
+        + [FileListingEntry(path=p, name=p.name) for p in paths],
+    )
+    handler = MagicMock()
+    handler.list_files.return_value = listing
+    registry = MagicMock()
+    registry.get.return_value = handler
+
+    index = {
+        "schema_version": 2,
+        "artifacts": [
+            {
+                "node_id": "dataset_ingest_0",
+                "artifact_type": "audio_samples",
+                "data_path": str(data),
+            }
+        ],
+    }
+
+    with (
+        patch(
+            "app.core.runs.outputs_index.ensure_outputs_index",
+            return_value=index,
+        ),
+        patch(
+            "app.core.runs.outputs_index.artifacts_from_index",
+            return_value=index["artifacts"],
+        ),
+        patch(
+            "app.core.artifacts.artifact_serializer.get_serializer_registry",
+            return_value=registry,
+        ),
+        patch.object(ro, "_collect_listed_paths", return_value=[]),
+        patch.object(ro, "_collect_configured_write_files"),
+        patch.object(ro, "_load_run_graph", return_value={"nodes": [], "edges": []}),
+        patch.object(ro, "_resolve_attributed_node", side_effect=lambda path, nid, *_a, **_k: nid),
+        patch.object(ro, "is_under_jail", return_value=True),
+        patch.object(ro, "_allowed_file", return_value=True),
+    ):
+        ui = ro.list_run_output_files(run_id, run_dir)
+        zip_entries, _truncated = ro.list_run_output_files_for_zip(run_id, run_dir)
+
+    ui_n = sum(1 for e in ui if e.get("node_id") == "dataset_ingest_0")
+    zip_n = sum(1 for e in zip_entries if e.get("node_id") == "dataset_ingest_0")
+    assert ui_n <= 32
+    assert zip_n > 32
+    assert zip_n == 81

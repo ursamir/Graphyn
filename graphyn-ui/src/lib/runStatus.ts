@@ -52,5 +52,7 @@ export function isTerminalRunStatus(raw: unknown): boolean {
 export function statusMatchesFilter(raw: unknown, filter: string): boolean {
   const needle = filter.trim().toLowerCase()
   if (!needle || needle === 'all') return true
+  // Active = in-flight (running / queued / paused) — replaces the old Live tab filter.
+  if (needle === 'active') return isLiveRunStatus(raw)
   return normalizeRunStatus(raw) === normalizeRunStatus(needle)
 }

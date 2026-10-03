@@ -1,6 +1,6 @@
 /**
  * Shared layout storage keys — one master divider width across the console.
- * Views should use these instead of page-local keys so History/Live/Compare
+ * Views should use these instead of page-local keys so Runs list|detail
  * and Library screens stay visually aligned.
  */
 export const LAYOUT_KEYS = {

@@ -17,6 +17,11 @@ import {
   Rows3,
   Search,
   Star,
+  FolderOpen as EmptyFolderOpen,
+  SearchX as EmptySearchX,
+  History as EmptyHistory,
+  Camera as EmptyCamera,
+  GitCompare as EmptyGitCompare,
 } from 'lucide-react'
 import { ApiError, apiJson } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
@@ -25,9 +30,11 @@ import type { GraphIR } from '../../types/graph'
 import {
   ConfirmButton,
   CollapsibleJson,
+  EmptyState,
   ErrorBanner,
   KeyValue,
   LoadingBlock,
+  SegmentedTabs,
   StatusBadge,
 } from '../../components/ui'
 import { paths } from '../../routes/paths'
@@ -85,6 +92,15 @@ const SORT_LABEL: Record<WorkspaceSort, string> = {
 type Tab = 'spec' | 'taxonomy' | 'contract' | 'versions' | 'snapshots' | 'diff'
 
 const TABS: Tab[] = ['spec', 'taxonomy', 'contract', 'versions', 'snapshots', 'diff']
+
+const DOC_TAB_OPTIONS: { id: Tab; label: string }[] = [
+  { id: 'versions', label: 'Versions' },
+  { id: 'spec', label: 'Spec' },
+  { id: 'taxonomy', label: 'Taxonomy' },
+  { id: 'contract', label: 'Contract' },
+  { id: 'snapshots', label: 'Snapshots' },
+  { id: 'diff', label: 'Diff' },
+]
 
 /** API ProjectManager.set_status enum (never 'active'). */
 const STATUSES = ['draft', 'in-progress', 'ready', 'archived'] as const
@@ -1217,17 +1233,18 @@ export default function ProjectsView() {
     }
 
     return (
-      <div className="h-full min-h-0 overflow-y-auto">
-        <div className="mx-auto max-w-[92rem] space-y-6 px-6 py-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex h-full min-h-0 flex-col bg-white">
+        <div className="shrink-0 border-b border-ink-200/80 bg-white px-4 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
-              <h1 className="text-type-page text-ink-950">Workspaces</h1>
-              <p className="mt-1 max-w-2xl text-type-body text-ink-500">
-                Every workspace on this API. A workspace holds its own pipelines, linked datasets and
-                run history — Editor and Runs stay greyed out in the sidebar until one is open.
+              <h1 className="text-[15px] font-semibold leading-tight tracking-tight text-ink-950">
+                Workspaces
+              </h1>
+              <p className="mt-0.5 max-w-2xl text-type-meta text-ink-500">
+                Open a workspace for Editor and Runs. Each holds pipelines, datasets, and run history.
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
                 className="btn-quiet"
@@ -1250,6 +1267,8 @@ export default function ProjectsView() {
               </button>
             </div>
           </div>
+        </div>
+        <div className="workbench-scroll space-y-4">
 
           {error && (
             <ErrorBanner
@@ -1400,39 +1419,40 @@ export default function ProjectsView() {
               {loading || projects == null ? (
                 <LoadingBlock label="Loading workspaces…" />
               ) : list.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-ink-300 bg-white px-6 py-10 text-center">
-                  <h2 className="text-base font-semibold text-ink-950">No workspaces yet</h2>
-                  <p className="mx-auto mt-1 max-w-md text-[13px] text-ink-500">
-                    {authBlocked
+                <EmptyState
+                  icon={EmptyFolderOpen}
+                  title="No workspaces yet"
+                  description={
+                    authBlocked
                       ? 'Sign in via Settings to list workspaces.'
-                      : 'Create one above to start building pipelines, or open a template to see how one is put together.'}
-                  </p>
-                  <div className="mt-4 flex flex-wrap justify-center gap-2">
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={() => nameRef.current?.focus()}
-                    >
-                      <Plus className="h-3.5 w-3.5" /> New workspace
-                    </button>
-                    <button type="button" className="btn-secondary" onClick={goTemplates}>
-                      Browse templates
-                    </button>
-                  </div>
-                </div>
+                      : 'Create one above to start building pipelines, or open a template to see how one is put together.'
+                  }
+                  action={
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => nameRef.current?.focus()}
+                      >
+                        <Plus className="h-3.5 w-3.5" /> New workspace
+                      </button>
+                      <button type="button" className="btn-secondary" onClick={goTemplates}>
+                        Browse templates
+                      </button>
+                    </>
+                  }
+                />
               ) : sorted.length === 0 ? (
-                <div className="rounded-2xl border border-ink-200/80 bg-white px-6 py-10 text-center">
-                  <p className="text-[13px] text-ink-600">
-                    No workspaces match “{projectFilter.trim()}”.
-                  </p>
-                  <button
-                    type="button"
-                    className="btn-secondary mt-3"
-                    onClick={() => setProjectFilter('')}
-                  >
-                    Clear search
-                  </button>
-                </div>
+                <EmptyState
+                  icon={EmptySearchX}
+                  title="No matching workspaces"
+                  description={`No workspaces match “${projectFilter.trim()}”.`}
+                  action={
+                    <button type="button" className="btn-secondary" onClick={() => setProjectFilter('')}>
+                      Clear search
+                    </button>
+                  }
+                />
               ) : dense ? (
                 <ul className="divide-y divide-ink-100 rounded-2xl border border-ink-200/80 bg-white shadow-sm">
                   {sorted.map((p) => (
@@ -1537,11 +1557,22 @@ export default function ProjectsView() {
                     <LoadingBlock label="Loading activity…" />
                   </div>
                 ) : feed.length === 0 ? (
-                  <p className="px-4 py-5 text-[12px] text-ink-500">
-                    {activityFilter === 'failed'
-                      ? 'No failed runs in recent history.'
-                      : 'No runs recorded against a workspace yet.'}
-                  </p>
+                  <div className="px-2 py-3">
+                    <EmptyState
+                      compact
+                      icon={EmptyHistory}
+                      title={
+                        activityFilter === 'failed'
+                          ? 'No failed runs'
+                          : 'No activity yet'
+                      }
+                      description={
+                        activityFilter === 'failed'
+                          ? 'Nothing failed in recent history across workspaces.'
+                          : 'Runs from any workspace appear here once recorded.'
+                      }
+                    />
+                  </div>
                 ) : (
                   <ul className="divide-y divide-ink-100">
                     {feed.slice(0, 14).map((r) => (
@@ -1659,17 +1690,19 @@ export default function ProjectsView() {
   const prodHint = projectPipelines.find((p) => p.environments?.prod)?.environments?.prod
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-ink-200/60 bg-white/80 px-6 py-4 backdrop-blur-md">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex h-full min-h-0 flex-col bg-white">
+      <div className="shrink-0 border-b border-ink-200/80 bg-white px-4 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
-            <h1 className="truncate text-type-page text-ink-950">{selected}</h1>
-            <p className="mt-0.5 text-type-meta text-ink-400">
+            <h1 className="truncate text-[15px] font-semibold leading-tight tracking-tight text-ink-950">
+              {selected}
+            </h1>
+            <p className="mt-0.5 text-type-meta text-ink-500">
               Workspace · {statusVal}
               {versionFocus ? ` · ${versionFocus}` : ''}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button type="button" className="btn-primary" onClick={goEditor}>
               <Workflow className="h-3.5 w-3.5" /> Open Editor
             </button>
@@ -1794,19 +1827,9 @@ export default function ProjectsView() {
 
           {/* Activity feed */}
           <section>
-            {/* Activity was the one section with no way out of it: eight rows, then
-                nothing. Runs (full history + filters) and Artifacts (what those runs
-                produced) are both one click from here now. */}
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div className="ide-section-title">Activity</div>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="ide-quiet-btn text-[11px]"
-                  onClick={() => useAppStore.getState().openArtifacts({ project: selected })}
-                >
-                  Browse artifacts
-                </button>
                 <button
                   type="button"
                   className="ide-quiet-btn text-[11px]"
@@ -1826,9 +1849,17 @@ export default function ProjectsView() {
               {opening ? (
                 <div className="px-4 py-5 text-[13px] text-ink-400">Loading…</div>
               ) : recentRuns.length === 0 && !schedules.some((s) => s.last_run_id) ? (
-                <div className="px-4 py-5 text-[13px] text-ink-600">
-                  No activity yet — run a pipeline from the Editor.
-                </div>
+                <EmptyState
+                  compact
+                  icon={EmptyHistory}
+                  title="No activity yet"
+                  description="Run a pipeline from the Editor."
+                  action={
+                    <button type="button" className="btn-secondary" onClick={goEditor}>
+                      Open Editor
+                    </button>
+                  }
+                />
               ) : (
                 <ul className="divide-y divide-ink-100">
                   {recentRuns.slice(0, 8).map((r) => (
@@ -1912,13 +1943,17 @@ export default function ProjectsView() {
               {opening ? (
                 <div className="px-4 py-5 text-[13px] text-ink-400">Loading…</div>
               ) : projectPipelines.length === 0 ? (
-                <div className="px-4 py-5 text-[13px] text-ink-600">
-                  No pipelines yet.{' '}
-                  <button type="button" className="font-medium text-accent-800 hover:underline" onClick={goTemplates}>
-                    Start from a template
-                  </button>
-                  .
-                </div>
+                <EmptyState
+                  compact
+                  icon={Workflow}
+                  title="No pipelines yet"
+                  description="Start from a template or open the Editor."
+                  action={
+                    <button type="button" className="btn-secondary" onClick={goTemplates}>
+                      Start from a template
+                    </button>
+                  }
+                />
               ) : (
                 <ul className="divide-y divide-ink-100">
                   {sortedPipelines.slice(0, 8).map((p) => {
@@ -2048,17 +2083,17 @@ export default function ProjectsView() {
                 const projectSchedules = schedules.filter((s) => String(s.project || '') === selected)
                 if (projectSchedules.length === 0) {
                   return (
-                    <div className="px-4 py-4 text-[13px] text-ink-500">
-                      No schedules for this workspace yet. Create one under Ops, or run on demand from the
-                      Editor.{' '}
-                      <button
-                        type="button"
-                        className="font-medium text-accent-800 hover:underline"
-                        onClick={() => goView('system')}
-                      >
-                        Open Ops
-                      </button>
-                    </div>
+                    <EmptyState
+                      compact
+                      icon={CalendarClock}
+                      title="No schedules"
+                      description="Create one under Ops, or run on demand from the Editor."
+                      action={
+                        <button type="button" className="btn-secondary" onClick={() => goView('system')}>
+                          Open Ops
+                        </button>
+                      }
+                    />
                   )
                 }
                 return (
@@ -2143,9 +2178,14 @@ export default function ProjectsView() {
                   as the card header's "Open Datasets", one row apart. */}
             </div>
             {links.inputs.length === 0 && (
-              <p className="mt-2 rounded-lg border border-dashed border-ink-200 bg-ink-50/50 px-3 py-2 text-[12px] text-ink-600">
-                No inputs pinned yet. Pick a label above, or open Datasets and come back to Link.
-              </p>
+              <div className="mt-2">
+                <EmptyState
+                  compact
+                  icon={Database}
+                  title="No inputs pinned"
+                  description="Pick a label above, or open Datasets and come back to Link."
+                />
+              </div>
             )}
             {links.inputs.length > 0 && (
               <ul className="mt-2 flex flex-wrap gap-1.5">
@@ -2196,27 +2236,13 @@ export default function ProjectsView() {
               </span>
             </summary>
             <div className="space-y-3 border-t border-ink-100 px-4 pb-4 pt-3">
-              <div className="flex flex-wrap gap-1 border-b border-ink-100 pb-2">
-                {(
-                  [
-                    ['versions', 'Versions'],
-                    ['spec', 'Spec'],
-                    ['taxonomy', 'Taxonomy'],
-                    ['contract', 'Contract'],
-                    ['snapshots', 'Snapshots'],
-                    ['diff', 'Diff'],
-                  ] as const
-                ).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={tab === id ? 'tab-pill tab-pill-on' : 'tab-pill'}
-                    onClick={() => setTab(id)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <SegmentedTabs
+                value={tab}
+                options={DOC_TAB_OPTIONS}
+                onChange={setTab}
+                aria-label="Spec and metadata"
+                className="border-b border-ink-100 pb-2"
+              />
 
               {tab === 'spec' && (
                 <section className="space-y-2">
@@ -2265,7 +2291,12 @@ export default function ProjectsView() {
                     </div>
                   )}
                   {versions.length === 0 ? (
-                    <p className="text-[13px] text-ink-500">No versions yet — run a pipeline that writes dataset output.</p>
+                    <EmptyState
+                      compact
+                      icon={Database}
+                      title="No dataset versions"
+                      description="Run a pipeline that writes dataset output."
+                    />
                   ) : (
                     <KeyValue data={versions} />
                   )}
@@ -2288,7 +2319,7 @@ export default function ProjectsView() {
                     </button>
                   </div>
                   {snapshots.length === 0 ? (
-                    <p className="text-[13px] text-ink-500">No snapshots.</p>
+                    <EmptyState compact icon={EmptyCamera} title="No snapshots" description="Create one above to pin dataset state." />
                   ) : (
                     <ul className="space-y-1">
                       {snapshots.map((s, i) => {
@@ -2327,7 +2358,12 @@ export default function ProjectsView() {
                       <button type="button" className="btn-secondary" onClick={() => void runDiff()}>Diff</button>
                     </div>
                   ) : (
-                    <p className="text-[13px] text-ink-500">Need at least 2 dataset versions to diff — run a pipeline that writes dataset output more than once.</p>
+                    <EmptyState
+                      compact
+                      icon={EmptyGitCompare}
+                      title="Need two versions"
+                      description="Run a pipeline that writes dataset output more than once, then compare versions here."
+                    />
                   )}
                   {diffResult != null && <KeyValue data={diffResult} />}
                   {(() => {
@@ -2338,13 +2374,21 @@ export default function ProjectsView() {
                         {ids.runId ? (
                           <button type="button" className="btn-secondary" onClick={() => openTrace({ runId: ids.runId })}>Open Lineage</button>
                         ) : null}
-                        {ids.artifactId || ids.runId ? (
+                        {ids.runId ? (
                           <button
                             type="button"
                             className="btn-secondary"
-                            onClick={() => openArtifacts({ runId: ids.runId, artifactId: ids.artifactId })}
+                            onClick={() => openArtifacts({ runId: ids.runId })}
                           >
-                            Open Artifacts
+                            Run outputs
+                          </button>
+                        ) : ids.artifactId ? (
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => openArtifacts({ artifactId: ids.artifactId })}
+                          >
+                            Run outputs
                           </button>
                         ) : null}
                       </div>

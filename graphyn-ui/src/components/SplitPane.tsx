@@ -12,6 +12,11 @@ type SplitPaneProps = {
   defaultSize?: number
   minSize?: number
   maxSize?: number
+  /**
+   * Minimum px reserved for the secondary pane when clamping against the container.
+   * Nested file|preview splits should pass a larger value (~320) so the preview stays usable.
+   */
+  secondaryMinSize?: number
   orientation?: 'horizontal' | 'vertical'
   storageKey?: string
   className?: string
@@ -35,11 +40,15 @@ function readStored(key: string | undefined, fallback: number): number {
   }
 }
 
+const DEFAULT_SECONDARY_MIN_PX = 240
+const HANDLE_PX = 4
+
 export function SplitPane({
   children,
   defaultSize = 320,
   minSize = 180,
   maxSize = 720,
+  secondaryMinSize = DEFAULT_SECONDARY_MIN_PX,
   orientation = 'horizontal',
   storageKey,
   className,
@@ -47,15 +56,46 @@ export function SplitPane({
   paneOverflow = 'auto',
 }: SplitPaneProps) {
   const [size, setSize] = React.useState(() => readStored(storageKey, defaultSize))
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const [containerSpan, setContainerSpan] = React.useState(0)
   const dragging = React.useRef(false)
   const startPos = React.useRef(0)
   const startSize = React.useRef(size)
   const skipBroadcast = React.useRef(false)
 
+  React.useLayoutEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const measure = () => {
+      const rect = el.getBoundingClientRect()
+      setContainerSpan(orientation === 'horizontal' ? rect.width : rect.height)
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [orientation])
+
   const clamp = React.useCallback(
-    (n: number) => Math.max(minSize, Math.min(maxSize, n)),
-    [minSize, maxSize],
+    (n: number) => {
+      let hi = maxSize
+      if (containerSpan > 0) {
+        // Keep secondary pane usable even when localStorage still has a wide Runs/master width.
+        const reserved = Math.max(80, secondaryMinSize)
+        hi = Math.min(maxSize, Math.max(minSize, containerSpan - HANDLE_PX - reserved))
+      }
+      return Math.max(minSize, Math.min(hi, n))
+    },
+    [minSize, maxSize, containerSpan, secondaryMinSize],
   )
+
+  React.useEffect(() => {
+    if (containerSpan <= 0) return
+    setSize((s) => {
+      const next = clamp(s)
+      return next === s ? s : next
+    })
+  }, [clamp, containerSpan])
 
   React.useEffect(() => {
     if (!storageKey) return
@@ -124,8 +164,11 @@ export function SplitPane({
   const [first, second] = children
   const paneOverflowClass = paneOverflow === 'hidden' ? 'overflow-hidden' : 'overflow-auto'
 
+  const applied = clamp(size)
+
   return (
     <div
+      ref={rootRef}
       className={clsx(
         'flex min-h-0 min-w-0 overflow-hidden',
         horizontal ? 'flex-row' : 'flex-col',
@@ -133,15 +176,15 @@ export function SplitPane({
       )}
     >
       <div
-        className={clsx('min-h-0 min-w-0', paneOverflowClass, horizontal ? 'shrink-0' : 'shrink-0')}
-        style={horizontal ? { width: size } : { height: size }}
+        className={clsx('min-h-0 min-w-0 overflow-hidden', paneOverflowClass, 'shrink-0')}
+        style={horizontal ? { width: applied, maxWidth: applied } : { height: applied, maxHeight: applied }}
       >
         {first}
       </div>
       <div
         role="separator"
         aria-orientation={horizontal ? 'vertical' : 'horizontal'}
-        aria-valuenow={Math.round(size)}
+        aria-valuenow={Math.round(applied)}
         tabIndex={0}
         title="Drag to resize"
         className={clsx(

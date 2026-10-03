@@ -5,7 +5,16 @@ import { Download, RefreshCw, PackagePlus, MoreHorizontal, Search, Trash2 } from
 import { ApiError, apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
 import { useMenuDismiss } from '../../lib/menus'
-import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader, StatusBadge } from '../../components/ui'
+import {
+  ConfirmButton,
+  EmptyState,
+  ErrorBanner,
+  IdeTabs,
+  LoadingBlock,
+  SegmentedTabs,
+  StatusBadge,
+} from '../../components/ui'
+import { WorkbenchPage } from '../../layout'
 import { formatLocaleDateTime, formatRelativeTime, isIsolatedRuntime } from '../../lib/format'
 
 interface DepSummary {
@@ -594,7 +603,7 @@ export default function PluginsView() {
 
   const tabs: Array<{ id: MainTab; label: string }> = [
     { id: 'installed', label: `Installed${plugins ? ` (${plugins.length})` : ''}` },
-    { id: 'install', label: 'Install / Search' },
+    { id: 'install', label: 'Install · Search' },
   ]
 
   const statusFilters: Array<{ id: StatusFilter; label: string }> = [
@@ -605,90 +614,78 @@ export default function PluginsView() {
   ]
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-8 space-y-6">
-      <PageHeader
-        title="Plugins"
-        description="Library — install node packs for the Editor catalog."
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={venvGcBusy}
-              onClick={() => {
-                setVenvGcBusy(true)
-                void apiJson<{ removed?: string[] }>('/plugins/venvs/gc', { method: 'POST' })
-                  .then((res) => {
-                    const n = Array.isArray(res?.removed) ? res.removed.length : 0
-                    pushToast(
-                      n
-                        ? `Removed ${n} unused plugin venv${n === 1 ? '' : 's'}`
-                        : 'No unused plugin venvs to remove',
-                      'success',
-                    )
-                  })
-                  .catch((err) =>
-                    pushToast(err instanceof Error ? err.message : String(err), 'error'),
-                  )
-                  .finally(() => setVenvGcBusy(false))
-              }}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              {venvGcBusy ? 'Cleaning…' : 'Clean unused venvs'}
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => void load()}>
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
-            </button>
-          </div>
-        }
-      />
-      <p className="rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
-        <span className="font-medium text-ink-800">Deps:</span>{' '}
-        <span className="rounded bg-ink-100 px-1 font-mono text-[11px] text-ink-600">shared env</span>{' '}
-        plugins (<span className="font-mono text-[11px]">runtime=inprocess</span>) install into the API’s own
-        Python;{' '}
-        <span className="rounded bg-accent-50 px-1 font-mono text-[11px] text-accent-900">isolated venv</span>{' '}
-        plugins (<span className="font-mono text-[11px]">runtime=isolated</span>) get their own{' '}
-        <span className="font-mono text-[11px]">~/.graphyn/plugins/venvs/&lt;name&gt;</span> (heavy ML
-        stacks). Reinstall/upgrade a plugin after changing its runtime. Mode B workers need the same
-        packs —{' '}
-        <a
-          href={DOCS_GETTING_STARTED_MODE_B}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium text-accent-700 hover:underline"
-        >
-          Getting Started
-        </a>
-        .
-      </p>
-      {error && <ErrorBanner message={error} onRetry={() => void load()} />}
-
-      <div className="flex flex-wrap gap-1 border-b border-ink-200/80 pb-0">
-        {tabs.map((t) => (
+    <WorkbenchPage
+      title="Plugins"
+      description="Library — install node packs for the Editor catalog."
+      toolbar={
+        <IdeTabs aria-label="Plugin sections" value={mainTab} options={tabs} onChange={setMainTab} />
+      }
+      actions={
+        <div className="flex flex-wrap gap-1.5">
           <button
-            key={t.id}
             type="button"
-            onClick={() => setMainTab(t.id)}
-            className={
-              mainTab === t.id
-                ? 'border-b-2 border-accent-600 px-3 py-2 text-[13px] font-semibold text-ink-950'
-                : 'px-3 py-2 text-[13px] text-ink-500 hover:text-ink-800'
-            }
+            className="btn-secondary"
+            disabled={venvGcBusy}
+            onClick={() => {
+              setVenvGcBusy(true)
+              void apiJson<{ removed?: string[] }>('/plugins/venvs/gc', { method: 'POST' })
+                .then((res) => {
+                  const n = Array.isArray(res?.removed) ? res.removed.length : 0
+                  pushToast(
+                    n
+                      ? `Removed ${n} unused plugin venv${n === 1 ? '' : 's'}`
+                      : 'No unused plugin venvs to remove',
+                    'success',
+                  )
+                })
+                .catch((err) =>
+                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                )
+                .finally(() => setVenvGcBusy(false))
+            }}
           >
-            {t.label}
+            <Trash2 className="h-3.5 w-3.5" />
+            {venvGcBusy ? 'Cleaning…' : 'Clean unused venvs'}
           </button>
-        ))}
-      </div>
+          <button type="button" className="btn-secondary" onClick={() => void load()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+      <details className="rounded-lg border border-ink-100 bg-white px-3 py-2 text-[12px] text-ink-600">
+        <summary className="cursor-pointer select-none font-medium text-ink-800">Deps & runtime</summary>
+        <p className="mt-1.5 leading-relaxed">
+          <span className="rounded bg-ink-100 px-1 font-mono text-[11px] text-ink-600">shared env</span>{' '}
+          plugins (<span className="font-mono text-[11px]">runtime=inprocess</span>) install into the API’s own
+          Python;{' '}
+          <span className="rounded bg-accent-50 px-1 font-mono text-[11px] text-accent-900">isolated venv</span>{' '}
+          plugins (<span className="font-mono text-[11px]">runtime=isolated</span>) get their own{' '}
+          <span className="font-mono text-[11px]">~/.graphyn/plugins/venvs/&lt;name&gt;</span> (heavy ML
+          stacks). Reinstall/upgrade a plugin after changing its runtime. Mode B workers need the same
+          packs —{' '}
+          <a
+            href={DOCS_GETTING_STARTED_MODE_B}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-accent-700 hover:underline"
+          >
+            Getting Started
+          </a>
+          .
+        </p>
+      </details>
+      {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
       {/* Both forms were laid out full-bleed in a ~1300px card: the source input
           stretched the whole page for a short package string while the search box
           next to it was 200px, so two similar fields looked unrelated. Capped and
           matched. */}
       {mainTab === 'install' && (
-        <div className="grid gap-4 xl:grid-cols-2">
-          <section className="surface-card space-y-3 p-5">
-            <h3 className="text-sm font-semibold">Install from source</h3>
+        <div className="grid gap-3 xl:grid-cols-2">
+          <section className="surface-card space-y-2 p-3">
+            <h3 className="text-[13px] font-semibold text-ink-900">Install from source</h3>
             <p className="text-type-meta text-ink-500">
               A local path, a PyPI package name, an https:// archive, or a{' '}
               <span className="font-mono">git+</span> URL.
@@ -699,7 +696,7 @@ export default function PluginsView() {
                 onChange={(e) => setSource(e.target.value)}
                 placeholder="path, package, https://…, git+…"
                 aria-label="Plugin source"
-                className="min-w-0 max-w-md flex-1 rounded-lg border border-ink-200 px-3 py-2 text-sm"
+                className="field-control mt-0 min-w-0 max-w-md flex-1 text-sm"
               />
               <button
                 type="button"
@@ -711,14 +708,14 @@ export default function PluginsView() {
                 <Download className="h-3.5 w-3.5" /> Install
               </button>
             </div>
-            <details className="rounded-lg border border-ink-100 bg-ink-50 px-3 py-2">
+            <details className="rounded-lg border border-ink-100 bg-ink-50/80 px-2.5 py-1.5">
               <summary className="cursor-pointer select-none text-xs font-medium text-ink-600">Advanced</summary>
               <div className="mt-2 space-y-2">
                 <input
                   value={sha}
                   onChange={(e) => setSha(e.target.value)}
                   placeholder="SHA256 (optional expected_sha256)"
-                  className="w-full rounded-lg border border-ink-200 px-3 py-2 text-sm font-mono"
+                  className="field-control mt-0 w-full font-mono text-sm"
                 />
                 <label className="flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={upgrade} onChange={(e) => setUpgrade(e.target.checked)} />
@@ -727,7 +724,7 @@ export default function PluginsView() {
               </div>
             </details>
             {pkgInstalling && (
-              <div className="flex items-start gap-2 rounded-xl border border-accent-200 bg-accent-50/60 px-3 py-2 text-sm text-ink-700">
+              <div className="flex items-start gap-2 rounded-lg border border-accent-200 bg-accent-50/60 px-2.5 py-2 text-sm text-ink-700">
                 <span className="mt-0.5 inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
                 <div>
                   <div className="font-medium">Installing {pkgInstalling}…</div>
@@ -740,8 +737,8 @@ export default function PluginsView() {
             )}
           </section>
 
-          <section className="surface-card space-y-3 p-5">
-            <h3 className="text-sm font-semibold">Search index</h3>
+          <section className="surface-card space-y-2 p-3">
+            <h3 className="text-[13px] font-semibold text-ink-900">Search index</h3>
             {/* "Search index" never said what index. The page only admitted it needs
                 a configured plugin directory once a search had already failed. */}
             <p className="text-type-meta text-ink-500">
@@ -752,7 +749,7 @@ export default function PluginsView() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                className="min-w-0 max-w-md flex-1 rounded-lg border border-ink-200 px-3 py-2 text-sm"
+                className="field-control mt-0 min-w-0 max-w-md flex-1 text-sm"
                 placeholder="package name"
                 aria-label="Package name to search"
                 onKeyDown={(e) => e.key === 'Enter' && query.trim() && void searchIndex()}
@@ -790,7 +787,7 @@ export default function PluginsView() {
       )}
 
       {mainTab === 'installed' && (
-        <section className="surface-card p-5 space-y-3">
+        <section className="surface-card space-y-2 p-3">
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-[13rem] flex-1 sm:max-w-sm">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
@@ -799,27 +796,24 @@ export default function PluginsView() {
                 onChange={(e) => setListQuery(e.target.value)}
                 placeholder="Search name, description, node type…"
                 aria-label="Search installed plugins"
-                className="w-full rounded-lg border border-ink-200 bg-white py-1.5 pl-8 pr-2 text-sm"
+                className="field-control mt-0 w-full pl-8 text-sm"
               />
             </div>
-            <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
-              Runtime
-              <select
-                className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
-                value={runtimeFilter}
-                onChange={(e) =>
-                  setRuntimeFilter(e.target.value as 'all' | 'isolated' | 'inprocess')
-                }
-              >
-                <option value="all">Any</option>
-                <option value="isolated">Isolated venv</option>
-                <option value="inprocess">Shared env</option>
-              </select>
-            </label>
+            <SegmentedTabs
+              aria-label="Runtime filter"
+              className="shrink-0"
+              value={runtimeFilter}
+              options={[
+                { id: 'all', label: 'Any' },
+                { id: 'isolated', label: 'Isolated' },
+                { id: 'inprocess', label: 'Shared' },
+              ]}
+              onChange={setRuntimeFilter}
+            />
             <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
               Sort
               <select
-                className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
+                className="field-control mt-0 w-auto py-1 text-[12px]"
                 value={pluginSort}
                 onChange={(e) => setPluginSort(e.target.value as PluginSort)}
               >
@@ -840,11 +834,7 @@ export default function PluginsView() {
                 key={f.id}
                 type="button"
                 onClick={() => setStatusFilter(f.id)}
-                className={
-                  statusFilter === f.id
-                    ? 'rounded-full border border-accent-300 bg-accent-50 px-2.5 py-1 text-[12px] font-semibold text-accent-900'
-                    : 'rounded-full border border-ink-200 bg-white px-2.5 py-1 text-[12px] text-ink-600 hover:border-ink-300'
-                }
+                className={statusFilter === f.id ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
               >
                 {f.label}
               </button>
@@ -897,38 +887,35 @@ export default function PluginsView() {
               description="Install a package, path, or git URL to add nodes to the Editor catalog."
               action={
                 <button type="button" className="btn-secondary" onClick={() => setMainTab('install')}>
-                  Go to Install / Search
+                  Go to Install · Search
                 </button>
               }
             />
           ) : filtered && filtered.length === 0 ? (
-            <div className="py-6 text-center">
-              <p className="text-sm text-ink-500">
-                No plugins match{listQuery.trim() ? ` “${listQuery.trim()}”` : ' this filter'}
-                {activeTags.length ? ` with tag${activeTags.length === 1 ? '' : 's'} ${activeTags.join(' + ')}` : ''}.
-              </p>
-              {(activeTags.length > 0 || listQuery.trim() || runtimeFilter !== 'all' || statusFilter !== 'all') && (
-                <button
-                  type="button"
-                  className="btn-secondary mt-3"
-                  onClick={() => {
-                    setActiveTags([])
-                    setListQuery('')
-                    setRuntimeFilter('all')
-                    setStatusFilter('all')
-                  }}
-                >
-                  Clear all filters
-                </button>
-              )}
-            </div>
+            <EmptyState
+              compact
+              icon={EmptyPuzzle}
+              title="No matching plugins"
+              description={`Nothing matches${listQuery.trim() ? ` “${listQuery.trim()}”` : ' this filter'}${activeTags.length ? ` with tag${activeTags.length === 1 ? '' : 's'} ${activeTags.join(' + ')}` : ''}.`}
+              action={
+                activeTags.length > 0 || listQuery.trim() || runtimeFilter !== 'all' || statusFilter !== 'all' ? (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setActiveTags([])
+                      setListQuery('')
+                      setRuntimeFilter('all')
+                      setStatusFilter('all')
+                    }}
+                  >
+                    Clear all filters
+                  </button>
+                ) : undefined
+              }
+            />
           ) : (
-            /* Two columns on wide screens. Each card was full-width (~1300px) for
-               ~140px of content, so 48 plugins meant an enormous scroll with a huge
-               dead gap between the text on the left and the ⋯ menu on the right.
-               A card that expands its dependency panel spans both columns so the
-               table inside it isn't cramped. */
-            <ul className="grid gap-2 xl:grid-cols-2">
+            <ul className="-mx-3 divide-y divide-ink-100 border-t border-ink-100">
               {(filtered ?? []).map((p) => {
                 const missingReq = p.dependency_summary?.missing_required?.length ?? 0
                 const showMissingOptCount = p.dependency_summary?.missing_optional?.length ?? 0
@@ -956,17 +943,15 @@ export default function PluginsView() {
                   (busy ? '' : depInstallErrors[p.name] || apiInstallFailed) ||
                   (p.status === 'failed' && p.error ? shortenInstallError(String(p.error)) : '')
                 return (
-                  <li
-                    key={p.name}
-                    className={clsx(
-                      'rounded-2xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm',
-                      // The dependency panel is a table; give it the full width.
-                      isExpanded && 'xl:col-span-2',
-                    )}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-2">
+                  <li key={p.name}>
+                    <div
+                      className={clsx(
+                        'ide-row items-start px-3 py-2',
+                        isExpanded && 'bg-ink-50/40',
+                      )}
+                    >
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium text-type-body">
+                        <div className="font-medium text-[13px] text-ink-950">
                           {p.name} {p.version ? `v${p.version}` : ''}
                         </div>
                         {/* Every installed plugin ships a description and this page
@@ -1148,7 +1133,7 @@ export default function PluginsView() {
                           <div
                             role="menu"
                             className={clsx(
-                              'absolute right-0 z-20 w-52 rounded-2xl border border-ink-200 bg-white p-1.5 shadow-soft',
+                              'absolute right-0 z-20 w-52 rounded-lg border border-ink-200 bg-white p-1 shadow-soft',
                               menuUp ? 'bottom-full mb-1' : 'top-full mt-1',
                             )}
                           >
@@ -1184,12 +1169,8 @@ export default function PluginsView() {
                         )}
                       </div>
                     </div>
-                    {/* This sentence used to print on every isolated plugin — 16 copies
-                        of one general fact that the "Deps:" banner at the top of the
-                        page already states. It now lives on the button's tooltip,
-                        where it applies to the action that needs it. */}
                     {busy && (
-                      <div className="mt-3 flex items-start gap-2 rounded-xl border border-accent-200 bg-accent-50/60 px-3 py-2 text-sm text-ink-700">
+                      <div className="flex items-start gap-2 border-t border-ink-100 bg-accent-50/40 px-3 py-2 text-sm text-ink-700">
                         <span className="mt-0.5 inline-block h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-accent-500 border-t-transparent" />
                         <div>
                           {(() => {
@@ -1211,9 +1192,9 @@ export default function PluginsView() {
                       </div>
                     )}
                     {cardError && !busy && (
-                      <div className="mt-2 space-y-1">
+                      <div className="space-y-1 border-t border-ink-100 bg-rose-50/30 px-3 py-2">
                         <p
-                          className="rounded-lg border border-rose-100 bg-rose-50/80 px-2.5 py-1.5 text-[12px] leading-snug text-rose-900"
+                          className="text-[12px] leading-snug text-rose-900"
                           title={cardError}
                         >
                           {cardError}
@@ -1228,7 +1209,7 @@ export default function PluginsView() {
                       </div>
                     )}
                     {isExpanded && depStatus && (
-                      <div className="mt-3 space-y-2 border-t border-ink-100 pt-3 text-sm">
+                      <div className="space-y-2 border-t border-ink-100 bg-ink-50/50 px-3 py-2 text-sm">
                         <div className="text-type-meta text-ink-500">
                           {depStatus.python ? (
                             <span className="font-mono text-[11px]">{depStatus.python}</span>
@@ -1294,6 +1275,7 @@ export default function PluginsView() {
           )}
         </section>
       )}
-    </div>
+      </div>
+    </WorkbenchPage>
   )
 }

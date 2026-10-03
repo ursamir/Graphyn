@@ -223,28 +223,68 @@ export async function fetchAuthenticatedBlobUrl(staticPath: string): Promise<str
 }
 
 /** Authenticated blob URL for a jailed input dataset file (caller must revoke). */
-export async function fetchInputBlobUrl(filePath: string): Promise<string> {
-  const res = await apiFetch('/data/inputs/file', { query: { path: filePath }, timeoutMs: 120000 })
+export async function fetchInputBlobUrl(
+  filePath: string,
+  init?: { signal?: AbortSignal },
+): Promise<string> {
+  const res = await apiFetch('/data/inputs/file', {
+    query: { path: filePath },
+    timeoutMs: 120000,
+    signal: init?.signal,
+  })
   if (!res.ok) throw new ApiError(`Failed to load file (${res.status})`, res.status, filePath)
   return blobUrlWithMime(res, filePath)
 }
 
 /** Authenticated blob URL for a jailed output file (caller must revoke). */
-export async function fetchOutputBlobUrl(filePath: string): Promise<string> {
-  const res = await apiFetch('/outputs/file', { query: { path: filePath }, timeoutMs: 120000 })
+export async function fetchOutputBlobUrl(
+  filePath: string,
+  init?: { signal?: AbortSignal },
+): Promise<string> {
+  const res = await apiFetch('/outputs/file', {
+    query: { path: filePath },
+    timeoutMs: 120000,
+    signal: init?.signal,
+  })
   if (!res.ok) throw await parseError(res, '/outputs/file')
   return blobUrlWithMime(res, filePath)
+}
+
+function preferGuessedMime(serverType: string, guessed: string | null): string {
+  const server = (serverType || '').split(';')[0].trim().toLowerCase()
+  if (!guessed) return server || 'application/octet-stream'
+  if (
+    !server ||
+    server === 'application/octet-stream' ||
+    server === 'binary/octet-stream' ||
+    server === 'application/force-download' ||
+    server === 'application/zip' // mislabeled media
+  ) {
+    return guessed
+  }
+  // Extension wins for media when the server type is a different family (e.g. text/html error body).
+  const family = (t: string) => t.split('/')[0]
+  if (
+    (guessed.startsWith('audio/') || guessed.startsWith('video/') || guessed.startsWith('image/')) &&
+    family(server) !== family(guessed)
+  ) {
+    return guessed
+  }
+  // Normalize common WAV aliases so Chromium can decode blob URLs.
+  if (guessed === 'audio/wav' && (server === 'audio/x-wav' || server === 'audio/wave')) {
+    return 'audio/wav'
+  }
+  return server || guessed
 }
 
 async function blobUrlWithMime(res: Response, filePath: string): Promise<string> {
   const { guessMimeType } = await import('../lib/fileKind')
   const buf = await res.arrayBuffer()
-  const serverType = (res.headers.get('Content-Type') || '').split(';')[0].trim()
+  if (buf.byteLength === 0) {
+    throw new ApiError('Empty file — nothing to preview', res.status, filePath)
+  }
   const guessed = guessMimeType(filePath)
-  const type =
-    guessed && (!serverType || serverType === 'application/octet-stream')
-      ? guessed
-      : serverType || guessed || 'application/octet-stream'
+  const type = preferGuessedMime(res.headers.get('Content-Type') || '', guessed)
   return URL.createObjectURL(new Blob([buf], { type }))
 }
 

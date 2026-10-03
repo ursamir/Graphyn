@@ -3,11 +3,14 @@ import {
   executionOrderFromRun,
   guessNodeFromPath,
   isInternalRunFile,
+  artifactSlugFromPath,
+  listRunModelCandidates,
   looksLikeOpaqueId,
   naturalCompare,
   normalizeOutputsResponse,
   orderOutputGroups,
   runHasModelOutput,
+  runLevelFileCue,
   shortOutputPath,
   sortFilesNatural,
 } from './runOutputs'
@@ -149,12 +152,72 @@ describe('runHasModelOutput', () => {
     ).toBe(false)
   })
 
-  it('is true for model files, trainer nodes, training metrics, or registered models', () => {
+  it('is true only for model files, model-typed artifacts, or registered models', () => {
     expect(runHasModelOutput({ files: [{ name: 'model.tflite', path: 'a/model.tflite', kind: 'binary' }] })).toBe(true)
-    expect(runHasModelOutput({ nodeStats: [{ node_id: 'trainer_3', node_type: 'trainer' }] })).toBe(true)
-    expect(runHasModelOutput({ metrics: { val_accuracy: 0.9 } })).toBe(true)
     expect(runHasModelOutput({ artifacts: [{ artifact_type: 'keras_model' }] })).toBe(true)
     expect(runHasModelOutput({ registeredModels: 1 })).toBe(true)
+    // Trainer / metrics alone — workflow ran, but no model artifact to promote.
+    expect(runHasModelOutput({ nodeStats: [{ node_id: 'trainer_3', node_type: 'trainer' }] })).toBe(false)
+    expect(runHasModelOutput({ metrics: { val_accuracy: 0.9 } })).toBe(false)
+  })
+})
+
+describe('artifactSlugFromPath', () => {
+  it('reads pack slug from artifacts/<slug>/runs/…', () => {
+    expect(
+      artifactSlugFromPath(
+        'artifacts/optimized/runs/2280ec7127774d9f9bdeb528126f5344/model.tflite',
+      ),
+    ).toBe('optimized')
+    expect(
+      artifactSlugFromPath(
+        'workspace/artifacts/speech-commands/runs/abc/tflite/model.tflite',
+      ),
+    ).toBe('speech-commands')
+  })
+
+  it('skips content-addressed blob dirs', () => {
+    expect(artifactSlugFromPath('artifacts/b0d99d938dcb48198e686326f8a92c69/data')).toBeUndefined()
+  })
+})
+
+describe('listRunModelCandidates', () => {
+  it('splits dual-branch trainers into separate candidates', () => {
+    const c = listRunModelCandidates({
+      files: [
+        { name: 'model.keras', path: 'trainer_0/model.keras', kind: 'model', node_id: 'trainer_0' },
+        {
+          name: 'model.keras',
+          path: 'trainer_b66a5330/model.keras',
+          kind: 'model',
+          node_id: 'trainer_b66a5330',
+        },
+      ],
+      labelFor: (id) => (id === 'trainer_0' ? 'Trainer #0' : 'Trainer #b66a5330'),
+    })
+    expect(c.map((x) => x.id)).toEqual(['trainer_0', 'trainer_b66a5330'])
+    expect(c.map((x) => x.label)).toEqual(['Trainer #0', 'Trainer #b66a5330'])
+  })
+
+  it('attaches workspace pack slug from pack-layout paths', () => {
+    const c = listRunModelCandidates({
+      files: [
+        {
+          name: 'model.tflite',
+          path: 'artifacts/optimized/runs/2280ec7127774d9f9bdeb528126f5344/model.tflite',
+          kind: 'model',
+          node_id: 'edge_optimizer_f683f74c',
+        },
+        {
+          name: 'model.tflite',
+          path: 'artifacts/speech-commands/runs/2280ec7127774d9f9bdeb528126f5344/tflite/model.tflite',
+          kind: 'model',
+          node_id: 'edge_optimizer_0',
+        },
+      ],
+    })
+    expect(c.find((x) => x.id === 'edge_optimizer_f683f74c')?.artifactSlug).toBe('optimized')
+    expect(c.find((x) => x.id === 'edge_optimizer_0')?.artifactSlug).toBe('speech-commands')
   })
 })
 
@@ -165,5 +228,15 @@ describe('server listing order', () => {
     expect(sortFilesNatural(files).map((f) => f.name)).toEqual(['0.wav', '1.wav', '2.wav', '10.wav', '100.wav'])
     // already natural (backend switched): unchanged
     expect(sortFilesNatural(sortFilesNatural(files)).map((f) => f.name)).toEqual(['0.wav', '1.wav', '2.wav', '10.wav', '100.wav'])
+  })
+})
+
+describe('runLevelFileCue', () => {
+  it('maps journal filenames to plain titles', () => {
+    expect(runLevelFileCue('graph.json').title).toBe('Pipeline graph')
+    expect(runLevelFileCue('meta.json').title).toBe('Run summary')
+    expect(runLevelFileCue('logs.json').title).toBe('Event log')
+    expect(runLevelFileCue('prove.json').title).toBe('Reproducibility record')
+    expect(runLevelFileCue('weird.bin').title).toBe('weird.bin')
   })
 })

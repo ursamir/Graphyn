@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { focusMatchesNode, humanNodeLabel } from './format'
+import { displayNodeLabel, focusMatchesNode, humanNodeLabel, instanceIdCue } from './format'
 
 describe('focusMatchesNode', () => {
   it('matches exact ids only for graph instance ids', () => {
@@ -15,6 +15,22 @@ describe('focusMatchesNode', () => {
     expect(focusMatchesNode('trainer_0', 'Trainer')).toBe(false)
     expect(focusMatchesNode('trainer_b66a5330', 'Trainer')).toBe(false)
     expect(focusMatchesNode('trainer_b66a5330', humanNodeLabel('trainer_0'))).toBe(false)
+  })
+})
+
+describe('instanceIdCue / displayNodeLabel', () => {
+  it('extracts numeric and hex cues like the builder canvas', () => {
+    expect(instanceIdCue('trainer_0', 'trainer')).toBe('0')
+    expect(instanceIdCue('trainer_b66a5330', 'trainer')).toBe('b66a5330')
+    expect(instanceIdCue('trainer', 'trainer')).toBe(null)
+  })
+  it('humanNodeLabel strips instance tails; displayNodeLabel can restore #cue', () => {
+    expect(humanNodeLabel('trainer_0')).toBe('Trainer')
+    expect(humanNodeLabel('trainer_b66a5330')).toBe('Trainer')
+    expect(displayNodeLabel('trainer_0', { withCue: true })).toBe('Trainer #0')
+    expect(displayNodeLabel('trainer_b66a5330', { label: 'Trainer', withCue: true })).toBe(
+      'Trainer #b66a5330',
+    )
   })
 })
 

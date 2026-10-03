@@ -76,6 +76,8 @@ target_level_db  = { type = "number", default = -1.0, minimum = -96, maximum = 0
 
 Layer `type` values for `custom`: `conv2d`, `depthwise_conv2d`, `batch_norm`, `relu`, `relu6`, `max_pool2d`, `avg_pool2d`, `global_avg_pool2d`, `dropout`, `dense`, `inverted_residual`, `ds_separable_block`. Implementation: `model_architecture.py` (`export_layer_specs` / `build_keras_model`). Preset fixtures live under `trainer/presets/*.layers.json`.
 
+**Builder JSON widgets (`widget = "json"`):** use for open or nested shapes, but prefer a **known field name** the console already structures — `layers`, `augmentations`, `split_ratios`, `allowed_paths` open dedicated form/list editors (with Edit as JSON as secondary). Unknown `widget=json` fields still get a compact JSON textarea. Do not force forms for freeform artifact dumps (those stay tree viewers).
+
 **Credentials:** declare kinds the plugin consumes; graphs bind by connection id only.
 
 ```toml

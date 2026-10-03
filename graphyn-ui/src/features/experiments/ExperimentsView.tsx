@@ -8,7 +8,6 @@ import {
   ErrorBanner,
   LoadingBlock,
   NeedProjectPrompt,
-  PageHeader,
   StatusBadge,
 } from '../../components/ui'
 import {
@@ -19,7 +18,7 @@ import {
   shortRunId,
 } from '../../lib/format'
 import { MetricBars } from '../../components/MetricBars'
-import { MasterDetail } from '../../layout'
+import { MasterDetail, WorkbenchPage } from '../../layout'
 import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { fetchRunGraph } from '../../lib/runGraph'
@@ -337,13 +336,13 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
     )
   }
 
-  // Embedded under Runs → Compare: same MasterDetail + shared divider as History/Live.
+  // Embedded under Runs → Compare: same MasterDetail + shared divider as the Runs list.
   if (embedded) {
     return (
       <MasterDetail
         master={
-          <>
-            <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex h-full min-h-0 flex-col gap-2">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
               <p className="text-[12px] text-ink-500">
                 {selectedIds.length === 0
                   ? 'Tick 2–5 runs to compare'
@@ -386,7 +385,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                 }
               />
             ) : (
-              <ul className="mt-3 space-y-1.5">
+              <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto [scrollbar-gutter:stable]">
                 {tableRuns.map((r) => {
                   const checked = selectedIds.includes(r.run_id)
                   const metric = (() => {
@@ -453,7 +452,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                 })}
               </ul>
             )}
-          </>
+          </div>
         }
         detail={
           selectedIds.length < 2 ? (
@@ -499,6 +498,8 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                 <div className="text-xs text-amber-700">Missing: {compare.missing_run_ids.join(', ')}</div>
               ) : null}
               <div className="overflow-hidden rounded-2xl border border-ink-200/80 bg-white shadow-sm">
+                {/* Each table scrolls on its own — a shared scroller hid the
+                    horizontal bar under 100+ param rows (only Key + run 1 visible). */}
                 <CompareTable
                   title="Parameters"
                   keys={compare.param_keys || []}
@@ -506,6 +507,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                   getter={(r, k) => r.parameters?.[k]}
                   emptyLabel="No parameters recorded for these runs"
                   onOpenRun={openRun}
+                  maxBodyHeight="min(42vh, 22rem)"
                 />
                 <CompareTable
                   title="Metrics"
@@ -541,32 +543,28 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
   }
 
   return (
-    // Top padding lives on the header, not the scroll container: a sticky child's
-    // `top: 0` resolves against the scrollport's PADDING box, so `p-6` would pin
-    // the selection bar 24px low and let content scroll through the gap above it.
-    <div className="relative h-full min-h-0 space-y-6 overflow-y-auto px-6 pb-6">
-      <PageHeader
-            className="pt-6"
-            title="Compare runs"
-            description="Deep link for cross-run metrics. Prefer Runs → Compare tab when a workspace is open."
-            actions={
-              <div className="flex items-center gap-2">
-                {selectedIds.length >= 2 && (
-                  <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
-                    Compare ({selectedIds.length})
-                  </button>
-                )}
-                {compare && (
-                  <button type="button" className="btn-secondary" onClick={clearCompare}>
-                    Clear
-                  </button>
-                )}
-                <button type="button" className="btn-quiet" onClick={() => void refresh()}>
-                  <RefreshCw className="h-3.5 w-3.5" /> Refresh
-                </button>
-              </div>
-            }
-          />
+    <WorkbenchPage
+      title="Compare runs"
+      description="Deep link for cross-run metrics. Prefer Runs → Compare tab when a workspace is open."
+      actions={
+        <div className="flex items-center gap-2">
+          {selectedIds.length >= 2 && (
+            <button type="button" className="btn-primary" onClick={() => void runCompare()} disabled={compareLoading}>
+              Compare ({selectedIds.length})
+            </button>
+          )}
+          {compare && (
+            <button type="button" className="btn-secondary" onClick={clearCompare}>
+              Clear
+            </button>
+          )}
+          <button type="button" className="btn-quiet" onClick={() => void refresh()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-6">
           <div role="status" className="rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-sm text-ink-700">
             This view is a deep link. For day-to-day work, use{' '}
             <button
@@ -923,7 +921,8 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </WorkbenchPage>
   )
 })
 
@@ -937,6 +936,7 @@ function CompareTable({
   format,
   emptyLabel,
   onOpenRun,
+  maxBodyHeight,
 }: {
   title: string
   keys: string[]
@@ -945,6 +945,8 @@ function CompareTable({
   format?: (v: unknown) => string
   emptyLabel?: string
   onOpenRun?: (runId: string) => void
+  /** Cap body height so the horizontal scrollbar stays on-screen (param tables). */
+  maxBodyHeight?: string
 }) {
   const fmt = format ?? ((v: unknown) => (v == null ? '—' : prettyScalar(v)))
   if (!keys.length) {
@@ -956,52 +958,79 @@ function CompareTable({
   }
   return (
     <div className="border-b border-ink-50 last:border-0">
-      <div className="px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-500 bg-ink-50/40">
-        {title}
+      <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-500 bg-ink-50/40">
+        <span>{title}</span>
+        {runs.length > 3 ? (
+          <span className="normal-case tracking-normal font-normal text-ink-400">
+            {runs.length} runs · scroll if columns clip
+          </span>
+        ) : null}
       </div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-left text-[11px] text-ink-500">
-            <th className="px-4 py-2 font-medium w-40">Key</th>
-            {runs.map((r) => (
-              <th key={r.run_id} className="px-3 py-2 font-mono font-normal text-xs" title={r.run_id}>
-                {onOpenRun ? (
-                  <button
-                    type="button"
-                    className="hover:underline hover:text-accent-800"
-                    onClick={() => onOpenRun(r.run_id)}
-                  >
-                    {shortRunId(r.run_id)}
-                  </button>
-                ) : (
-                  shortRunId(r.run_id)
-                )}
+      <div
+        className="min-w-0 overflow-auto [scrollbar-gutter:stable]"
+        style={maxBodyHeight ? { maxHeight: maxBodyHeight } : undefined}
+      >
+        <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
+          <thead>
+            <tr className="text-left text-[11px] text-ink-500">
+              <th className="sticky left-0 top-0 z-[2] w-44 max-w-[11rem] bg-ink-50 px-3 py-2 font-medium">
+                Key
               </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {keys.map((k) => {
-            const vals = runs.map((r) => getter(r, k))
-            const differs = vals.some((v) => valuesDiffer(v, vals[0]))
-            return (
-              <tr key={k} className="border-t border-ink-50">
-                <td className="px-4 py-1.5 text-ink-600 font-mono text-xs">{k}</td>
-                {vals.map((v, i) => (
+              {runs.map((r) => (
+                <th
+                  key={r.run_id}
+                  className="sticky top-0 z-[1] min-w-[6.5rem] max-w-[9rem] bg-ink-50 px-2 py-2 font-mono font-normal text-xs"
+                  title={r.run_id}
+                >
+                  {onOpenRun ? (
+                    <button
+                      type="button"
+                      className="hover:underline hover:text-accent-800"
+                      onClick={() => onOpenRun(r.run_id)}
+                    >
+                      {shortRunId(r.run_id)}
+                    </button>
+                  ) : (
+                    shortRunId(r.run_id)
+                  )}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {keys.map((k) => {
+              const vals = runs.map((r) => getter(r, k))
+              const differs = vals.some((v) => valuesDiffer(v, vals[0]))
+              return (
+                <tr key={k} className="border-t border-ink-50">
                   <td
-                    key={runs[i].run_id}
-                    className={`px-3 py-1.5 tabular-nums ${
-                      differs ? 'bg-amber-50 text-amber-950' : 'text-ink-800'
+                    className={`sticky left-0 z-[1] max-w-[11rem] truncate px-3 py-1.5 font-mono text-xs text-ink-600 ${
+                      differs ? 'bg-amber-50' : 'bg-white'
                     }`}
+                    title={k}
                   >
-                    {fmt(v)}
+                    {k}
                   </td>
-                ))}
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+                  {vals.map((v, i) => {
+                    const text = fmt(v)
+                    return (
+                      <td
+                        key={runs[i].run_id}
+                        className={`max-w-[9rem] truncate px-2 py-1.5 tabular-nums text-xs ${
+                          differs ? 'bg-amber-50 text-amber-950' : 'text-ink-800'
+                        }`}
+                        title={text === '—' ? undefined : text}
+                      >
+                        {text}
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

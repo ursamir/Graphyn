@@ -16,10 +16,11 @@ import { goView } from '../../routes/nav'
 import {
   EmptyState,
   ErrorBanner,
+  IdeTabs,
   LoadingBlock,
-  PageHeader,
   StatusBadge,
 } from '../../components/ui'
+import { WorkbenchPage } from '../../layout'
 
 function badgeFromPayload(data: unknown, okKeys: string[]): string {
   if (!data || typeof data !== 'object') return 'unknown'
@@ -358,38 +359,29 @@ export default function SystemView() {
   const useProjectSelect = projectsApiOk && projectOptions.length > 0
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-5">
-      <PageHeader
-        title="Ops"
-        description="Health, schedules, webhooks, cleanup, and audit."
-        actions={
-          <button type="button" className="btn-secondary" onClick={() => void refresh()}>
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
-        }
-      />
+    <WorkbenchPage
+      title="Ops"
+      description="Health, schedules, webhooks, cleanup, and audit."
+      actions={
+        <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
+      }
+      toolbar={
+        <IdeTabs
+          aria-label="Ops sections"
+          value={systemTab}
+          options={tabs}
+          onChange={setSystemTab}
+        />
+      }
+    >
+      <div className="space-y-4">
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
       {loading && health == null && ready == null ? <LoadingBlock label="Loading system status…" /> : null}
 
-      <div className="flex flex-wrap gap-1 border-b border-ink-200/80 pb-0">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setSystemTab(t.id)}
-            className={
-              systemTab === t.id
-                ? 'border-b-2 border-accent-600 px-3 py-2 text-[13px] font-semibold text-ink-950'
-                : 'px-3 py-2 text-[13px] text-ink-500 hover:text-ink-800'
-            }
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
       {authStatus && authStatus.auth_required && !authStatus.token_configured ? (
-        <div className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           Auth is required ({authStatus.env || 'production'}) but{' '}
           <code className="font-mono text-xs">GRAPHYN_API_TOKEN</code> is not configured on the
           server. Set the token and paste the same value in Settings.
@@ -398,7 +390,7 @@ export default function SystemView() {
 
       {systemTab === 'status' && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Backend</span>
             {backendLabel ? (
               <span
@@ -1372,6 +1364,7 @@ export default function SystemView() {
         )}
       </section>
       )}
-    </div>
+      </div>
+    </WorkbenchPage>
   )
 }

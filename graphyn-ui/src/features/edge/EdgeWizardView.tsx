@@ -19,9 +19,10 @@ import {
   EmptyState,
   ErrorBanner,
   LoadingBlock,
-  PageHeader,
   StatusBadge,
 } from '../../components/ui'
+import { WorkbenchPage } from '../../layout'
+import { SegmentedTabs } from '../../components/ui'
 import { FieldSelect } from '../../components/FieldSelect'
 import {
   EDGE_BACKENDS,
@@ -752,7 +753,7 @@ export default function EdgeWizardView() {
       const msg = err instanceof Error ? err.message : String(err)
       pushToast(msg, 'error')
       setRunError(
-        `${msg} — open Artifacts / Data if the package landed under a different name.`,
+        `${msg} — open Run outputs / Datasets if the package landed under a different name.`,
       )
     } finally {
       setDownloading(false)
@@ -812,44 +813,33 @@ export default function EdgeWizardView() {
     ) : null
 
   return (
-    // Top padding lives on the header, not the scroll container: a sticky child's
-    // `top: 0` resolves against the scrollport's PADDING box, so `p-6` would pin
-    // the lineage bar 24px low and let content scroll through the strip above it.
-    <div className="h-full min-h-0 overflow-y-auto px-6 pb-6 space-y-6">
-      <PageHeader
-        className="pt-6"
-        title="Ship"
-        description="Deploy — package a trained run for on-device delivery, or browse the device fleet."
-        actions={
-          shipTab === 'package' && packageExists ? (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => openArtifacts(runId ? { runId } : undefined)}
-            >
-              <Archive className="h-3.5 w-3.5" /> Artifacts
-            </button>
-          ) : undefined
-        }
-      />
-
-      <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1 w-fit">
-        <button
-          type="button"
-          className={shipTab === 'package' ? 'tab-pill tab-pill-on' : 'tab-pill'}
-          onClick={() => setShipTab('package')}
-        >
-          Package
-        </button>
-        <button
-          type="button"
-          className={shipTab === 'devices' ? 'tab-pill tab-pill-on' : 'tab-pill'}
-          onClick={() => setShipTab('devices')}
-        >
-          Devices
-        </button>
-      </div>
-
+    <WorkbenchPage
+      title="Ship"
+      description="Deploy — package a trained run for on-device delivery, or browse the device fleet."
+      toolbar={
+        <SegmentedTabs
+          aria-label="Ship mode"
+          value={shipTab}
+          options={[
+            { id: 'package', label: 'Package' },
+            { id: 'devices', label: 'Devices' },
+          ]}
+          onChange={setShipTab}
+        />
+      }
+      actions={
+        shipTab === 'package' && packageExists ? (
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => openArtifacts(runId ? { runId } : undefined)}
+          >
+            <Archive className="h-3.5 w-3.5" /> Run outputs
+          </button>
+        ) : undefined
+      }
+    >
+      <div className="space-y-6">
       {shipTab === 'devices' ? (
         <DevicesView workspaceId={activeProject || linkedProject || null} embedded />
       ) : (
@@ -963,7 +953,7 @@ export default function EdgeWizardView() {
           </ol>
 
           {step === 1 && (
-            <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
+            <div className="rounded-lg border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
               <h3 className="text-sm font-semibold text-ink-900">Graph</h3>
               <p className="text-sm text-ink-500">
                 This wizard is{' '}
@@ -1483,6 +1473,7 @@ export default function EdgeWizardView() {
           )}
         </>
       )}
-    </div>
+      </div>
+    </WorkbenchPage>
   )
 }

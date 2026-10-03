@@ -1,4 +1,5 @@
 import React from 'react'
+import clsx from 'clsx'
 import { LayoutTemplate as EmptyLayoutTemplate } from 'lucide-react'
 import { RefreshCw, ChevronRight, Database, Download, MoreHorizontal, Puzzle, Search, Upload } from 'lucide-react'
 import { apiJson } from '../../api/client'
@@ -7,7 +8,8 @@ import { useAppStore } from '../../store/appStore'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import type { GraphIR } from '../../types/graph'
 import { useMenuDismiss } from '../../lib/menus'
-import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
+import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
+import { MasterDetail, WorkbenchPage } from '../../layout'
 import { MarketplaceBrowse } from './MarketplaceBrowse'
 import { loadMarketplaceCatalog } from './marketplaceCatalog'
 import { humanizeTemplateName, humanNodeLabel, stripIsolatedPrefix } from '../../lib/format'
@@ -145,6 +147,7 @@ export default function TemplatesView() {
   const headerMoreRef = React.useRef<HTMLDivElement | null>(null)
   const [menuFor, setMenuFor] = React.useState<string | null>(null)
   const menuRef = React.useRef<HTMLDivElement | null>(null)
+  const [selectedName, setSelectedName] = React.useState<string | null>(null)
   const [projectGate, setProjectGate] = React.useState<{ template: string } | null>(null)
   const [projectChoices, setProjectChoices] = React.useState<string[]>([])
   const [projectPick, setProjectPick] = React.useState('')
@@ -482,587 +485,606 @@ export default function TemplatesView() {
     return `${filtered.length} shown`
   })()
 
-  // No top padding on the scroll container: a sticky child's `top: 0` resolves
-  // against the scrollport's PADDING box, so `p-6` pinned the filter bar 24px
-  // below the visible top edge and cards scrolled through the strip above it.
-  // The header carries that spacing itself instead.
-  return (
-    <div className="h-full min-h-0 overflow-y-auto px-6 pb-6 space-y-5">
-      <PageHeader
-        className="pt-6"
-        title="Templates"
-        // Named the destination workspace instead of "stamp GraphIR into a
-        // workspace": the action is a copy, and which workspace it copies into
-        // was the one thing the page never said out loud.
-        description={
-          activeProject
-            ? `Starter graphs to copy into a workspace. “Open in Editor” copies one into ${activeProject}, where you can edit and run it — the original template is left untouched. Workspace starters + Marketplace catalog share this page.`
-            : 'Starter graphs to copy into a workspace. Opening one asks which workspace to copy it into, then loads it in the Editor. Workspace starters + Marketplace catalog share this page.'
-        }
-        actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <button type="button" className="btn-quiet" onClick={() => void load()} title="Refresh templates">
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
-            </button>
-            <div className="relative" ref={headerMoreRef}>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setHeaderMoreOpen((o) => !o)}
-                aria-expanded={headerMoreOpen}
-                aria-haspopup="menu"
-                aria-label="More template actions"
+  React.useEffect(() => {
+    if (filter === 'marketplace') return
+    if (filtered.length === 0) {
+      setSelectedName(null)
+      return
+    }
+    if (!selectedName || !filtered.some((t) => t.name === selectedName)) {
+      setSelectedName(filtered[0].name)
+    }
+  }, [filter, filtered, selectedName])
+
+  const filterToolbar = (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search templates…"
+          aria-label="Search templates"
+          className="field-control mt-0 w-full pl-8 text-sm"
+        />
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {(
+          [
+            ['all', 'All', allCount, items != null && marketplaceTotal != null],
+            ['examples', 'Examples', exampleCount, items != null],
+            ['saved', 'Saved', savedCount, items != null],
+            ['marketplace', 'Marketplace', marketplaceCount, marketplaceTotal != null],
+          ] as const
+        ).map(([id, label, count, ready]) => (
+          <button
+            key={id}
+            type="button"
+            className={filter === id ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+            onClick={() => setFilter(id as typeof filter)}
+            data-testid={id === 'marketplace' ? 'templates-tab-marketplace' : undefined}
+          >
+            {label} {ready ? count : '…'}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+
+  const renderTemplateDetail = (tpl: TemplateSummary) => {
+    const name = tpl.name
+    const versions = versionsMap[name] ?? []
+    const latest = latestMap[name]
+    const inputLabel = datasetInputLabel(tpl)
+    const missing = missingNodeTypes(tpl)
+    return (
+      <article className="flex flex-col gap-3 rounded-lg border border-ink-200/70 bg-white p-4 shadow-sm">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-type-body font-semibold text-ink-950">
+                {tpl.title || humanizeTemplateName(name)}
+              </h2>
+              {isExample(name) && filter !== 'examples' && (
+                <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-type-meta font-medium uppercase tracking-wide text-ink-500">
+                  Example
+                </span>
+              )}
+              {tpl.difficulty ? (
+                <span className="shrink-0 rounded-md bg-accent-50 px-1.5 py-px text-type-meta font-medium capitalize text-accent-800">
+                  {tpl.difficulty}
+                </span>
+              ) : null}
+            </div>
+            <div className="truncate font-mono text-type-meta text-ink-400" title={name}>
+              {name}
+            </div>
+            <p className="mt-2 text-type-secondary text-ink-600">
+              {tpl.description?.trim()
+                ? tpl.description
+                : 'Open in Editor to inspect nodes and run this pipeline.'}
+            </p>
+            {missing.length > 0 ? (
+              <div
+                className="mt-2 inline-flex max-w-full items-start gap-1 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-type-meta text-amber-900"
+                title={summarizeMissing(missing, nodeTypePlugins).tooltip}
+                data-testid="template-missing-plugins"
               >
-                <MoreHorizontal className="h-3.5 w-3.5" /> More
-              </button>
-              {headerMoreOpen && (
-                <div className="absolute right-0 z-20 mt-1 w-64 rounded-xl border border-ink-200 bg-white p-2 shadow-soft">
+                <Puzzle className="mt-px h-3 w-3 shrink-0" />
+                <span className="min-w-0 break-words">
+                  {summarizeMissing(missing, nodeTypePlugins).label}
+                </span>
+              </div>
+            ) : null}
+          </div>
+          <div className="relative shrink-0" ref={menuFor === name ? menuRef : undefined}>
+            <button
+              type="button"
+              className="btn-icon"
+              aria-label={`More actions for ${tpl.title || humanizeTemplateName(name)}`}
+              aria-expanded={menuFor === name}
+              aria-haspopup="menu"
+              onClick={(e) => {
+                if (menuFor === name) {
+                  setMenuFor(null)
+                  return
+                }
+                const rect = e.currentTarget.getBoundingClientRect()
+                setMenuUp(
+                  window.innerHeight - rect.bottom <
+                    (versions.length > 0 ? CARD_MENU_HEIGHT_PX : CARD_MENU_HEIGHT_PX / 2),
+                )
+                setMenuFor(name)
+              }}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {menuFor === name && (
+              <div
+                role="menu"
+                className={clsx(
+                  'absolute right-0 z-20 w-48 rounded-lg border border-ink-200 bg-white p-1.5 shadow-soft',
+                  menuUp ? 'bottom-full mb-1' : 'top-full mt-1',
+                )}
+              >
+                {versions.length > 0 && (
+                  <ConfirmButton
+                    label="Delete version"
+                    confirmLabel="Confirm version"
+                    danger
+                    onConfirm={() => {
+                      const ver = selectedVersion[name] || latest
+                      if (!ver || ver === 'unversioned') return
+                      void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
+                        method: 'DELETE',
+                        query: { version: ver },
+                      })
+                        .then(load)
+                        .then(() => {
+                          setMenuFor(null)
+                          pushToast('Deleted version', 'success')
+                        })
+                        .catch((err) =>
+                          pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                        )
+                    }}
+                  />
+                )}
+                <div className={versions.length > 0 ? 'mt-1' : ''}>
+                  <ConfirmButton
+                    label="Delete"
+                    confirmLabel={
+                      isExample(name) ? 'Confirm delete (Sync examples restores it)' : 'Confirm delete'
+                    }
+                    danger
+                    onConfirm={() =>
+                      void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
+                        method: 'DELETE',
+                      })
+                        .then(load)
+                        .then(() => {
+                          setMenuFor(null)
+                          pushToast(`Deleted ${tpl.title || humanizeTemplateName(name)}`, 'success')
+                        })
+                        .catch((err) =>
+                          pushToast(err instanceof Error ? err.message : String(err), 'error'),
+                        )
+                    }
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <dl className="grid gap-1.5 text-type-secondary text-ink-600">
+          {tpl.inputs?.length ? (
+            <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
+              <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Inputs</dt>
+              <dd>
+                {inputLabel ? (
+                  <span className="flex flex-wrap gap-1">
+                    {(tpl.inputs ?? []).slice(0, 4).map((raw) => (
+                      <button
+                        key={raw}
+                        type="button"
+                        className="inline-flex max-w-full items-center gap-1 rounded-md bg-ink-50 px-1.5 py-0.5 text-type-meta text-ink-600 transition hover:bg-accent-50 hover:text-accent-800"
+                        title={`${raw} — open “${inputLabel}” in Datasets`}
+                        onClick={() => {
+                          openData({ mode: 'inputs', label: inputLabel })
+                          pushToast(`Datasets — ${inputLabel} inputs`, 'info')
+                        }}
+                      >
+                        <Database className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{shortPath(raw)}</span>
+                      </button>
+                    ))}
+                  </span>
+                ) : (
+                  chipList(tpl.inputs, 'None declared', shortPath)
+                )}
+              </dd>
+            </div>
+          ) : null}
+          {tpl.outputs?.length ? (
+            <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
+              <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Outputs</dt>
+              <dd>
+                {chipList(tpl.outputs, 'None declared', (s) =>
+                  s.includes('/') ? shortPath(s) : humanNodeLabel(s),
+                )}
+              </dd>
+            </div>
+          ) : null}
+          {tpl.required_plugins?.length ? (
+            <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
+              <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Plugins</dt>
+              <dd className="flex flex-wrap gap-1">
+                {tpl.required_plugins.map((p) => {
+                  const on = activePlugins.includes(p)
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      aria-pressed={on}
+                      title={
+                        on ? `Stop filtering by ${p}` : `Show only templates that need ${p}`
+                      }
+                      className={`rounded-md px-1.5 py-0.5 text-type-meta transition ${
+                        on
+                          ? 'bg-accent-100 font-medium text-accent-900'
+                          : 'bg-ink-50 text-ink-600 hover:bg-accent-50 hover:text-accent-800'
+                      }`}
+                      onClick={() => togglePlugin(p)}
+                    >
+                      {p}
+                    </button>
+                  )
+                })}
+              </dd>
+            </div>
+          ) : null}
+        </dl>
+
+        {tpl.tags?.some((t) => !HIDDEN_TAGS.has(t)) ? (
+          <div className="flex flex-wrap gap-1">
+            {tpl.tags
+              .filter((t) => !HIDDEN_TAGS.has(t))
+              .slice(0, 5)
+              .map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className="rounded-full border border-ink-200/80 px-1.5 py-px text-type-meta text-ink-500 transition hover:border-accent-300 hover:text-accent-800"
+                  title={`Search for “${t}”`}
+                  onClick={() => setSearch(t)}
+                >
+                  {t}
+                </button>
+              ))}
+          </div>
+        ) : null}
+
+        {tpl.node_types?.length ? (
+          <div
+            className="flex flex-wrap items-center gap-x-1 gap-y-1 rounded-lg bg-ink-50/70 px-2 py-1.5"
+            title={tpl.node_types.map(humanNodeLabel).join(' → ')}
+          >
+            {tpl.node_types.slice(0, 8).map((nt, i) => (
+              <React.Fragment key={`${nt}-${i}`}>
+                {i > 0 && <ChevronRight className="h-3 w-3 shrink-0 text-ink-300" />}
+                <span className="truncate text-type-meta font-medium text-ink-600">
+                  {humanNodeLabel(nt)}
+                </span>
+              </React.Fragment>
+            ))}
+            {tpl.node_types.length > 8 && (
+              <span className="text-type-meta text-ink-400">+{tpl.node_types.length - 8}</span>
+            )}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 pt-3">
+          {versions.length > 0 ? (
+            <>
+              <span className="text-type-meta text-ink-500">
+                Latest {latest && latest !== 'unversioned' ? latest : versions[0]}
+              </span>
+              <select
+                className="rounded-md border border-ink-200 bg-white px-1.5 py-0.5 text-type-meta"
+                value={selectedVersion[name] ?? latest ?? ''}
+                onChange={(e) => setSelectedVersion((s) => ({ ...s, [name]: e.target.value }))}
+                aria-label={`Version for ${tpl.title || humanizeTemplateName(name)}`}
+              >
+                {versions.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : (tpl.node_count ?? 0) > 0 ? (
+            <span className="text-type-meta text-ink-400">
+              {tpl.node_count} node{(tpl.node_count ?? 0) === 1 ? '' : 's'}
+            </span>
+          ) : null}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              title={
+                activeProject
+                  ? `Copy this graph into ${activeProject} and open it in the Editor`
+                  : 'Pick a workspace, then open this graph in the Editor'
+              }
+              onClick={() => void loadIntoBuilder(name)}
+            >
+              Open in Editor
+            </button>
+          </div>
+        </div>
+      </article>
+    )
+  }
+
+  const selectedTpl = selectedName ? filtered.find((t) => t.name === selectedName) : undefined
+
+  return (
+    <WorkbenchPage
+      title="Templates"
+      description={
+        activeProject
+          ? `Starter graphs to copy into a workspace. “Open in Editor” copies one into ${activeProject}, where you can edit and run it — the original template is left untouched. Workspace starters + Marketplace catalog share this page.`
+          : 'Starter graphs to copy into a workspace. Opening one asks which workspace to copy it into, then loads it in the Editor. Workspace starters + Marketplace catalog share this page.'
+      }
+      actions={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button type="button" className="btn-quiet" onClick={() => void load()} title="Refresh templates">
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+          <div className="relative" ref={headerMoreRef}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setHeaderMoreOpen((o) => !o)}
+              aria-expanded={headerMoreOpen}
+              aria-haspopup="menu"
+              aria-label="More template actions"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" /> More
+            </button>
+            {headerMoreOpen && (
+              <div className="absolute right-0 z-20 mt-1 w-64 rounded-lg border border-ink-200 bg-white p-2 shadow-soft">
+                <button
+                  type="button"
+                  className="btn-quiet w-full justify-start"
+                  disabled={syncing}
+                  onClick={() => {
+                    void importExamples()
+                    setHeaderMoreOpen(false)
+                  }}
+                  title="Copy example graphs into templates"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {syncing ? 'Syncing…' : 'Sync examples'}
+                </button>
+                {!saveOpen ? (
                   <button
                     type="button"
                     className="btn-quiet w-full justify-start"
-                    disabled={syncing}
-                    onClick={() => {
-                      void importExamples()
-                      setHeaderMoreOpen(false)
-                    }}
-                    title="Copy example graphs into templates"
+                    onClick={() => setSaveOpen(true)}
                   >
-                    <Download className="h-3.5 w-3.5" />
-                    {syncing ? 'Syncing…' : 'Sync examples'}
+                    Save from Editor
                   </button>
-                  {!saveOpen ? (
-                    <button
-                      type="button"
-                      className="btn-quiet w-full justify-start"
-                      onClick={() => setSaveOpen(true)}
-                    >
-                      Save from Editor
-                    </button>
-                  ) : (
-                    <div className="mt-1 space-y-2 border-t border-ink-100 pt-2">
-                      <input
-                        value={saveName}
-                        onChange={(e) => setSaveName(e.target.value)}
-                        placeholder="template-name"
-                        className="field-control mt-0 w-full text-sm"
-                        autoFocus
-                      />
-                      <div className="flex flex-wrap gap-1">
-                        <button type="button" className="btn-primary" onClick={() => void saveFromCanvas()}>
-                          Save
-                        </button>
-                        <button type="button" className="btn-quiet" onClick={uploadFile}>
-                          <Upload className="h-3.5 w-3.5" /> Upload
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-quiet"
-                          onClick={() => {
-                            setSaveOpen(false)
-                          }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                ) : (
+                  <div className="mt-1 space-y-2 border-t border-ink-100 pt-2">
+                    <input
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      placeholder="template-name"
+                      className="field-control mt-0 w-full text-sm"
+                      autoFocus
+                    />
+                    <div className="flex flex-wrap gap-1">
+                      <button type="button" className="btn-primary" onClick={() => void saveFromCanvas()}>
+                        Save
+                      </button>
+                      <button type="button" className="btn-quiet" onClick={uploadFile}>
+                        <Upload className="h-3.5 w-3.5" /> Upload
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-quiet"
+                        onClick={() => {
+                          setSaveOpen(false)
+                        }}
+                      >
+                        Cancel
+                      </button>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        }
-      />
-      {error && <ErrorBanner message={error} onRetry={() => void load()} />}
-      {syncBanner && (
-        <ErrorBanner
-          title={`Sync finished with ${syncBanner.errors.length} issue${syncBanner.errors.length === 1 ? '' : 's'}`}
-          message={`Imported ${syncBanner.written} template${syncBanner.written === 1 ? '' : 's'}. Review the issues below — cards still list what succeeded.`}
-          detail={syncBanner.errors
-            .map((e) => (typeof e === 'string' ? e : `${e.id ?? 'item'}: ${e.error ?? 'unknown'}`))
-            .join('\n')}
-          onDismiss={() => setSyncBanner(null)}
-          onRetry={() => void importExamples()}
-        />
-      )}
-
-      {/* Sticky: 30 cards is several screens of scrolling, and the search box and
-          filters used to disappear at the top of it — you had to scroll back up to
-          change what you were looking at. */}
-      {/* Opaque rather than a translucent backdrop-blur: this bar spans the full
-          width above a 30-card grid, and blurring that much moving content behind
-          it is an expensive composite on every scroll frame. A filter bar also
-          just reads better solid. */}
-      <div className="sticky top-0 z-30 -mx-6 space-y-2.5 border-b border-ink-200/70 bg-[#fbfbfc] px-6 py-3 shadow-sm">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search templates…"
-              aria-label="Search templates"
-              className="field-control mt-0 w-full pl-8 text-sm"
-            />
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {(
-              [
-                ['all', 'All', allCount, items != null && marketplaceTotal != null],
-                ['examples', 'Examples', exampleCount, items != null],
-                ['saved', 'Saved', savedCount, items != null],
-                ['marketplace', 'Marketplace', marketplaceCount, marketplaceTotal != null],
-              ] as const
-            ).map(([id, label, count, ready]) => (
-              <button
-                key={id}
-                type="button"
-                className={filter === id ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
-                onClick={() => setFilter(id as typeof filter)}
-                data-testid={id === 'marketplace' ? 'templates-tab-marketplace' : undefined}
-              >
-                {label} {ready ? count : '…'}
-              </button>
-            ))}
-          </div>
-          <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
-            Sort
-            <select
-              className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as TemplateSort)}
-              disabled={filter === 'marketplace'}
-            >
-              {(Object.keys(TEMPLATE_SORT_LABEL) as TemplateSort[]).map((k) => (
-                <option key={k} value={k}>
-                  {TEMPLATE_SORT_LABEL[k]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span className="ml-auto text-[12px] text-ink-400">{shownLabel}</span>
-        </div>
-
-        {/* Plugin facets. Every card lists its required plugins; those chips are
-            now the filter control, so "show me everything that uses ASR" is a
-            click on the card you're already looking at. */}
-        {filter !== 'marketplace' && facets.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-ink-400">
-              Plugin
-            </span>
-            {facets.map(([p, n]) => {
-              const on = activePlugins.includes(p)
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  aria-pressed={on}
-                  className={`rounded-md border px-1.5 py-0.5 text-[11px] transition ${
-                    on
-                      ? 'border-accent-400 bg-accent-50 font-medium text-accent-900'
-                      : 'border-ink-200 bg-white text-ink-600 hover:border-accent-300 hover:text-accent-800'
-                  }`}
-                  onClick={() => togglePlugin(p)}
-                >
-                  {p} <span className={on ? 'text-accent-700' : 'text-ink-400'}>{n}</span>
-                </button>
-              )
-            })}
-            {activePlugins.length > 0 && (
-              <button
-                type="button"
-                className="ml-1 text-[11px] font-medium text-ink-500 hover:text-ink-900"
-                onClick={() => setActivePlugins([])}
-              >
-                Clear {activePlugins.length} filter{activePlugins.length === 1 ? '' : 's'}
-              </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      }
+      toolbar={filterToolbar}
+      bodyClassName="flex h-full min-h-0 flex-col overflow-hidden !px-0 !py-0"
+    >
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="shrink-0 space-y-2.5 px-4 pt-3 sm:px-6">
+          {error && <ErrorBanner message={error} onRetry={() => void load()} />}
+          {syncBanner && (
+            <ErrorBanner
+              title={`Sync finished with ${syncBanner.errors.length} issue${syncBanner.errors.length === 1 ? '' : 's'}`}
+              message={`Imported ${syncBanner.written} template${syncBanner.written === 1 ? '' : 's'}. Review the issues below — the list still shows what succeeded.`}
+              detail={syncBanner.errors
+                .map((e) => (typeof e === 'string' ? e : `${e.id ?? 'item'}: ${e.error ?? 'unknown'}`))
+                .join('\n')}
+              onDismiss={() => setSyncBanner(null)}
+              onRetry={() => void importExamples()}
+            />
+          )}
 
-      {filter === 'marketplace' ? (
-        <MarketplaceBrowse search={search} onStats={onMarketplaceStats} />
-      ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {filter === 'marketplace' ? (
+              <span className="text-[12px] text-ink-400">{shownLabel}</span>
+            ) : (
+              <>
+                <label className="flex items-center gap-1.5 text-[12px] text-ink-500">
+                  Sort
+                  <select
+                    className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px] text-ink-800"
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as TemplateSort)}
+                  >
+                    {(Object.keys(TEMPLATE_SORT_LABEL) as TemplateSort[]).map((k) => (
+                      <option key={k} value={k}>
+                        {TEMPLATE_SORT_LABEL[k]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="ml-auto text-[12px] text-ink-400">{shownLabel}</span>
+              </>
+            )}
+          </div>
 
-      {filter !== 'marketplace' ? (
-      <>
-      {filter === 'all' ? (
-        <h2 className="text-sm font-semibold text-ink-800">Workspace starters ({filtered.length})</h2>
-      ) : null}
-      {items === null ? (
-        <LoadingBlock />
-      ) : filtered.length === 0 ? (
-        <EmptyState icon={EmptyLayoutTemplate}
-          title={
-            search.trim()
-              ? 'No matching templates'
-              : filter === 'examples'
-                ? 'No example templates'
-                : 'No templates'
-          }
-          description={
-            activePlugins.length > 0
-              ? `Nothing requires ${activePlugins.join(' + ')}${search.trim() ? ` and matches “${search.trim()}”` : ''}.`
-              : search.trim()
-                ? `Nothing matches “${search.trim()}”. Try another term or clear search.`
-                : filter === 'examples'
-                  ? 'Sync example graphs from the repo, then open one in Editor.'
-                  : 'Sync examples, save from Editor, or upload a graph file.'
-          }
-          action={
-            /* With facets on, "Sync examples" is the wrong offer — the templates
-               are there, the filter just excluded them. */
-            activePlugins.length > 0 ? (
+          {filter !== 'marketplace' && facets.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-ink-400">
+                Plugin
+              </span>
+              {facets.map(([p, n]) => {
+                const on = activePlugins.includes(p)
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    aria-pressed={on}
+                    className={`rounded-md border px-1.5 py-0.5 text-[11px] transition ${
+                      on
+                        ? 'border-accent-400 bg-accent-50 font-medium text-accent-900'
+                        : 'border-ink-200 bg-white text-ink-600 hover:border-accent-300 hover:text-accent-800'
+                    }`}
+                    onClick={() => togglePlugin(p)}
+                  >
+                    {p} <span className={on ? 'text-accent-700' : 'text-ink-400'}>{n}</span>
+                  </button>
+                )
+              })}
+              {activePlugins.length > 0 && (
+                <button
+                  type="button"
+                  className="ml-1 text-[11px] font-medium text-ink-500 hover:text-ink-900"
+                  onClick={() => setActivePlugins([])}
+                >
+                  Clear {activePlugins.length} filter{activePlugins.length === 1 ? '' : 's'}
+                </button>
+              )}
+            </div>
+          )}
+
+          {filter === 'all' ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-ink-100 bg-ink-50/70 px-3 py-2 text-[12px] text-ink-600">
+              <span>
+                Workspace starters below
+                {marketplaceTotal != null ? (
+                  <>
+                    {' '}
+                    ·{' '}
+                    <span className="font-medium text-ink-800">{marketplaceTotal}</span> in Marketplace
+                  </>
+                ) : null}
+              </span>
               <button
                 type="button"
-                className="btn-secondary"
-                onClick={() => setActivePlugins([])}
+                className="btn-quiet text-[12px]"
+                onClick={() => setFilter('marketplace')}
               >
-                Clear plugin filters
+                Browse Marketplace
               </button>
-            ) : !search.trim() ? (
-              <button type="button" className="btn-secondary" onClick={() => void importExamples()}>
-                Sync examples
-              </button>
-            ) : undefined
-          }
-        />
-      ) : (
-        <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((tpl) => {
-            const name = tpl.name
-            const versions = versionsMap[name] ?? []
-            const latest = latestMap[name]
-            const inputLabel = datasetInputLabel(tpl)
-            const missing = missingNodeTypes(tpl)
-            return (
-              <li
-                key={name}
-                className="group flex flex-col gap-2 rounded-xl border border-ink-200/70 bg-white px-3.5 py-3 shadow-sm transition hover:shadow-soft"
-              >
-                <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="truncate text-type-body font-semibold text-ink-950">
-                        {tpl.title || humanizeTemplateName(name)}
-                      </div>
-                      {/* Redundant while the Examples tab is active — it would
-                          print the same word on all 25 visible cards. */}
-                      {isExample(name) && filter !== 'examples' && (
-                        <span className="shrink-0 rounded-md bg-ink-100 px-1.5 py-px text-type-meta font-medium uppercase tracking-wide text-ink-500">
-                          Example
-                        </span>
-                      )}
-                      {tpl.difficulty ? (
-                        <span className="shrink-0 rounded-md bg-accent-50 px-1.5 py-px text-type-meta font-medium capitalize text-accent-800">
-                          {tpl.difficulty}
-                        </span>
-                      ) : null}
-                    </div>
-                    {/* Several examples share a display name with a saved template once the
-                        "ex-NN-" prefix is stripped (e.g. "call-analytics" vs
-                        "ex-22-call-analytics" both humanize to "Call analytics") — show the
-                        raw slug so those aren't indistinguishable in the list. */}
-                    <div className="truncate font-mono text-type-meta text-ink-400" title={name}>
-                      {name}
-                    </div>
-                    <p className="mt-1 line-clamp-2 text-type-secondary text-ink-600">
-                      {tpl.description?.trim()
-                        ? tpl.description
-                        : 'Open in Editor to inspect nodes and run this pipeline.'}
-                    </p>
-                    {missing.length > 0 ? (
-                      <div
-                        className="mt-1.5 inline-flex max-w-full items-start gap-1 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-type-meta text-amber-900"
-                        title={summarizeMissing(missing, nodeTypePlugins).tooltip}
-                        data-testid="template-missing-plugins"
-                      >
-                        <Puzzle className="mt-px h-3 w-3 shrink-0" />
-                        <span className="min-w-0 break-words">
-                          {summarizeMissing(missing, nodeTypePlugins).label}
-                        </span>
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="relative shrink-0" ref={menuFor === name ? menuRef : undefined}>
-                    <button
-                      type="button"
-                      className="btn-icon"
-                      aria-label={`More actions for ${tpl.title || humanizeTemplateName(name)}`}
-                      aria-expanded={menuFor === name}
-                      aria-haspopup="menu"
-                      onClick={(e) => {
-                        if (menuFor === name) {
-                          setMenuFor(null)
-                          return
-                        }
-                        /* Same clipping fix as the workspaces console: on the last
-                           row of a 30-card grid this opened off the bottom of the
-                           window and Delete was unreachable. */
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        /* Height depends on whether this template has versions —
-                           without them the menu is a single Delete item, and a
-                           fixed worst-case threshold would flip it upwards in
-                           plenty of cases where it fits perfectly well below. */
-                        setMenuUp(
-                          window.innerHeight - rect.bottom <
-                            (versions.length > 0 ? CARD_MENU_HEIGHT_PX : CARD_MENU_HEIGHT_PX / 2),
-                        )
-                        setMenuFor(name)
-                      }}
-                    >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </button>
-                    {menuFor === name && (
-                      <div
-                        role="menu"
-                        className={`absolute right-0 z-20 w-48 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft ${
-                          menuUp ? 'bottom-full mb-1' : 'top-full mt-1'
-                        }`}
-                      >
-                        {versions.length > 0 && (
-                          <ConfirmButton
-                            label="Delete version"
-                            confirmLabel="Confirm version"
-                            danger
-                            onConfirm={() => {
-                              const ver = selectedVersion[name] || latest
-                              if (!ver || ver === 'unversioned') return
-                              void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
-                                method: 'DELETE',
-                                query: { version: ver },
-                              })
-                                .then(load)
-                                .then(() => {
-                                  setMenuFor(null)
-                                  pushToast('Deleted version', 'success')
-                                })
-                                .catch((err) =>
-                                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
-                                )
-                            }}
-                          />
-                        )}
-                        <div className={versions.length > 0 ? 'mt-1' : ''}>
-                          <ConfirmButton
-                            label="Delete"
-                            confirmLabel={
-                              isExample(name) ? 'Confirm delete (Sync examples restores it)' : 'Confirm delete'
-                            }
-                            danger
-                            onConfirm={() =>
-                              void apiJson(`/pipelines/templates/${encodeURIComponent(name)}`, {
-                                method: 'DELETE',
-                              })
-                                .then(load)
-                                .then(() => {
-                                  setMenuFor(null)
-                                  pushToast(`Deleted ${tpl.title || humanizeTemplateName(name)}`, 'success')
-                                })
-                                .catch((err) =>
-                                  pushToast(err instanceof Error ? err.message : String(err), 'error'),
-                                )
-                            }
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <dl className="grid gap-1.5 text-type-secondary text-ink-600">
-                  {/* Same treatment as Outputs: five templates declare no inputs, and
-                      a row reading "None declared" tells you nothing the missing row
-                      doesn't. Not rendered rather than CSS-hidden, so it stays out of
-                      the accessibility tree too. */}
-                  {tpl.inputs?.length ? (
-                  <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
-                    <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Inputs</dt>
-                    {/* The input chip IS the link to Datasets. It previously sat in
-                        the footer as a separate button whose label was truncated to
-                        "speech-comma…" — a cross-link you couldn't read, duplicating
-                        the path already printed on this row. */}
-                    <dd>
-                      {inputLabel ? (
-                        <span className="flex flex-wrap gap-1">
-                          {(tpl.inputs ?? []).slice(0, 4).map((raw) => (
-                            <button
-                              key={raw}
-                              type="button"
-                              className="inline-flex max-w-full items-center gap-1 rounded-md bg-ink-50 px-1.5 py-0.5 text-type-meta text-ink-600 transition hover:bg-accent-50 hover:text-accent-800"
-                              title={`${raw} — open “${inputLabel}” in Datasets`}
-                              onClick={() => {
-                                openData({ mode: 'inputs', label: inputLabel })
-                                pushToast(`Datasets — ${inputLabel} inputs`, 'info')
-                              }}
-                            >
-                              <Database className="h-3 w-3 shrink-0" />
-                              <span className="truncate">{shortPath(raw)}</span>
-                            </button>
-                          ))}
-                        </span>
-                      ) : (
-                        chipList(tpl.inputs, 'None declared', shortPath)
-                      )}
-                    </dd>
-                  </div>
-                  ) : null}
-                  {/* Outputs are declared on fewer than half the templates, so this
-                      row used to print "None declared" on 16 of 30 cards — a line of
-                      nothing, on every card, pushing the real content down. */}
-                  {tpl.outputs?.length ? (
-                    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
-                      <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Outputs</dt>
-                      <dd>
-                        {chipList(tpl.outputs, 'None declared', (s) =>
-                          s.includes('/') ? shortPath(s) : humanNodeLabel(s),
-                        )}
-                      </dd>
-                    </div>
-                  ) : null}
-                  {tpl.required_plugins?.length ? (
-                    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-2">
-                      <dt className="text-type-meta font-medium uppercase tracking-wide text-ink-400">Plugins</dt>
-                      <dd className="flex flex-wrap gap-1">
-                        {/* The same chips that describe the card are the catalogue's
-                            filter control — click one to see everything else that
-                            needs it, instead of retyping it into search. */}
-                        {tpl.required_plugins.map((p) => {
-                          const on = activePlugins.includes(p)
-                          return (
-                            <button
-                              key={p}
-                              type="button"
-                              aria-pressed={on}
-                              title={
-                                on
-                                  ? `Stop filtering by ${p}`
-                                  : `Show only templates that need ${p}`
-                              }
-                              className={`rounded-md px-1.5 py-0.5 text-type-meta transition ${
-                                on
-                                  ? 'bg-accent-100 font-medium text-accent-900'
-                                  : 'bg-ink-50 text-ink-600 hover:bg-accent-50 hover:text-accent-800'
-                              }`}
-                              onClick={() => togglePlugin(p)}
-                            >
-                              {p}
-                            </button>
-                          )
-                        })}
-                      </dd>
-                    </div>
-                  ) : null}
-                </dl>
-
-                {/* Tags were fetched for all 30 templates and shown on none of them —
-                    they only fed the invisible search blob. They are the fastest way
-                    to tell "asr + llm + call-analytics" from "edge + deploy". */}
-                {tpl.tags?.some((t) => !HIDDEN_TAGS.has(t)) ? (
-                  <div className="flex flex-wrap gap-1">
-                    {tpl.tags
-                      .filter((t) => !HIDDEN_TAGS.has(t))
-                      .slice(0, 5)
-                      .map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          className="rounded-full border border-ink-200/80 px-1.5 py-px text-type-meta text-ink-500 transition hover:border-accent-300 hover:text-accent-800"
-                          title={`Search for “${t}”`}
-                          onClick={() => setSearch(t)}
-                        >
-                          {t}
-                        </button>
-                      ))}
-                  </div>
-                ) : null}
-
-                {/* The node list used to be a comma-joined grey line at the card's
-                    bottom edge — the one piece of content that actually says what a
-                    template *does*, styled as the least important thing on the card.
-                    Shown as the pipeline it describes instead, so the gallery is
-                    scannable without opening every graph. */}
-                {tpl.node_types?.length ? (
-                  <div
-                    className="flex flex-wrap items-center gap-x-1 gap-y-1 rounded-lg bg-ink-50/70 px-2 py-1.5"
-                    title={tpl.node_types.map(humanNodeLabel).join(' → ')}
-                  >
-                    {tpl.node_types.slice(0, 4).map((nt, i) => (
-                      <React.Fragment key={`${nt}-${i}`}>
-                        {i > 0 && <ChevronRight className="h-3 w-3 shrink-0 text-ink-300" />}
-                        <span className="truncate text-type-meta font-medium text-ink-600">
-                          {humanNodeLabel(nt)}
-                        </span>
-                      </React.Fragment>
-                    ))}
-                    {tpl.node_types.length > 4 && (
-                      <span className="text-type-meta text-ink-400">+{tpl.node_types.length - 4}</span>
-                    )}
-                  </div>
-                ) : null}
-
-                <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-ink-100 pt-2">
-                  {versions.length > 0 ? (
-                    <>
-                      <span className="text-type-meta text-ink-500">
-                        Latest {latest && latest !== 'unversioned' ? latest : versions[0]}
-                      </span>
-                      <select
-                        className="rounded-md border border-ink-200 bg-white px-1.5 py-0.5 text-type-meta"
-                        value={selectedVersion[name] ?? latest ?? ''}
-                        onChange={(e) =>
-                          setSelectedVersion((s) => ({ ...s, [name]: e.target.value }))
-                        }
-                        aria-label={`Version for ${tpl.title || humanizeTemplateName(name)}`}
-                      >
-                        {versions.map((v) => (
-                          <option key={v} value={v}>
-                            {v}
-                          </option>
-                        ))}
-                      </select>
-                    </>
-                  ) : (tpl.node_count ?? 0) > 0 ? (
-                    <span className="text-type-meta text-ink-400">
-                      {tpl.node_count} node{(tpl.node_count ?? 0) === 1 ? '' : 's'}
-                    </span>
-                  ) : null}
-                  {/* The Datasets cross-link moved onto the Inputs chip above: as a
-                      footer button its label was truncated to "speech-comma…", and it
-                      restated a path the card already printed one row up. The footer
-                      is now just the primary action, in the same place on every card. */}
-                  <div className="ml-auto flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      title={
-                        activeProject
-                          ? `Copy this graph into ${activeProject} and open it in the Editor`
-                          : 'Pick a workspace, then open this graph in the Editor'
-                      }
-                      onClick={() => void loadIntoBuilder(name)}
-                    >
-                      Open in Editor
-                    </button>
-                  </div>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-
-      {filter === 'all' ? (
-        <div className="space-y-3 border-t border-ink-200/80 pt-5">
-          <h2 className="text-sm font-semibold text-ink-800">
-            Marketplace ({marketplaceTotal ?? '…'})
-          </h2>
-          <MarketplaceBrowse search={search} onStats={onMarketplaceStats} />
+            </div>
+          ) : null}
         </div>
-      ) : null}
 
-      </> ) : null}
+        {filter === 'marketplace' ? (
+          <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 sm:px-6">
+            <MarketplaceBrowse search={search} onStats={onMarketplaceStats} />
+          </div>
+        ) : items === null ? (
+          <div className="px-4 sm:px-6">
+            <LoadingBlock />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="px-4 sm:px-6">
+            <EmptyState
+              icon={EmptyLayoutTemplate}
+              title={
+                search.trim()
+                  ? 'No matching templates'
+                  : filter === 'examples'
+                    ? 'No example templates'
+                    : 'No templates'
+              }
+              description={
+                activePlugins.length > 0
+                  ? `Nothing requires ${activePlugins.join(' + ')}${search.trim() ? ` and matches “${search.trim()}”` : ''}.`
+                  : search.trim()
+                    ? `Nothing matches “${search.trim()}”. Try another term or clear search.`
+                    : filter === 'examples'
+                      ? 'Sync example graphs from the repo, then open one in Editor.'
+                      : 'Sync examples, save from Editor, or upload a graph file.'
+              }
+              action={
+                activePlugins.length > 0 ? (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setActivePlugins([])}
+                  >
+                    Clear plugin filters
+                  </button>
+                ) : !search.trim() ? (
+                  <button type="button" className="btn-secondary" onClick={() => void importExamples()}>
+                    Sync examples
+                  </button>
+                ) : undefined
+              }
+            />
+          </div>
+        ) : (
+          <MasterDetail
+            className="min-h-0 flex-1 px-4 pb-4 sm:px-6"
+            listLabel="templates"
+            collapsible
+            defaultSize={300}
+            masterClassName="!bg-transparent"
+            detailClassName="!pl-4"
+            master={
+              <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white">
+                {filtered.map((tpl) => {
+                  const active = tpl.name === selectedName
+                  return (
+                    <li key={tpl.name}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedName(tpl.name)}
+                        className={clsx(
+                          'ide-row w-full flex-col items-start gap-0.5 !py-2 !px-3',
+                          active && 'is-active',
+                        )}
+                      >
+                        <span className="w-full truncate font-medium text-ink-950">
+                          {tpl.title || humanizeTemplateName(tpl.name)}
+                        </span>
+                        <span
+                          className="w-full truncate font-mono text-[11px] text-ink-400"
+                          title={tpl.name}
+                        >
+                          {tpl.name}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            }
+            detail={
+              selectedTpl ? (
+                renderTemplateDetail(selectedTpl)
+              ) : (
+                <EmptyState
+                  compact
+                  title="Select a template"
+                  description="Choose a template from the list to preview details and open it in the Editor."
+                />
+              )
+            }
+          />
+        )}
+      </div>
 
       {projectGate && (
         <div
@@ -1073,7 +1095,7 @@ export default function TemplatesView() {
           onClick={() => !projectGateBusy && setProjectGate(null)}
         >
           <div
-            className="w-full max-w-md rounded-2xl border border-ink-200 bg-white p-5 shadow-xl"
+            className="w-full max-w-md rounded-lg border border-ink-200 bg-white p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 id="project-gate-title" className="text-lg font-semibold text-ink-950">
@@ -1153,6 +1175,6 @@ export default function TemplatesView() {
           </div>
         </div>
       )}
-    </div>
+    </WorkbenchPage>
   )
 }

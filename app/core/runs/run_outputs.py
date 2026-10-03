@@ -6,10 +6,12 @@ Owns:             Jail roots, allow-list, listing run outputs, zip packing.
 Public Surface:   list_run_output_files (entries may include node_id),
                   list_run_output_files_detail (items + per-node truncation +
                   inputs_by_node; prioritised, per-node-fair 400 cap),
+                  list_run_output_files_for_zip (higher cap for zip packs),
                   list_node_output_files (page one node's files),
                   is_project_metadata_path, resolve_download_path,
                   natural_sort_key (listing order: digit runs compared numerically),
-                  pack_outputs_zip, OutputPathError, ALLOWED_SUFFIXES.
+                  pack_outputs_zip (node_id/ subfolders; returns bytes + truncated),
+                  OutputPathError, ALLOWED_SUFFIXES.
 Must NOT:         Serve files outside project_dir, graphyn_home, or repo examples/,
                   nor config/secret files inside them (webhooks.json, plugin
                   registry, credentials/secrets/audit dirs, *.sqlite, dotfiles);
@@ -102,6 +104,9 @@ _MAX_DATASET_WAVS = 3
 _MAX_DATASET_DEPTH = 3  # dataset / <name> / v1 / train|val|test
 
 _MAX_LISTED_FILES = 400
+# Zip download uses a higher prioritised cap so "Download all" is closer to complete
+# than the UI listing (still bounded — huge wav trees are not fully packed).
+_MAX_ZIP_FILES = 2000
 # Candidates gathered before prioritised selection trims to _MAX_LISTED_FILES.
 _MAX_CANDIDATES = 5000
 # Share of the cap reserved (at most) for model / metrics / small summary files.
@@ -1641,12 +1646,20 @@ def _expand_artifact_entry(
 
 
 def _list_run_outputs(
-    run_id: str, run_dir: Path
+    run_id: str,
+    run_dir: Path,
+    *,
+    max_files: int = _MAX_LISTED_FILES,
+    sample_cap: int | None = 32,
 ) -> tuple[list[dict[str, Any]], _ListingContext]:
     """Build the downloadable listing from ArtifactStore inventories.
 
     Preferred path: ``outputs_index.json`` (ArtifactRecord refs) expanded via
     ``ArtifactTypeHandler.list_files``. Does not walk domain trees.
+    ``max_files`` caps the prioritised selection (UI listing vs zip).
+    ``sample_cap`` limits how many files each ArtifactStore entry contributes
+    before selection (UI keeps 32 so huge wav dumps do not starve the list;
+    zip passes ``None`` so the higher zip budget can include more clips).
     """
     from app.core.runs.outputs_index import (
         artifacts_from_index,
@@ -1673,7 +1686,7 @@ def _list_run_outputs(
 
     index = ensure_outputs_index(run_id, run_dir)
     for entry in artifacts_from_index(index):
-        paths, total, node_id = _expand_artifact_entry(entry, sample_cap=32)
+        paths, total, node_id = _expand_artifact_entry(entry, sample_cap=sample_cap)
         if node_id:
             ctx.summarized_totals[node_id] = max(
                 ctx.summarized_totals.get(node_id, 0), total
@@ -1735,7 +1748,8 @@ def _list_run_outputs(
         node_of[key] = _resolve_attributed_node(
             path, attribution.get(key), all_nodes, graph
         )
-    selected = _select_listing(collected, node_of, order, run_dir, _MAX_LISTED_FILES)
+    cap = max(1, int(max_files))
+    selected = _select_listing(collected, node_of, order, run_dir, cap)
     if len(selected) < len(collected):
         ctx.capped = True
     entries = [file_entry(path, node_id=node_of.get(str(path))) for path in selected]
@@ -1857,11 +1871,24 @@ def list_node_output_files(
     }
 
 
-def pack_outputs_zip(entries: list[dict[str, Any]]) -> bytes:
-    """Zip listed files; names are uniqued by parent folder when needed."""
+def _safe_zip_component(name: str) -> str:
+    """Filesystem-safe single path segment for zip member folders."""
+    text = re.sub(r"[^\w.\-]+", "_", str(name or "").strip(), flags=re.UNICODE)
+    text = text.strip("._")[:80]
+    return text or "run"
+
+
+def pack_outputs_zip(entries: list[dict[str, Any]]) -> tuple[bytes, bool, int]:
+    """Zip listed files under ``<node_id>/<filename>`` (``run/`` when unattributed).
+
+    Returns ``(zip_bytes, truncated, file_count)`` — ``truncated`` is True when the
+    byte budget stopped packing before every entry.
+    """
     buf = io.BytesIO()
     used_names: set[str] = set()
     total = 0
+    packed = 0
+    truncated = False
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for entry in entries:
             if entry.get("kind") == "dir":
@@ -1877,13 +1904,51 @@ def pack_outputs_zip(entries: list[dict[str, Any]]) -> bytes:
                 continue
             total += size
             if total > _MAX_ZIP_BYTES:
+                truncated = True
                 break
-            arc = path.name
+            folder = _safe_zip_component(str(entry.get("node_id") or "run"))
+            arc = f"{folder}/{path.name}"
             if arc in used_names:
-                arc = f"{path.parent.name}_{path.name}"
+                stem = path.stem
+                suffix = path.suffix
+                n = 2
+                while True:
+                    candidate = f"{folder}/{stem}_{n}{suffix}"
+                    if candidate not in used_names:
+                        arc = candidate
+                        break
+                    n += 1
             used_names.add(arc)
             zf.write(path, arcname=arc)
-    return buf.getvalue()
+            packed += 1
+    return buf.getvalue(), truncated, packed
+
+
+def list_run_output_files_for_zip(
+    run_id: str, run_dir: Path
+) -> tuple[list[dict[str, Any]], bool]:
+    """Prioritised listing for zip download (higher cap than the UI list).
+
+    Expands each ArtifactStore inventory without the UI sample_cap=32 so
+    Dataset Ingest (and similar) can contribute more than a preview handful.
+    Still prioritised + capped at ``_MAX_ZIP_FILES`` / byte budget.
+    """
+    entries, ctx = _list_run_outputs(
+        run_id, run_dir, max_files=_MAX_ZIP_FILES, sample_cap=None
+    )
+    # Truncated when selection or known inventory totals exceed what we packed.
+    listing_short = bool(ctx.capped)
+    if not listing_short:
+        shown: dict[str, int] = {}
+        for entry in entries:
+            nid = entry.get("node_id")
+            if nid and entry.get("kind") != "dir":
+                shown[nid] = shown.get(nid, 0) + 1
+        for nid, total in ctx.summarized_totals.items():
+            if total > shown.get(nid, 0):
+                listing_short = True
+                break
+    return entries, listing_short
 
 # Public names. A leading underscore stays private to this module.
 load_run_graph = _load_run_graph

@@ -3,7 +3,8 @@ import { KeyRound as EmptyKeyRound } from 'lucide-react'
 import { KeyRound, RefreshCw, Search } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock, PageHeader } from '../../components/ui'
+import { ConfirmButton, EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
+import { WorkbenchPage } from '../../layout'
 
 type CredItem = {
   id: string
@@ -160,18 +161,17 @@ export default function CredentialsView() {
   })
 
   return (
-    <div className="h-full min-h-0 overflow-auto p-6">
-      <PageHeader
-        title="Credentials"
-        description="Platform connections by kind. Graphs store connection ids only — secrets never leave the store."
-        actions={
-          <button type="button" className="btn-secondary" onClick={() => void load()}>
-            <RefreshCw className="h-3.5 w-3.5" />
-            Refresh
-          </button>
-        }
-      />
-      <p className="mb-3 max-w-2xl rounded-xl border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
+    <WorkbenchPage
+      title="Credentials"
+      description="Platform connections by kind. Graphs store connection ids only — secrets never leave the store."
+      actions={
+        <button type="button" className="btn-secondary" onClick={() => void load()}>
+          <RefreshCw className="h-3.5 w-3.5" />
+          Refresh
+        </button>
+      }
+    >
+      <p className="mb-3 max-w-2xl rounded-lg border border-ink-100 bg-white px-3 py-2 text-[12px] text-ink-600">
         Precedence: explicit connection id → workspace default for kind → env bootstrap
         (<code className="font-mono">OPENAI_API_KEY</code>, <code className="font-mono">GRAPHYN_SMTP_*</code>, …).
         Raw secrets are never returned by the API. Editor nodes pick a connection via the inspector
@@ -187,7 +187,7 @@ export default function CredentialsView() {
         <label className="block text-sm text-ink-600">
           Name
           <input
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 font-mono text-sm"
+            className="field-control mt-1 font-mono text-sm"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="prod-openai"
@@ -197,7 +197,7 @@ export default function CredentialsView() {
         <label className="mt-3 block text-sm text-ink-600">
           Kind
           <select
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 text-sm"
+            className="field-control mt-1 text-sm"
             value={kind}
             onChange={(e) => setKind(e.target.value)}
           >
@@ -211,7 +211,7 @@ export default function CredentialsView() {
         <label className="mt-3 block text-sm text-ink-600">
           Payload (JSON)
           <textarea
-            className="mt-1 w-full rounded-lg border border-ink-200 px-3 py-2 font-mono text-sm"
+            className="field-control mt-1 font-mono text-sm"
             rows={6}
             value={payloadJson}
             onChange={(e) => setPayloadJson(e.target.value)}
@@ -230,7 +230,7 @@ export default function CredentialsView() {
       <div className="mb-3 flex items-center gap-2">
         <Search className="h-4 w-4 text-ink-400" />
         <input
-          className="w-full max-w-sm rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
+          className="field-control w-full max-w-sm text-sm"
           placeholder="Filter by name / kind / id"
           value={listQuery}
           onChange={(e) => setListQuery(e.target.value)}
@@ -240,11 +240,15 @@ export default function CredentialsView() {
       {loading ? (
         <LoadingBlock label="Loading credentials…" />
       ) : filtered.length === 0 ? (
-        <EmptyState icon={EmptyKeyRound} title="No credentials" description="Create a connection above. Values are stored encrypted under GRAPHYN_HOME/credentials." />
+        <EmptyState
+          icon={EmptyKeyRound}
+          title="No credentials"
+          description="Create a connection above. Values are stored encrypted under GRAPHYN_HOME/credentials."
+        />
       ) : (
-        <ul className="divide-y divide-ink-100 rounded-2xl border border-ink-200 bg-white">
+        <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white">
           {filtered.map((c) => (
-            <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <li key={c.id} className="ide-row flex-wrap justify-between gap-3 !px-4 !py-3">
               <div>
                 <div className="font-mono text-sm text-ink-900">
                   {c.name}{' '}
@@ -312,6 +316,6 @@ export default function CredentialsView() {
           ))}
         </ul>
       )}
-    </div>
+    </WorkbenchPage>
   )
 }

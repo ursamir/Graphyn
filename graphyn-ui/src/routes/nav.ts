@@ -77,7 +77,8 @@ export const JUMP_KEYS: Record<string, AppView> = {
   r: 'runs',
   o: 'runs',
   e: 'runs',
-  a: 'artifacts',
+  /** A → Runs → Run outputs (handled specially in App when lastRunId set). */
+  a: 'runs',
   d: 'data',
   j: 'projects',
   g: 'edge',
@@ -90,13 +91,12 @@ export const JUMP_KEYS: Record<string, AppView> = {
 }
 
 /** Human label for a view's primary jump key, shown in the shortcuts overlay's
- * Navigation section (secondary Runs-panel keys — o/e — are listed separately). */
+ * Navigation section (secondary Runs-panel keys — o/e/a — are listed separately). */
 export const NAV_SHORTCUT_LABEL: Partial<Record<AppView, string>> = {
   projects: 'Home (workspace overview)',
   builder: 'Editor',
   runs: 'Runs (History)',
   data: 'Datasets',
-  artifacts: 'Artifacts (cross-run registry)',
   templates: 'Templates',
   proposals: 'Agent inbox',
   plugins: 'Library · Plugins',

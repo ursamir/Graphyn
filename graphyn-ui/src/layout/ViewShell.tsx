@@ -9,12 +9,19 @@ type ViewShellProps = {
   title: string
   description?: string
   actions?: React.ReactNode
-  /** Optional second row under the title (tabs, filters). */
+  /** Optional tabs/filters — second row by default, or inline beside the title. */
   toolbar?: React.ReactNode
+  /**
+   * When true, title + toolbar + actions share one row (dense IDE pages like Runs).
+   * Description, if present, still sits under the title on a second line.
+   */
+  inlineToolbar?: boolean
   children: React.ReactNode
   className?: string
   /** Extra class on the content (body) region. */
   contentClassName?: string
+  /** Extra class on the page-shell-header. */
+  headerClassName?: string
 }
 
 export function ViewShell({
@@ -22,25 +29,50 @@ export function ViewShell({
   description,
   actions,
   toolbar,
+  inlineToolbar = false,
   children,
   className,
   contentClassName,
+  headerClassName,
 }: ViewShellProps) {
   return (
-    <div className={clsx('flex h-full min-h-0 flex-col', className)}>
-      <div className="relative z-10 shrink-0 border-b border-ink-200/70 bg-white/90 px-5 py-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-type-page text-ink-950">{title}</h1>
-            {description ? (
-              <p className="mt-0.5 text-type-meta text-ink-400">{description}</p>
+    <div className={clsx('flex h-full min-h-0 flex-col bg-white', className)}>
+      <div className={clsx('page-shell-header relative z-10', inlineToolbar && '!py-1.5', headerClassName)}>
+        {inlineToolbar ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <div className="min-w-0 shrink-0">
+              <h1 className="text-[15px] font-semibold leading-tight tracking-tight text-ink-950">
+                {title}
+              </h1>
+              {description ? (
+                <p className="mt-0.5 text-type-meta text-ink-500">{description}</p>
+              ) : null}
+            </div>
+            {toolbar ? <div className="min-w-0">{toolbar}</div> : null}
+            {actions ? (
+              <div className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</div>
             ) : null}
           </div>
-          {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
-        </div>
-        {toolbar ? <div className="mt-2.5">{toolbar}</div> : null}
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h1 className="text-[15px] font-semibold leading-tight tracking-tight text-ink-950">
+                  {title}
+                </h1>
+                {description ? (
+                  <p className="mt-0.5 text-type-meta text-ink-500">{description}</p>
+                ) : null}
+              </div>
+              {actions ? <div className="flex flex-wrap items-center gap-1.5">{actions}</div> : null}
+            </div>
+            {toolbar ? <div className="mt-2">{toolbar}</div> : null}
+          </>
+        )}
       </div>
-      <div className={clsx('min-h-0 flex-1 overflow-hidden', contentClassName)}>{children}</div>
+      <div className={clsx('min-h-0 flex-1 overflow-hidden bg-[var(--surface-muted)]', contentClassName)}>
+        {children}
+      </div>
     </div>
   )
 }

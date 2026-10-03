@@ -61,13 +61,76 @@ function ImageViewer(props: FileViewerProps) {
 }
 
 function AudioViewer(props: FileViewerProps) {
+  const [playUrl, setPlayUrl] = React.useState<string | null>(null)
+  const [failed, setFailed] = React.useState(false)
+  const [converting, setConverting] = React.useState(false)
+
+  React.useEffect(() => {
+    let revoked: string | null = null
+    let cancelled = false
+    setFailed(false)
+    setPlayUrl(null)
+    if (!props.blobUrl) return
+
+    const sourceUrl = props.blobUrl
+    const name = (props.name || props.path || '').toLowerCase()
+    const looksWav = name.endsWith('.wav')
+    if (!looksWav) {
+      setPlayUrl(sourceUrl)
+      return
+    }
+
+    setConverting(true)
+    void (async () => {
+      try {
+        const { wavBufferToPlayableObjectUrl } = await import('../../lib/wavPlayable')
+        const res = await fetch(sourceUrl)
+        const buf = await res.arrayBuffer()
+        if (cancelled) return
+        const converted = wavBufferToPlayableObjectUrl(buf)
+        if (converted) {
+          revoked = converted
+          setPlayUrl(converted)
+        } else {
+          setPlayUrl(sourceUrl)
+        }
+      } catch {
+        if (!cancelled) setPlayUrl(sourceUrl)
+      } finally {
+        if (!cancelled) setConverting(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      if (revoked) URL.revokeObjectURL(revoked)
+    }
+  }, [props.blobUrl, props.name, props.path])
+
   if (!props.blobUrl) return <p className="text-sm text-ink-500">No audio preview.</p>
+  if (converting && !playUrl) return <p className="text-sm text-ink-500">Preparing audio…</p>
+  if (!playUrl) return <p className="text-sm text-ink-500">No audio preview.</p>
   return (
     <div className="space-y-2">
-      <audio controls preload="metadata" className="w-full" src={props.blobUrl}>
+      <audio
+        key={playUrl}
+        controls
+        preload="auto"
+        className="w-full"
+        src={playUrl}
+        onError={() => setFailed(true)}
+      >
         Your browser does not support audio playback.
       </audio>
-      <p className="text-[11px] text-ink-400">If playback fails, download the file — MIME may be wrong on disk.</p>
+      {failed ? (
+        <p className="text-[11px] text-rose-700">
+          Playback failed — use Download. This file may use an unsupported codec.
+        </p>
+      ) : (
+        <p className="text-[11px] text-ink-400">
+          Float32 / wide PCM WAVs are converted for browser playback when possible.
+        </p>
+      )}
     </div>
   )
 }
@@ -243,8 +306,8 @@ function ModelViewer(props: FileViewerProps) {
         <Box className="h-4 w-4" /> {fmt} artifact
       </div>
       <p className="text-xs text-ink-500">
-        Weights / graph binaries are not rendered inline. Download or open from disk; use Edge / Models
-        for packaging and promotion.
+        Weights / graph binaries are not rendered inline. Download or open from disk. For trained
+        models, packaging and promotion live under Ship / Models.
       </p>
       {props.size != null ? <p className="text-xs text-ink-500">Size: {formatBytes(props.size)}</p> : null}
       <CopyableMono value={props.path} />

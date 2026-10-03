@@ -24,7 +24,6 @@ const VIEW_JUMPS: Array<{ id: AppView; label: string; keywords?: string }> = [
   { id: 'runs', label: 'Runs', keywords: 'runs history r' },
   { id: 'models', label: 'Models', keywords: 'models registry mlflow m' },
   { id: 'data', label: 'Datasets', keywords: 'datasets inputs outputs d library' },
-  { id: 'artifacts', label: 'Artifacts', keywords: 'artifacts files a browse registry' },
   { id: 'templates', label: 'Templates', keywords: 'starter build t' },
   { id: 'proposals', label: 'Agent inbox', keywords: 'pr agent proposals p' },
   { id: 'plugins', label: 'Library · Plugins', keywords: 'catalog library plugins l' },
@@ -223,13 +222,15 @@ export function CommandPalette({
         },
       })
       out.push({
-        id: 'workspace:files',
-        label: 'Artifacts',
-        hint: activeProject,
-        group: 'Library & admin',
-        keywords: 'artifacts files browse library',
+        id: 'workspace:outputs',
+        label: 'Runs → Run outputs',
+        hint: lastRunId ? shortRunId(lastRunId) : 'last run',
+        group: 'Runs panels',
+        keywords: 'artifacts files outputs browse a',
         run: () => {
-          openArtifacts({ project: activeProject })
+          const rid = useAppStore.getState().lastRunId
+          if (rid) openArtifacts({ runId: rid, project: activeProject })
+          else goView('runs')
           setOpen(false)
         },
       })

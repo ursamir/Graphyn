@@ -1,7 +1,8 @@
 import React from 'react'
 import { Cpu as EmptyCpu } from 'lucide-react'
 import { AlertTriangle, Cpu, Radio } from 'lucide-react'
-import { EmptyState, PageHeader } from '../../components/ui'
+import { EmptyState } from '../../components/ui'
+import { WorkbenchPage } from '../../layout'
 import { paths } from '../../routes/paths'
 import { navigatePath } from '../../routes/parsePath'
 
@@ -69,23 +70,21 @@ export default function DevicesView({
   // Brief placeholder while redirecting into Ship → Devices when workspace is open.
   if (workspaceId?.trim()) {
     return (
-      <div className="h-full min-h-0 overflow-y-auto p-6 space-y-4">
-        <PageHeader
-          title="Devices"
-          description={`Opening Ship → Devices for workspace ${workspaceId}…`}
-        />
+      <WorkbenchPage
+        title="Devices"
+        description={`Opening Ship → Devices for workspace ${workspaceId}…`}
+      >
         {body}
-      </div>
+      </WorkbenchPage>
     )
   }
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-4">
-      <PageHeader
-        title="Devices"
-        description="Global device fleet — needs-API until device registry ships (no fake OTA)."
-      />
+    <WorkbenchPage
+      title="Devices"
+      description="Global device fleet — needs-API until device registry ships (no fake OTA)."
+    >
       {body}
-    </div>
+    </WorkbenchPage>
   )
 }

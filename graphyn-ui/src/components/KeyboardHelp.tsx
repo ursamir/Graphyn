@@ -15,7 +15,6 @@ const NAV_ORDER: AppView[] = [
   // Library & admin / global groups
   'templates',
   'proposals',
-  'artifacts',
   'plugins',
   'workers',
   'credentials',
@@ -44,7 +43,8 @@ const SECTIONS: Array<{ title: string; rows: Array<{ keys: string; action: strin
   {
     title: 'Runs panels (secondary)',
     rows: [
-      { keys: 'O', action: 'Runs → Lineage (last run, deep link)' },
+      { keys: 'O', action: 'Runs → Lineage (last run)' },
+      { keys: 'A', action: 'Runs → Run outputs (last run)' },
       { keys: 'E', action: 'Runs → Compare runs…' },
     ],
   },

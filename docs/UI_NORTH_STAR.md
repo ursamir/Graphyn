@@ -67,8 +67,8 @@ This document is the **master checklist**. Pillar gaps, API holes, screens, jour
 | **Workspace / Home** | Project context | Dataset-only folder |
 | **Editor** | GraphIR canvas | Do not show `#/builder` or raw route ids in chrome |
 | **Runs** | Execution history + Live + Compare | The Editor **Run** button |
-| **Run outputs** | Per-run downloadable files | Datasets or Artifacts |
-| **Artifacts** | Cross-run registry / ids | Run outputs panel |
+| **Run outputs** | Per-run downloadable files | Datasets |
+| **Lineage** | Per-run audit trail | Cross-run registry (removed) |
 | **Datasets** | Shared Inputs/Outputs under `workspace/datasets` | Run downloads |
 | **Models** | Registry versions + stages | Raw trainer artifacts until registered |
 | **Ship** | Edge package + devices | Worker fleet |
@@ -93,7 +93,6 @@ Library
   Datasets
   Plugins
   Models *NEW*        global browse → open filters by project
-  Artifacts           cross-run registry (secondary)
 Deploy
   Ship / Edge         packages + devices (global device fleet ok)
   Worker fleet
@@ -105,19 +104,19 @@ Admin
 
 ### 4.2 Workspace open — activity strip
 
-**✓ Shipped (IDE chrome):** Stable rail always — strip Home · Editor · Runs · Models · Ship · Datasets (enabled only with `activeProject`); groups Build / Library (Plugins, Artifacts) / Deploy (Workers) / Admin never include Models/Ship/Datasets. Details: `docs/UI_WORKSPACE_IDE.md`.
+**✓ Shipped (IDE chrome):** Stable rail always — strip Home · Editor · Runs · Models · Ship · Datasets (enabled only with `activeProject`); groups Build / Library (Plugins) / Deploy (Workers) / Admin never include Models/Ship/Datasets. Library Artifacts removed. Details: `docs/UI_WORKSPACE_IDE.md`.
 
 ```
 Home          Situation · pipelines · linked data · always-on · next actions
 Editor        Canvas · Triggers dock · Agent drawer · placement (Mode B)
-Runs          History | Live | Compare
-              panels: Logs · Run outputs · Lineage · Details · Checkpoints
+Runs          list + detail (Active filter; Compare from multi-select)
+              panels: Summary · Run outputs · Logs · Lineage · Checkpoints (when present)
 Models *NEW*  Registry for this workspace
 Datasets      Linked pins + jump to library
 Ship *NEW*    Package wizard · Devices · assign
 ───────────
 Library & admin (collapsed):
-  Templates · Agent inbox · Artifacts · Plugins · Workers · Secrets · Ops · Access
+  Templates · Agent inbox · Plugins · Workers · Secrets · Ops · Access
 ```
 
 ### 4.3 URL architecture — path routes (production)
@@ -148,7 +147,7 @@ Library & admin (collapsed):
 | `/library/datasets/inputs/:label` | Input detail | |
 | `/library/datasets/outputs/:project/:version?` | Output browse | |
 | `/library/plugins` | Plugins | |
-| `/library/artifacts` | Artifacts registry | Query: `?artifactId=` |
+| `/library/artifacts` | **Removed** — redirects to Runs (artifact id resolves → outputs/lineage) | Legacy bookmarks only |
 | `/library/models` | Models (global) | Optional; often redirect into workspace |
 | `/deploy/ship` | Ship (global) | Package when no workspace; prefer workspace Ship |
 | `/deploy/ship/devices` | Device fleet | |
@@ -199,9 +198,9 @@ Library & admin (collapsed):
 | `#/runs?tab=compare` | `/workspaces/{W}/runs/compare` |
 | `#/experiments` | `/workspaces/{W}/runs/compare` |
 | `#/trace?run_id=` | `/workspaces/{W}/runs/{id}/lineage` |
-| `#/trace?artifact_id=` | `/library/artifacts?artifactId=` → lineage sheet |
+| `#/trace?artifact_id=` | Resolve `GET /artifacts/{id}` → `/workspaces/{W}/runs/{runId}/lineage` |
 | `#/data` | `/library/datasets` or `/workspaces/{W}/datasets` |
-| `#/artifacts` | `/library/artifacts` |
+| `#/artifacts` | Runs list or resolve `?artifactId=` → Run outputs |
 | `#/templates` | `/templates` |
 | `#/proposals` | `/agent/inbox` |
 | `#/edge` | `/workspaces/{W}/ship` or `/deploy/ship` |
@@ -597,7 +596,7 @@ Any artifact/model/package/device build → Lineage (A7/A17) → Replay → Repr
 - Tabs: History | **Live** (B3) | Compare  
 - History: filters by metric/param (A12); multi-select callout before Compare (U2)  
 - Compare: table + charts (A3); export CSV (D7)  
-- Panels: Logs · Run outputs · Lineage · Details · Checkpoints  
+- Panels: Summary · Run outputs · Logs · Lineage · Checkpoints (when present); **Register model** (Summary CTA + chrome) only if the run produced a model artifact; Lineage = paper trail (not a peer nav) 
 - Actions: promote aliases, Register model (A4), Ship, Open Editor, Explain failure (A15)  
 - Breadcrumb entity = short run id (U3)
 
@@ -614,10 +613,10 @@ Any artifact/model/package/device build → Lineage (A7/A17) → Replay → Repr
 - Label/collect lite (C2)  
 - Ingest job progress / SSE (C14)
 
-### 8.6 Artifacts
-- Cross-run registry; prefer Run outputs for one run  
-- Register model CTA (A4)  
-- Trace / Replay / Repro (B7)
+### 8.6 Artifacts (UI removed)
+- No Library → Artifacts page; use Runs → **Run outputs** / **Lineage**  
+- Legacy `/library/artifacts?artifactId=` resolves via API → run panel  
+- Register model from Runs Summary (A4); Repro pack from Lineage (B7)
 
 ### 8.7 Ship (Edge)
 - Tabs: Package | Devices  

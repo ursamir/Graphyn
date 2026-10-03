@@ -9,24 +9,107 @@ export function EmptyState({
   description,
   action,
   icon: Icon = Inbox,
+  compact = false,
 }: {
   title: string
   description?: string
   action?: React.ReactNode
   /** lucide-react icon shown in the badge above the title (default: Inbox). */
   icon?: LucideIcon
+  /** Dense empty for side panes / master lists. */
+  compact?: boolean
 }) {
   return (
-    <div className="empty-state-shell">
+    <div className={clsx('empty-state-shell', compact && 'empty-state-shell-compact')}>
       <div
-        className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl border border-ink-200/60 bg-white text-ink-400 shadow-sm"
+        className={clsx(
+          'mb-3 flex items-center justify-center rounded-lg border border-ink-200/60 bg-white text-ink-400 shadow-sm',
+          compact ? 'h-8 w-8' : 'h-10 w-10',
+        )}
         aria-hidden
       >
-        <Icon className="h-5 w-5" strokeWidth={1.75} />
+        <Icon className={compact ? 'h-4 w-4' : 'h-5 w-5'} strokeWidth={1.75} />
       </div>
       <div className="text-type-section tracking-tight text-ink-900">{title}</div>
-      {description && <p className="mt-2 max-w-md text-type-body leading-relaxed text-ink-500">{description}</p>}
-      {action && <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{action}</div>}
+      {description && (
+        <p className={clsx('max-w-md text-type-body leading-relaxed text-ink-500', compact ? 'mt-1' : 'mt-2')}>
+          {description}
+        </p>
+      )}
+      {action && (
+        <div className={clsx('flex flex-wrap items-center justify-center gap-2', compact ? 'mt-3' : 'mt-5')}>
+          {action}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Underline page tabs (Plugins, Ops, …). */
+export function IdeTabs<T extends string>({
+  value,
+  options,
+  onChange,
+  'aria-label': ariaLabel = 'Sections',
+}: {
+  value: T
+  options: Array<{ id: T; label: string }>
+  onChange: (id: T) => void
+  'aria-label'?: string
+}) {
+  return (
+    <nav className="ide-tabs" role="tablist" aria-label={ariaLabel}>
+      {options.map((opt) => (
+        <button
+          key={opt.id}
+          type="button"
+          role="tab"
+          aria-selected={value === opt.id}
+          className={value === opt.id ? 'ide-tab ide-tab-on' : 'ide-tab'}
+          onClick={() => onChange(opt.id)}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </nav>
+  )
+}
+
+/** Segmented mode switch (run detail panels, Ship Package/Devices, …). */
+export function SegmentedTabs<T extends string>({
+  value,
+  options,
+  onChange,
+  'aria-label': ariaLabel = 'Mode',
+  className,
+}: {
+  value: T
+  options: Array<{ id: T; label: string }>
+  onChange: (id: T) => void
+  'aria-label'?: string
+  className?: string
+}) {
+  return (
+    <div
+      className={clsx(
+        'inline-flex flex-wrap items-center gap-0.5 rounded-lg border border-ink-200/80 bg-ink-50/80 p-0.5',
+        className,
+      )}
+      role="tablist"
+      aria-label={ariaLabel}
+    >
+      {options.map((opt) => (
+        <button
+          key={opt.id}
+          type="button"
+          role="tab"
+          aria-selected={value === opt.id}
+          className={value === opt.id ? 'tab-pill tab-pill-on' : 'tab-pill'}
+          onClick={() => onChange(opt.id)}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   )
 }

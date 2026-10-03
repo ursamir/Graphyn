@@ -3,8 +3,11 @@ import clsx from 'clsx'
 import type { NodePlacement, PortDef } from '../../types/graph'
 import { AudioLines, Box, Brain, Copy, GitBranch, Pencil, Sparkles, X } from 'lucide-react'
 import { schemaFieldHint } from '../../lib/format'
-import { numberInputAttrs } from './configValidation'
+import { isFieldVisible, numberInputAttrs } from './configValidation'
+import { AugmentationsEditor } from './AugmentationsEditor'
 import { LayersEditor } from './LayersEditor'
+import { SplitRatiosEditor } from './SplitRatiosEditor'
+import { StringListEditor } from './StringListEditor'
 
 export type GraphynNodeData = {
   nodeType: string
@@ -260,10 +263,18 @@ function fieldEditor(
     )
   }
 
-  // model_builder `layers`: structured list editor (Add / reorder / typed fields).
-  // Other widget=json fields keep the compact textarea.
+  // Structured Job-A editors for known widget=json shapes; others keep the textarea.
   if (key === 'layers' && (widget === 'json' || type === 'array' || Array.isArray(value))) {
     return <LayersEditor value={value} onChange={onChange} invalid={invalid} />
+  }
+  if (key === 'augmentations' && (widget === 'json' || type === 'array' || Array.isArray(value))) {
+    return <AugmentationsEditor value={value} onChange={onChange} invalid={invalid} />
+  }
+  if (key === 'split_ratios' && (widget === 'json' || type === 'object' || (value != null && typeof value === 'object' && !Array.isArray(value)))) {
+    return <SplitRatiosEditor value={value} onChange={onChange} invalid={invalid} />
+  }
+  if (key === 'allowed_paths' && (widget === 'json' || type === 'array' || Array.isArray(value))) {
+    return <StringListEditor value={value} onChange={onChange} invalid={invalid} placeholder="path or glob" />
   }
 
   if (widget === 'textarea' || widget === 'json') {
@@ -509,9 +520,12 @@ const STATUS_RING: Record<string, string> = {
   cancelled: 'ring-1 ring-amber-400/70',
 }
 
-export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeData>) {
+export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNodeData>) {
   const props = data.schemaProps ?? {}
-  const entries = Object.entries(props)
+  const cfg = data.config ?? {}
+  const visibleEntries = Object.entries(props).filter(([, def]) =>
+    isFieldVisible(def as Record<string, unknown>, cfg, props as Record<string, Record<string, unknown>>),
+  )
   const inputs = data.inputs?.length ? data.inputs : [{ name: 'input' }]
   const outputs = data.outputs?.length ? data.outputs : [{ name: 'output' }]
   const status = normalizeExecStatus(data.status)
@@ -520,10 +534,26 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
   const Icon = look.Icon
   const failed = status === 'failed'
   const skipped = status === 'skipped'
+  const archCue =
+    data.nodeType === 'model_builder' && typeof cfg.architecture === 'string' && cfg.architecture
+      ? String(cfg.architecture)
+      : null
+  const idCue = (() => {
+    const raw = String(id || '')
+    const type = String(data.nodeType || '')
+    if (!raw || raw === type) return null
+    if (type && raw.startsWith(`${type}_`)) {
+      const rest = raw.slice(type.length + 1)
+      return rest ? rest.slice(0, 8) : null
+    }
+    const m = raw.match(/_([a-f0-9]{6,})$/i)
+    if (m) return m[1].slice(0, 8)
+    return null
+  })()
 
   return (
     <div
-      title={`${data.nodeType}${status !== 'idle' ? ` · ${status}` : ''}`}
+      title={`${data.nodeType}${id ? ` · ${id}` : ''}${status !== 'idle' ? ` · ${status}` : ''}`}
       className={clsx(
         'graphyn-node relative w-[240px] overflow-visible rounded-[10px] border bg-white',
         selected ? 'is-selected border-ink-900' : 'border-ink-200',
@@ -573,8 +603,10 @@ export default function GraphynNode({ data, selected }: NodeProps<GraphynNodeDat
           <div className={clsx('mt-0.5 truncate text-[11px]', failed ? 'text-rose-700' : 'text-ink-500')}>
             {status === 'skipped' ? 'skipped (not run) · ' : status !== 'idle' ? `${status} · ` : ''}
             {data.category || 'node'}
+            {archCue ? ` · ${archCue}` : ''}
             {isolated ? ' · isolated' : ''}
-            {entries.length ? ` · ${entries.length} fields` : ''}
+            {visibleEntries.length ? ` · ${visibleEntries.length} fields` : ''}
+            {idCue ? ` · #${idCue}` : ''}
           </div>
         </div>
         <div className="flex shrink-0 flex-col gap-0.5 opacity-70 hover:opacity-100">

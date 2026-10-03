@@ -64,9 +64,6 @@ export function pathForView(view: AppView, ctx: ViewPathContext = {}): string | 
     case 'system':
       return paths.adminOps()
 
-    case 'artifacts':
-      return paths.libraryArtifacts()
-
     case 'experiments':
       return W ? paths.runsCompare(W) : null
 
@@ -86,7 +83,6 @@ export const VIEW_PATH_HINT: Record<AppView, string> = {
   projects: '/workspaces',
   builder: '/workspaces/:id/editor',
   runs: '/workspaces/:id/runs',
-  artifacts: '/library/artifacts',
   plugins: '/library/plugins',
   templates: '/templates',
   data: '/workspaces/:id/datasets',

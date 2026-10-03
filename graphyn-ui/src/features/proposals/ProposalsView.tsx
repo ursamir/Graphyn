@@ -19,10 +19,9 @@ import {
   EmptyState,
   ErrorBanner,
   LoadingBlock,
-  PageHeader,
   StatusBadge,
 } from '../../components/ui'
-import { MasterDetail } from '../../layout'
+import { MasterDetail, WorkbenchPage } from '../../layout'
 import { formatLocaleDateTime } from '../../lib/format'
 import { paths } from '../../routes/paths'
 import { navigatePath } from '../../routes/parsePath'
@@ -423,118 +422,120 @@ export default function ProposalsView() {
   const baseGraph = detail?.base_graph
   const showSideBySide = !!(baseGraph && proposedGraph)
 
-  return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="shrink-0 border-b border-ink-100 px-4 py-4 sm:px-6">
-        <PageHeader
-          title="Agent inbox"
-          description="Generate stub proposals via POST /proposals, or review agent GraphIR from MCP propose_graph."
-          actions={
-            <>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setGenerateOpen((o) => !o)}
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                Generate proposal
-              </button>
-              <button type="button" className="btn-quiet" onClick={() => void refresh()} disabled={loading}>
-                <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
-            </>
-          }
+  const filterToolbar = (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search actor, summary, id…"
+          aria-label="Search proposals"
+          className="field-control mt-0 w-full pl-8 text-sm"
         />
-        {generateOpen && (
-          <div className="mt-3 space-y-2 rounded-xl border border-ink-200 bg-white p-3">
-            <label className="block text-[12px] font-medium text-ink-700">
-              Prompt / summary
-              <textarea
-                className="field-control mt-1 min-h-[4.5rem] w-full text-sm"
-                value={generatePrompt}
-                onChange={(e) => setGeneratePrompt(e.target.value)}
-                placeholder="Describe the graph change (creates a stub GraphIR proposal for review)…"
-              />
-            </label>
-            <p className="text-[11px] text-ink-500">
-              Uses <code className="font-mono">POST /api/v1/proposals</code> with an empty-graph stub. Richer
-              generation still lives in MCP <code className="font-mono">propose_graph</code> /{' '}
-              <code className="font-mono">generate_graph</code>.
-              {activeProject ? (
-                <>
-                  {' '}
-                  Will bind to workspace <code className="font-mono">{activeProject}</code>.
-                </>
-              ) : (
-                <> Open a workspace to auto-bind the proposal.</>
-              )}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={generateBusy}
-                onClick={() => void onGenerate()}
-              >
-                {generateBusy ? 'Creating…' : 'Create proposal'}
-              </button>
-              <button type="button" className="btn-quiet" onClick={() => setGenerateOpen(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-        {!bannerDismissed && (
-          <div className="mt-3 flex flex-wrap items-start gap-3 rounded-xl border border-accent-200 bg-accent-50/60 px-3 py-2.5 text-sm text-ink-800">
-            <p className="min-w-0 flex-1">
-              Agents create proposals via MCP <code className="font-mono text-[12px]">propose_graph</code> or{' '}
-              <code className="font-mono text-[12px]">POST /api/v1/proposals</code>; review and accept them here.
-            </p>
-            <div className="flex shrink-0 items-center gap-2">
-              <a
-                href={DOCS_MCP_PROPOSE}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-900"
-              >
-                <ExternalLink className="h-3 w-3" />
-                Docs
-              </a>
-              <button type="button" className="btn-quiet" onClick={dismissBanner} aria-label="Dismiss banner">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-        )}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[12rem] flex-1 sm:max-w-xs">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search actor, summary, id…"
-              aria-label="Search proposals"
-              className="field-control mt-0 w-full pl-8 text-sm"
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {(['pending', 'all', 'accepted', 'rejected'] as const).map((f) => (
+          <button
+            key={f}
+            type="button"
+            className={filter === f ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
+            onClick={() => setFilter(f)}
+          >
+            {f === 'all' ? 'All' : f[0].toUpperCase() + f.slice(1)}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+
+  return (
+    <WorkbenchPage
+      title="Agent inbox"
+      description="Generate stub proposals via POST /proposals, or review agent GraphIR from MCP propose_graph."
+      actions={
+        <>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setGenerateOpen((o) => !o)}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Generate proposal
+          </button>
+          <button type="button" className="btn-quiet" onClick={() => void refresh()} disabled={loading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </>
+      }
+      toolbar={filterToolbar}
+      bodyClassName="flex h-full min-h-0 flex-col overflow-hidden !px-0 !py-0"
+    >
+      {generateOpen && (
+        <div className="shrink-0 space-y-2 border-b border-ink-100 bg-white px-4 py-3 sm:px-6">
+          <label className="block text-[12px] font-medium text-ink-700">
+            Prompt / summary
+            <textarea
+              className="field-control mt-1 min-h-[4.5rem] w-full text-sm"
+              value={generatePrompt}
+              onChange={(e) => setGeneratePrompt(e.target.value)}
+              placeholder="Describe the graph change (creates a stub GraphIR proposal for review)…"
             />
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {(['pending', 'all', 'accepted', 'rejected'] as const).map((f) => (
-              <button
-                key={f}
-                type="button"
-                className={filter === f ? 'catalog-pill catalog-pill-on' : 'catalog-pill'}
-                onClick={() => setFilter(f)}
-              >
-                {f === 'all' ? 'All' : f[0].toUpperCase() + f.slice(1)}
-              </button>
-            ))}
+          </label>
+          <p className="text-[11px] text-ink-500">
+            Uses <code className="font-mono">POST /api/v1/proposals</code> with an empty-graph stub. Richer
+            generation still lives in MCP <code className="font-mono">propose_graph</code> /{' '}
+            <code className="font-mono">generate_graph</code>.
+            {activeProject ? (
+              <>
+                {' '}
+                Will bind to workspace <code className="font-mono">{activeProject}</code>.
+              </>
+            ) : (
+              <> Open a workspace to auto-bind the proposal.</>
+            )}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={generateBusy}
+              onClick={() => void onGenerate()}
+            >
+              {generateBusy ? 'Creating…' : 'Create proposal'}
+            </button>
+            <button type="button" className="btn-quiet" onClick={() => setGenerateOpen(false)}>
+              Cancel
+            </button>
           </div>
         </div>
-      </div>
+      )}
+      {!bannerDismissed && (
+        <div className="shrink-0 flex flex-wrap items-start gap-3 border-b border-ink-100 bg-accent-50/40 px-4 py-2.5 text-sm text-ink-800 sm:px-6">
+          <p className="min-w-0 flex-1">
+            Agents create proposals via MCP <code className="font-mono text-[12px]">propose_graph</code> or{' '}
+            <code className="font-mono text-[12px]">POST /api/v1/proposals</code>; review and accept them here.
+          </p>
+          <div className="flex shrink-0 items-center gap-2">
+            <a
+              href={DOCS_MCP_PROPOSE}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-900"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Docs
+            </a>
+            <button type="button" className="btn-quiet" onClick={dismissBanner} aria-label="Dismiss banner">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && (
-        <div className="px-4 pt-3 sm:px-6">
+        <div className="shrink-0 px-4 pt-3 sm:px-6">
           <ErrorBanner message={error} onRetry={() => void refresh()} />
         </div>
       )}
@@ -549,7 +550,9 @@ export default function ProposalsView() {
             <LoadingBlock label="Loading proposals…" />
           ) : !items?.length ? (
             <div className="p-4">
-              <EmptyState icon={EmptyBot}
+              <EmptyState
+                compact
+                icon={EmptyBot}
                 title="No proposals yet"
                 description={
                   filter === 'pending'
@@ -568,7 +571,9 @@ export default function ProposalsView() {
             </div>
           ) : visibleItems.length === 0 ? (
             <div className="p-4">
-              <EmptyState icon={EmptySearchX}
+              <EmptyState
+                compact
+                icon={EmptySearchX}
                 title="No matching proposals"
                 description={`Nothing matches “${search.trim()}”. Try another actor, summary, or id.`}
               />
@@ -584,8 +589,8 @@ export default function ProposalsView() {
                       onClick={() => setSelectedId(p.id)}
                       className={
                         active
-                          ? 'flex w-full flex-col gap-1 bg-white px-4 py-3 text-left ring-1 ring-inset ring-accent-300'
-                          : 'flex w-full flex-col gap-1 px-4 py-3 text-left hover:bg-white/80'
+                          ? 'ide-row is-active w-full flex-col items-start gap-1 !px-4 !py-3'
+                          : 'ide-row w-full flex-col items-start gap-1 !px-4 !py-3'
                       }
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -615,14 +620,21 @@ export default function ProposalsView() {
         detail={
         <section className="min-h-0 px-4 py-4 sm:px-6">
           {!selectedId ? (
-            <EmptyState icon={EmptyMousePointerClick}
+            <EmptyState
+              compact
+              icon={EmptyMousePointerClick}
               title="Select a proposal"
               description="Review the diff summary, then Accept to load into Editor or Reject."
             />
           ) : detailLoading && !detail ? (
             <LoadingBlock label="Loading proposal…" />
           ) : !detail ? (
-            <EmptyState icon={EmptyFileQuestionMark} title="Proposal not found" description="It may have been removed." />
+            <EmptyState
+              compact
+              icon={EmptyFileQuestionMark}
+              title="Proposal not found"
+              description="It may have been removed."
+            />
           ) : (
             <div className="mx-auto max-w-3xl space-y-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -779,7 +791,7 @@ export default function ProposalsView() {
         </section>
         }
       />
-    </div>
+    </WorkbenchPage>
   )
 }
 

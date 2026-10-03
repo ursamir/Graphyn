@@ -12,9 +12,10 @@ import {
   EmptyState,
   ErrorBanner,
   LoadingBlock,
-  PageHeader,
+  SegmentedTabs,
   StatusBadge,
 } from '../../components/ui'
+import { WorkbenchPage } from '../../layout'
 
 /** Same-host smoke command — see docs/SDK_AND_CLI.md `graphyn worker start`. */
 const WORKER_START_CMD =
@@ -149,26 +150,36 @@ export default function WorkersView() {
         : 'Set GRAPHYN_BACKEND=distributed on the control plane for Mode B.'
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6 space-y-5">
-      <PageHeader
-        title="Worker fleet"
-        description={
-          backendMode === 'distributed'
-            ? 'Deploy — Mode B worker registry, labels, GPU, and heartbeats.'
-            : 'Deploy — only needed when Mode is Distributed; local Mode A runs pipelines in-process.'
-        }
-        actions={
-          <button type="button" className="btn-secondary" onClick={() => void refresh()}>
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
-        }
-      />
-
+    <WorkbenchPage
+      title="Worker fleet"
+      description={
+        backendMode === 'distributed'
+          ? 'Deploy — Mode B worker registry, labels, GPU, and heartbeats.'
+          : 'Deploy — only needed when Mode is Distributed; local Mode A runs pipelines in-process.'
+      }
+      toolbar={
+        <SegmentedTabs
+          aria-label="Fleet sections"
+          value={fleetTab}
+          options={[
+            { id: 'workers', label: 'Workers' },
+            { id: 'queue', label: 'Queue' },
+          ]}
+          onChange={setFleetTab}
+        />
+      }
+      actions={
+        <button type="button" className="btn-secondary" onClick={() => void refresh()}>
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </button>
+      }
+    >
+      <div className="space-y-4">
       <p className="text-xs text-ink-500">
         Workers use the same API token as this console.
       </p>
 
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-200 bg-white px-4 py-3 text-sm shadow-sm">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Summary</span>
         <span className="font-medium text-ink-900">
           {workers === null ? '…' : workers.length} {workers?.length === 1 ? 'worker' : 'workers'}
@@ -177,29 +188,9 @@ export default function WorkersView() {
         <span className="ml-auto text-[11px] text-ink-400">
           {lastRefresh ? `Refreshed ${formatRelativeTime(lastRefresh.toISOString())}` : 'Not refreshed yet'}
         </span>
-        <button type="button" className="btn-secondary" onClick={() => void refresh()}>
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </button>
       </div>
 
       {error && <ErrorBanner message={error} onRetry={() => void refresh()} />}
-
-      <div className="flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1 w-fit">
-        <button
-          type="button"
-          className={fleetTab === 'workers' ? 'tab-pill tab-pill-on' : 'tab-pill'}
-          onClick={() => setFleetTab('workers')}
-        >
-          Workers
-        </button>
-        <button
-          type="button"
-          className={fleetTab === 'queue' ? 'tab-pill tab-pill-on' : 'tab-pill'}
-          onClick={() => setFleetTab('queue')}
-        >
-          Queue
-        </button>
-      </div>
 
       {fleetTab === 'queue' ? (
         <section className="space-y-4 rounded-2xl border border-ink-200 bg-white p-4 shadow-sm">
@@ -555,6 +546,7 @@ export default function WorkersView() {
           </aside>
         </div>
       )}
-    </div>
+      </div>
+    </WorkbenchPage>
   )
 }

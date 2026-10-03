@@ -2,12 +2,12 @@ import { create } from 'zustand'
 import type { GraphIR, NodeCatalogEntry } from '../types/graph'
 import { paths } from '../routes/paths'
 import { navigatePath, parsePathname } from '../routes/parsePath'
+import { resolveArtifactRunId } from '../lib/resolveArtifact'
 import { isWorkspaceKnownValid } from '../lib/workspaceValidity'
 
 export type AppView =
   | 'builder'
   | 'runs'
-  | 'artifacts'
   | 'plugins'
   | 'templates'
   | 'data'
@@ -91,13 +91,13 @@ export function commitActiveProject(name: string) {
 export type FocusRunPanel = 'logs' | 'debug' | 'checkpoints' | 'artifacts' | 'lineage'
 
 /** Top-level mode on the Run page — History vs Compare (W&B/MLflow pattern). */
+/** `live` kept for older callers; App maps /runs/live → history + ?status=active. */
 export type FocusRunsTab = 'history' | 'compare' | 'live'
 
 interface AppState {
   view: AppView
   setView: (view: AppView) => void
   focusRunId: string | null
-  focusArtifactId: string | null
   /** Consumed once by RunsView when opening a run into a specific panel. */
   focusRunPanel: FocusRunPanel | null
   clearFocusRunPanel: () => void
@@ -105,7 +105,9 @@ interface AppState {
   focusRunsTab: FocusRunsTab
   setFocusRunsTab: (tab: FocusRunsTab) => void
   openRun: (id: string, opts?: { project?: string; panel?: FocusRunPanel }) => void
+  /** Prefer Runs → Lineage. Artifact-id-only resolves via GET /artifacts/{id}. */
   openTrace: (opts: { artifactId?: string; runId?: string; project?: string }) => void
+  /** Prefer Runs → Run outputs. Artifact-id-only resolves via GET /artifacts/{id}. */
   openArtifacts: (opts?: { runId?: string; artifactId?: string; project?: string }) => void
   openExperiments: (opts?: { runIds?: string[] }) => void
   openProposals: (opts?: { id?: string }) => void
@@ -191,7 +193,8 @@ function panelPathSegment(
 ): 'logs' | 'outputs' | 'lineage' | 'details' | 'checkpoints' | undefined {
   if (!panel) return undefined
   if (panel === 'artifacts') return 'outputs'
-  if (panel === 'debug') return 'details'
+  // Legacy Summary (`debug`) → Overview lineage path.
+  if (panel === 'debug') return 'lineage'
   return panel
 }
 
@@ -230,11 +233,37 @@ function readInitialView(): AppView {
   return 'projects'
 }
 
+function landRunPanel(
+  get: () => AppState,
+  set: (partial: Partial<AppState>) => void,
+  runId: string,
+  panel: 'lineage' | 'artifacts',
+) {
+  const W = get().activeProject || ''
+  const seg = panel === 'artifacts' ? 'outputs' : 'lineage'
+  if (W) navigatePath(paths.runPanel(W, runId, seg))
+  else navigatePath(paths.workspaces())
+  set({
+    view: 'runs',
+    focusRunId: runId,
+    lastRunId: runId,
+    lastRunProject: get().activeProject,
+    focusRunsTab: 'history',
+    focusRunPanel: panel,
+  })
+}
+
+function landRunsList(get: () => AppState, set: (partial: Partial<AppState>) => void) {
+  const W = get().activeProject || ''
+  if (W) navigatePath(paths.runs(W))
+  else navigatePath(paths.workspaces())
+  set({ view: W ? 'runs' : 'projects', focusRunsTab: 'history' })
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   view: readInitialView(),
   setView: (view) => set({ view }),
   focusRunId: null,
-  focusArtifactId: null,
   focusRunPanel: null,
   clearFocusRunPanel: () => set({ focusRunPanel: null }),
   focusRunsTab: 'history',
@@ -266,23 +295,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const aid = artifactId?.trim() || ''
     const rid = runId?.trim() || ''
-    const W = get().activeProject || ''
-    if (rid && !aid) {
-      if (W) navigatePath(paths.runPanel(W, rid, 'lineage'))
-      set({
-        view: 'runs',
-        focusRunId: rid,
-        lastRunId: rid,
-        lastRunProject: get().activeProject,
-        focusRunsTab: 'history',
-        focusRunPanel: 'lineage',
-      })
+    // Run id wins even when an artifact id is also present (old Library path).
+    if (rid) {
+      landRunPanel(get, set, rid, 'lineage')
       return
     }
-    // No runId (or both runId+artifactId): land on Artifacts — Lineage for a
-    // specific run always resolves via the branch above (Runs → lineage panel).
-    navigatePath(paths.libraryArtifacts(aid ? { artifactId: aid } : undefined))
-    set({ view: 'artifacts', focusArtifactId: aid || null })
+    if (aid) {
+      void (async () => {
+        const resolved = await resolveArtifactRunId(aid)
+        if (resolved) {
+          landRunPanel(get, set, resolved, 'lineage')
+          return
+        }
+        get().pushToast('Artifact not found — open a run’s Lineage instead', 'error')
+        landRunsList(get, set)
+      })()
+      return
+    }
+    landRunsList(get, set)
   },
   openArtifacts: ({ runId, artifactId, project } = {}) => {
     const proj = project?.trim() || ''
@@ -292,21 +322,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     const aid = artifactId?.trim() || ''
     const rid = runId?.trim() || ''
-    const W = get().activeProject || ''
-    if (rid && !aid) {
-      if (W) navigatePath(paths.runPanel(W, rid, 'outputs'))
-      set({
-        view: 'runs',
-        focusRunId: rid,
-        lastRunId: rid,
-        lastRunProject: get().activeProject,
-        focusRunsTab: 'history',
-        focusRunPanel: 'artifacts',
-      })
+    if (rid) {
+      landRunPanel(get, set, rid, 'artifacts')
       return
     }
-    navigatePath(paths.libraryArtifacts(aid ? { artifactId: aid } : undefined))
-    set({ view: 'artifacts', focusArtifactId: aid || null })
+    if (aid) {
+      void (async () => {
+        const resolved = await resolveArtifactRunId(aid)
+        if (resolved) {
+          landRunPanel(get, set, resolved, 'artifacts')
+          return
+        }
+        get().pushToast('Artifact not found — use Runs → Run outputs', 'error')
+        landRunsList(get, set)
+      })()
+      return
+    }
+    landRunsList(get, set)
   },
   openExperiments: ({ runIds } = {}) => {
     const W = get().activeProject || ''
@@ -382,7 +414,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         dataUnscopeEpoch: s.dataUnscopeEpoch + 1,
         builderDataset: null,
         focusRunId: null,
-        focusArtifactId: null,
         focusRunPanel: null,
         lastRunId: null,
         lastRunProject: null,
@@ -403,7 +434,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       dataUnscopeEpoch: s.dataUnscopeEpoch + 1,
       builderDataset: null,
       focusRunId: null,
-      focusArtifactId: null,
       focusRunPanel: null,
       lastRunId: null,
       lastRunProject: null,

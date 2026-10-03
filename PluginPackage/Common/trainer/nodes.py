@@ -836,7 +836,7 @@ class ModelBuilderNode(Node):
                 "ds_cnn = Hello Edge DS-CNN (Zhang 2017); "
                 "mobilenet = MobileNetV2 inverted residuals (Sandler 2018); "
                 "simple_cnn = two-conv baseline; "
-                "custom = layers JSON (layer-wise)."
+                "custom = editable layer list (Load from preset to seed)."
             ),
         )
         filters: int = Field(default=64, ge=1, title="Filters", description="Base convolution filter / width count (presets).")

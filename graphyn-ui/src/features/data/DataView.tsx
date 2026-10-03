@@ -10,7 +10,16 @@ import {
 } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
 import { useAppStore } from '../../store/appStore'
-import { ConfirmButton, CopyableMono, EmptyState, ErrorBanner, KeyValue, LoadingBlock, PageHeader } from '../../components/ui'
+import {
+  ConfirmButton,
+  CopyableMono,
+  EmptyState,
+  ErrorBanner,
+  KeyValue,
+  LoadingBlock,
+  SegmentedTabs,
+} from '../../components/ui'
+import { MasterDetail, WorkbenchPage } from '../../layout'
 import { FileViewer } from '../../components/FileViewer'
 import clsx from 'clsx'
 import {
@@ -864,18 +873,154 @@ export default function DataView() {
   const showEmptyOutputs = mode === 'outputs' && (outputs.length === 0 || pathRecovery)
   const showEmptyInputs = mode === 'inputs' && inputs.length === 0
 
+  const outputSourceRows = React.useMemo(() => {
+    const src = listFilter.trim() ? filteredOutputs : outputs
+    return src.flatMap((o) =>
+      o.versions
+        .filter((v) => !listFilter.trim() || matchesQuery(`${o.project}/${v}`, listFilter))
+        .map((v) => ({ project: o.project, version: v })),
+    )
+  }, [outputs, filteredOutputs, listFilter])
+
   const searchField = (
-    <label className="relative block min-w-[12rem] flex-1 max-w-sm">
+    <label className="relative block w-full">
       <span className="sr-only">Filter lists</span>
       <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
       <input
         value={listFilter}
         onChange={(e) => setListFilter(e.target.value)}
         placeholder={mode === 'inputs' ? 'Filter labels or files…' : 'Filter workspaces or files…'}
-        className="w-full rounded-lg border border-ink-200 py-1.5 pl-8 pr-2 text-sm"
+        className="field-control mt-0 w-full pl-8 text-sm"
       />
     </label>
   )
+
+  const pickOutputSource = (nextProject: string, nextVersion: string) => {
+    setError(null)
+    setErrorDetail(null)
+    libraryClearRef.current = false
+    skipProjectHashRef.current = false
+    setProject(nextProject)
+    setVersion(nextVersion)
+  }
+
+  const pickInputLabel = (next: string) => {
+    if (next) skippedInputLabels.current.delete(next)
+    setError(null)
+    setErrorDetail(null)
+    setLabel(next)
+  }
+
+  const detailToolbarOutputs =
+    !showEmptyOutputs && mode === 'outputs' ? (
+      <div className="flex flex-wrap items-center gap-2">
+        {project ? (
+          activeProject ? (
+            <>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => goView('builder')}
+                title="Open Editor with current workspace"
+              >
+                Open Editor
+              </button>
+              <button
+                type="button"
+                className="btn-quiet text-[12px]"
+                onClick={() => openProjects({ project: activeProject })}
+              >
+                Open Home
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => openProjects({ project })}
+              title="Open this dataset as a workspace"
+            >
+              Use in workspace
+            </button>
+          )
+        ) : null}
+        {uxMode === 'manage' && project && version ? (
+          <ConfirmButton
+            label="Delete"
+            confirmLabel={`Delete ${project}/${version}?`}
+            danger
+            onConfirm={() => void deleteOutput()}
+          />
+        ) : null}
+        {uxMode === 'browse' && project ? (
+          <button
+            type="button"
+            className="btn-secondary text-[12px]"
+            onClick={() => {
+              setUxMode('manage')
+              setManageTab('upload')
+              setMode('outputs')
+            }}
+          >
+            Manage…
+          </button>
+        ) : null}
+      </div>
+    ) : null
+
+  const detailToolbarInputs =
+    !showEmptyInputs && mode === 'inputs' ? (
+      <div className="flex flex-wrap items-center gap-2">
+        {uxMode === 'manage' && label ? (
+          <ConfirmButton
+            label="Delete"
+            confirmLabel={`Delete input ${label}?`}
+            danger
+            onConfirm={() => void deleteInput()}
+          />
+        ) : null}
+        {activeProject ? (
+          <button
+            type="button"
+            className="btn-primary"
+            title={`Open ${activeProject} Home, where “${label || 'an input label'}” can be pinned under Linked inputs`}
+            onClick={() => {
+              useAppStore.getState().openProject(activeProject)
+            }}
+          >
+            Open Home
+          </button>
+        ) : label ? (
+          <button
+            type="button"
+            className="btn-primary"
+            title={`Pick a workspace, then pin “${label}” under its Home → Linked inputs`}
+            onClick={() => {
+              pushToast(`Pick a workspace, then pin “${label}” under Home → Linked inputs`, 'info')
+              openProjects()
+            }}
+          >
+            Pick a workspace…
+          </button>
+        ) : null}
+        {uxMode === 'manage' ? (
+          <button type="button" className="btn-secondary" onClick={upload}>
+            <Upload className="h-3.5 w-3.5" /> Upload
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn-quiet text-[12px]"
+            onClick={() => {
+              setUxMode('manage')
+              setManageTab('upload')
+            }}
+          >
+            Manage…
+          </button>
+        )}
+      </div>
+    ) : null
 
   
   const workspaceDatasetsPath =
@@ -883,63 +1028,79 @@ export default function DataView() {
     window.location.pathname.startsWith('/workspaces/') &&
     window.location.pathname.includes('/datasets')
 
-return (
-    // Top padding on the header, not the scroll container: a sticky child's
-    // `top: 0` resolves against the scrollport's PADDING box, so `p-6` would pin
-    // the file table's header row 24px low and let rows scroll through the strip
-    // above it (the defect found on Templates).
-    <div className="h-full min-h-0 overflow-y-auto px-6 pb-6 space-y-4">
-      <PageHeader
-        className="pt-6"
-        title={workspaceDatasetsPath ? 'Workspace datasets' : 'Datasets'}
-        description={
-          workspaceDatasetsPath
-            ? linkedInputs && linkedInputs.length > 0
-              ? `Input labels pinned to ${activeProject ?? 'this workspace'} (Home → Linked inputs), plus shared outputs. Toggle “Show all shared inputs” or Browse shared library for the full catalog.`
-              : 'Shared Inputs/Outputs library, opened from this workspace. No inputs are pinned here yet — pin labels under Home → Linked inputs to narrow this list.'
-            : 'Library — Shared Inputs and Outputs for pipelines (not per-run downloads under Runs).'
-        }
-        actions={
-          <div className="flex gap-2">
-            {/* Not duplicated here — the Manage toolbar already has its own
-                Upload button (same handler) scoped to the selected label,
-                which used to render alongside this one whenever
-                uxMode==='manage' && manageTab==='upload', showing the exact
-                same action twice at once. */}
-            {workspaceDatasetsPath ? (
-              <button
-                type="button"
-                className="btn-quiet text-[12px]"
-                title="Browse shared Inputs/Outputs catalog (not Models/Ship)"
-                onClick={() => {
-                  skipProjectHashRef.current = true
-                  libraryClearRef.current = true
-                  setProject('')
-                  setVersion('')
-                  replacePathSearch({ mode: mode === 'inputs' ? 'inputs' : 'outputs' }, paths.libraryDatasets())
-                }}
-              >
-                Browse shared library
-              </button>
-            ) : null}
-            <button type="button" className="btn-secondary" onClick={() => void loadSources()}>
-              <RefreshCw className="h-3.5 w-3.5" /> Refresh
+  const showSourcePicker = showFileBrowser
+
+  return (
+    <WorkbenchPage
+      title={workspaceDatasetsPath ? 'Workspace datasets' : 'Datasets'}
+      description={
+        workspaceDatasetsPath
+          ? linkedInputs && linkedInputs.length > 0
+            ? `Pinned input labels for ${activeProject ?? 'this workspace'} plus shared outputs.`
+            : 'Shared Inputs/Outputs scoped to this workspace — pin labels on Home to narrow the list.'
+          : 'Shared Inputs and Outputs for pipelines (not per-run files under Runs).'
+      }
+      toolbar={
+        <SegmentedTabs
+          value={uxMode}
+          options={[
+            { id: 'browse', label: 'Browse' },
+            { id: 'manage', label: 'Manage' },
+          ]}
+          onChange={switchUxMode}
+          aria-label="Data mode"
+        />
+      }
+      actions={
+        <div className="flex gap-2">
+          {workspaceDatasetsPath ? (
+            <button
+              type="button"
+              className="btn-quiet text-[12px]"
+              title="Browse shared Inputs/Outputs catalog (not Models/Ship)"
+              onClick={() => {
+                skipProjectHashRef.current = true
+                libraryClearRef.current = true
+                setProject('')
+                setVersion('')
+                replacePathSearch({ mode: mode === 'inputs' ? 'inputs' : 'outputs' }, paths.libraryDatasets())
+              }}
+            >
+              Browse shared library
             </button>
-          </div>
-        }
-      />
+          ) : null}
+          <button type="button" className="btn-secondary" onClick={() => void loadSources()}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </div>
+      }
+      bodyClassName="flex h-full min-h-0 flex-col overflow-hidden !px-0 !py-0"
+    >
       {!storageHintDismissed ? (
         <div
           role="note"
-          className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-[12px] leading-relaxed text-ink-700"
+          className="flex shrink-0 flex-wrap items-start gap-2 border-b border-ink-100 bg-ink-50/80 px-4 py-2 text-[12px] leading-snug text-ink-700 sm:px-6"
         >
-          <p>
-            <strong className="font-medium text-ink-900">Which storage?</strong> Datasets = shared
-            folders · Runs → Run outputs = one run · Artifacts = cross-run registry.
+          <p className="min-w-0 flex-1">
+            <strong className="font-medium text-ink-900">Storage:</strong> Datasets = shared folders · Runs →
+            Run outputs = one run’s downloadable files · Lineage = audit trail.{' '}
+            <strong className="font-medium text-ink-900">Label lite:</strong> use Output versions + Home pins
+            (full labeling studio not available).{' '}
+            <button
+              type="button"
+              className="font-medium text-accent-800 hover:underline"
+              onClick={() => {
+                if (activeProject) openProjects({ project: activeProject })
+                else openProjects()
+              }}
+            >
+              Open Home
+            </button>
           </p>
           <button
             type="button"
-            className="shrink-0 text-[11px] font-semibold text-ink-500 hover:text-ink-800"
+            className="btn-quiet shrink-0"
+            aria-label="Dismiss note"
             onClick={() => {
               try {
                 localStorage.setItem('graphyn.datasets.storageHint', '1')
@@ -949,50 +1110,35 @@ return (
               setStorageHintDismissed(true)
             }}
           >
-            Got it
+            <X className="h-3.5 w-3.5" />
           </button>
         </div>
       ) : null}
-      {uxMode === 'manage' ? (
-      <div
-        role="note"
-        className="rounded-xl border border-dashed border-ink-200 bg-white/80 px-3 py-2 text-[12px] leading-relaxed text-ink-700"
-      >
-        <span className="font-medium text-ink-900">Label lite:</span> use Outputs versions + Home pins;
-        full labeling studio is not available yet.{' '}
-        <button
-          type="button"
-          className="font-medium text-accent-800 hover:underline"
-          onClick={() => {
-            if (activeProject) openProjects({ project: activeProject })
-            else openProjects()
-          }}
-        >
-          Open Home
-        </button>
-      </div>
-      ) : null}
       {showBrowseError ? (
-        <ErrorBanner
-          message={error!}
-          title={errorDetail ?? undefined}
-          onRetry={() => {
-            setDetailEpoch((n) => n + 1)
-            void loadSources()
-          }}
-          onDismiss={() => {
-            setError(null)
-            setErrorDetail(null)
-          }}
-        />
+        <div className="shrink-0 px-4 pt-3 sm:px-6">
+          <ErrorBanner
+            message={error!}
+            title={errorDetail ?? undefined}
+            onRetry={() => {
+              setDetailEpoch((n) => n + 1)
+              void loadSources()
+            }}
+            onDismiss={() => {
+              setError(null)
+              setErrorDetail(null)
+            }}
+          />
+        </div>
       ) : null}
       {mode === 'inputs' && blockedInputs.length > 0 && !showBrowseError ? (
         <div
           role="note"
-          className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 text-[12px] leading-relaxed text-amber-950"
+          className="shrink-0 border-b border-amber-100 bg-amber-50/70 px-4 py-2 text-[12px] leading-relaxed text-amber-950 sm:px-6"
         >
-          <span className="font-medium">{blockedInputs.length} external label
-          {blockedInputs.length === 1 ? '' : 's'}</span>{' '}
+          <span className="font-medium">
+            {blockedInputs.length} external label
+            {blockedInputs.length === 1 ? '' : 's'}
+          </span>{' '}
           (symlink outside datasets/input) — skipped in Browse.
           {accessibleInputs.length === 0
             ? ' Set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API (Compose default is on) and Refresh.'
@@ -1000,114 +1146,233 @@ return (
         </div>
       ) : null}
 
-      <div
-        className="inline-flex rounded-xl border border-ink-200 bg-ink-50/80 p-0.5"
-        role="tablist"
-        aria-label="Data mode"
-      >
-        {(
-          [
-            ['browse', 'Browse'],
-            ['manage', 'Manage'],
-          ] as const
-        ).map(([m, tabLabel]) => (
-          <button
-            key={m}
-            type="button"
-            role="tab"
-            aria-selected={uxMode === m}
-            className={clsx(
-              'rounded-[10px] px-3.5 py-1.5 text-[13px] font-medium transition',
-              uxMode === m
-                ? 'bg-white text-ink-950 shadow-sm ring-1 ring-ink-200/80'
-                : 'text-ink-500 hover:text-ink-800',
-            )}
-            onClick={() => switchUxMode(m)}
-          >
-            {tabLabel}
-          </button>
-        ))}
-      </div>
-
-      {uxMode === 'browse' ? (
-        <div className="flex flex-wrap gap-2">
-          {(
-            [
-              ['inputs', 'Inputs'],
-              ['outputs', 'Outputs'],
-            ] as const
-          ).map(([m, tabLabel]) => (
-            <button
-              key={m}
-              type="button"
-              className={mode === m ? 'btn-primary' : 'btn-secondary'}
-              onClick={() => {
-                setError(null)
-                setErrorDetail(null)
-                setPathRecovery(false)
-                setListFilter('')
-                setMode(m)
-              }}
-            >
-              {tabLabel}
-            </button>
-          ))}
-          <span className="self-center text-[11px] text-ink-400">Read-only — open / play files</span>
-        </div>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {(
-            [
-              ['upload', 'Upload'],
-              ['ingest', 'Ingest'],
-              ['merge', 'Merge'],
-            ] as const
-          ).map(([tab, tabLabel]) => (
-            <button
-              key={tab}
-              type="button"
-              className={manageTab === tab ? 'btn-primary' : 'btn-secondary'}
-              onClick={() => setManage(tab)}
-            >
-              {tabLabel}
-            </button>
-          ))}
-        </div>
-      )}
-
       {loading ? (
         <LoadingBlock />
-      ) : uxMode === 'manage' && manageTab === 'ingest' ? (
-        <div className="space-y-4">
-          <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-2">
-            <h3 className="text-sm font-semibold">URL ingest</h3>
-            <textarea value={urls} onChange={(e) => setUrls(e.target.value)} rows={4} className="w-full rounded-lg border border-ink-200 p-2 text-sm" placeholder="one URL per line" />
-            <input value={ingestLabel} onChange={(e) => setIngestLabel(e.target.value)} className="rounded-lg border border-ink-200 px-2 py-1 text-sm" />
-            <button type="button" className="btn-primary" onClick={() => void startUrlIngest()}>Start URL ingest</button>
-          </section>
-          <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-2">
-            <h3 className="text-sm font-semibold">HuggingFace ingest</h3>
-            <input value={hfRepo} onChange={(e) => setHfRepo(e.target.value)} placeholder="org/dataset" className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" />
-            <button type="button" className="btn-secondary" onClick={() => void startHfIngest()}>Start HF ingest</button>
-          </section>
-          <pre className="max-h-48 overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
-            {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') || 'No ingest events yet — start a job to stream GET /ingest/url/{job_id}/stream progress here.'}
-          </pre>
-        </div>
-      ) : uxMode === 'manage' && manageTab === 'merge' ? (
-        <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-2">
-          <h3 className="text-sm font-semibold">Merge datasets</h3>
-          <p className="text-sm text-ink-500">Comma-separated workspace:version pairs combined into a new version of the target workspace.</p>
-          <input value={mergeSources} onChange={(e) => setMergeSources(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="workspace:version, other:v2" />
-          <input value={mergeTargetProject} onChange={(e) => setMergeTargetProject(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="target workspace" />
-          <input value={mergeTargetVersion} onChange={(e) => setMergeTargetVersion(e.target.value)} className="w-full rounded-lg border border-ink-200 px-2 py-1 text-sm" placeholder="target version" />
-          <button type="button" className="btn-primary" onClick={() => void doMerge()}>Merge</button>
-        </section>
-      ) : showFileBrowser ? (
-        <>
-          {mode === 'outputs' ? (
-            showEmptyOutputs ? (
-              <EmptyState icon={EmptyDatabase}
+      ) : (
+        <MasterDetail
+          listLabel="datasets"
+          collapsible
+          className="min-h-0 flex-1"
+          masterClassName="!pr-8"
+          master={
+            <div className="space-y-3">
+              {uxMode === 'browse' ? (
+                <>
+                  <SegmentedTabs
+                    value={mode === 'inputs' || mode === 'outputs' ? mode : 'inputs'}
+                    options={[
+                      { id: 'inputs', label: 'Inputs' },
+                      { id: 'outputs', label: 'Outputs' },
+                    ]}
+                    onChange={(m) => {
+                      setError(null)
+                      setErrorDetail(null)
+                      setPathRecovery(false)
+                      setListFilter('')
+                      setMode(m)
+                    }}
+                    aria-label="Browse datasets"
+                  />
+                  <p className="text-[11px] text-ink-400">Read-only — open / play files</p>
+                </>
+              ) : (
+                <SegmentedTabs
+                  value={manageTab}
+                  options={[
+                    { id: 'upload', label: 'Upload' },
+                    { id: 'ingest', label: 'Ingest' },
+                    { id: 'merge', label: 'Merge' },
+                  ]}
+                  onChange={(tab) => setManage(tab)}
+                  aria-label="Manage datasets"
+                />
+              )}
+
+              {showSourcePicker && mode === 'outputs' && !showEmptyOutputs ? (
+                <div className="space-y-2">
+                  {searchField}
+                  <select
+                    value={project}
+                    onChange={(e) => {
+                      const next = e.target.value
+                      pickOutputSource(next, outputs.find((o) => o.project === next)?.versions[0] ?? '')
+                    }}
+                    className="field-control w-full text-sm"
+                  >
+                    <option value="">Select workspace…</option>
+                    {(listFilter.trim() ? filteredOutputs : outputs).map((o) => (
+                      <option key={o.project} value={o.project}>
+                        {o.project}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={version}
+                    onChange={(e) => {
+                      setError(null)
+                      setErrorDetail(null)
+                      setVersion(e.target.value)
+                    }}
+                    className="field-control w-full text-sm"
+                  >
+                    {versions.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                  <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200/70">
+                    {outputSourceRows.slice(0, 80).map(({ project: p, version: v }) => (
+                      <li key={`${p}/${v}`}>
+                        <button
+                          type="button"
+                          className={clsx(
+                            'ide-row w-full px-3 py-2',
+                            p === project && v === version && 'is-active font-medium',
+                          )}
+                          onClick={() => pickOutputSource(p, v)}
+                        >
+                          <EmptyDatabase className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                          <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-800">
+                            {p}/{v}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {showSourcePicker && mode === 'inputs' && !showEmptyInputs ? (
+                <div className="space-y-2">
+                  {searchField}
+                  <select
+                    value={label}
+                    onChange={(e) => pickInputLabel(e.target.value)}
+                    className="field-control w-full text-sm"
+                  >
+                    {!label ? <option value="">Select a label…</option> : null}
+                    {filteredInputs.map((i) => (
+                      <option key={i.label} value={i.label}>
+                        {i.label} ({i.file_count})
+                        {i.accessible === false ? ' — external (blocked)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {linkedInputs && linkedInputs.length > 0 ? (
+                    <label
+                      className="inline-flex items-center gap-1.5 text-[12px] text-ink-600"
+                      title={`${linkedInputs.length} label${linkedInputs.length === 1 ? '' : 's'} pinned to ${activeProject}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={showAllInputs}
+                        onChange={(e) => setShowAllInputs(e.target.checked)}
+                      />
+                      Show all shared inputs
+                    </label>
+                  ) : linkedInputs && linkedInputs.length === 0 ? (
+                    <span className="text-[12px] text-ink-400">
+                      None pinned to {activeProject} — showing all shared input labels.
+                    </span>
+                  ) : null}
+                  <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200/70">
+                    {filteredInputs.slice(0, 80).map((i) => (
+                      <li key={i.label}>
+                        <button
+                          type="button"
+                          className={clsx(
+                            'ide-row w-full px-3 py-2',
+                            label === i.label && 'is-active font-medium',
+                          )}
+                          onClick={() => pickInputLabel(i.label)}
+                        >
+                          <EmptyTags className="h-3.5 w-3.5 shrink-0 text-ink-400" />
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-800">{i.label}</span>
+                          <span className="shrink-0 text-[11px] tabular-nums text-ink-400">{i.file_count}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          }
+          detail={
+            <div className="space-y-3">
+              {uxMode === 'manage' && manageTab === 'ingest' ? (
+                <div className="space-y-3">
+                  <section className="surface-card space-y-2 p-3">
+                    <h3 className="text-sm font-semibold">URL ingest</h3>
+                    <textarea
+                      value={urls}
+                      onChange={(e) => setUrls(e.target.value)}
+                      rows={4}
+                      className="field-control w-full text-sm"
+                      placeholder="one URL per line"
+                    />
+                    <input
+                      value={ingestLabel}
+                      onChange={(e) => setIngestLabel(e.target.value)}
+                      className="field-control w-full text-sm"
+                    />
+                    <button type="button" className="btn-primary" onClick={() => void startUrlIngest()}>
+                      Start URL ingest
+                    </button>
+                  </section>
+                  <section className="surface-card space-y-2 p-3">
+                    <h3 className="text-sm font-semibold">HuggingFace ingest</h3>
+                    <input
+                      value={hfRepo}
+                      onChange={(e) => setHfRepo(e.target.value)}
+                      placeholder="org/dataset"
+                      className="field-control w-full text-sm"
+                    />
+                    <button type="button" className="btn-secondary" onClick={() => void startHfIngest()}>
+                      Start HF ingest
+                    </button>
+                  </section>
+                  <pre className="max-h-48 overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
+                    {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') ||
+                      'No ingest events yet — start a job to stream GET /ingest/url/{job_id}/stream progress here.'}
+                  </pre>
+                </div>
+              ) : uxMode === 'manage' && manageTab === 'merge' ? (
+                <section className="surface-card space-y-2 p-3">
+                  <h3 className="text-sm font-semibold">Merge datasets</h3>
+                  <p className="text-sm text-ink-500">
+                    Comma-separated workspace:version pairs combined into a new version of the target workspace.
+                  </p>
+                  <input
+                    value={mergeSources}
+                    onChange={(e) => setMergeSources(e.target.value)}
+                    className="field-control w-full text-sm"
+                    placeholder="workspace:version, other:v2"
+                  />
+                  <input
+                    value={mergeTargetProject}
+                    onChange={(e) => setMergeTargetProject(e.target.value)}
+                    className="field-control w-full text-sm"
+                    placeholder="target workspace"
+                  />
+                  <input
+                    value={mergeTargetVersion}
+                    onChange={(e) => setMergeTargetVersion(e.target.value)}
+                    className="field-control w-full text-sm"
+                    placeholder="target version"
+                  />
+                  <button type="button" className="btn-primary" onClick={() => void doMerge()}>
+                    Merge
+                  </button>
+                </section>
+              ) : showFileBrowser ? (
+                <>
+                  {detailToolbarOutputs}
+                  {detailToolbarInputs}
+                  {mode === 'outputs' && showEmptyOutputs ? (
+              <EmptyState
+                compact
+                icon={EmptyDatabase}
                 title={pathRecovery ? 'Dataset path reset' : 'No output datasets yet'}
                 description={
                   pathRecovery
@@ -1160,244 +1425,81 @@ return (
                   )
                 }
               />
-            ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                {searchField}
-                <select
-                  value={project}
-                  onChange={(e) => {
-                    setError(null)
-                    setErrorDetail(null)
-                    libraryClearRef.current = false
-                    skipProjectHashRef.current = false
-                    const next = e.target.value
-                    setProject(next)
-                    setVersion(outputs.find((o) => o.project === next)?.versions[0] ?? '')
-                  }}
-                  className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-                >
-                  <option value="">Select workspace…</option>
-                  {(listFilter.trim() ? filteredOutputs : outputs).map((o) => (
-                    <option key={o.project} value={o.project}>{o.project}</option>
-                  ))}
-                </select>
-                <select value={version} onChange={(e) => { setError(null); setErrorDetail(null); setVersion(e.target.value) }} className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm">
-                  {versions.map((v) => <option key={v} value={v}>{v}</option>)}
-                </select>
-                {project ? (
-                  activeProject ? (
+                  ) : null}
+                  {mode === 'inputs' && showEmptyInputs ? (
+                    <EmptyState
+                      compact
+                      icon={EmptyTags}
+                      title="No input labels"
+                      description="Upload files or ingest URLs to create a label folder under workspace/datasets/input."
+                      action={
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => {
+                            setUxMode('manage')
+                            setManageTab('upload')
+                            upload()
+                          }}
+                        >
+                          Upload a file
+                        </button>
+                      }
+                    />
+                  ) : null}
+
+                  {showEmptyOutputs || showEmptyInputs ? null : (
                     <>
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={() => goView('builder')}
-                        title="Open Editor with current workspace"
-                      >
-                        Open Editor
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-quiet text-[12px]"
-                        onClick={() => openProjects({ project: activeProject })}
-                      >
-                        Open Home
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      onClick={() => openProjects({ project })}
-                      title="Open this dataset as a workspace"
-                    >
-                      Use in workspace
-                    </button>
-                  )
-                ) : null}
-                {uxMode === 'manage' && project && version ? (
-                  <ConfirmButton
-                    label="Delete"
-                    confirmLabel={`Delete ${project}/${version}?`}
-                    danger
-                    onConfirm={() => void deleteOutput()}
-                  />
-                ) : null}
-                {uxMode === 'browse' && project ? (
-                  <button
-                    type="button"
-                    className="btn-secondary text-[12px]"
-                    onClick={() => {
-                      setUxMode('manage')
-                      setManageTab('upload')
-                      // Stay on outputs — this button lives in the outputs
-                      // toolbar, so forcing 'inputs' here (as the Manage tab
-                      // used to) would drop the project/version the user was
-                      // just browsing and land them on the unrelated Upload
-                      // panel instead of the delete-output-version view.
-                      setMode('outputs')
-                    }}
-                  >
-                    Manage…
-                  </button>
-                ) : null}
-              </div>
-            )
-          ) : showEmptyInputs ? (
-            <EmptyState icon={EmptyTags}
-              title="No input labels"
-              description="Upload files or ingest URLs to create a label folder under workspace/datasets/input."
-              action={
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={() => {
-                    setUxMode('manage')
-                    setManageTab('upload')
-                    upload()
-                  }}
-                >
-                  Upload a file
-                </button>
-              }
-            />
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              {searchField}
-              <select
-                value={label}
-                onChange={(e) => {
-                  const next = e.target.value
-                  if (next) skippedInputLabels.current.delete(next)
-                  setError(null)
-                  setErrorDetail(null)
-                  setLabel(next)
-                }}
-                className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-              >
-                {!label ? <option value="">Select a label…</option> : null}
-                {filteredInputs.map((i) => (
-                  <option key={i.label} value={i.label}>
-                    {i.label} ({i.file_count})
-                    {i.accessible === false ? ' — external (blocked)' : ''}
-                  </option>
-                ))}
-              </select>
-              {linkedInputs && linkedInputs.length > 0 ? (
-                <label
-                  className="inline-flex items-center gap-1.5 text-[12px] text-ink-600"
-                  title={`${linkedInputs.length} label${linkedInputs.length === 1 ? '' : 's'} pinned to ${activeProject}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={showAllInputs}
-                    onChange={(e) => setShowAllInputs(e.target.checked)}
-                  />
-                  Show all shared inputs
-                </label>
-              ) : linkedInputs && linkedInputs.length === 0 ? (
-                <span className="text-[12px] text-ink-400">
-                  None pinned to {activeProject} — showing all shared input labels.
-                </span>
-              ) : null}
-              {uxMode === 'manage' && label ? (
-                <ConfirmButton
-                  label="Delete"
-                  confirmLabel={`Delete input ${label}?`}
-                  danger
-                  onConfirm={() => void deleteInput()}
-                />
-              ) : null}
-              {/* "Use in workspace" navigated to the picker and said nothing about
-                  what happens next, so it read as if it would link the label for
-                  you. It can't — pinning happens on a workspace's Home. Both
-                  branches now name the actual next step. */}
-              {activeProject ? (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  title={`Open ${activeProject} Home, where “${label || 'an input label'}” can be pinned under Linked inputs`}
-                  onClick={() => {
-                    useAppStore.getState().openProject(activeProject)
-                  }}
-                >
-                  Open Home
-                </button>
-              ) : label ? (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  title={`Pick a workspace, then pin “${label}” under its Home → Linked inputs`}
-                  onClick={() => {
-                    pushToast(`Pick a workspace, then pin “${label}” under Home → Linked inputs`, 'info')
-                    openProjects()
-                  }}
-                >
-                  Pick a workspace…
-                </button>
-              ) : null}
-              {uxMode === 'manage' ? (
-                <button type="button" className="btn-secondary" onClick={upload}>
-                  <Upload className="h-3.5 w-3.5" /> Upload
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn-quiet text-[12px]"
-                  onClick={() => {
-                    setUxMode('manage')
-                    setManageTab('upload')
-                  }}
-                >
-                  Manage…
-                </button>
-              )}
-            </div>
-          )}
+                      {uxMode === 'manage' && manageTab === 'upload' ? (
+                        <details className="surface-card">
+                          <summary className="cursor-pointer select-none px-3 py-2 text-[12px] font-medium text-ink-600">
+                            Delete an output version
+                          </summary>
+                          <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 px-3 py-2">
+                            <select
+                              value={project}
+                              onChange={(e) => {
+                                const next = e.target.value
+                                setProject(next)
+                                setVersion(outputs.find((o) => o.project === next)?.versions[0] ?? '')
+                              }}
+                              className="field-control text-sm"
+                            >
+                              <option value="">Select workspace…</option>
+                              {outputs.map((o) => (
+                                <option key={o.project} value={o.project}>
+                                  {o.project}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={version}
+                              onChange={(e) => setVersion(e.target.value)}
+                              className="field-control text-sm"
+                            >
+                              {versions.map((v) => (
+                                <option key={v} value={v}>
+                                  {v}
+                                </option>
+                              ))}
+                            </select>
+                            {project && version ? (
+                              <ConfirmButton
+                                label="Delete"
+                                confirmLabel={`Delete ${project}/${version}?`}
+                                danger
+                                onConfirm={() => void deleteOutput()}
+                              />
+                            ) : null}
+                          </div>
+                        </details>
+                      ) : null}
 
-          {uxMode === 'manage' && manageTab === 'upload' ? (
-            <details className="rounded-xl border border-ink-100 bg-ink-50/60">
-              <summary className="cursor-pointer select-none px-3 py-2 text-[12px] font-medium text-ink-600">
-                Delete an output version
-              </summary>
-              <div className="flex flex-wrap items-center gap-2 border-t border-ink-100 px-3 py-2">
-                <select
-                  value={project}
-                  onChange={(e) => {
-                    const next = e.target.value
-                    setProject(next)
-                    setVersion(outputs.find((o) => o.project === next)?.versions[0] ?? '')
-                  }}
-                  className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-                >
-                  <option value="">Select workspace…</option>
-                  {outputs.map((o) => (
-                    <option key={o.project} value={o.project}>{o.project}</option>
-                  ))}
-                </select>
-                <select
-                  value={version}
-                  onChange={(e) => setVersion(e.target.value)}
-                  className="rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
-                >
-                  {versions.map((v) => (
-                    <option key={v} value={v}>{v}</option>
-                  ))}
-                </select>
-                {project && version ? (
-                  <ConfirmButton
-                    label="Delete"
-                    confirmLabel={`Delete ${project}/${version}?`}
-                    danger
-                    onConfirm={() => void deleteOutput()}
-                  />
-                ) : null}
-              </div>
-            </details>
-          ) : null}
-
-          {showEmptyOutputs || showEmptyInputs ? null : stats != null && <KeyValue data={stats} />}
-          {showEmptyOutputs || showEmptyInputs ? null : showBrowseError && filteredRows.length === 0 ? (
-            <EmptyState icon={EmptyTriangleAlert}
+                      {stats != null && <KeyValue data={stats} />}
+                      {showBrowseError && filteredRows.length === 0 ? (
+            <EmptyState
+              compact
+              icon={EmptyTriangleAlert}
               title="Couldn’t load files"
               description="This selection isn’t browseable. Clear it and pick an accessible label or version."
               action={
@@ -1419,7 +1521,9 @@ return (
               }
             />
           ) : filteredRows.length === 0 ? (
-            <EmptyState icon={EmptyFolderOpen}
+            <EmptyState
+              compact
+              icon={EmptyFolderOpen}
               title={
                 listFilter.trim()
                   ? 'No matches'
@@ -1438,10 +1542,10 @@ return (
                     ? 'This version has no files yet. Run a pipeline or merge datasets to populate it.'
                     : !label
                       ? accessibleInputs.length
-                        ? 'Choose a label from the dropdown to browse shared input files.'
+                        ? 'Choose a label from the list to browse shared input files.'
                         : blockedInputs.length
                           ? 'All labels are external symlinks. Enable GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API (Compose defaults to on), then Refresh.'
-                          : 'Choose a label from the dropdown to browse shared input files.'
+                          : 'Choose a label from the list to browse shared input files.'
                       : 'This label has no files yet. Upload or ingest to add some.'
               }
               action={
@@ -1496,7 +1600,7 @@ return (
                   stick inside a box that never scrolls — i.e. not stick at all
                   (measured: it scrolled 279px past the top). The header rounds its
                   own outer corners instead. */}
-              <div className="rounded-2xl border border-ink-200 bg-white">
+              <div className="rounded-lg border border-ink-200 bg-white">
                 <table className="w-full text-left text-sm">
                   {/* Sticky header: 200 rows is several screens, and the column
                       labels used to scroll away with them. `top-0` is safe here
@@ -1615,9 +1719,15 @@ return (
                 </table>
               </div>
             </div>
-          )}
-        </>
-      ) : null}
+                      )}
+                    </>
+                  )}
+                </>
+              ) : null}
+            </div>
+          }
+        />
+      )}
       {previewFile ? (
         <div
           className="fixed inset-0 z-[110] flex items-center justify-center bg-ink-950/40 p-4"
@@ -1648,6 +1758,6 @@ return (
           </div>
         </div>
       ) : null}
-    </div>
+    </WorkbenchPage>
   )
 }

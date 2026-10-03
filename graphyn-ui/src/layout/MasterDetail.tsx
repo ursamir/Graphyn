@@ -25,6 +25,8 @@ type MasterDetailProps = {
   orientation?: 'horizontal' | 'vertical'
   /** Allow collapsing the master list to give detail more room. */
   collapsible?: boolean
+  /** Accessible name for the master list (collapse controls). */
+  listLabel?: string
 }
 
 function readCollapsed(key: string): boolean {
@@ -40,13 +42,14 @@ export function MasterDetail({
   detail,
   storageKey,
   defaultSize = 360,
-  minSize = 260,
+  minSize = 280,
   maxSize = 640,
   className,
   masterClassName,
   detailClassName,
   orientation: orientationProp,
   collapsible = false,
+  listLabel = 'list',
 }: MasterDetailProps) {
   const { mode } = useLayoutPrefs()
   const stacked = mode === 'container-content'
@@ -78,14 +81,14 @@ export function MasterDetail({
           <button
             type="button"
             className="btn-quiet !px-1.5 !py-1.5"
-            aria-label="Show run list"
-            title="Show run list"
+            aria-label={`Show ${listLabel}`}
+            title={`Show ${listLabel}`}
             onClick={() => setCollapsed(false)}
           >
             <PanelLeftOpen className="h-4 w-4" />
           </button>
         </div>
-        <div className={clsx('h-full min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto p-5', detailClassName)}>
+        <div className={clsx('h-full min-h-0 min-w-0 flex-1 space-y-2 overflow-y-auto p-3', detailClassName)}>
           {detail}
         </div>
       </div>
@@ -106,17 +109,18 @@ export function MasterDetail({
         <div
           key="master"
           className={clsx(
-            'relative h-full min-h-0 overflow-y-auto bg-white/40',
-            stacked ? 'px-5 py-3' : 'p-5',
+            'relative h-full min-h-0 overflow-y-auto bg-white [scrollbar-gutter:stable]',
+            stacked ? 'px-3 py-2' : 'p-3',
+            collapsible && orientation === 'horizontal' && 'pr-9',
             masterClassName,
           )}
         >
           {collapsible && orientation === 'horizontal' ? (
             <button
               type="button"
-              className="btn-quiet absolute right-2 top-2 z-[1] !px-1.5 !py-1"
-              aria-label="Hide run list"
-              title="Hide run list"
+              className="btn-quiet absolute right-1.5 top-1.5 z-[1] !px-1.5 !py-1"
+              aria-label={`Hide ${listLabel}`}
+              title={`Hide ${listLabel}`}
               onClick={() => setCollapsed(true)}
             >
               <PanelLeftClose className="h-3.5 w-3.5" />
@@ -126,7 +130,10 @@ export function MasterDetail({
         </div>,
         <div
           key="detail"
-          className={clsx('h-full min-h-0 space-y-3 overflow-y-auto p-5', detailClassName)}
+          className={clsx(
+            'h-full min-h-0 min-w-0 space-y-2 overflow-y-auto p-3 [scrollbar-gutter:stable]',
+            detailClassName,
+          )}
         >
           {detail}
         </div>,

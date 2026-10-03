@@ -3,7 +3,7 @@ import { Boxes as EmptyBoxes } from 'lucide-react'
 import { Box, CheckCircle2, GitBranch, RefreshCw, Shield } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { useAppStore } from '../../store/appStore'
-import { EmptyState, ErrorBanner, LoadingBlock, StatusBadge } from '../../components/ui'
+import { EmptyState, ErrorBanner, LoadingBlock, SegmentedTabs, StatusBadge } from '../../components/ui'
 import { MasterDetail, ViewShell } from '../../layout'
 import { paths } from '../../routes/paths'
 import { navigatePath } from '../../routes/parsePath'
@@ -207,6 +207,19 @@ export default function ModelsView() {
     <ViewShell
       title="Models"
       description="Registry of promoted run artifacts — stages, request/approve prod, link back to training runs."
+      toolbar={
+        activeProject ? (
+          <SegmentedTabs
+            aria-label="Model scope"
+            value={scopeMode}
+            options={[
+              { id: 'workspace', label: 'This workspace' },
+              { id: 'all', label: 'All registries' },
+            ]}
+            onChange={setScopeMode}
+          />
+        ) : undefined
+      }
       actions={
         <>
           <button type="button" className="btn-secondary" onClick={() => void load()}>
@@ -221,47 +234,21 @@ export default function ModelsView() {
     >
       <div className="space-y-4 p-5 h-full min-h-0 flex flex-col">
       {activeProject ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-ink-100 bg-ink-50/80 px-3 py-2 text-[12px] text-ink-600">
-          <p>
-            {scopeMode === 'workspace' ? (
-              <>
-                <span className="font-medium text-ink-800">Models for this workspace</span>
-                {' '}
-                — showing registries whose staging/prod/latest run belongs to {activeProject}.
-              </>
-            ) : (
-              <>
-                Showing <span className="font-medium text-ink-800">all registries</span>
-                {' '}
-                (not filtered to {activeProject}).
-              </>
-            )}
-          </p>
-          <div className="inline-flex shrink-0 overflow-hidden rounded-lg border border-ink-200 bg-white text-[11px] font-medium">
-            <button
-              type="button"
-              className={
-                scopeMode === 'workspace'
-                  ? 'bg-accent-50 px-2.5 py-1 text-accent-900'
-                  : 'px-2.5 py-1 text-ink-500 hover:bg-ink-50'
-              }
-              onClick={() => setScopeMode('workspace')}
-            >
-              This workspace
-            </button>
-            <button
-              type="button"
-              className={
-                scopeMode === 'all'
-                  ? 'bg-accent-50 px-2.5 py-1 text-accent-900'
-                  : 'px-2.5 py-1 text-ink-500 hover:bg-ink-50'
-              }
-              onClick={() => setScopeMode('all')}
-            >
-              All registries
-            </button>
-          </div>
-        </div>
+        <p className="text-[12px] text-ink-600">
+          {scopeMode === 'workspace' ? (
+            <>
+              <span className="font-medium text-ink-800">Models for this workspace</span>
+              {' '}
+              — registries whose staging/prod/latest run belongs to {activeProject}.
+            </>
+          ) : (
+            <>
+              Showing <span className="font-medium text-ink-800">all registries</span>
+              {' '}
+              (not filtered to {activeProject}).
+            </>
+          )}
+        </p>
       ) : null}
       {registerOpen && (
         <div className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3 shadow-sm">
@@ -351,23 +338,23 @@ export default function ModelsView() {
           masterClassName="!p-0 !bg-transparent"
           detailClassName="!p-0"
           master={
-          <ul className="divide-y divide-ink-100 overflow-hidden rounded-2xl border border-ink-200 bg-white">
+          <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white">
             {filteredRows.map((m) => (
               <li key={m.name}>
                 <button
                   type="button"
                   className={
                     selected === m.name
-                      ? 'flex w-full items-center gap-2 bg-accent-50 px-4 py-3 text-left'
-                      : 'flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-ink-50'
+                      ? 'ide-row is-active w-full !px-3 !py-2.5'
+                      : 'ide-row w-full !px-3 !py-2.5'
                   }
                   onClick={() => {
                     setSelected(m.name)
                     if (activeProject) navigatePath(paths.model(activeProject, m.name), true)
                   }}
                 >
-                  <Box className="h-4 w-4 text-ink-400" />
-                  <span className="flex-1 truncate font-medium text-ink-900">{m.name}</span>
+                  <Box className="h-4 w-4 shrink-0 text-ink-400" />
+                  <span className="min-w-0 flex-1 truncate font-medium text-ink-900">{m.name}</span>
                   {m.stages?.prod ? (
                     <StatusBadge status="prod" />
                   ) : m.stages?.staging ? (
@@ -381,7 +368,7 @@ export default function ModelsView() {
           detail={
           <div className="rounded-2xl border border-ink-200 bg-white p-4 space-y-4">
             {!selected || !detail ? (
-              <p className="text-sm text-ink-500">Select a model to manage stages.</p>
+              <EmptyState compact title="Select a model" description="Choose a registry on the left to manage stages." />
             ) : (
               <>
                 <div>

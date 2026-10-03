@@ -4,7 +4,6 @@ import {
   Boxes,
   Workflow,
   History,
-  Archive,
   Package,
   BookOpen,
   Database,
@@ -40,7 +39,6 @@ import { CommandPalette } from './components/CommandPalette'
 import { NotificationBell } from './components/NotificationBell'
 import BuilderView from './features/builder/BuilderView'
 import RunsView from './features/runs/RunsView'
-import ArtifactsView from './features/artifacts/ArtifactsView'
 import PluginsView from './features/plugins/PluginsView'
 import TemplatesView from './features/templates/TemplatesView'
 import DataView from './features/data/DataView'
@@ -108,7 +106,6 @@ const NAV_GROUPS: NavGroup[] = [
     title: 'Library',
     items: [
       { id: 'plugins', label: 'Plugins', icon: Package },
-      { id: 'artifacts', label: 'Artifacts', icon: Archive },
     ],
   },
   {
@@ -133,7 +130,6 @@ const VIEW_LABEL: Record<AppView, string> = {
   runs: 'Runs',
   plugins: 'Plugins',
   data: 'Datasets',
-  artifacts: 'Artifacts',
   edge: 'Ship',
   experiments: 'Compare runs',
   proposals: 'Agent inbox',
@@ -150,9 +146,8 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   builder: 'Editor — design Graph IR pipelines on the canvas',
   templates: 'Templates — stamp a starter graph into a workspace',
   proposals: 'Agent inbox — review agent GraphIR before it enters the Editor',
-  runs: 'Runs — history; open a run for Outputs, Lineage, and Compare',
+  runs: 'Runs — history; open a run for Overview, Outputs, and Compare',
   experiments: 'Compare runs — prefer Runs → Compare when a workspace is open',
-  artifacts: 'Artifacts — cross-run registry; for one run use Runs → Run outputs',
   plugins: 'Plugins — install node packs for the Editor catalog',
   data: 'Datasets — shared Inputs/Outputs library (not run downloads)',
   edge: 'Ship — edge package and devices',
@@ -165,7 +160,7 @@ const NAV_HINTS: Partial<Record<AppView, string>> = {
   devices: 'Devices — fleet inventory (API pending)',
 }
 
-/** Compact last-run observe control — Trace / Artifacts / Compare live in a menu. (ux-pass) */
+/** Compact last-run observe control — Overview / Run outputs / Compare live in a menu. */
 /** Dot colour for a finished run's outcome, folded into the run chip so the
  *  header doesn't carry a second pill saying the same thing in words. */
 const OUTCOME_DOT: Record<string, string> = {
@@ -243,7 +238,7 @@ function LastRunMenu({
               onOpenTrace()
             }}
           >
-            Lineage
+            Overview
           </button>
           <button
             type="button"
@@ -366,6 +361,8 @@ export default function App() {
    * navigatePath) on purpose: no popstate, so this cannot re-enter the parse.
    */
   React.useEffect(() => {
+    // Legacy artifact-id resolve owns navigation — don't rewrite out from under it.
+    if (parsedLocation.resolveArtifactId) return
     const canonical = parsedLocation.canonical
     if (!canonical || window.location.pathname === canonical) return
     window.history.replaceState(null, '', `${canonical}${window.location.search}`)
@@ -618,6 +615,24 @@ export default function App() {
         openExperiments(parsed.compareIds?.length ? { runIds: parsed.compareIds } : {})
         return
       }
+      // Legacy /library/artifacts?artifactId= → resolve → Runs panel.
+      // Also heal sticky `?artifactId=` left on /workspaces/:id/runs from older redirects.
+      const qsAid = new URLSearchParams(window.location.search).get('artifactId')
+        || new URLSearchParams(window.location.search).get('artifact_id')
+        || ''
+      const orphanAid = (parsed.resolveArtifactId || qsAid).trim()
+      const onRunsList =
+        parts[0] === 'workspaces' && parts[2] === 'runs' && !parts[3] && Boolean(orphanAid)
+      if (parsed.resolveArtifactId || onRunsList) {
+        const aid = orphanAid
+        if (!aid) return
+        if (parsed.legacyArtifactsOutputs || onRunsList) {
+          openArtifacts({ artifactId: aid, project: parsed.workspaceId || parts[1] })
+        } else {
+          openTrace({ artifactId: aid, project: parsed.workspaceId || parts[1] })
+        }
+        return
+      }
       if (parsed.runId) {
         openRun(parsed.runId, {
           project: parsed.workspaceId,
@@ -626,15 +641,21 @@ export default function App() {
         return
       }
       if (parsed.view) setView(parsed.view)
-      if (parsed.runsTab === 'live') useAppStore.getState().setFocusRunsTab('live')
-      else if (parsed.runsTab === 'history' && parsed.view === 'runs') {
+      // /runs/live → unified Runs list with Active filter (no separate Live tab).
+      if (parsed.runsTab === 'live' && parsed.workspaceId) {
+        useAppStore.getState().setFocusRunsTab('history')
+        const target = `${paths.runs(parsed.workspaceId)}?status=active`
+        if (`${window.location.pathname}${window.location.search}` !== target) {
+          window.history.replaceState(null, '', target)
+        }
+      } else if (parsed.runsTab === 'history' && parsed.view === 'runs') {
         useAppStore.getState().setFocusRunsTab('history')
       }
     }
     apply()
     window.addEventListener('popstate', apply)
     return () => window.removeEventListener('popstate', apply)
-  }, [openRun, openExperiments, setView, setActiveProject])
+  }, [openRun, openExperiments, openArtifacts, openTrace, setView, setActiveProject])
 
   const onLoginRoute = window.location.pathname.startsWith('/login')
   React.useEffect(() => {
@@ -791,6 +812,14 @@ export default function App() {
         } else go('runs')
         return
       }
+      if (key === 'a') {
+        e.preventDefault()
+        const rid = useAppStore.getState().lastRunId
+        if (rid) {
+          if (confirmNavigation()) openArtifacts({ runId: rid })
+        } else go('runs')
+        return
+      }
       if (key === 'e') {
         e.preventDefault()
         const rid = useAppStore.getState().lastRunId
@@ -911,7 +940,6 @@ export default function App() {
         <>
           {view === 'builder' && <BuilderView />}
           {view === 'runs' && <RunsView />}
-          {view === 'artifacts' && <ArtifactsView />}
           {view === 'plugins' && <PluginsView />}
           {view === 'templates' && <TemplatesView />}
           {view === 'data' && <DataView />}
@@ -941,7 +969,7 @@ export default function App() {
   const navAside = (
     <aside
               className={clsx(
-                'z-30 flex h-full min-h-0 flex-col border-r border-ink-200/80 bg-[#f7f7f8]',
+                'z-30 flex h-full min-h-0 flex-col border-r border-ink-200/80 bg-[#ebedf0]',
                 narrow ? 'absolute inset-y-0 left-0 w-[13.5rem] shadow-xl' : 'w-full',
               )}
             >
@@ -950,9 +978,9 @@ export default function App() {
                 disabled without activeProject) then the same four NAV_GROUPS. Only enabled
                 state and highlight change — never a different collapsed Library&admin chrome.
               */}
-              <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Primary">
-                <div className="mb-3 space-y-0.5">
-                  <div className="flex items-center justify-between gap-2 px-2.5 pb-1">
+              <nav className="flex-1 overflow-y-auto px-1.5 py-2" aria-label="Primary">
+                <div className="mb-2 space-y-0.5">
+                  <div className="flex items-center justify-between gap-2 px-2 pb-1">
                     {activeProject ? (
                       <>
                         <div
@@ -1005,15 +1033,10 @@ export default function App() {
                           }
                           onClick={() => go(id)}
                           className={clsx(
-                            'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                            !enabled &&
-                              'cursor-not-allowed opacity-35 text-ink-400 grayscale-[0.35]',
-                            active
-                              ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
-                              : enabled &&
-                                  (isHome
-                                    ? 'font-medium text-ink-900 hover:bg-white/80 hover:text-ink-950'
-                                    : 'text-ink-700 hover:bg-white/70 hover:text-ink-950'),
+                            'ide-row',
+                            !enabled && 'cursor-not-allowed opacity-35 grayscale-[0.35]',
+                            active && 'is-active font-medium',
+                            enabled && !active && (isHome ? 'font-medium text-ink-900' : 'text-ink-700'),
                           )}
                           aria-current={active ? 'page' : undefined}
                           data-strip-role={isHome ? 'home' : 'workspace-scoped'}
@@ -1021,7 +1044,7 @@ export default function App() {
                         >
                           <Icon
                             className={clsx(
-                              'h-4 w-4 shrink-0',
+                              'h-3.5 w-3.5 shrink-0',
                               active
                                 ? 'text-accent-800'
                                 : enabled
@@ -1051,10 +1074,8 @@ export default function App() {
                   </div>
                 </div>
                 {NAV_GROUPS.map((group) => (
-                  <div key={group.title} className="mb-4">
-                    <div className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
-                      {group.title}
-                    </div>
+                  <div key={group.title} className="mb-3">
+                    <div className="ide-section-title px-2 pb-1">{group.title}</div>
                     <div className="space-y-0.5">
                       {group.items.map(({ id, label, icon: Icon }) => {
                         const active = view === id
@@ -1064,15 +1085,10 @@ export default function App() {
                             type="button"
                             title={navTitle(id)}
                             onClick={() => go(id)}
-                            className={clsx(
-                              'relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left text-[13px] transition',
-                              active
-                                ? 'bg-white font-medium text-ink-950 shadow-sm ring-1 ring-ink-200/80'
-                                : 'text-ink-600 hover:bg-white/70 hover:text-ink-950',
-                            )}
+                            className={clsx('ide-row', active && 'is-active font-medium')}
                             aria-current={active ? 'page' : undefined}
                           >
-                            <Icon className={clsx('h-4 w-4', active ? 'text-ink-900' : 'text-ink-400')} />
+                            <Icon className={clsx('h-3.5 w-3.5', active ? 'text-accent-800' : 'text-ink-400')} />
                             <span className="flex-1 truncate">{label}</span>
                             {id === 'proposals' && pendingProposalCount > 0 && (
                               <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900">
@@ -1093,8 +1109,8 @@ export default function App() {
   return (
     <ErrorBoundary>
       <LayoutPrefsProvider>
-      <div className="flex h-full flex-col overflow-hidden bg-mesh">
-        <header className="relative z-40 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-200/70 bg-white/80 px-4 backdrop-blur-md">
+      <div className="flex h-full flex-col overflow-hidden bg-[#f0f2f5]">
+        <header className="relative z-40 flex h-11 shrink-0 items-center justify-between gap-3 border-b border-ink-200/80 bg-white px-3">
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -1112,15 +1128,17 @@ export default function App() {
             >
               <PanelLeftClose className={clsx('h-4 w-4', !navOpen && 'rotate-180')} />
             </button>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-accent-500 text-ink-950 shadow-sm">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent-500 text-ink-950">
               <Boxes className="h-3.5 w-3.5" />
             </div>
             <div className="min-w-0 leading-tight">
-              <div className="text-[15px] font-semibold text-ink-950">Graphyn</div>
-              {/* The workspace name is already shown in the sidebar's Workspace strip and in the
-                  page's own title — repeating it here too just added a third copy of the same
-                  string. This line is now purely "which page," matching the sidebar's own labels. */}
-              <div className="truncate text-[11px] text-ink-500">{VIEW_LABEL[view]}</div>
+              <div className="text-[13px] font-semibold text-ink-950">Graphyn</div>
+              {/* Workspace context only — page title lives in ViewShell / WorkbenchPage. */}
+              {activeProject ? (
+                <div className="truncate text-[10px] text-ink-500" title={activeProject}>
+                  {activeProject}
+                </div>
+              ) : null}
             </div>
           </div>
           <div className="flex items-center gap-2">

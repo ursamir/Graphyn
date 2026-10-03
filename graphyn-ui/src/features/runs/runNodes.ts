@@ -12,7 +12,7 @@
  *
  * No React here so it can be unit-tested in the node vitest env.
  */
-import { humanNodeLabel } from '../../lib/format'
+import { humanNodeLabel, instanceIdCue } from '../../lib/format'
 import { normalizeRunStatus } from '../../lib/runStatus'
 import { statusesFromEvents } from '../builder/builderRunState'
 import { looksLikeOpaqueId } from './runOutputs'
@@ -124,7 +124,7 @@ export function pipelineNodesFromRun(input: {
   const run = normalizeRunStatus(input.runStatus)
   const terminalNotOk = run === 'failed' || run === 'cancelled'
   const terminal = terminalNotOk || run === 'completed'
-  return order
+  const items = order
     .filter((id) => id && !looksLikeOpaqueId(id))
     .map((id) => {
       const g = byGraph.get(id)
@@ -143,6 +143,138 @@ export function pipelineNodesFromRun(input: {
         status,
       }
     })
+  return disambiguatePipelineLabels(items)
+}
+
+/** Append `#0` / `#c3f15543` when two steps share the same base label. */
+export function disambiguatePipelineLabels<T extends { id: string; label: string; nodeType?: string }>(
+  items: T[],
+): T[] {
+  const counts = new Map<string, number>()
+  for (const it of items) {
+    const key = it.label.toLowerCase()
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  return items.map((it) => {
+    if ((counts.get(it.label.toLowerCase()) || 0) < 2) return it
+    const cue = instanceIdCue(it.id, it.nodeType)
+    if (!cue) return it
+    return { ...it, label: `${it.label} #${cue}` }
+  })
+}
+
+export type PipelineShapeKind = 'linear' | 'fork' | 'parallel'
+
+export type PipelineShape = {
+  kind: PipelineShapeKind
+  sharedIds: string[]
+  /** Ordered node ids after the shared spine (fork) or full sink paths (parallel). */
+  branches: string[][]
+  /** id → `shared` | `A` | `B` | … — meaningful for fork/parallel only. */
+  laneOf: Map<string, string>
+}
+
+/** True when Overview / stack should show Path chrome (not a single spine). */
+export function isMultiTrackShape(shape: PipelineShape | null | undefined): boolean {
+  return shape?.kind === 'fork' || shape?.kind === 'parallel'
+}
+
+/**
+ * Recover a readable pipeline shape from stack order + graph edges.
+ * Walks each sink backwards via its closest parent (highest stack index).
+ * - linear: one sink (or one path) — includes single-sink diamonds
+ * - fork: ≥2 sinks with a shared prefix
+ * - parallel: ≥2 sinks with no shared prefix (no fake Shared trunk)
+ */
+export function computePipelineShape(
+  orderedIds: string[],
+  edges: Array<{ src_id?: unknown; dst_id?: unknown }> | null | undefined,
+): PipelineShape {
+  const ids = orderedIds.map((id) => String(id || '').trim()).filter(Boolean)
+  const idSet = new Set(ids)
+  const orderIndex = new Map(ids.map((id, i) => [id, i]))
+  const fromMap = new Map<string, string[]>()
+  const toMap = new Map<string, string[]>()
+  for (const e of Array.isArray(edges) ? edges : []) {
+    const src = str(e?.src_id)
+    const dst = str(e?.dst_id)
+    if (!src || !dst || !idSet.has(src) || !idSet.has(dst) || src === dst) continue
+    toMap.set(src, [...(toMap.get(src) || []), dst])
+    fromMap.set(dst, [...(fromMap.get(dst) || []), src])
+  }
+
+  const linear = (): PipelineShape => {
+    const laneOf = new Map(ids.map((id) => [id, 'shared']))
+    return { kind: 'linear', sharedIds: ids, branches: [], laneOf }
+  }
+
+  if (ids.length === 0 || toMap.size === 0) return linear()
+
+  const sinks = ids.filter((id) => !(toMap.get(id) || []).length)
+  if (sinks.length < 2) return linear()
+
+  const primaryParent = (id: string): string | null => {
+    const parents = (fromMap.get(id) || []).filter((p) => orderIndex.has(p))
+    if (!parents.length) return null
+    return parents.slice().sort((a, b) => (orderIndex.get(b) || 0) - (orderIndex.get(a) || 0))[0]
+  }
+
+  const pathToRoot = (endId: string): string[] => {
+    const path = [endId]
+    const seen = new Set([endId])
+    let cur = endId
+    for (;;) {
+      const p = primaryParent(cur)
+      if (!p || seen.has(p)) break
+      path.unshift(p)
+      seen.add(p)
+      cur = p
+    }
+    return path
+  }
+
+  const paths = sinks.map(pathToRoot)
+  let sharedLen = 0
+  const minLen = Math.min(...paths.map((p) => p.length))
+  while (
+    sharedLen < minLen &&
+    paths.every((p) => p[sharedLen] === paths[0][sharedLen])
+  ) {
+    sharedLen++
+  }
+
+  const rawBranches = paths.map((p) => p.slice(sharedLen)).filter((b) => b.length > 0)
+  const uniqBranches: string[][] = []
+  const seenKey = new Set<string>()
+  for (const b of rawBranches) {
+    const key = b.join('>')
+    if (seenKey.has(key)) continue
+    seenKey.add(key)
+    uniqBranches.push(b)
+  }
+  if (uniqBranches.length < 2) return linear()
+
+  const sharedIds = paths[0].slice(0, sharedLen)
+  const kind: PipelineShapeKind = sharedLen >= 1 ? 'fork' : 'parallel'
+  const laneOf = new Map<string, string>()
+  for (const id of sharedIds) laneOf.set(id, 'shared')
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  uniqBranches.forEach((branch, i) => {
+    const lane = letters[i] || String(i + 1)
+    for (const id of branch) {
+      if (!laneOf.has(id)) laneOf.set(id, lane)
+    }
+  })
+  for (const id of ids) {
+    if (!laneOf.has(id)) laneOf.set(id, kind === 'parallel' ? 'A' : 'shared')
+  }
+  return { kind, sharedIds, branches: uniqBranches, laneOf }
+}
+
+/** Short lane copy for Overview / Pipeline stack (fork/parallel only). */
+export function laneLabel(lane: string | undefined | null): string {
+  if (!lane || lane === 'shared') return 'Shared'
+  return `Path ${lane}`
 }
 
 export type RunFailure = { nodeId: string | null; nodeType: string | null; error: string }

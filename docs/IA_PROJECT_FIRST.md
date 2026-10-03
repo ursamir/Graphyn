@@ -28,7 +28,7 @@
 |---|---|---|
 | **Projects** | Projects | Primary entry — picker / create / open |
 | **Build** | Templates, Proposals | Builder optional for canvas-only; **Run** path should go through a project |
-| **Library** | Plugins, Artifacts | Global library + plugin catalog (Models/Datasets are workspace-strip only) |
+| **Library** | Plugins | Global plugin catalog (Models/Datasets are workspace-strip only; Artifacts UI removed) |
 | **Deploy** | Ship, Worker fleet | Unchanged |
 | **Admin** | Secrets, Ops, Access | Credentials and platform ops (Plugins stay in **Library**, shipped UI) |
 
@@ -48,7 +48,7 @@ Header shows a **workspace chip only when the URL is `/workspaces/:id`** (switch
 
 Global **Build** (Templates, Proposals), **Library** (Data), **Deploy**, **Admin** remain available below or beside the project strip.
 
-**Declutter:** Trace and Artifacts are **not** equal sidebar peers. Reach them from run detail, artifact detail, and the header last-run strip (shortened when a project is active).
+**Declutter:** Lineage and Run outputs are **not** sidebar peers — reach them from run detail and the header last-run strip. Library → Artifacts UI is removed.
 
 ---
 
@@ -171,7 +171,7 @@ Shipped after Phase 2 to make **global vs project** and **viewer vs editor** obv
 | **Data Manage** | Explorer actions (upload / delete / ingest) — secondary |
 | **Runs** | History + Files + Lineage + Compare (one surface; Prefect/W&B pattern) |
 | **Lineage / Compare runs** | Deep-link only (`#/trace`, `#/experiments`) or Runs panels — not activity-bar peers |
-| **Trace / Artifacts** | Deep-link only (artifact ids / cross-run registry) — not sidebar peers |
+| **Legacy `/library/artifacts`** | Redirects to Runs (artifact id → resolve → outputs/lineage) |
 | **Templates** | New from template wizard (creates/opens workspace first) |
 | **Proposals** | PR review (global) |
 | **Plugins / Secrets / System** | Settings / Extensions (Admin) |
@@ -181,15 +181,16 @@ Shipped after Phase 2 to make **global vs project** and **viewer vs editor** obv
 
 Modeled on VS Code + Prefect run tabs + W&B/MLflow compare-in-runs:
 
-1. **Activity bar (project open):** **Home** / Editor / **Runs** / **Datasets** / **Artifacts** (optional). **Lineage** and **Compare runs** are Runs detail panels or deep links (`#/trace`, `#/experiments`) — not activity-bar peers. Global/Settings collapsed.
-2. **Header:** workspace chip only on `/workspaces/:id` + Switch; else **Open workspace** when stored project or none; last-run menu: **Artifacts** | **Compare runs…** (land on Runs panels).
+1. **Activity bar (project open):** **Home** / Editor / **Runs** / **Datasets**. **Lineage**, **Run outputs**, and **Compare runs** are Runs detail panels — not activity-bar peers. Global/Settings collapsed.
+2. **Header:** workspace chip only on `/workspaces/:id` + Switch; else **Open workspace** when stored project or none; last-run menu: **Overview (Lineage)** | **Run outputs** | **Compare runs…**.
 3. **Projects picker** (`#/projects`): dense explorer + filter; welcome pane only.
 4. **Workspace Overview** (`#/projects?project=`): situation strip + Open Editor / From template / Last run; **Pinned inputs** are manual links (runs do not auto-link); Versions & taxonomy collapsed.
 5. **Editor:** Run | Validate | Save; placement only in Distributed mode.
 6. **Runs (unified observe):**
-   - Top: **History | Live | Compare**.
-   - Detail panels: **Logs** (execution printout) | **Run outputs** (downloadable outputs, type previews, grouped by node) | **Lineage** (executed nodes + provenance — enriched `/trace?run_id=`) | **Details** (counts, node_stats, errors) | **Checkpoints**.
-   - `openTrace({ runId })` → Runs → Lineage; `openArtifacts({ runId })` → Runs → Run outputs.
+   - One list + detail (no History|Live|Compare peer tabs). **Active** status filter (+ list polling) replaces Live; **Compare** is a multi-select action → `/runs/compare` (Back chrome). `/runs/live` → `/runs?status=active`.
+   - No page title strip on Runs (one MasterDetail layout always); run chrome (identity + panel tabs) sits in the detail pane aligned with the list filter strip.
+   - Detail panels: **Overview** (adaptive Run story: linear duration spine + Got outcome; fork/parallel Path tracks only when multi-sink; timeline chronological or Path-sectioned; collapsible Hot spots; Export meta JSON) | **Run outputs** (Download zip → per-step folders; Whole-run journal files with plain titles) | **Logs** (with timestamps + line count) | **Checkpoints** (optional). Default: Overview when succeeded; Logs when live/failed/cancelled. Legacy `/details` → Overview. Header: Editor · Manage (live) · **Register model** (succeeded+model; Close-able form, no duplicate banner) · Delete (terminal). No Library → Artifacts page. Pipeline stack Path headers only for fork/parallel shapes.
+   - `openTrace({ runId })` → Runs → Overview; `openArtifacts({ runId })` → Runs → Run outputs; artifact-id-only deep links resolve via `GET /artifacts/{id}`.
 7. **Datasets vs Home:** sidebar **Datasets** = shared Inputs/Outputs library for the project; Home keeps workspace overview only.
 8. **Hash sync:** `replaceHash` / `go` dispatch `hashchange`; Switch clears `?project=`.
 9. **Auth:** 401 → Settings CTA.
@@ -200,7 +201,7 @@ Modeled on VS Code + Prefect run tabs + W&B/MLflow compare-in-runs:
 |---|---|---|
 | **Datasets** | Shared Inputs/Outputs library | Browse\|Manage; honesty: Outputs ≠ Runs → Files |
 | **Lineage** | Artifact-id deep-link (`#/trace`) | Prefer Runs → Lineage for runs |
-| **Artifacts** | Cross-run file registry | Prefer Runs → Files for one run; Runs → Lineage for provenance |
+| **Artifacts (removed)** | — | Use Runs → Run outputs / Lineage; legacy `/library/artifacts` redirects |
 | **Templates** | Stamp into project → Editor | Search + pills; quieter header; gate copy |
 | **Proposals** | Approve agent GraphIR | MCP discovery banner; search; diff first |
 | **Edge** | Package for device | Step-owned actions; openRun for fail/lineage |
@@ -222,10 +223,8 @@ Locked product decision (IDE analogy — VS Code / Cursor):
 
 | Mode | When | Primary nav | Secondary |
 |---|---|---|---|
-| **Workspace** | URL `/workspaces/:id…` **and** `activeProject` set from path | Same stable rail; strip items **enabled**; Models/Ship/Datasets on strip only | Build / Library (Plugins, Artifacts) / Deploy (Workers) / Admin — unchanged shape |
+| **Workspace** | URL `/workspaces/:id…` **and** `activeProject` set from path | Same stable rail; strip items **enabled**; Models/Ship/Datasets on strip only | Build / Library (Plugins) / Deploy (Workers) / Admin — unchanged shape |
 | **Global** | No workspace in URL | Same stable rail; Editor/Runs/Models/Ship/Datasets **disabled** until a project opens | Same groups — Models/Ship/Datasets are **not** in Library/Deploy |
-
-- **Artifacts** is never on the workspace strip (library-secondary; ArtifactsView may still default-filter to the open workspace).
 - Models / Ship / Datasets when a workspace is open navigate to `/workspaces/:id/models|ship|datasets` and **scope data** to that workspace.
 - See `docs/UI_WORKSPACE_IDE.md` and `docs/UI_NORTH_STAR.md` §4.2.
 

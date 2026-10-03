@@ -2,7 +2,7 @@
 
 Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Canonical IA: `docs/IA_PROJECT_FIRST.md`.
 
-**Nav labels:** Workspace strip: Home · Editor · Runs · Models · Ship · Datasets. Library and admin: Templates · Agent inbox · Artifacts · Plugins · Workers · Credentials · Ops · Access.
+**Nav labels:** Workspace strip: Home · Editor · Runs · Models · Ship · Datasets. Library and admin: Templates · Agent inbox · Plugins · Workers · Credentials · Ops · Access.
 
 **Client / polling contracts (2026-09-30):**
 - `apiFetch` forwards the caller's `AbortSignal` for the whole response lifetime (headers **and** body streaming); `timeoutMs` covers the headers phase only; a caller-aborted request is never retried. `parseError` / `configuredActor` are exported from `api/client.ts`.
@@ -21,13 +21,14 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 ## Models (`ModelsView`)
 
 - `ViewShell` + `MasterDetail` (shared `graphyn.layout.master`); list registered models; request/approve prod; register from name + run_id + slug (primary CTA).
+- Scope: `SegmentedTabs` in toolbar (**This workspace** | **All registries**) when a workspace is open; dense `ide-row` master list; detail empty → compact `EmptyState`.
 - Detail: **Open run Trace/Lineage** via `openTrace({ runId })`; **Dataset pins** / Home when workspace known.
 - Deep-link via path helpers when workspace is open.
 - Load error that empties the list clears `selected` / detail (no stale detail pane).
 
 ## Projects (`ProjectsView`)
 
-- Picker: filter + dense rows; create in explorer header. **Create workspace** validates inline (`workspaceNameError`): message under the input, red border, Create disabled until valid; server errors rephrased via `workspaceErrorMessage`. Row ⋯ menu is Open, View runs, Clone, then Delete. The list does not use `overflow-hidden`, so that menu (including Delete on the last row) paints outside the card. Open a workspace for the same Delete under Workspace settings.
+- Picker: filter + dense rows; create in explorer header. Workspace list / filter empties and Home list panels (Activity, Continue, Always-on, linked inputs) use shared `EmptyState` (`compact` in side cards). Spec & metadata drawer uses `SegmentedTabs` (Versions · Spec · … · Diff). **Create workspace** validates inline (`workspaceNameError`): message under the input, red border, Create disabled until valid; server errors rephrased via `workspaceErrorMessage`. Row ⋯ menu is Open, View runs, Clone, then Delete. The list does not use `overflow-hidden`, so that menu (including Delete on the last row) paints outside the card. Open a workspace for the same Delete under Workspace settings.
 - **Home / Overview:** first-run 2-card strip when empty (Templates · Datasets); header keeps primary **Open Editor**.
 - Situation strip; **Pinned inputs** (manual — runs do not auto-link); Versions & taxonomy collapsed.
 - Pipeline **pin favorites** via `localStorage` `graphyn.pinnedPipelines.{project}` (star; pinned sort first).
@@ -58,10 +59,15 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - **Catalog ports:** `NodeRegistry.register` fills empty `NodeMetadata` ports from the class (isolated stubs historically omitted them). Builder `catalogPorts` / `portsNeedResync` / `decorateNodeData` re-sync canvas handles when the catalog advertises real named ports — catalog-drag and template-import show the same handles for every node type.
 - **Copy node:** each canvas node has a Copy action (beside Configure / Remove) that clones type, config, placement, and ports with a new id offset on the canvas; edges are not copied. Write sinks (`output_path` / `output_dir`) are rebound to the new id.
 - **Unique write paths:** catalog-add and graph load uniquify shared `workspace/artifacts/…` sinks per node id (trainer/evaluator/model_builder no longer collide on plugin defaults). Pipeline focus matches instance ids only — two Trainers stay distinct.
-- **model_builder architectures:** presets `ds_cnn` / `mobilenet` / `simple_cnn` (paper-style blocks; tunable filters/depth/MobileNet knobs). `architecture=custom` uses a structured **Layers** list editor (add / reorder / typed fields; optional Edit as JSON). Inspector **Load layers from preset** seeds `layers` from a paper body (using current knobs) and sets `architecture=custom`.
-- **Inspector collapse:** right inspector panel collapses like the catalog (`graphyn.builder.inspectorOpen`); selecting a node/edge re-expands it.
+- **model_builder architectures:** presets `ds_cnn` / `mobilenet` / `simple_cnn` (paper-style blocks; tunable filters/depth/MobileNet knobs). `architecture=custom` uses a structured **Layers** list editor (add / reorder / typed fields; optional Edit as JSON). Inspector **Load layers from preset** appears only when architecture is `custom`.
+- **JSON UX (Builder config):** treat JSON as three jobs — (A) known-shape structured config → form/list editor with **Edit as JSON** secondary; (B) freeform documents (artifacts, proposals, lineage) → tree/pretty viewer only; (C) escape hatch always available for A. `ConfigFieldEditor` wires Job A editors by `fieldKey`: `layers` → `LayersEditor`, `augmentations` → `AugmentationsEditor`, `split_ratios` → `SplitRatiosEditor` (train/val/test + sum check; custom keys if present), `allowed_paths` → `StringListEditor`. Other `widget=json` / object|array fields keep the compact textarea fallback.
+- **Inspector collapse:** right inspector panel collapses like the catalog (`graphyn.builder.inspectorOpen`); selecting a node/edge re-expands it. Single header row (collapse + Node/Edge/Graph title); Local mode shows a one-line placement note instead of a dashed box. Field descriptions are brief under the control (full text on hover). Trainer `patience` is forced into Basic next to Epochs.
+- **Editor toolbar:** three clusters — **Document** (workspace chip · **Open** saved pipeline · env `SegmentedTabs`/Publish · **Name**), **Run** (Run/Cancel · Save with amber dirty dot · Undo/Redo · invalid/error jump chips), **Overflow** (More: Validate, Templates, Triggers, Agent, **Save as…**, Save as template, import/export, clear). **Open** loads a workspace pipeline; **Name** is the single document slug (synced into Save’s `templateName` — no second NAME field in More). Env chips only for existing pointers; draft-only shows **Draft** + **Publish → staging**. Catalog filter label is **All nodes (N)**; “Click or drag…” subheader only when the canvas is empty.
+- **Catalog add:** click **or** HTML5 drag onto the canvas (`application/graphyn-node`); drop uses `screenToFlowPosition` so the node lands under the cursor. Empty-canvas copy says “Click or drag…”.
+- **Connect tip:** shown only when the canvas has nodes but **no edges** yet; dismissible (`graphyn.builder.connectTipDismissed`). Hidden once any edge exists — not a permanent overlay.
+- **Canvas nodes:** subtitle shows visible field count (not schema length), `model_builder` architecture cue, and instance id suffix (`#0` / `#c3f15543`) so dual-branch copies are distinguishable.
 - **Run-start errors** (503 registry not ready, 4xx validation, …) show an inline run-start error banner with the server detail instead of a generic toast.
-- **Unsaved changes** (`graphHistory.ts`): `editorSnapshot` captures only the document (node type/label/config/placement/position, edges, name, seed — never run status/selection), compared by `snapshotSignature` to the last loaded/saved **baseline**. Dirty → amber dot + **Unsaved** chip; `beforeunload` prompt; an app navigation guard (`registerNavigationGuard` from `lib/navigationGuard.ts`) so sidebar / palette / workspace switch / `goView` confirm before leaving; `confirmDiscard` before an in-Editor action replaces the canvas (open pipeline/env, import, external load). Loading a graph resets the baseline and history.
+- **Unsaved changes** (`graphHistory.ts`): `editorSnapshot` captures only the document (node type/label/config/placement/position, edges, name, seed — never run status/selection), compared by `snapshotSignature` to the last loaded/saved **baseline**. Dirty → amber dot on **Save** (no separate Unsaved chip); `beforeunload` prompt; an app navigation guard (`registerNavigationGuard` from `lib/navigationGuard.ts`) so sidebar / palette / workspace switch / `goView` confirm before leaving; `confirmDiscard` before an in-Editor action replaces the canvas (open pipeline/env, import, external load). Loading a graph resets the baseline and history.
 - **Undo / redo:** bounded history (`HISTORY_LIMIT = 50`); rapid edits of the same field coalesce into one step (`changeKey`); Ctrl/Cmd+Z undo, Shift+Ctrl/Cmd+Z or Ctrl+Y redo (`historyShortcut`, ignored while typing in a field — browser text undo wins) plus toolbar buttons.
 - **Config validation** (`configValidation.ts`): JSON-schema `minimum`/`maximum`, `exclusiveMinimum`/`exclusiveMaximum` (draft-4 boolean and draft-6 numeric), `multipleOf`, `integer`, `enum`, `minLength`/`maxLength`, `pattern`. Invalid fields get a red border + `aria-invalid`; nodes show an invalid-count badge; a banner lists issues and **Run / Save are blocked** while any exist. Conditional fields: `ui.visible_if = { field = value | [values] }` and `ui.depends_on = "field"` (truthy) or `{ field = value }` hide fields (hidden fields are not validated).
 - **Log dedupe** (`logDedupe.ts`): a node `node_error` followed by the pipeline-level `error` with the same core message counts/renders once (Editor log panel + Runs → Logs pretty view; raw view unchanged).
@@ -69,39 +75,40 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 
 ## Runs (`RunsView`) — unified observe
 
-- Page title **Runs**; hub for History, Live, **Run outputs**, Lineage, Compare (not separate Lineage tab).
+- Page title **Runs**; one list + detail (no History|Live|Compare peer tabs). Compare is a multi-select action; Active status filter replaces the old Live tab.
 - Opening a run does **not** call `setActiveProject`. The address bar is the workspace; a run whose metadata names another workspace stays a detail selection.
 - Run selection ↔ URL sync uses `window.history` directly (not `navigatePath`), so the App path sync does not call `store.openRun` and overwrite the header **Last run**. A missing run id renders one not-found state.
 - **Run outputs** ordered by execution order, files natural-sorted; “+N more” pages via `?with_meta=1` and `?node_id=&limit=`. The API fills its 400 cap run-level files first, then models/metrics/small summaries, then bulk files, round-robin per node; source-node (ingest) input files are not outputs (`inputs_by_node` counts them). **Promote model** only for runs with a model output.
 - **Run outputs grouping:** `guessNodeFromPath` (in `runOutputs.ts`) must never promote a run id / opaque hex to a pipeline step. Journal paths `runs/<run_id>/…` (including `outputs_index.json`) group as **Run-level**. `outputs_index.json` is hidden from the listing (API + UI). File-card subtitles use `shortOutputPath` (drop `workspace/` and `runs/<id>/`). Truncation chips name the step and sit under that step’s file list; a panel banner explains caps when any step is truncated. `PipelineStack` also filters opaque ids at render time.
 - **File viewers:** pluggable via `components/viewers/registry.ts` (`registerFileViewer`). Built-ins: image, audio, video, json, text, npy, pickle, model, binary; popup expand on `FileViewer`. MIME fix for audio/video blobs in `api/client.ts` `blobUrlWithMime`. Session notes: `docs/WORKLOG_OUTPUTS_AND_VIEWERS.md`.
-- Runs **Manage** is a native `<details>`; Escape / outside click / one-open come from App's `installGlobalDetailsMenuDismiss()`.
-- Top tabs: **History | Live | Compare** — shared `ViewShell` / `RunsChrome`; list|detail via app `MasterDetail` (`graphyn.layout.master`, synced with Compare / Models / Artifacts).
-- History: status + free-text filters; optional metric name + min (client-side on loaded runs); status/promote alias use `FieldSelect`.
-- History/Live run cards use stacked flex (title+badge / meta row) — not viewport `sm:` grids — so narrow master panes (~320px) do not crush names over badges.
-- Live: same shell; left live run cards, right progress / node wave / workers + “Open full run”.
-- Compare: left checkbox run cards, right params/metrics/charts (not stacked table-over-compare).
-- Compare chrome includes the same **Refresh** as History/Live (via `ExperimentsViewHandle`).
-- Compare master cards use the same stacked layout as History (name+badge / metric+relative time+short id) with a checkbox.
+- Live runs: **Manage** is a native `<details>` (Pause / Resume / Cancel); Escape / outside click / one-open come from App's `installGlobalDetailsMenuDismiss()`. Terminal runs show a direct **Delete** confirm (no one-item Manage menu).
+- **One layout always:** no `ViewShell` title strip on the list (sidebar already says Runs). MasterDetail edge-to-edge; master filter strip + detail run chrome share the same top edge whether or not a run is selected. Selecting a run must not change outer chrome.
+- **List filter strip:** one dense row (status + search + metric toggle + refresh). Metric/min only expand when the slider control is on — avoids a ~250px stacked filter block in a narrow master pane. List status badges use short labels (`Done` / `Failed` / …).
+- **Selected run chrome:** status · name · time · id · Editor · Manage(live) · **Register model**(when succeeded+model) · Delete(terminal) — success path before destructive. Register is chrome-only (no duplicate Overview banner); toggles a Close-able stage/register form on Overview (scrollable branch list; closes on tab leave). Label becomes **Close register** while open. Live in-flight runs also show a compact `LiveRunMonitor` (node wave / workers).
+- Status filter includes **Active** (`running|queued|paused` via `statusMatchesFilter`); list polls every 3s while Active or a live status is selected; Active + empty selection auto-follows the newest active run. `/runs/live` aliases to `/runs?status=active`.
+- List rows: dense stacked `ide-row` + checkbox for Compare (2–5); selection bar Clear / Compare → `openExperiments`. Metric name + min filters client-side; status/promote alias use `FieldSelect`.
+- **Compare mode** (`focusRunsTab === 'compare'` / `/runs/compare`): `ViewShell` **Compare** + Back to runs + Refresh; embedded `ExperimentsView` (checkbox cards + params/metrics/charts).
 - App nav collapse persists (`graphyn.layout.navOpen`).
-- **Pipeline stack** (numbered circular steps + **All** on top) replaces the Focus dropdown — fixed `min-w` so labels stay readable; status is a dot.
-- Tabs sit under the run header; right pane shows content for **tab × stack** selection.
-- **Run outputs:** API stamps optional `node_id` on each file (ArtifactStore data dir, path refs inside `data.json`, basename hints). UI groups by that id; node focus hides journal-only run files; All shows nodes then dashed **Run-level**; node files split into Outputs / Inputs when detectable. Audio-sample dumps are summarized (manifest + a few clips) so the listing cap stays usable. Focus filters groups by instance id only (`focusMatchesNode` is exact when focus is `trainer_0` / `trainer_b66a5330` — never soft-match via `humanNodeLabel`, or the hex-suffix Trainer/Evaluator re-merges its sibling).
+- **Pipeline stack** (numbered circular steps + **All** on top) replaces the Focus dropdown — fixed `min-w` so labels stay readable; status is a dot. Dual-instance copies that share a base label get `#0` / `#c3f15543` cues (same as the builder canvas). When `computePipelineShape` is `fork`/`parallel` (multi-sink), the rail groups Shared → Path A → Path B (execution numbers preserved). Linear runs stay a plain numbered list.
+- Detail panels use underline **IdeTabs** (not a heavy pill strip). Right pane shows content for **tab × stack** selection. Empty copy is focus-aware (Checkpoints / Logs / Outputs name the selected step).
+- **Run outputs:** API stamps optional `node_id` on each file (ArtifactStore data dir, path refs inside `data.json`, basename hints). UI groups by that id; node focus hides journal-only run files; All shows nodes then dashed **Run-level**; node files split into Outputs / Inputs when detectable. Preview selection is scoped to files visible for the current focus (no stale `7.wav` while another step says in-memory). Nested file|preview `SplitPane` uses `graphyn.layout.nested` with `secondaryMinSize={320}` so the preview cannot be crushed. Audio-sample dumps are summarized (manifest + a few clips) so the listing cap stays usable. Focus filters groups by instance id only (`focusMatchesNode` is exact when focus is `trainer_0` / `trainer_b66a5330` — never soft-match via `humanNodeLabel`, or the hex-suffix Trainer/Evaluator re-merges its sibling). WAV preview converts IEEE-float / wide PCM to 16-bit via `lib/wavPlayable.ts` for browser playback. Console CSP (`index.html`) must include `media-src 'self' blob: data:` — without it Chromium rejects blob `<audio>`/`<video>` (`default-src 'self'` only).
 - Focus filters Logs by extracting node hints from structured events **and** formatted lines (`Trainer · started`); bare type labels still match instances, but instance focus does not reverse soft-match a bare label. Empty Focus filter says “No logs for …” not “No logs recorded”.
-- **Compact sticky detail chrome** (`z-10` inside detail scroll): status · graph name · time · short id · (live only) progress/node · **Editor** (open graph) · **Manage** (pause/resume/cancel/delete — not Admin Ops) · **Promote model** (succeeded only); then tabs. No Focus chip strip / dropdown, no full-width Promote bar.
-- **Promote model** = `POST /runs/{id}/promote` with alias `latest|staging|prod` (registry stage pointer — not an LLM prompt). Panel also registers a named model when slug returned.
+- Run outputs meta is one thin row (truncated path · Latest · focus · **Download zip**), not a full header block. Zip packs files under `<node_id>/` (API); toast warns when listing/byte-capped. `FileViewer` chrome is one line (name · size · kind · Expand/Download; full path in tooltip). Pipeline stack + panel fill the remaining height.
+- **Register model** (chrome only) when the run produced a model file/artifact (or already registered one) — `runHasModelOutput` / `listRunModelCandidates`. Dual branches listed to **register each by name**; **Stage artifact pack** is run-wide (`POST /runs/{id}/promote` → latest|staging|prod). **Artifact pack** = workspace slug from `artifacts/<slug>/runs/…` (`artifactSlugFromPath`). Registered list links **Open Models**. Preprocess / export runs never show Register.
+- **Compare** tables (`CompareTable`): each table has its own `overflow-auto` (not a shared scroller — param tables with 100+ rows buried the H-bar). Cells `max-w` + truncate + `title` tooltip; sticky Key + sticky thead. Parameters caps body height (`maxBodyHeight`) so sideways scroll stays on-screen; hint when >3 runs. Embedded Compare master list scrolls inside MasterDetail.
+- **Checkpoints** tab is omitted when the terminal run has none (optional resume points). Empty copy explains that many workflows never write them. Overview hides zero Checkpoints / Errors / Lineage-links counts; shows Metrics + collapsible Hot spots (duration) when present.
 - Terminal runs hide progress / “Current node”; Focus is not auto-seeded from last node (avoids empty Outputs).
-- Tab **Summary**: compact count strip + timing (+ errors when present). No duplicate tab CTAs, no raw JSON dump.
-- Detail: **Logs** | **Run outputs** | **Lineage** | **Summary** | **Checkpoints**. Nested outputs splitter: `graphyn.layout.nested`.
+- Detail: **Overview** | **Run outputs** | **Logs** | **Checkpoints** (when present). Default: Overview when succeeded, Logs when live/failed/cancelled. Nested outputs splitter: `graphyn.layout.nested`. Legacy `/details` → Overview (`…/lineage`).
 - `open(id)` / status poll / `refetchRunDetail` / `loadRunModels` drop results when the selection changed (`selectedRef` + `openSeqRef`). When the polled status turns terminal, detail (logs / outputs / artifacts) is refetched.
-- Lineage: detail-only (stack is parent); no duplicate node list / Raw JSON / Graph cards / Editor CTA.
-- Failed/cancelled: compact inline banner. Succeeded: **Promote model** → single panel (alias + register).
+- Overview (= former Summary + Lineage): adaptive **Run story** — verdict + domain-agnostic **Got** outcome + duration **spine pills** for linear graphs (including single-sink train_ml / diamonds); **fork** map (Shared + Path A/B tracks with relative duration bars + per-path Got) when ≥2 sinks share a prefix; **parallel** tracks (no Shared) when sinks share nothing. Timeline is chronological for linear; sectioned Shared/Path only for fork/parallel. Wrote counts use `truncated_by_node.total` when the UI sample-caps audio dumps. No Browse-files button. **Export meta** downloads run+trace+readiness JSON. Saved-files/provenance fold into the map footer; Checkpoints/Errors strip only when non-zero. **Hot spots** closed `<details>`. Empty Wrote: “no files (data stayed in memory)”. Logs: clocks + line count (+ “N paths” when multi-track). Step click → Step story → **Run outputs**. Registry IDs under Advanced. Run outputs **Whole run** files use plain titles (Pipeline graph, Run summary, Event log, Reproducibility record).
+- Failed/cancelled: compact inline banner. Succeeded: **Register model** → Overview (stage pack + register).
 - **Node list** (`runNodes.ts` `pipelineNodesFromRun`): built from the run's graph in execution order (topological; ties by graph order / `node_stats` index), so nodes that never ran still appear, correctly numbered; status from journal events then `node_stats`; no status on a failed/cancelled run → **skipped**.
 - **Ask agent to fix:** confirm panel first; creates a pending proposal (the run's unchanged graph + the real failing node / error from `extractRunFailure`, which reads `error` / `error_message` rather than `message`) in the Agent inbox; stays on the page, toast offers **Open proposal**.
 
 ## Experiments (`ExperimentsView`)
 
-- Standalone title **Compare runs**; prefer Runs → Compare when a workspace is open.
+- Standalone shell: `WorkbenchPage` (**Compare runs**); embedded Runs → Compare keeps `MasterDetail` only.
+- Prefer Runs → Compare when a workspace is open.
 - **Params from node configs:** after `GET /experiments/compare`, each run's graph is loaded (`fetchRunGraph(runId, null)`) and merged via `compareEnrich.ts` `enrichCompareParams` → `runCompare.ts` `mergeRunParams` (`node_id.field` + `graph.<key>`; experiment params win). `param_keys` is rebuilt from `compareParamRows` (natural key order); differing cells highlighted; CSV export includes node config params. **Export CSV** is disabled when there are no param or metric rows.
 - **Embedded** under Runs → Compare: `MasterDetail` (shared master width) — checkbox cards left, compare results right.
 - Selection written to `/workspaces/:W/runs/compare?ids=` (path search).
@@ -110,6 +117,7 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 
 ## Data (`DataView`)
 
+- Shell: `WorkbenchPage`; Browse/Manage file browser uses `MasterDetail` (`listLabel="datasets"`, collapsible) — workspace/version or input label pickers live in the master list; detail holds toolbars, stats, file table, and compact `EmptyState`s (no duplicate pickers when the master list is shown).
 - Page title **Datasets**; Browse | Manage; Inputs|Outputs ≠ Runs → Run outputs.
 - `openData({ mode, project, version, label })` navigates `paths.datasets(W)` / `paths.libraryDatasets()` with search params (`manage=1` for ingest/merge).
 - First-visit dismissible “Which storage?” strip (Datasets vs Run outputs vs Artifacts).
@@ -124,20 +132,15 @@ Persona UX notes for feature screens. Shell/nav labels: `frontend-canvas.md`. Ca
 - Workspace Datasets (`/workspaces/:id/datasets`) reads `GET /projects/{id}/links`: when inputs are pinned (Home → Linked inputs) only those labels are listed, with a **Show all shared inputs** toggle; with none pinned, all shared labels are listed with an explanatory note. Header copy says which.
 - File table and label list use natural sort (`lib/naturalSort.ts` — digit runs numeric so `nohash_2` before `nohash_10`, but hex-like runs of ≥6 `[0-9a-f]` mixing digits and letters compare as plain strings so `03401e93_…` sorts next to `0a7c…`/`0c54…`).
 
-## Trace (`TraceView`)
+## Overview (Runs panel — was Summary + Lineage)
 
-- Title **Lineage**; artifact-id / advanced paste deep-link via search params; prefer Runs → Lineage for a selected run. Does not write `#/trace`.
-- Empty CTA → Open Runs when possible.
-
-## Artifacts (`ArtifactsView`)
-
-- `ViewShell` + `MasterDetail` (shared master width). Cross-run file registry only; Runs → **Run outputs** for one run; Runs → Lineage for provenance.
-- `open()` clears `detail` before fetch so a failed open cannot show the previous artifact.
-- `open(id)` clears detail before fetch; on failure keeps selected but never shows prior artifact detail.
-- Detail: **Register model** when artifact has `run_id` (POST `/models` staging).
+- Prefer Runs → **Overview** (`openTrace({ runId })` → `…/lineage`).
+- Legacy `/library/artifacts?artifactId=` / artifact-id-only deep links resolve via `GET /artifacts/{id}` → Overview or Run outputs.
+- Does not write `#/trace`. Library Artifacts UI removed.
 
 ## Templates (`TemplatesView`)
 
+- Shell: `WorkbenchPage` (search + All/Examples/Saved/Marketplace pills in `toolbar`; sort + plugin facets below banners). Fill-height body for every tab. Workspace + Marketplace browse use `MasterDetail` (`listLabel="templates"`, collapsible, default master ~300px) — dense `ide-row` list (title + mono slug), detail pane holds description/nodes/plugins/Open in Editor/overflow; no selection → compact `EmptyState`. **All** shows workspace starters in the same split + a “Browse Marketplace” CTA (no stacked second splitter that crushed the detail pane). `SplitPane` clamps master width so a fat shared `graphyn.layout.master` value cannot hide the detail.
 - Page title **Templates** (not “New from template”); starters that stamp GraphIR into a workspace.
 - Unified pills with honest counts: **All** = workspace + marketplace totals; **Examples** / **Saved** from `/pipelines/templates`; **Marketplace** from `public/marketplace-catalog.json` (~3032).
 - Marketplace browse is client-side filter + pagination (48/page); **Open in Editor** still `POST /pipelines/marketplace/materialize`. “N shown” reflects the active tab (not a stale workspace-only count).
@@ -151,8 +154,9 @@ nly). A missing Phase-1 dataset now fails ingest ("has not been produced yet") i
 
 ## Proposals (`ProposalsView`)
 
+- Shell: `WorkbenchPage` (search + status filter chips in `toolbar`); list|detail in scroll body.
 - Header **Agent inbox**; Generate proposal form → POST `/proposals` (empty-graph stub + summary).
-- List|detail via app `MasterDetail` (shared master width with Runs / Models / Artifacts).
+- List|detail via app `MasterDetail` (shared master width with Runs / Models / Artifacts); master rows use `ide-row` / `is-active`; master/detail empties use compact `EmptyState`.
 - Generate appends user prompt to `localStorage` `graphyn.proposal.chat.{id}`; transcript under detail.
 - Auto-bind: when `activeProject` set, include in graph metadata/tags and summary `[project:…]`.
 - Dismissible discovery banner (MCP/API create; review here); persist `graphyn.proposals.bannerDismissed`.
@@ -167,7 +171,7 @@ nly). A missing Phase-1 dataset now fails ingest ("has not been produced yet") i
 
 ## Edge (`EdgeWizardView`)
 
-- Page title **Ship**; tabs **Package | Devices** (Devices embeds `DevicesView`).
+- Shell: `WorkbenchPage` with `SegmentedTabs` toolbar (**Package** | **Devices**). Devices embeds `DevicesView` without its own shell; standalone `/devices` uses `WorkbenchPage`.
 - Wizard step **Package run** (not “Run” — avoids nav collision).
 - Step pills: cannot jump to 3/4 without project + source run; step 4 also needs package `runId`.
 - **Dropdowns** use shared `FieldSelect` (portal menu, width matches the trigger). A short list opens under the control; when the viewport is tight it grows upward from that same control. Native `<select>` was clipped by the sticky lineage bar.
@@ -189,8 +193,11 @@ nly). A missing Phase-1 dataset now fails ingest ("has not been produced yet") i
 ## Plugins (`PluginsView`)
 
 - Description: install node packs for the Editor catalog.
+- Shell: `WorkbenchPage` with `IdeTabs` toolbar (**Installed** | **Install · Search**); status filters use `catalog-pill` / `catalog-pill-on`; runtime filter uses `SegmentedTabs` (Any / Isolated / Shared).
 - Header: **Clean unused venvs** → `POST /plugins/venvs/gc` + Refresh.
-- Banner: **shared env** (`runtime=inprocess`) vs **isolated venv** (`runtime=isolated`) — same wording/chip style as the row badges; heavy Audio/ML packs ship as isolated.
+- **Deps & runtime** callout is a foldable `<details>`; row badges still use **shared env** / **isolated venv** chip style; heavy Audio/ML packs ship as isolated.
+- Installed list: `divide-y` + `ide-row` rows (dependency panel expands inline below the row); empty filter → compact `EmptyState`; row ⋯ menu `rounded-lg`.
+- Install tab: `surface-card p-3` + `field-control` inputs.
 - Isolated boot installs required + TF/Keras/ONNX allowlist by default (`GRAPHYN_ISOLATED_BOOT_HEAVY=1`); set `=0` to defer. Exotic optionals (TTS, audiocraft, tflite-runtime, …) via **Install optional (venv)**.
 - Badge text: `shared env` / `isolated venv`; Install optional labeled accordingly.
 - After shared-env pip failure, hint to upgrade plugin for isolated runtime then Install optional (venv).
@@ -202,19 +209,21 @@ nly). A missing Phase-1 dataset now fails ingest ("has not been produced yet") i
 
 ## Workers (`WorkersView`)
 
-- Page title **Worker fleet**; PageHeader Mode B hint only when distributed. Empty = Mode B + copyable `graphyn worker start`.
-- Tabs: **Workers | Queue**. Queue explains no list-all `/jobs` API + Mode A/B copy; recent runs as proxy.
+- Shell: `WorkbenchPage` with `SegmentedTabs` toolbar (**Workers** | **Queue**); Mode B hint only when distributed. Empty = Mode B + copyable `graphyn worker start`.
+- Queue explains no list-all `/jobs` API + Mode A/B copy; recent runs as proxy. Summary strip has no duplicate Refresh (header actions own it).
 - Detail drawer: labels/pools display-only (no PATCH); **Deregister** ConfirmButton → `DELETE /workers/{id}`.
 - Workers use the same API token as this console. No requirement IDs on the page.
 
 ## Credentials (`CredentialsView`)
 
+- Shell: `WorkbenchPage`; create form + filter use `field-control`; list is dense `ide-row` rows in a bordered list.
 - **Revoke** = soft revoke (`DELETE /credentials/{id}`); separate danger **Delete permanently** ConfirmButton uses `?delete=true`.
 - Named secret values are not a console page. Ops bootstrap stays on CLI `graphyn secrets`.
 - List renders fields as a key/value list. Secret fields (kind schema `secret`, else `secret_fields_set` keys, else key-name heuristic) show **set / not set** badges — from the API's `secret_fields_set` when present, otherwise `""` = not set, any other value (the `***` marker) = set. Values are never printed.
 
 ## System (`SystemView`)
 
+- Shell: `WorkbenchPage` with `IdeTabs` toolbar (Status · Schedules · Webhooks · Cleanup · Audit).
 - Page title **Ops** — health, schedules, webhooks, cleanup, audit.
 - Refresh uses **per-endpoint** `Promise.allSettled` — one failing probe does not blank the whole page; Health/Readiness/Schedules/Webhooks show inline errors when their fetch fails.
 - Status: operator facts only. Health is liveness; Readiness shows catalog node count, backend, and storage checks. Metrics chips have no second summary line. Maintenance clears unused plugin venvs. No requirement IDs, threat numbers, or doc paths on this page.
@@ -225,9 +234,5 @@ nly). A missing Phase-1 dataset now fails ingest ("has not been produced yet") i
 
 ## Access (`AccessView`)
 
+- Shell: `WorkbenchPage`; actor form in a surface card; roadmap empty uses compact `EmptyState`.
 - Actor field saves `graphyn.actor`; note that roles are pending multi-user API.
-
-## Artifacts (`ArtifactsView`)
-
-- Detail: show `consumers`/`downstream` when present; else “Downstream consumers — needs provenance API”.
-- Opening an artifact clears prior detail before fetch (no stale cross-id detail).

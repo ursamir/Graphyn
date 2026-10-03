@@ -7,6 +7,7 @@ import ReactFlow, {
   addEdge,
   useEdgesState,
   useNodesState,
+  useReactFlow,
   type Connection,
   type Edge,
   type Node,
@@ -21,7 +22,7 @@ import {
   Download,
   Upload,
   Square,
-  BookmarkPlus,
+  Save,
   MoreHorizontal,
   ChevronDown,
   ChevronUp,
@@ -45,8 +46,15 @@ import {
 } from './modelBuilderPresets'
 import { stampProjectOnGraph } from '../../lib/projectStamp'
 import { normalizeRunStatus } from '../../lib/runStatus'
-import { ConfirmButton, EmptyState, ErrorBanner, NeedProjectPrompt, StatusBadge } from '../../components/ui'
-import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
+import {
+  ConfirmButton,
+  EmptyState,
+  ErrorBanner,
+  NeedProjectPrompt,
+  SegmentedTabs,
+  StatusBadge,
+} from '../../components/ui'
+import { formatExecutionLine, formatValidationErrors, humanNodeLabel, isIsolatedRuntime, schemaFieldHint, schemaFieldHintBrief, schemaFieldLabel, shortRunId, skipConsecutiveByText, startCase } from '../../lib/format'
 import {
   buildGraphFromCanvas,
   type NodePlacement,
@@ -112,6 +120,9 @@ const defaultEdgeOptions = {
 const CATALOG_OPEN_KEY = 'graphyn.builder.catalogOpen'
 const INSPECTOR_OPEN_KEY = 'graphyn.builder.inspectorOpen'
 const LOG_COLLAPSED_KEY = 'graphyn.builder.logCollapsed'
+const CONNECT_TIP_DISMISSED_KEY = 'graphyn.builder.connectTipDismissed'
+/** Catalog → canvas HTML5 drag payload (node_type string). */
+const CATALOG_DND_MIME = 'application/graphyn-node'
 
 function readBoolPref(key: string, defaultValue: boolean): boolean {
   try {
@@ -236,7 +247,6 @@ function BuilderInner() {
   const openRun = useAppStore((s) => s.openRun)
   const openData = useAppStore((s) => s.openData)
   const openProjects = useAppStore((s) => s.openProjects)
-  const openProject = useAppStore((s) => s.openProject)
   const builderDataset = useAppStore((s) => s.builderDataset)
   const activeProject = useAppStore((s) => s.activeProject)
   const setBuilderDataset = useAppStore((s) => s.setBuilderDataset)
@@ -245,6 +255,7 @@ function BuilderInner() {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphynNodeData>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
+  const { screenToFlowPosition } = useReactFlow()
   const [filter, setFilter] = React.useState('')
   const [categoryFilter, setCategoryFilter] = React.useState('all')
   const [templateName, setTemplateName] = React.useState('')
@@ -255,6 +266,9 @@ function BuilderInner() {
   const [catalogOpen, setCatalogOpen] = React.useState(() => readBoolPref(CATALOG_OPEN_KEY, true))
   const [inspectorOpen, setInspectorOpen] = React.useState(() => readBoolPref(INSPECTOR_OPEN_KEY, true))
   const [logCollapsed, setLogCollapsed] = React.useState(() => readBoolPref(LOG_COLLAPSED_KEY, true))
+  const [connectTipDismissed, setConnectTipDismissed] = React.useState(() =>
+    readBoolPref(CONNECT_TIP_DISMISSED_KEY, false),
+  )
   const [runHadErrors, setRunHadErrors] = React.useState(false)
   // Authoritative outcome for `lastRunId` (server status, or this session's own
   // terminal event for that exact run id). Never defaults to succeeded.
@@ -838,6 +852,7 @@ function BuilderInner() {
         })),
       )
       setGraphName(snap.graphName)
+      setTemplateName(snap.graphName)
       setSeed(snap.seed)
       setInspectorId((id) => (id && snap.nodes.some((n) => n.id === id) ? id : null))
       setSelectedEdgeId((id) => (id && snap.edges.some((e) => e.id === id) ? id : null))
@@ -979,13 +994,13 @@ function BuilderInner() {
     [setEdges, pushToast],
   )
 
-  const addNode = (entry: NodeCatalogEntry) => {
+  const addNode = (entry: NodeCatalogEntry, position?: { x: number; y: number }) => {
     const id = `${entry.node_type}_${crypto.randomUUID().slice(0, 8)}`
     const ports = catalogPorts(entry)
     const node: Node<GraphynNodeData> = attachHandlers({
       id,
       type: 'graphyn',
-      position: {
+      position: position ?? {
         x: nodes.reduce((m, n) => Math.max(m, n.position.x), -40) + 300,
         y: nodes.find((n) => n.id === inspectorId)?.position.y ?? 80,
       },
@@ -1003,6 +1018,34 @@ function BuilderInner() {
       },
     })
     setNodes((nds) => [...nds, node])
+    setInspectorId(id)
+    setSelectedEdgeId(null)
+    if (!inspectorOpen) setInspectorOpen(true)
+  }
+
+  const onCatalogDragStart = (event: React.DragEvent, entry: NodeCatalogEntry) => {
+    event.dataTransfer.setData(CATALOG_DND_MIME, entry.node_type)
+    event.dataTransfer.setData('text/plain', entry.node_type)
+    event.dataTransfer.effectAllowed = 'copy'
+  }
+
+  const onCanvasDragOver = (event: React.DragEvent) => {
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+
+  const onCanvasDrop = (event: React.DragEvent) => {
+    event.preventDefault()
+    const nodeType =
+      event.dataTransfer.getData(CATALOG_DND_MIME) || event.dataTransfer.getData('text/plain')
+    if (!nodeType) return
+    const entry = catalog.find((c) => c.node_type === nodeType)
+    if (!entry) {
+      pushToast(`Unknown node type: ${nodeType}`, 'error')
+      return
+    }
+    const position = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+    addNode(entry, position)
   }
 
   const pendingGraph = useAppStore((s) => s.pendingGraph)
@@ -1618,8 +1661,16 @@ function BuilderInner() {
     input.click()
   }
 
+  /** Keep canvas identity and Save slug the same — one document name. */
+  const commitDocumentName = (raw: string) => {
+    const n = slugifyName(raw)
+    setGraphName(n)
+    setTemplateName(n)
+    return n
+  }
+
   const saveTemplate = async () => {
-    const name = templateName.trim() || graphName
+    const name = slugifyName(graphName || templateName || 'pipeline')
     if (!/^[A-Za-z0-9_-]+$/.test(name)) {
       pushToast('Template name must match [A-Za-z0-9_-]+', 'error')
       return
@@ -1635,39 +1686,59 @@ function BuilderInner() {
           description: 'Saved from Graphyn Editor',
         }),
       })
-      setTemplateName(name)
+      commitDocumentName(name)
       pushToast(`Template saved: ${res.name}${res.version ? ` @ ${res.version}` : ''}`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
   }
 
-  const saveToProject = async () => {
+  const saveToProject = async (nameOverride?: string) => {
     const project = (activeProject || '').trim()
     if (!project) {
       pushToast('Open a workspace first', 'error')
       return
     }
-    const name = (templateName.trim() || graphName || 'main').replace(/[^A-Za-z0-9_-]/g, '_') || 'main'
+    const name =
+      slugifyName(nameOverride ?? (graphName || templateName || 'main')).replace(
+        /[^A-Za-z0-9_-]/g,
+        '_',
+      ) || 'main'
     if (!/^[A-Za-z0-9_-]+$/.test(name)) {
       pushToast('Pipeline name must match [A-Za-z0-9_-]+', 'error')
       return
     }
     if (blockOnInvalidConfig('save')) return
     try {
-      const graph = graphForRun()
+      commitDocumentName(name)
+      const base = buildGraphFromCanvas(
+        nodesRef.current.map((n) => ({ id: n.id, position: n.position, data: n.data })),
+        edgesRef.current,
+        seed,
+        name,
+        graphParametersRef.current,
+      )
+      const graph = stampProjectOnGraph(base, project, builderDataset?.version)
       // Edits made while the PUT is in flight stay dirty.
-      const savedSig = snapshotSigRef.current
+      const savedSig = snapshotSignature(editorSnapshot(nodesRef.current, edgesRef.current, name, seed))
       await apiJson(`/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(name)}`, {
         method: 'PUT',
         body: JSON.stringify(graph),
       })
       setBaselineSig(savedSig)
-      setTemplateName(name)
+      setPipelinePick(name)
+      await refreshProjectPipelines()
       pushToast(`Saved to project ${project} · ${name}`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
+  }
+
+  const saveAsProject = () => {
+    const suggested = slugifyName(graphName || templateName || 'pipeline')
+    const entered = window.prompt('Save as pipeline slug', suggested)
+    if (entered == null) return
+    void saveToProject(entered)
   }
 
 
@@ -1686,13 +1757,22 @@ function BuilderInner() {
         query ? { query } : undefined,
       )
       loadGraph(graph)
-      setTemplateName(pipelineName)
+      commitDocumentName(pipelineName)
       setPipelinePick(pipelineName)
       if (env) setPipelineEnv(env)
       pushToast(`Opened ${pipelineName}${env && env !== 'draft' ? ` (${env})` : ''} in Editor`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
+  }
+
+  const refreshProjectPipelines = async () => {
+    const project = (activeProject || '').trim()
+    if (!project) return
+    const pipes = await apiJson<typeof projectPipelineList>(
+      `/projects/${encodeURIComponent(project)}/pipelines`,
+    ).catch(() => null)
+    if (Array.isArray(pipes)) setProjectPipelineList(pipes)
   }
 
   const promoteProjectPipeline = async (
@@ -1712,10 +1792,34 @@ function BuilderInner() {
           : `Promoted to ${opts.to_env}`,
         'success',
       )
-      const pipes = await apiJson<typeof projectPipelineList>(
-        `/projects/${encodeURIComponent(project)}/pipelines`,
-      ).catch(() => projectPipelineList)
-      setProjectPipelineList(Array.isArray(pipes) ? pipes : projectPipelineList)
+      await refreshProjectPipelines()
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  /** Create a versioned snapshot and optionally point staging (same as Home → Publish). */
+  const publishProjectPipeline = async (pipelineName: string, setEnv?: 'staging' | 'prod') => {
+    const project = (activeProject || '').trim()
+    if (!project || !pipelineName) return
+    try {
+      const res = await apiJson<{ version?: string; status?: string }>(
+        `/projects/${encodeURIComponent(project)}/pipelines/${encodeURIComponent(pipelineName)}/publish`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            message: 'Published from Editor',
+            set_env: setEnv,
+          }),
+        },
+      )
+      pushToast(
+        setEnv === 'prod'
+          ? `Published ${res.version} — prod pending approval`
+          : `Published ${res.version}${setEnv ? ` → ${setEnv}` : ''}`,
+        'success',
+      )
+      await refreshProjectPipelines()
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -1875,6 +1979,8 @@ function BuilderInner() {
           setNodes([])
           setEdges([])
           setGraphName('pipeline')
+          setTemplateName('pipeline')
+          setPipelinePick('')
           setRunHadErrors(false)
           setActionError(null)
           setInspectorId(null)
@@ -1911,7 +2017,19 @@ function BuilderInner() {
       >
         <div className="flex items-center justify-between gap-1 border-b border-ink-100 px-1.5 py-1">
           {catalogOpen ? (
-            <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Catalog</div>
+            <div className="px-1">
+              <div
+                className="text-[10px] font-semibold uppercase tracking-wide text-ink-400"
+                title={nodes.length === 0 ? 'Click or drag a node onto the canvas' : undefined}
+              >
+                Catalog
+              </div>
+              {nodes.length === 0 ? (
+                <div className="text-[9px] font-normal normal-case tracking-normal text-ink-400">
+                  Click or drag onto canvas
+                </div>
+              ) : null}
+            </div>
           ) : null}
           <button
             type="button"
@@ -1940,7 +2058,7 @@ function BuilderInner() {
             onChange={(e) => setCategoryFilter(e.target.value)}
             className="field-control mt-1.5"
           >
-            <option value="all">All categories ({catalog.length})</option>
+            <option value="all">All nodes ({catalog.length})</option>
             {categories.map((cat) => (
               <option key={cat} value={cat}>
                 {startCase(cat)} ({catalog.filter((n) => (n.category || 'Other') === cat).length})
@@ -2021,9 +2139,11 @@ function BuilderInner() {
                       <button
                         key={n.node_type}
                         type="button"
-                        title={n.description || n.node_type}
+                        draggable
+                        title={`${n.description || n.node_type} — click to add, or drag onto the canvas`}
                         onClick={() => addNode(n)}
-                        className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-ink-50"
+                        onDragStart={(e) => onCatalogDragStart(e, n)}
+                        className="flex w-full cursor-grab items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-ink-50 active:cursor-grabbing"
                       >
                         {(() => {
                           const look = categoryLook(n.category)
@@ -2071,87 +2191,92 @@ function BuilderInner() {
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="relative z-30 flex shrink-0 flex-wrap items-center gap-2 border-b border-ink-200/50 bg-white/80 px-3 py-1.5 backdrop-blur-md">
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950 hover:border-accent-400"
-            title="Workspace"
-            onClick={() => activeProject && openProject(activeProject)}
+        <div className="relative z-30 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-200/50 bg-white/80 px-3 py-1.5 backdrop-blur-md">
+          {/* Workspace context — Home lives in the left nav; don't yank the Editor away mid-edit. */}
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-accent-200 bg-accent-50 px-2.5 py-0.5 text-[11px] font-semibold text-accent-950"
+            title={activeProject ? `Workspace ${activeProject}` : 'No workspace'}
           >
             {activeProject || 'Editor'}
-          </button>
+          </span>
           {activeProject ? (
-            <button
-              type="button"
-              className="btn-quiet !px-2 !py-0.5 text-[11px]"
-              onClick={() => openProject(activeProject)}
-            >
-              Open Home
-            </button>
-          ) : null}
-          {activeProject ? (
-            <div className="flex flex-wrap items-center gap-1.5 rounded-full border border-ink-200/80 bg-ink-50/70 px-2 py-0.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               {projectPipelineList.length === 0 ? (
                 <span className="text-[10px] text-ink-500" title="Save the graph to create a project pipeline">
                   No saved pipeline — Save to create
                 </span>
               ) : (
                 <>
-                  <select
-                    className="max-w-[9rem] rounded border-0 bg-transparent py-0.5 text-[11px] font-medium text-ink-800 outline-none"
-                    value={pipelinePick}
-                    onChange={(e) => setPipelinePick(e.target.value)}
-                    aria-label="Workspace pipeline"
-                    title="Canonical project pipeline"
-                  >
-                    {!pipelinePick ? (
-                      <option value="">— not a saved pipeline —</option>
-                    ) : null}
-                    {projectPipelineList.map((p) => (
-                      <option key={p.name} value={p.name}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                  {(['draft', 'staging', 'prod'] as const).map((env) => {
-                    const pipe = projectPipelineList.find((p) => p.name === pipelinePick)
-                    const has =
-                      env === 'draft'
-                        ? true
-                        : Boolean(pipe?.environments?.[env])
-                    return (
-                      <button
-                        key={env}
-                        type="button"
-                        disabled={!has && env !== 'draft'}
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                          pipelineEnv === env
-                            ? 'bg-accent-600 text-white'
-                            : has
-                              ? 'bg-white text-ink-700 hover:bg-ink-100'
-                              : 'cursor-not-allowed text-ink-300'
-                        }`}
-                        title={
-                          env === 'draft'
-                            ? 'Open draft / working copy'
-                            : has
-                              ? `Open ${env} pointer`
-                              : `No ${env} pointer yet — publish/promote from Overview`
-                        }
-                        onClick={() => void openPipelineEnv(pipelinePick || pipe?.name || '', env)}
-                      >
-                        {env}
-                      </button>
-                    )
-                  })}
+                  <label className="flex min-w-0 max-w-[min(22rem,42vw)] items-center gap-1.5 rounded-lg border border-ink-200/80 bg-ink-50/70 px-2 py-0.5">
+                    <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Open</span>
+                    <select
+                      className="min-w-0 flex-1 truncate rounded border-0 bg-transparent py-0.5 text-[11px] font-medium text-ink-800 outline-none"
+                      value={pipelinePick}
+                      onChange={(e) => {
+                        const name = e.target.value
+                        setPipelinePick(name)
+                        if (name) void openPipelineEnv(name, pipelineEnv)
+                      }}
+                      aria-label="Open saved workspace pipeline"
+                      title={
+                        pipelinePick
+                          ? `Open saved pipeline: ${pipelinePick}`
+                          : 'Open a saved workspace pipeline onto the canvas'
+                      }
+                    >
+                      {!pipelinePick ? (
+                        <option value="">— not a saved pipeline —</option>
+                      ) : null}
+                      {projectPipelineList.map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   {(() => {
                     const pipe = projectPipelineList.find((p) => p.name === pipelinePick)
-                    const staging = pipe?.environments?.staging
+                    const hasStaging = Boolean(pipe?.environments?.staging)
+                    const hasProd = Boolean(pipe?.environments?.prod)
                     const pending = pipe?.environments?.pending_prod?.version
-                    if (!staging && !pending) return null
+                    // Only offer switches for versions that exist — never fake staging/prod toggles.
+                    const switchable: Array<'draft' | 'staging' | 'prod'> = ['draft']
+                    if (hasStaging) switchable.push('staging')
+                    if (hasProd) switchable.push('prod')
+                    const multi = switchable.length > 1
                     return (
-                      <span className="ml-0.5 flex gap-1">
-                        {staging ? (
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        {multi ? (
+                          <SegmentedTabs
+                            aria-label="Open draft, staging, or prod copy of this pipeline"
+                            className="shrink-0 text-[10px] font-semibold uppercase tracking-wide"
+                            value={pipelineEnv}
+                            options={switchable.map((env) => ({ id: env, label: env }))}
+                            onChange={(env) => {
+                              if (!pipelinePick) return
+                              if (env === pipelineEnv && !dirty) return
+                              void openPipelineEnv(pipelinePick, env)
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="rounded-full border border-ink-200/80 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600"
+                            title="Working copy — publish to create a staging pointer you can switch to"
+                          >
+                            Draft
+                          </span>
+                        )}
+                        {pipelinePick && !hasStaging ? (
+                          <button
+                            type="button"
+                            className="text-[10px] font-medium text-accent-800 hover:underline"
+                            title="Snapshot the saved pipeline and point staging at it"
+                            onClick={() => void publishProjectPipeline(pipelinePick, 'staging')}
+                          >
+                            Publish → staging
+                          </button>
+                        ) : null}
+                        {pipelinePick && hasStaging && !hasProd && !pending ? (
                           <button
                             type="button"
                             className="text-[10px] font-medium text-accent-800 hover:underline"
@@ -2181,13 +2306,30 @@ function BuilderInner() {
                             Approve prod
                           </button>
                         ) : null}
-                      </span>
+                      </div>
                     )
                   })()}
                 </>
               )}
             </div>
           ) : null}
+          {/* Document identity — Save / Run use this slug (synced with templateName). */}
+          <div className="flex items-center gap-1.5 rounded-lg border border-ink-200/80 bg-ink-50/60 pl-2 focus-within:border-accent-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-accent-200/70">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Name</span>
+            <input
+              value={graphName}
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^A-Za-z0-9_-]/g, '-')
+                setGraphName(v)
+                setTemplateName(v)
+              }}
+              onBlur={() => commitDocumentName(graphName)}
+              placeholder="graph-name"
+              className="w-36 rounded-lg bg-transparent py-1.5 pr-2.5 text-sm font-medium text-ink-900 outline-none"
+              title="Document slug — Save and Run use this name"
+              aria-label="Graph name"
+            />
+          </div>
           {pendingProposalCount > 0 && (
             <button
               type="button"
@@ -2234,6 +2376,7 @@ function BuilderInner() {
               </button>
             </div>
           )}
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {!isRunning ? (
             <button
               type="button"
@@ -2252,11 +2395,17 @@ function BuilderInner() {
             type="button"
             className="btn-secondary"
             disabled={!activeProject}
-            title={activeProject ? `Save Graph IR to workspace ${activeProject}` : 'Open a workspace to save'}
+            title={
+              activeProject
+                ? dirty
+                  ? `Unsaved — save as ${slugifyName(graphName || 'pipeline')} in ${activeProject}`
+                  : `Save as ${slugifyName(graphName || 'pipeline')} in ${activeProject}`
+                : 'Open a workspace to save'
+            }
             onClick={() => void saveToProject()}
             aria-label={dirty ? 'Save (unsaved changes)' : 'Save'}
           >
-            <BookmarkPlus className="h-3.5 w-3.5" /> Save
+            <Save className="h-3.5 w-3.5" /> Save
             {dirty ? (
               <span className="ml-0.5 h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" title="Unsaved changes" />
             ) : null}
@@ -2283,32 +2432,6 @@ function BuilderInner() {
               <Redo2 className="h-3.5 w-3.5" />
             </button>
           </div>
-          {/* The picker above chooses WHICH saved pipeline is loaded; this renames the graph
-              currently in the canvas (used as the artifact slug on Run) — they can diverge (e.g.
-              load "call-analytics" then rename before running a variant), so both showing the
-              same text by default reads as an accidental duplicate without this label. */}
-          <div className="flex items-center gap-1.5 rounded-lg border border-ink-200/80 bg-ink-50/60 pl-2 focus-within:border-accent-400 focus-within:bg-white focus-within:ring-2 focus-within:ring-accent-200/70">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Name</span>
-            <input
-              value={graphName}
-              onChange={(e) => setGraphName(e.target.value.replace(/[^A-Za-z0-9_-]/g, '-'))}
-              onBlur={() => setGraphName((n) => slugifyName(n))}
-              placeholder="graph-name"
-              className="w-36 rounded-lg bg-transparent py-1.5 pr-2.5 text-sm font-medium text-ink-900 outline-none"
-              title="Graph name — used as the artifact slug on Run"
-              aria-label="Graph name"
-            />
-          </div>
-          {dirty ? (
-            <span
-              className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 ring-1 ring-amber-200"
-              title="The graph differs from the last loaded / saved version — Save to keep it"
-              role="status"
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
-              Unsaved
-            </span>
-          ) : null}
           {configIssues.length > 0 ? (
             <button
               type="button"
@@ -2333,7 +2456,7 @@ function BuilderInner() {
               Errors
             </button>
           )}
-          <div className="relative ml-auto" ref={moreRef}>
+          <div className="relative" ref={moreRef}>
             <button
               type="button"
               className="btn-quiet"
@@ -2405,18 +2528,22 @@ function BuilderInner() {
                     ) : null}
                   </button>
                 </div>
-                <div className="mb-2 space-y-1 border-b border-ink-100 px-1 pb-2">
-                  <input
-                    value={templateName}
-                    onChange={(e) => setTemplateName(e.target.value)}
-                    placeholder="pipeline-name"
-                    className="field-control mt-0 text-xs"
-                    title="Name used when saving as a global template"
-                    aria-label="Pipeline name"
-                  />
+                <div className="mb-2 flex flex-col items-stretch gap-0.5 border-b border-ink-100 pb-2">
+                  {activeProject ? (
+                    <button
+                      type="button"
+                      className="btn-quiet w-full justify-start"
+                      onClick={() => {
+                        setMoreOpen(false)
+                        saveAsProject()
+                      }}
+                    >
+                      <Save className="h-3.5 w-3.5" /> Save as…
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className="btn-secondary w-full justify-start"
+                    className="btn-quiet w-full justify-start"
                     onClick={() => {
                       void saveTemplate()
                       setMoreOpen(false)
@@ -2436,6 +2563,7 @@ function BuilderInner() {
                 </div>
               </div>
             )}
+          </div>
           </div>
         </div>
 
@@ -2490,9 +2618,24 @@ function BuilderInner() {
         <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-canvas">
           <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
           <div className="absolute inset-0">
-          {nodes.length > 0 && (
-            <div className="pointer-events-none absolute left-3 top-3 z-10 max-w-xs rounded-lg border border-ink-200/80 bg-white/90 px-2.5 py-1.5 text-type-meta text-ink-500 shadow-sm backdrop-blur">
-              Drag from a teal output handle to a dark input handle to connect. Hover a handle for port type.
+          {nodes.length > 0 && edges.length === 0 && !connectTipDismissed && (
+            <div className="absolute left-3 top-3 z-10 flex max-w-xs items-start gap-2 rounded-lg border border-ink-200/80 bg-white/95 px-2.5 py-1.5 text-type-meta text-ink-500 shadow-sm backdrop-blur">
+              <p className="min-w-0 flex-1 leading-snug">
+                Drag from a teal output handle to a dark input handle to connect. Hover a handle for
+                port type.
+              </p>
+              <button
+                type="button"
+                className="shrink-0 rounded p-0.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+                aria-label="Dismiss connect tip"
+                title="Dismiss"
+                onClick={() => {
+                  setConnectTipDismissed(true)
+                  writeBoolPref(CONNECT_TIP_DISMISSED_KEY, true)
+                }}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
           {backendMode !== 'distributed' &&
@@ -2527,6 +2670,8 @@ function BuilderInner() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={(c) => void onConnect(c)}
+            onDragOver={onCanvasDragOver}
+            onDrop={onCanvasDrop}
             onNodeClick={(_, n) => {
               setInspectorId(n.id)
               setSelectedEdgeId(null)
@@ -2556,7 +2701,7 @@ function BuilderInner() {
               <div className="pointer-events-auto max-w-sm rounded-3xl border border-ink-200/80 bg-white/90 px-8 py-7 text-center shadow-soft backdrop-blur">
                 <div className="text-lg font-semibold text-ink-950">Start a pipeline</div>
                 <p className="mt-2 text-sm leading-relaxed text-ink-500">
-                  Pick a node from the left catalog, or open a template to start a pipeline.
+                  Click or drag a node from the left catalog onto the canvas, or open a template.
                 </p>
                 <div className="mt-3 flex flex-wrap justify-center gap-2">
                   <button
@@ -2588,20 +2733,6 @@ function BuilderInner() {
                 : 'relative z-20 flex w-10 shrink-0 min-h-0 flex-col overflow-hidden border-l border-ink-200/70 bg-white/95 shadow-soft backdrop-blur'
             }
           >
-            <div className="flex items-center justify-between gap-1 border-b border-ink-100 px-1.5 py-1">
-              {inspectorOpen ? (
-                <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Inspector</div>
-              ) : null}
-              <button
-                type="button"
-                className="btn-icon ml-auto"
-                aria-label={inspectorOpen ? 'Collapse inspector' : 'Expand inspector'}
-                title={inspectorOpen ? 'Collapse inspector' : 'Expand inspector'}
-                onClick={() => setInspectorOpen((v) => !v)}
-              >
-                {inspectorOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-              </button>
-            </div>
             {inspectorOpen ? (
             <>
             <AgentDrawer open={agentOpen} onClose={() => setAgentOpen(false)} />
@@ -2623,8 +2754,17 @@ function BuilderInner() {
                     : graphName || 'pipeline'
               return (
                 <>
-                  <div className="flex items-start justify-between gap-2 border-b border-ink-100 px-3 py-2">
-                    <div className="min-w-0">
+                  <div className="flex items-start gap-1 border-b border-ink-100 px-1.5 py-1.5">
+                    <button
+                      type="button"
+                      className="btn-icon mt-0.5 shrink-0"
+                      aria-label="Collapse inspector"
+                      title="Collapse inspector"
+                      onClick={() => setInspectorOpen(false)}
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                    <div className="min-w-0 flex-1 px-0.5">
                       <div className="text-type-meta font-semibold uppercase tracking-wide text-ink-400">
                         {mode === 'node' ? 'Node' : mode === 'edge' ? 'Edge' : 'Graph'}
                       </div>
@@ -2636,7 +2776,7 @@ function BuilderInner() {
                     {(inspectorId || selectedEdgeId) && (
                       <button
                         type="button"
-                        className="btn-icon"
+                        className="btn-icon mt-0.5 shrink-0"
                         aria-label="Clear selection"
                         onClick={() => {
                           setInspectorId(null)
@@ -2874,21 +3014,16 @@ function BuilderInner() {
                           })()}
                         </div>
                         ) : (
-                        <div className="mb-3 rounded-lg border border-dashed border-ink-200 bg-ink-50/40 p-2.5 space-y-1.5">
-                          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                            Placement
-                          </div>
-                          <p className="text-[10px] leading-snug text-ink-500">
-                            Local mode ignores placement until you switch to Distributed.
-                          </p>
+                        <p className="mb-2 text-[10px] leading-snug text-ink-400">
+                          Placement is ignored in Local mode.{' '}
                           <button
                             type="button"
-                            className="text-[11px] font-medium text-accent-800 hover:underline"
+                            className="font-medium text-accent-800 hover:underline"
                             onClick={() => openModeExplainer()}
                           >
-                            Local vs Distributed — explain modes
+                            Local vs Distributed
                           </button>
-                        </div>
+                        </p>
                         )}
 
                         {/wait/i.test(node.data.nodeType) ? (
@@ -2907,7 +3042,10 @@ function BuilderInner() {
                           const entries = allEntries.filter(([, def]) => isFieldVisible(def, cfg, props))
                           const hiddenCount = allEntries.length - entries.length
                           const nodeIssues = issuesByNode.get(node.id)
-                          const normalizeGroup = (def: Record<string, unknown>) => {
+                          const normalizeGroup = (key: string, def: Record<string, unknown>) => {
+                            // Surface EarlyStopping patience with Epochs (Basic) even if the
+                            // plugin schema still marks it Advanced.
+                            if (key === 'patience') return 'Basic'
                             const g = String(def.group ?? '').trim()
                             if (!g) return 'Basic'
                             const low = g.toLowerCase()
@@ -2915,17 +3053,19 @@ function BuilderInner() {
                             if (low === 'basic') return 'Basic'
                             return g
                           }
-                          const basic = entries.filter(([, def]) => normalizeGroup(def) !== 'Advanced')
-                          const advanced = entries.filter(([, def]) => normalizeGroup(def) === 'Advanced')
+                          const basic = entries.filter(([key, def]) => normalizeGroup(key, def) !== 'Advanced')
+                          const advanced = entries.filter(([key, def]) => normalizeGroup(key, def) === 'Advanced')
                           const advancedInvalid = advanced.filter(([k]) => nodeIssues?.has(k)).length
                           const renderField = ([key, def]: [string, Record<string, unknown>]) => {
                             const fieldIssues = nodeIssues?.get(key) ?? []
+                            const hintBrief = schemaFieldHintBrief(def)
+                            const hintFull = schemaFieldHint(def)
                             return (
-                            <label key={key} className="block text-[12px] text-ink-700" title={schemaFieldHint(def)}>
+                            <label key={key} className="block text-[12px] text-ink-700" title={hintFull || schemaFieldHint(def)}>
                               <span className="font-medium">{schemaFieldLabel(key, def)}</span>
-                              {schemaFieldHint(def) ? (
-                                <span className="mt-0.5 block text-[10px] leading-snug text-ink-400">
-                                  {schemaFieldHint(def)}
+                              {hintBrief ? (
+                                <span className="mt-0.5 block text-[10px] leading-snug text-ink-400" title={hintFull}>
+                                  {hintBrief}
                                 </span>
                               ) : null}
                               <ConfigFieldEditor
@@ -2946,13 +3086,13 @@ function BuilderInner() {
                           }
                           return (
                             <div key={`${node.id}-${historyGen}`} className="space-y-2">
-                              {String(node.data.nodeType || '') === 'model_builder' ? (
+                              {String(node.data.nodeType || '') === 'model_builder' &&
+                              String((node.data.config ?? {}).architecture || '') === 'custom' ? (
                                 <div className="rounded-lg border border-ink-200 bg-ink-50/80 px-2.5 py-2">
                                   <div className="text-[11px] font-semibold text-ink-700">Load layers from preset</div>
                                   <p className="mt-0.5 text-[10px] leading-snug text-ink-400">
-                                    Seeds architecture=custom with a paper body (ds_cnn / mobilenet / simple_cnn)
-                                    using this node&apos;s current filters / depth / MobileNet knobs. Edit layers
-                                    in the list below after loading.
+                                    Replace the layer list with a paper body (ds_cnn / mobilenet / simple_cnn)
+                                    using this node&apos;s current filters / depth / MobileNet knobs.
                                   </p>
                                   <div className="mt-1.5 flex flex-wrap items-center gap-2">
                                     <select
@@ -2994,6 +3134,11 @@ function BuilderInner() {
                                     </button>
                                   </div>
                                 </div>
+                              ) : String(node.data.nodeType || '') === 'model_builder' ? (
+                                <p className="text-[10px] leading-snug text-ink-400">
+                                  Set Architecture to <span className="font-mono">custom</span> to edit layers
+                                  (or Load from preset once custom is selected).
+                                </p>
                               ) : null}
                               {basic.map(renderField)}
                               {advanced.length > 0 ? (
@@ -3034,7 +3179,22 @@ function BuilderInner() {
               )
             })()}
             </>
-            ) : null}
+            ) : (
+              <div className="flex flex-1 flex-col items-center pt-1.5">
+                <button
+                  type="button"
+                  className="btn-icon"
+                  aria-label="Expand inspector"
+                  title="Expand inspector"
+                  onClick={() => setInspectorOpen(true)}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="mt-2 write-vertical-right rotate-180 text-[10px] font-semibold uppercase tracking-wide text-ink-400 [writing-mode:vertical-rl]">
+                  Inspector
+                </span>
+              </div>
+            )}
           </aside>
         </div>
 
