@@ -88,11 +88,11 @@ class SegmenterNode(Node):
     }
 
     class Config(NodeConfig):
-        mode: Literal["fixed", "silence", "vad", "event", "speaker_turn"] = Field(default='fixed', title="Mode", description="Operating mode. fixed = sliding windows; silence = split on silence (may emit several segments per clip); vad = WebRTC VAD (falls back to silence); event = energy onsets; speaker_turn = metadata.speaker_segments (falls back to silence).")
+        mode: Literal["fixed", "silence", "vad", "event", "speaker_turn"] = Field(default='fixed', title="Mode", description="How clips are cut. fixed = sliding windows; silence = split on silent gaps (a clip can yield several segments); vad = voice-activity detection (falls back to silence when unavailable); event = energy onsets; speaker_turn = speaker turns from upstream (falls back to silence).")
         window_ms: int = Field(default=1000, title="Window (ms)", description="Window length in milliseconds (fixed mode). Clips shorter than one window are emitted whole.")
         overlap: float = Field(default=0.0, title="Overlap", description="Fractional overlap in [0, 1). fixed: window overlap; silence/vad: each segment end is extended by this fraction of its length.")
-        vad_aggressiveness: int = Field(default=2, title="VAD aggressiveness", description="WebRTC VAD aggressiveness 0–3 (higher = more aggressive speech filtering).")
-        silence_threshold_db: float = Field(default=40.0, gt=0, le=120, title="Silence threshold (dB below peak)", description="librosa top_db: frames quieter than (peak - this) dB are silence. Higher = less audio treated as silence.")
+        vad_aggressiveness: int = Field(default=2, title="VAD aggressiveness", description="Voice-activity detector strictness 0-3 (higher = filters out more non-speech).")
+        silence_threshold_db: float = Field(default=40.0, gt=0, le=120, title="Silence threshold (dB below peak)", description="Frames quieter than (clip peak minus this many dB) count as silence. Higher = less audio treated as silence. Used by silence mode and the vad / speaker-turn fallbacks.")
         event_threshold_db: float = Field(default=-30.0, le=0, title="Event threshold (dB re peak)", description="Event mode: frames whose RMS is at least this many dB relative to the loudest frame (<= 0) are active.")
         event_min_gap_ms: int = Field(default=200, title="Event min gap (ms)", description="Event mode: an event ends after this much continuous inactivity (milliseconds).")
         min_segment_ms: int = Field(default=100, title="Min segment (ms)", description="Discard segments shorter than this (milliseconds). Must be < max_segment_ms.")

@@ -9,6 +9,7 @@ import { Layers } from 'lucide-react'
 import { humanNodeLabel, focusMatchesNode } from '../../lib/format'
 import { looksLikeOpaqueId } from './runOutputs'
 import { laneLabel } from './runNodes'
+import { progressBadgeText, type NodeProgress } from './runProgress'
 import clsx from 'clsx'
 
 export type PipelineStackItem = {
@@ -64,6 +65,8 @@ export function PipelineStack({
   onChange,
   className,
   laneOf,
+  laneTitle,
+  progressOf,
 }: {
   items: PipelineStackItem[]
   /** null = All (whole run). */
@@ -72,6 +75,10 @@ export function PipelineStack({
   className?: string
   /** When fork/parallel, id → shared | A | B — groups the rail under section headers. */
   laneOf?: Map<string, string> | null
+  /** Lane header text (e.g. "Path B (Simple CNN · 30 epochs)"); default "Path B". */
+  laneTitle?: (lane: string) => string | null | undefined
+  /** Live node_progress for a running step (progress bar under its label). */
+  progressOf?: (id: string) => NodeProgress | null
 }) {
   const visible = items.filter(
     (item) => !looksLikeOpaqueId(item.id) && !looksLikeOpaqueId(String(item.label || '')),
@@ -127,6 +134,7 @@ export function PipelineStack({
               ? item.label
               : humanNodeLabel(item.id)
           const statusText = item.status === 'skipped' ? 'skipped (not run)' : item.status
+          const prog = item.status === 'running' || item.status == null ? progressOf?.(item.id) ?? null : null
           const prevLane = idx > 0 ? rows[idx - 1].lane : null
           const showLaneHeader = multiTrack && lane !== prevLane
           return (
@@ -139,7 +147,7 @@ export function PipelineStack({
                       laneChipClass(lane),
                     )}
                   >
-                    {laneLabel(lane)}
+                    {(lane !== 'shared' && laneTitle?.(lane)) || laneLabel(lane)}
                   </span>
                 </li>
               ) : null}
@@ -148,7 +156,7 @@ export function PipelineStack({
                   type="button"
                   aria-pressed={active}
                   onClick={() => onChange(item.id)}
-                  title={statusText ? `${label} · ${statusText}` : label}
+                  title={`${label}${statusText ? ` · ${statusText}` : ''} · ${item.id}`}
                   className={clsx(
                     'flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-left transition',
                     active
@@ -173,6 +181,21 @@ export function PipelineStack({
                     {label}
                     {item.status === 'skipped' ? (
                       <span className="block text-[10px] font-normal text-ink-400">not run</span>
+                    ) : null}
+                    {prog ? (
+                      <span className="mt-1 block" aria-live="polite">
+                        {prog.pct != null ? (
+                          <span className="block h-1 overflow-hidden rounded-full bg-ink-100">
+                            <span
+                              className="block h-full rounded-full bg-sky-500 transition-[width]"
+                              style={{ width: `${Math.max(2, prog.pct)}%` }}
+                            />
+                          </span>
+                        ) : null}
+                        <span className="mt-0.5 block truncate text-[10px] font-normal tabular-nums text-ink-500">
+                          {progressBadgeText(prog)}
+                        </span>
+                      </span>
                     ) : null}
                   </span>
                   {item.status ? (

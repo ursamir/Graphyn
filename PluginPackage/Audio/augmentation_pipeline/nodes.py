@@ -30,6 +30,45 @@ from app.models.audio_sample import AudioSample
 
 log = logging.getLogger(__name__)
 
+# ── progress events (Runs UI) ─────────────────────────────────────────────────
+try:
+    from app.core.nodes.progress import emit_node_progress
+except ImportError:  # pragma: no cover - host predates progress events
+    def emit_node_progress(payload: dict) -> None:  # type: ignore[misc]
+        return None
+
+
+class _ItemProgress:
+    """Throttled percent-over-items reporter (about ``steps`` events + the last).
+
+    Best effort: emitter errors are logged at debug level and never fail the node.
+    """
+
+    def __init__(self, phase: str, total: int, steps: int = 20) -> None:
+        self.phase = phase
+        self.total = max(int(total or 0), 0)
+        self.steps = max(int(steps), 1)
+        self._last_bucket = -1
+
+    def update(self, done: int) -> None:
+        if self.total <= 0:
+            return
+        done = max(0, min(int(done), self.total))
+        bucket = done * self.steps // self.total
+        if bucket <= self._last_bucket:
+            return
+        self._last_bucket = bucket
+        try:
+            emit_node_progress({
+                "phase": self.phase,
+                "done": done,
+                "total": self.total,
+                "pct": round(100.0 * done / self.total, 1),
+            })
+        except Exception:
+            log.debug("progress emit failed", exc_info=True)
+
+
 _KNOWN_AUGMENTATIONS = frozenset({
     "gain", "pitch_shift", "time_stretch", "speed_perturb", "reverb",
     "noise_inject", "codec_degrade", "eq", "audiomentations",
@@ -132,8 +171,11 @@ class AugmentationPipelineNode(Node):
     def process(self, samples):
         """Augment each input sample; always include the original."""
         out: list[AudioSample] = []
+        samples = list(samples or [])
+        progress = _ItemProgress("augment", len(samples))
 
-        for s in samples:
+        for idx, s in enumerate(samples):
+            progress.update(idx)
             # Always include the original
             out.append(copy.deepcopy(s))
 
@@ -177,6 +219,7 @@ class AugmentationPipelineNode(Node):
                 }
                 out.append(augmented)
 
+        progress.update(len(samples))
         return out
 
     # ── augmentation dispatch ─────────────────────────────────────────────────

@@ -21,7 +21,7 @@
         "source_type": "filesystem",
         "recursive": false
       },
-      "label": null,
+      "label": "Load recordings · up",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -34,7 +34,7 @@
         "normalize": true,
         "normalize_method": "peak"
       },
-      "label": null,
+      "label": "Clean audio · 16 kHz mono",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -45,7 +45,7 @@
         "mode": "silence",
         "silence_threshold_db": 40.0
       },
-      "label": null,
+      "label": "Split on silence",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -57,7 +57,7 @@
         "rejection_policy": "skip",
         "check_duration": false
       },
-      "label": null,
+      "label": "Quality check · SNR ≥ 5 dB",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -74,7 +74,7 @@
         "check_silence": false,
         "check_bandwidth": false
       },
-      "label": null,
+      "label": "Length check · 0.2–1.0 s",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -102,7 +102,7 @@
           }
         ]
       },
-      "label": null,
+      "label": "Augment · pitch + tempo ×2",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -120,7 +120,7 @@
         "random_seed": 42,
         "append": true
       },
-      "label": null,
+      "label": "Save dataset · append",
       "capability_metadata": null,
       "event_trigger": null
     }

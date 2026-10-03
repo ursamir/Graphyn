@@ -35,6 +35,62 @@ from app.models.model_artifact import ModelArtifact
 
 log = logging.getLogger(__name__)
 
+# ── progress events (Runs UI) ─────────────────────────────────────────────────
+try:
+    from app.core.nodes.progress import emit_node_progress
+except ImportError:  # pragma: no cover - host predates progress events
+    def emit_node_progress(payload: dict) -> None:  # type: ignore[misc]
+        return None
+
+
+def _report_progress(payload: dict) -> None:
+    """Best-effort progress event — never fails the export."""
+    try:
+        emit_node_progress(payload)
+    except Exception:
+        log.debug("EdgeOptimizerNode: progress emit failed", exc_info=True)
+
+
+_FORMAT_DISPLAY = {"tflite": "TFLite", "onnx": "ONNX"}
+_QUANT_DISPLAY = {
+    "int8": "INT8",
+    "float16": "FP16",
+    "float32": "FP32",
+    "dynamic_range": "dynamic-range",
+}
+
+
+def _labels_from_dir(directory: Path) -> list[str]:
+    path = Path(directory) / "labels.txt"
+    try:
+        if path.is_file():
+            return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except OSError:
+        pass
+    return []
+
+
+def _artifact_labels(artifact) -> list[str]:
+    """Model class-index order: artifact.labels, else labels.txt beside the source."""
+    labels = [str(x) for x in (getattr(artifact, "labels", None) or [])]
+    if labels:
+        return labels
+    mp = Path(str(getattr(artifact, "model_path", "") or ""))
+    for d in (mp if mp.is_dir() else mp.parent, mp.parent):
+        found = _labels_from_dir(d)
+        if found:
+            return found
+    return []
+
+
+def _export_display_name(artifact, model_format: str, quantization: str) -> str:
+    """e.g. 'DS-CNN (30 epochs) · TFLite INT8'."""
+    base = str(((getattr(artifact, "metrics", None) or {}).get("display_name") or "")).strip()
+    fmt = _FORMAT_DISPLAY.get(model_format, model_format.upper())
+    quant = _QUANT_DISPLAY.get(quantization, quantization)
+    tail = f"{fmt} {quant}".strip()
+    return f"{base} · {tail}" if base else tail
+
 
 class EdgeOptimizerNode(Node):
     """Optimize a Keras SavedModel for edge deployment via TFLite or ONNX.
@@ -89,12 +145,12 @@ class EdgeOptimizerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: Literal["tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"] = Field(default='tflite', title="Backend", description="Implementation backend. One of: tflite, onnx, tflm, executorch, ultralytics_export, auto.")
-        quantization: Literal["float32", "float16", "int8"] = Field(default='int8', title="Quantization", description="Weight/activation quantization mode. One of: float32, float16, int8.")
-        output_path: str = Field(default='workspace/artifacts/optimized', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        representative_samples: int = Field(default=100, ge=1, title="Representative samples", description="Number of calibration samples (evenly spaced over X_train_repr.npy) for int8 quantization.")
+        backend: Literal["tflite", "onnx", "tflm", "executorch", "ultralytics_export", "auto"] = Field(default='tflite', title="Backend", description="Export format. tflite = TensorFlow Lite (supports quantization); onnx = ONNX (float32 only); tflm, executorch, ultralytics_export = placeholder only, use the dedicated export nodes; auto = tflite when available, else onnx.")
+        quantization: Literal["float32", "float16", "int8"] = Field(default='int8', title="Quantization", description="float32 = no quantization; float16 = half-precision weights; int8 = full integer model (uint8 input/output), calibrated on training samples. TFLite only.")
+        output_path: str = Field(default='workspace/artifacts/optimized', title="Output path", description="Folder for the exported model and its labels.txt.")
+        representative_samples: int = Field(default=100, ge=1, title="Representative samples", description="Number of training samples used to calibrate int8 quantization.")
         prune: bool = Field(default=False, title="Prune", description="Not implemented yet: On only logs a warning.")
-        operator_fusion: bool = Field(default=True, title="Weight optimization", description="float32 only: On applies tf.lite.Optimize.DEFAULT (dynamic-range weights); Off keeps a pure float32 model.")
+        operator_fusion: bool = Field(default=True, title="Weight optimization", description="float32 only: On stores weights as int8 for a smaller file (activations stay float); Off keeps a pure float32 model.")
 
     def __init__(self, config=None, seed: int = 0, observer=None) -> None:
         super().__init__(config=config, seed=seed, observer=observer)
@@ -182,21 +238,25 @@ class EdgeOptimizerNode(Node):
         dest = out_path / "model.tflite"
         if src.resolve() != dest.resolve():
             shutil.copy2(src, dest)
-        labels = list(getattr(artifact, "labels", None) or [])
-        sibling = src.parent / "labels.txt"
-        if not labels and sibling.is_file():
-            labels = [ln.strip() for ln in sibling.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        labels = _artifact_labels(artifact)
         labels_path = out_path / "labels.txt"
         labels_path.write_text("\n".join(labels), encoding="utf-8")
         file_size = dest.stat().st_size
+        quant = str(self.config.quantization)
         return DeploymentArtifact(
             artifact_path=str(dest),
             model_format="tflite",
             target_hardware="cpu",
-            quantization=str(self.config.quantization),
+            quantization=quant,
             labels=labels,
             file_size_bytes=file_size,
-            metadata={"source": str(src), "copied": True},
+            metadata={
+                "source": str(src),
+                "copied": True,
+                "labels": list(labels),
+                "labels_path": str(labels_path),
+                "display_name": _export_display_name(artifact, "tflite", quant),
+            },
         )
 
     def _export_tflite(self, artifact: ModelArtifact, out_path: Path) -> DeploymentArtifact:
@@ -224,6 +284,7 @@ class EdgeOptimizerNode(Node):
 
         quantization = self.config.quantization
         log.info("EdgeOptimizerNode: converting SavedModel to TFLite (%s)...", quantization)
+        _report_progress({"phase": "convert", "backend": "tflite", "quantization": quantization, "pct": 0.0})
 
         converter = self._tflite_converter(tf, artifact)
 
@@ -264,10 +325,21 @@ class EdgeOptimizerNode(Node):
             indices = np.linspace(0, len(X_repr) - 1, n_samples, dtype=int)
             repr_data = X_repr[indices]
 
+            n_cal = len(repr_data)
+            every = max(1, n_cal // 10)
+
             def representative_dataset():
-                for i in range(len(repr_data)):
+                for i in range(n_cal):
                     sample = repr_data[i : i + 1].astype(np.float32)
                     yield [sample]
+                    done = i + 1
+                    if done == n_cal or done % every == 0:
+                        _report_progress({
+                            "phase": "calibrate",
+                            "done": done,
+                            "total": n_cal,
+                            "pct": round(100.0 * done / n_cal, 1),
+                        })
 
             converter.representative_dataset = representative_dataset
             converter.inference_input_type = tf.uint8
@@ -279,22 +351,33 @@ class EdgeOptimizerNode(Node):
         with open(tflite_path, "wb") as f:
             f.write(tflite_model)
 
+        labels = _artifact_labels(artifact)
         labels_path = out_path / "labels.txt"
-        with open(labels_path, "w") as f:
-            f.write("\n".join(artifact.labels))
+        with open(labels_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(labels))
 
         file_size = len(tflite_model)
         log.info("EdgeOptimizerNode: TFLite model saved to: %s (%d KB)", tflite_path, file_size // 1024)
         log.info("EdgeOptimizerNode: labels saved to: %s", labels_path)
+        _report_progress({
+            "phase": "convert", "backend": "tflite", "quantization": effective_quant,
+            "file_size_bytes": int(file_size), "pct": 100.0,
+            "message": f"Saved model.tflite ({max(1, file_size // 1024)} KB, {effective_quant})",
+        })
 
         return DeploymentArtifact(
             artifact_path=tflite_path,
             model_format="tflite",
             target_hardware="cpu",
             quantization=effective_quant,
-            labels=list(artifact.labels),
+            labels=list(labels),
             file_size_bytes=file_size,
-            metadata={"requested_quantization": quantization},
+            metadata={
+                "requested_quantization": quantization,
+                "labels": list(labels),
+                "labels_path": str(labels_path),
+                "display_name": _export_display_name(artifact, "tflite", effective_quant),
+            },
         )
 
     # ── ONNX export ───────────────────────────────────────────────────────────
@@ -307,6 +390,7 @@ class EdgeOptimizerNode(Node):
         """
         onnx_path = str(out_path / "model.onnx")
         model_path = artifact.model_path
+        _report_progress({"phase": "convert", "backend": "onnx", "pct": 0.0})
 
         # Detect PyTorch model by extension
         if model_path.lower().endswith((".pt", ".pth")):
@@ -370,21 +454,31 @@ class EdgeOptimizerNode(Node):
 
         file_size = Path(onnx_path).stat().st_size
 
-        # Save labels.txt
+        # Save labels.txt (model class-index order)
+        labels = _artifact_labels(artifact)
         labels_path = out_path / "labels.txt"
-        with open(labels_path, "w") as f:
-            f.write("\n".join(artifact.labels))
+        with open(labels_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(labels))
 
         log.info("EdgeOptimizerNode: ONNX model saved to: %s (%d KB)", onnx_path, file_size // 1024)
         log.info("EdgeOptimizerNode: labels saved to: %s", labels_path)
+        _report_progress({
+            "phase": "convert", "backend": "onnx", "file_size_bytes": int(file_size), "pct": 100.0,
+            "message": f"Saved model.onnx ({max(1, file_size // 1024)} KB)",
+        })
 
         return DeploymentArtifact(
             artifact_path=onnx_path,
             model_format="onnx",
             target_hardware="cpu",
             quantization="float32",
-            labels=list(artifact.labels),
+            labels=list(labels),
             file_size_bytes=file_size,
+            metadata={
+                "labels": list(labels),
+                "labels_path": str(labels_path),
+                "display_name": _export_display_name(artifact, "onnx", "float32"),
+            },
         )
 
     @staticmethod
@@ -546,12 +640,20 @@ class EdgeOptimizerNode(Node):
             f"source={artifact.model_path}\n",
             encoding="utf-8",
         )
-        labels = list(getattr(artifact, "labels", None) or [])
+        labels = _artifact_labels(artifact)
+        if labels:
+            (dest / "labels.txt").write_text("\n".join(labels), encoding="utf-8")
         return DeploymentArtifact(
             artifact_path=str(dest),
             model_format=backend,
             target_hardware="mcu" if backend in ("tflm", "executorch") else "cpu",
             quantization=str(self.config.quantization),
             labels=labels,
-            metadata={"backend": backend, "stub": True, "source": artifact.model_path},
+            metadata={
+                "backend": backend,
+                "stub": True,
+                "source": artifact.model_path,
+                "labels": list(labels),
+                "display_name": _export_display_name(artifact, backend, str(self.config.quantization)),
+            },
         )

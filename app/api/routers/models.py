@@ -4,7 +4,10 @@ Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for the lightweight model registry.
 Owns:             /api/v1/models routes; registry error → HTTP mapping
                   (run missing 404, run not succeeded 409, direct
-                  stage=prod 403 — prod only via request-prod/approve-prod).
+                  stage=prod 403 — prod only via request-prod/approve-prod,
+                  compiled_untrained 422, model_not_in_run 422). GET rows
+                  carry enriched stages (``kind: "model_stage"``, resolved
+                  artifact path/format/size/metrics/labels).
 Public Surface:   FastAPI router mounted at /api/v1.
 Must NOT:         Contain registry persistence — delegate to model_registry.
 Dependencies:     fastapi, app.core.mlops.model_registry, app.api.actor.
@@ -25,9 +28,18 @@ router = APIRouter(prefix="/models", tags=["models"])
 class RegisterBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
     run_id: str
-    slug: str
+    slug: Optional[str] = Field(
+        None, description="Artifact slug; derived from the model path when omitted"
+    )
     stage: str = "staging"
     description: Optional[str] = None
+    model_path: Optional[str] = Field(
+        None, description="Row ``path`` from GET /runs/{run_id}/models (preferred)"
+    )
+    node_id: Optional[str] = Field(None, description="Pick the model produced by this node")
+    allow_untrained: bool = Field(
+        False, description="Allow registering a compiled_untrained (model_builder) artifact"
+    )
 
 
 class RequestProdBody(BaseModel):
@@ -40,17 +52,22 @@ def list_models_endpoint():
     from app.core.mlops.model_registry import list_models
 
     ensure_store_readable()
-    return {"models": list_models()}
+    from app.core.mlops.model_registry import describe_models
+
+    try:
+        return {"models": describe_models()}
+    except Exception:
+        return {"models": list_models()}
 
 
 @router.get("/{name}", summary="Get one registered model")
 def get_model_endpoint(name: str):
     from app.api.store_guard import ensure_store_readable
-    from app.core.mlops.model_registry import get_model
+    from app.core.mlops.model_registry import describe_model
 
     ensure_store_readable()
     try:
-        return get_model(name)
+        return describe_model(name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -61,10 +78,27 @@ def _registry_http_error(exc: Exception) -> HTTPException | None:
     """Map typed registry errors: missing run 404, unfinished run 409,
     direct prod write 403 (must go through request-prod → approve-prod)."""
     from app.core.mlops.model_registry import (
+        ModelArtifactNotFound,
         ModelRunNotFound,
         ModelRunNotSucceeded,
+        ModelUntrained,
         ProdRequiresApproval,
     )
+
+    if isinstance(exc, ModelUntrained):
+        return HTTPException(
+            status_code=422,
+            detail={
+                "code": "compiled_untrained",
+                "message": str(exc),
+                "artifact": exc.artifact,
+                "hint": "Register the trainer's model, or pass allow_untrained=true",
+            },
+        )
+    if isinstance(exc, ModelArtifactNotFound):
+        return HTTPException(
+            status_code=422, detail={"code": "model_not_in_run", "message": str(exc)}
+        )
 
     if isinstance(exc, ModelRunNotFound):
         return HTTPException(status_code=404, detail={"code": "run_not_found", "message": str(exc)})
@@ -89,10 +123,13 @@ def register_model_endpoint(body: RegisterBody, request: Request):
         return register_model(
             body.name,
             run_id=body.run_id,
-            slug=body.slug,
+            slug=body.slug or "",
             stage=body.stage,
             description=body.description,
             actor=resolve_actor(request),
+            node_id=body.node_id,
+            model_path=body.model_path,
+            allow_untrained=body.allow_untrained,
         )
     except ValueError as exc:
         mapped = _registry_http_error(exc)

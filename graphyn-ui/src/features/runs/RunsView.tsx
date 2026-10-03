@@ -46,6 +46,7 @@ import { navigatePath, panelToFocus, parsePathname } from '../../routes/parsePat
 import { paths, type RunPanel } from '../../routes/paths'
 import { goView, onPathChange } from '../../routes/nav'
 import { RunLineagePanel } from './RunLineagePanel'
+import { apiErrorCode } from '../../api/errorCode'
 import { PipelineStack } from './PipelineStack'
 import ExperimentsView, { type ExperimentsViewHandle } from '../experiments/ExperimentsView'
 import {
@@ -65,13 +66,47 @@ import {
 } from './runOutputs'
 import {
   computePipelineShape,
-  disambiguatePipelineLabels,
+  disambiguateByPath,
   extractRunFailure,
   failureProposalSummary,
   isMultiTrackShape,
   pipelineNodesFromRun,
 } from './runNodes'
 import { dedupeErrorRows } from '../builder/logDedupe'
+import { formatMetric, metricLabel, primaryMetric, regressionOf } from '../../lib/metrics'
+import {
+  bestPathIdFromSummary,
+  datasetFromRun,
+  defaultModelOption,
+  fallbackPathResults,
+  guessModelKind,
+  isUntrained,
+  lanePathMap,
+  listRowMetric,
+  modelKindLabel,
+  normalizeRunModels,
+  pathDisplayName,
+  pathOfNodeMap,
+  pathsFromSummary,
+  pickBestPath,
+  rankModelOptions,
+  regressionFromHistory,
+  runTitle,
+  suggestModelName,
+  type ModelOption,
+  type PathResult,
+  type RegressionView,
+} from './runResults'
+import {
+  collapseProgressRows,
+  finishedNodeIds,
+  formatProgressLine,
+  latestProgressByNode,
+  parseProgress,
+  type NodeProgress,
+} from './runProgress'
+import { ProgressLogLine, RunResultsBanner } from './RunResults'
+import { useEvaluatorOutputs } from './useRunResults'
 
 /** Run ids whose GET /runs/{id} returned 404 this session — never auto-reopened. */
 const MISSING_RUN_IDS = new Set<string>()
@@ -186,10 +221,9 @@ function isStaleRunning(status?: string | null, createdAt?: string | null): bool
   return age != null && age >= STALE_RUNNING_MS
 }
 
-function runDisplayName(r: Pick<RunSummary, 'graph_name'>): string {
-  const raw = String(r.graph_name ?? '').trim()
-  if (raw) return humanizeTemplateName(raw)
-  return 'Pipeline'
+/** Backend `display_name`, else the humanized graph name — never a bare "Pipeline". */
+function runDisplayName(r: RunSummary): string {
+  return runTitle(r)
 }
 
 const PANEL_LABELS: Record<string, string> = {
@@ -326,14 +360,22 @@ type FormattedLogRow = {
   nodeHint: string | null
   failed: boolean
   clock: string
+  /** Pretty view: collapsed node_progress (latest + history). */
+  progress?: { latest: NodeProgress; history: NodeProgress[]; count: number }
 }
 
 function VirtualRunLogList({
   rows,
   emptyLabel = 'No logs recorded for this run.',
+  labelFor,
+  raw = false,
 }: {
   rows: FormattedLogRow[]
   emptyLabel?: string
+  /** Node id/hint → human step label (graph label + path). */
+  labelFor?: (hint: string) => string | undefined
+  /** Raw view: the event JSON as recorded. */
+  raw?: boolean
 }) {
   const scrollerRef = React.useRef<HTMLDivElement>(null)
   const [scrollTop, setScrollTop] = React.useState(0)
@@ -365,11 +407,19 @@ function VirtualRunLogList({
       ) : (
         <div style={{ height: totalH, position: 'relative' }}>
           <div style={{ transform: `translateY(${offsetY}px)` }}>
-            {slice.map(({ i, line, nodeHint, failed, clock }) => {
-              const hintLabel = nodeHint ? humanNodeLabel(nodeHint) : ''
+            {slice.map(({ i, line, nodeHint, failed, clock, progress }) => {
+              const hintLabel = nodeHint ? labelFor?.(nodeHint) || humanNodeLabel(nodeHint) : ''
+              const text = raw
+                ? line.raw || line.text
+                : progress
+                  ? formatProgressLine(progress.latest, hintLabel || undefined)
+                  : line.text
               const showHint =
+                !raw &&
+                !progress &&
                 Boolean(hintLabel) &&
-                !line.text.toLowerCase().startsWith(hintLabel.toLowerCase())
+                !text.toLowerCase().startsWith(hintLabel.toLowerCase()) &&
+                !text.toLowerCase().startsWith(humanNodeLabel(nodeHint || '').toLowerCase())
               return (
               <div
                 key={i}
@@ -388,7 +438,18 @@ function VirtualRunLogList({
                     {hintLabel}
                   </span>
                 ) : null}
-                <span className="min-w-0 truncate">{line.text}</span>
+                {progress ? (
+                  <ProgressLogLine
+                    text={text}
+                    progress={progress.latest}
+                    history={progress.history}
+                    count={progress.count}
+                  />
+                ) : (
+                  <span className="min-w-0 truncate" title={raw ? undefined : line.raw || undefined}>
+                    {text}
+                  </span>
+                )}
               </div>
               )
             })}
@@ -489,14 +550,30 @@ function RunsShell({
 function LiveRunMonitor({
   nodeStats,
   workers,
+  progress = [],
+  labelFor,
 }: {
   nodeStats: Array<Record<string, unknown>>
   workers: Array<[string, string]>
+  /** Latest node_progress per still-running node. */
+  progress?: NodeProgress[]
+  labelFor?: (nodeId: string) => string | undefined
 }) {
   const wave = waveBucketsFromNodeStats(nodeStats)
-  if (wave.length === 0 && workers.length === 0 && nodeStats.length === 0) return null
+  if (wave.length === 0 && workers.length === 0 && nodeStats.length === 0 && progress.length === 0) return null
   return (
     <div className="shrink-0 space-y-2 border-b border-ink-100 bg-ink-50/60 px-3 py-2">
+      {progress.map((p) => (
+        <div key={p.nodeId} className="text-[12px] text-ink-800" aria-live="polite">
+          <ProgressLogLine
+            text={formatProgressLine(p, labelFor?.(p.nodeId))}
+            progress={p}
+            history={[p]}
+            count={1}
+            dark={false}
+          />
+        </div>
+      ))}
       {wave.length > 0 ? <NodeStatusWave buckets={wave} /> : null}
       {workers.length > 0 ? (
         <div className="flex flex-wrap gap-1.5 text-[11px] text-ink-600">
@@ -506,7 +583,7 @@ function LiveRunMonitor({
               className="rounded-md bg-white px-1.5 py-0.5 font-mono text-ink-800 ring-1 ring-ink-200/80"
               title={`Node ${nid}`}
             >
-              {humanNodeLabel(nid)} → {wid}
+              {labelFor?.(nid) || humanNodeLabel(nid)} → {wid}
             </span>
           ))}
         </div>
@@ -517,7 +594,8 @@ function LiveRunMonitor({
           {nodeStats.slice(0, 8).map((n, i) => (
             <span key={i} className="inline-flex items-center gap-1">
               <span className="font-medium text-ink-800">
-                {humanNodeLabel(String(n.node_type || n.node_id || `node-${i}`))}
+                {labelFor?.(String(n.node_id || '')) ||
+                  humanNodeLabel(String(n.node_type || n.node_id || `node-${i}`))}
               </span>
               {n.status != null ? (
                 <span className="font-mono text-[10px] text-ink-400">{String(n.status)}</span>
@@ -603,6 +681,14 @@ export default function RunsView() {
   const pendingPanelRef = React.useRef<DetailPanel | null>(null)
   const wasLiveRunRef = React.useRef(false)
   const focusSeededForRun = React.useRef<string | null>(null)
+  /** Runs → Logs: Raw shows every recorded event; Pretty collapses progress. */
+  const [rawLogView, setRawLogView] = React.useState(false)
+  /** GET /runs/{id}/models (null = not loaded / not supported by this API). */
+  const [runModelRows, setRunModelRows] = React.useState<ModelOption[] | null>(null)
+  /** Register: also list untrained (architecture-only) models. */
+  const [showUntrained, setShowUntrained] = React.useState(false)
+  const livePollTickRef = React.useRef(0)
+  const evaluatorOutputs = useEvaluatorOutputs(selected, outputFiles)
 
   const goBackToRuns = React.useCallback(() => {
     setFocusRunsTab('history')
@@ -733,6 +819,7 @@ export default function RunsView() {
     setExpandedNodeFiles({})
     setRunArtifacts([])
     setRunModels([])
+    setRunModelRows(null)
     setNotFoundRunId(null)
     setFocusNodeId(null)
     setRunGraph(null)
@@ -751,6 +838,8 @@ export default function RunsView() {
     setDebug(null)
     setSamples(null)
     setRunModels([])
+    setRunModelRows(null)
+    setShowUntrained(false)
     setOutputFiles([])
     setOutputsMeta({ truncated: false, byNode: {} })
     setExpandedNodeFiles({})
@@ -834,6 +923,7 @@ export default function RunsView() {
       setOutputFiles(outs.files)
       setOutputsMeta({ truncated: outs.truncated, byNode: outs.truncatedByNode })
       void loadRunModels(id)
+      void loadRunModelRows(id)
       setRunArtifacts(Array.isArray(arts) ? arts : [])
       const meta = d?.meta && typeof d.meta === 'object' ? (d.meta as Record<string, unknown>) : null
       // Only pick a default panel when opening a different run (or a forced pending panel).
@@ -873,6 +963,15 @@ export default function RunsView() {
       if (norm === 'completed' || norm === 'failed' || norm === 'cancelled') {
         // Run just finished: refresh logs / outputs / artifacts for it.
         await refetchRunDetail(id)
+      } else if (++livePollTickRef.current % 2 === 0) {
+        // Live: refresh the journal every other tick so Logs and the step
+        // progress bars (node_progress) move while training runs.
+        try {
+          const d = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(id)}`, { retries: 0 })
+          if (selectedRef.current === id) setDetail(d)
+        } catch {
+          /* keep prior detail */
+        }
       }
     },
     2000,
@@ -968,6 +1067,7 @@ export default function RunsView() {
       setExpandedNodeFiles({})
       setRunArtifacts(Array.isArray(arts) ? arts : [])
       void loadRunModels(id)
+      void loadRunModelRows(id)
     } catch {
       /* keep prior detail on refresh failure */
     }
@@ -1025,17 +1125,15 @@ export default function RunsView() {
   const registerModelFromRun = async () => {
     if (!selected) return
     const name = regModelName.trim()
-    const slug =
-      regModelSlug.trim() ||
-      selectedPromoteCandidate?.artifactSlug ||
-      runArtifactSlug ||
-      ''
+    const opt = selectedModelOption
+    const slug = regModelSlug.trim() || opt?.slug || runArtifactSlug || ''
     if (!name) {
       pushToast('Enter a model name', 'error')
       return
     }
-    if (!slug) {
-      pushToast('Pick a branch with an artifact pack (or enter the pack slug)', 'error')
+    // Newer APIs derive the folder from model_path; older ones need the slug.
+    if (!slug && !(opt && runModelRows)) {
+      pushToast('Could not tell where this model is stored — open More options and enter the storage folder', 'error')
       return
     }
     setRegisterBusy(true)
@@ -1045,18 +1143,51 @@ export default function RunsView() {
         body: JSON.stringify({
           name,
           run_id: selected,
-          slug,
+          ...(slug ? { slug } : {}),
           stage: 'staging',
+          // UX API: the exact model file chosen, so the registry never resolves
+          // to the untrained architecture next to the trained model (older
+          // APIs ignore these fields).
+          ...(opt
+            ? {
+                model_path: opt.path,
+                ...(opt.nodeId ? { node_id: opt.nodeId } : {}),
+                ...(isUntrained(opt) ? { allow_untrained: true } : {}),
+              }
+            : {}),
         }),
       })
-      pushToast(`Registered model ${name} @ staging`, 'success')
+      pushToast(`Saved model “${name}” — find it under Models`, 'success', {
+        actionLabel: 'Open Models',
+        onAction: () => goView('models'),
+      })
       setRegModelName('')
       setRegModelSlug('')
       await loadRunModels(selected)
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error')
+      const code = apiErrorCode(err)
+      pushToast(
+        code === 'compiled_untrained'
+          ? 'That file is an untrained model (architecture only) — pick the trained model instead'
+          : err instanceof Error
+            ? err.message
+            : String(err),
+        'error',
+      )
     } finally {
       setRegisterBusy(false)
+    }
+  }
+
+  /** GET /runs/{id}/models — null when the API does not offer it (older server). */
+  const loadRunModelRows = async (runId: string) => {
+    try {
+      const raw = await apiJson<unknown>(`/runs/${encodeURIComponent(runId)}/models`, { retries: 0 })
+      if (selectedRef.current !== runId) return
+      const rows = normalizeRunModels(raw)
+      setRunModelRows(rows.length ? rows : null)
+    } catch {
+      if (selectedRef.current === runId) setRunModelRows(null)
     }
   }
 
@@ -1169,22 +1300,35 @@ export default function RunsView() {
       'unknown',
   )
   const logs = Array.isArray(detail?.logs) ? (detail!.logs as Array<Record<string, unknown>>) : []
-  // Drop the pipeline-level error row that restates the preceding node_error.
-  const formattedLogs: FormattedLogRow[] = dedupeErrorRows(
-    skipConsecutiveByText(
-      logs.map((l, i) => {
-        const raw = typeof l.message === 'string' ? l.message : JSON.stringify(l)
-        const line = formatExecutionLine(raw)
-        const nodeHint = extractLogNodeHint(l, line.text, raw)
-        const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
-        const clock = extractLogTimestamp(l, raw)
-        return { i, l, line, nodeHint, failed, clock }
-      }),
-      (row) => row.line.text,
-    ),
-    (row) => row.line.text,
-    (row) => (row.failed ? 'error' : row.line.level),
-  )
+  const baseLogRows: FormattedLogRow[] = logs.map((l, i) => {
+    const raw = typeof l.message === 'string' ? l.message : JSON.stringify(l)
+    const line = formatExecutionLine(raw)
+    const nodeHint = extractLogNodeHint(l, line.text, raw)
+    const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
+    const clock = extractLogTimestamp(l, raw)
+    return { i, l, line: { ...line, raw: JSON.stringify(l) }, nodeHint, failed, clock }
+  })
+  // Pretty: one live line per node for node_progress (latest + history), then
+  // drop the pipeline-level error row that restates the preceding node_error.
+  // Raw: every event as recorded.
+  const formattedLogs: FormattedLogRow[] = rawLogView
+    ? baseLogRows
+    : dedupeErrorRows(
+        skipConsecutiveByText(
+          collapseProgressRows(baseLogRows, (row) => row.l).map((c) =>
+            c.kind === 'progress'
+              ? {
+                  ...c.row,
+                  nodeHint: c.progress.nodeId,
+                  progress: { latest: c.progress, history: c.history, count: c.count },
+                }
+              : c.row,
+          ),
+          (row) => (row.progress ? `progress:${row.progress.latest.nodeId}:${row.progress.count}` : row.line.text),
+        ),
+        (row) => row.line.text,
+        (row) => (row.failed ? 'error' : row.line.level),
+      )
 
 
   React.useEffect(() => {
@@ -1237,7 +1381,7 @@ export default function RunsView() {
     artifacts: runArtifacts,
     metrics: (selectedSummary?.metrics ?? detailMeta?.metrics ?? null) as Record<string, unknown> | null,
     nodeStats: runNodeStats,
-    registeredModels: runModels.length,
+    registeredModels: runModels.length + (runModelRows?.length ?? 0),
   })
   const runMetrics = (selectedSummary?.metrics ?? detailMeta?.metrics ?? null) as
     | Record<string, unknown>
@@ -1258,6 +1402,9 @@ export default function RunsView() {
       detail?.graph_name ??
       '',
   ).trim()
+  const headerTitle = runTitle(
+    detail ? { ...(selectedSummary || {}), ...detail, run_id: selected } : selectedSummary ?? { run_id: selected },
+  )
   const embeddedGraph = (detail?.graph ?? (detail?.meta as { graph?: unknown } | undefined)?.graph) as
     | GraphIR
     | undefined
@@ -1275,19 +1422,20 @@ export default function RunsView() {
    * journal events → node_stats; not-run on a failed/cancelled run → skipped.
    * Nodes only seen in artifacts / outputs (no graph available) are appended.
    */
-  const pipelineStackItems = (() => {
+  const rawStackItems = (() => {
     const items = pipelineNodesFromRun({
       graph: stackGraph as Parameters<typeof pipelineNodesFromRun>[0]['graph'],
       nodeStats: runNodeStats,
       events: logs,
       runStatus,
+      disambiguate: false,
     }).map((n) => ({ id: n.id, label: n.label, nodeType: n.nodeType, status: n.status }))
     const seen = new Set(items.map((i) => i.id))
     const push = (raw?: unknown) => {
       const id = String(raw || '').trim()
       if (!id || seen.has(id) || looksLikeOpaqueId(id) || id === 'run') return
       seen.add(id)
-      // Base label only — disambiguatePipelineLabels adds #cue for duplicates.
+      // Base label only — disambiguateByPath adds "· Path B" for duplicates.
       items.push({ id, label: humanNodeLabel(id), nodeType: undefined, status: undefined })
     }
     for (const a of runArtifacts) push(a.node_id || a.node_type)
@@ -1295,13 +1443,104 @@ export default function RunsView() {
       const g = guessNodeFromPath(f.path, runArtifacts, f, { runId: selected })
       if (g !== 'run') push(g)
     }
-    return disambiguatePipelineLabels(items).map(({ id, label, status }) => ({ id, label, status }))
+    return items
   })()
 
   const pipelineShape = computePipelineShape(
-    pipelineStackItems.map((i) => i.id),
+    rawStackItems.map((i) => i.id),
     stackGraph && Array.isArray(stackGraph.edges) ? stackGraph.edges : null,
   )
+
+  // ── Results (backend summary, else evaluator metrics.json fallback) ──
+  const backendPaths = (() => {
+    const fromDetail = pathsFromSummary(detail)
+    return fromDetail.length ? fromDetail : pathsFromSummary(selectedSummary)
+  })()
+  const pathResults: PathResult[] = (() => {
+    if (backendPaths.length === 0) {
+      return fallbackPathResults({
+        shape: pipelineShape,
+        graphNodes: (stackGraph?.nodes as Parameters<typeof fallbackPathResults>[0]['graphNodes']) ?? null,
+        metricsByNode: evaluatorOutputs.metricsByNode,
+      })
+    }
+    // Backend paths: note which node produced the metrics (for the step story).
+    return backendPaths.map((p) => {
+      if (p.metricsNodeId) return p
+      const hit = p.nodeIds.filter((id) => evaluatorOutputs.metricsByNode[id] != null).pop()
+      return hit ? { ...p, metricsNodeId: hit } : p
+    })
+  })()
+  const bestPath = pickBestPath(pathResults, bestPathIdFromSummary(detail) ?? bestPathIdFromSummary(selectedSummary))
+  const runPrimary = primaryMetric(detail) ?? primaryMetric(selectedSummary) ?? bestPath?.primary ?? null
+  const lanePaths = lanePathMap(pipelineShape, pathResults)
+  const nodePaths = pathOfNodeMap(
+    pathResults,
+    isMultiTrackShape(pipelineShape) ? pipelineShape.laneOf : null,
+  )
+  for (const [id, lane] of pipelineShape.laneOf) {
+    const p = lanePaths.get(lane)
+    if (p && lane !== 'shared' && !nodePaths.has(id)) nodePaths.set(id, p)
+  }
+  const multiPath = isMultiTrackShape(pipelineShape) && pathResults.length > 1
+  const pipelineStackItems = disambiguateByPath(rawStackItems, (id) => {
+    if (!multiPath) return null
+    const p = nodePaths.get(id)
+    return p ? `Path ${p.letter}` : null
+  }).map(({ id, label, status }) => ({ id, label, status }))
+  const runDataset = datasetFromRun({
+    run: detail ?? selectedSummary,
+    events: logs,
+    graphNodes: (stackGraph?.nodes as Parameters<typeof datasetFromRun>[0]['graphNodes']) ?? null,
+  })
+  const runRegression: RegressionView | null = (() => {
+    const reg = regressionOf(detail) ?? regressionOf(selectedSummary)
+    if (reg && runPrimary) {
+      return {
+        delta: reg.delta,
+        previousValue: reg.previousValue,
+        previousRunId: reg.previousRunId,
+        metricName:
+          String(
+            ((detail?.regression ?? detailMeta?.regression ?? selectedSummary?.regression) as { metric?: unknown } | undefined)
+              ?.metric ?? '',
+          ) || runPrimary.name,
+      }
+    }
+    if (!selected || !runPrimary) return null
+    return regressionFromHistory({
+      runId: selected,
+      graphName,
+      createdAt:
+        (selectedSummary?.created_at as string | undefined) ??
+        (detailMeta?.created_at as string | undefined) ??
+        null,
+      current: runPrimary,
+      rows: (runs || []) as Array<Record<string, unknown>>,
+      metricOf: (row) => primaryMetric(row),
+    })
+  })()
+  /**
+   * Live per-node progress: journal node_progress events, then the latest-per-
+   * node map on GET /runs/{id} and the 2 s /status poll (`node_progress`),
+   * minus nodes that already finished.
+   */
+  const liveProgress: Map<string, NodeProgress> = (() => {
+    if (!isLiveRunStatus(runStatus)) return new Map<string, NodeProgress>()
+    const latest = latestProgressByNode(logs)
+    for (const src of [detail?.node_progress, detailMeta?.node_progress, status?.node_progress]) {
+      if (!src || typeof src !== 'object' || Array.isArray(src)) continue
+      for (const [nid, ev] of Object.entries(src as Record<string, unknown>)) {
+        const p = parseProgress(ev && typeof ev === 'object' ? { type: 'node_progress', node_id: nid, ...(ev as object) } : null)
+        if (p) latest.set(p.nodeId, p)
+      }
+    }
+    for (const id of finishedNodeIds(logs)) latest.delete(id)
+    for (const it of rawStackItems) {
+      if (it.status && it.status !== 'running' && it.status !== 'pending') latest.delete(it.id)
+    }
+    return latest
+  })()
 
   const focusLabel = focusNodeId
     ? pipelineStackItems.find((i) => focusMatchesNode(focusNodeId, i.id))?.label ||
@@ -1325,9 +1564,6 @@ export default function RunsView() {
     return listRunModelCandidates({ files, artifacts: runArtifacts, labelFor })
   }, [runProducedModel, outputFiles, runArtifacts, pipelineStackItems, selected])
 
-  const selectedPromoteCandidate =
-    modelCandidates.find((c) => c.id === promoteCandidateId) || modelCandidates[0] || null
-
   /** Run-wide pack slug from meta (fallback when a branch path has no pack). */
   const runArtifactSlug = React.useMemo(() => {
     const dir =
@@ -1337,27 +1573,76 @@ export default function RunsView() {
     return artifactSlugFromPath(String(dir)) || ''
   }, [detail])
 
-  const applyPromoteCandidate = React.useCallback(
-    (c: RunModelCandidate) => {
-      setPromoteCandidateId(c.id)
-      const base =
-        (c.nodeId || c.label || 'model')
-          .replace(/[^A-Za-z0-9_-]+/g, '_')
-          .replace(/^_+|_+$/g, '')
-          .slice(0, 48) || 'model'
-      setRegModelName(base)
-      // POST /models slug must be the workspace pack (speech-commands, optimized),
-      // not the node id — register looks up artifacts/<slug>/runs/<run_id>.
-      setRegModelSlug(c.artifactSlug || runArtifactSlug || '')
-    },
-    [runArtifactSlug],
-  )
+  /**
+   * Register options: GET /runs/{id}/models when the API has it, else model
+   * files discovered in Run outputs. Each gets its path (A/B), kind
+   * (trained / optimized / untrained) and that path's metrics.
+   */
+  const graphNodeTypeOf = (id?: string) =>
+    id
+      ? String(
+          ((stackGraph?.nodes as Array<{ id?: unknown; node_type?: unknown }> | undefined) || []).find(
+            (n) => String(n.id) === id,
+          )?.node_type ?? '',
+        ) || undefined
+      : undefined
+  const modelOptions: ModelOption[] = (() => {
+    const fill = (o: ModelOption): ModelOption => {
+      const p =
+        (o.pathId ? pathResults.find((x) => x.pathId === o.pathId) : undefined) ||
+        (o.nodeId ? nodePaths.get(o.nodeId) : undefined)
+      return {
+        ...o,
+        pathId: o.pathId ?? p?.pathId,
+        pathLabel: multiPath && p ? pathDisplayName(p) : o.pathLabel,
+        metrics: Object.keys(o.metrics).length || !p || isUntrained(o) ? o.metrics : p.metrics,
+      }
+    }
+    if (runModelRows && runModelRows.length > 0) return runModelRows.map(fill)
+    return modelCandidates.map((c) => {
+      const path = c.pathHint || c.id.replace(/^file:/, '')
+      const nodeType = graphNodeTypeOf(c.nodeId)
+      return fill({
+        id: c.id,
+        path,
+        nodeId: c.nodeId,
+        nodeType,
+        kind: guessModelKind(path, nodeType || c.nodeId?.replace(/_[0-9a-f]+$|_\d+$/i, '')),
+        metrics: {},
+        labels: [],
+        slug: c.artifactSlug,
+      })
+    })
+  })()
+  const rankedModelOptions = rankModelOptions(modelOptions, bestPath?.pathId)
+  const untrainedCount = rankedModelOptions.filter(isUntrained).length
+  const visibleModelOptions = showUntrained
+    ? rankedModelOptions
+    : rankedModelOptions.filter((o) => !isUntrained(o))
+  const selectedModelOption =
+    modelOptions.find((o) => o.id === promoteCandidateId) || defaultModelOption(modelOptions, bestPath?.pathId)
+  const modelOptionsKey = modelOptions.map((o) => o.id).join('|')
 
+  const applyModelOption = (o: ModelOption) => {
+    setPromoteCandidateId(o.id)
+    const p = (o.pathId ? pathResults.find((x) => x.pathId === o.pathId) : undefined) || (o.nodeId ? nodePaths.get(o.nodeId) : undefined)
+    setRegModelName(suggestModelName(o, graphName || 'model', (p?.description || '').split(' · ')[0] || (multiPath && p ? `path-${p.letter}` : '')))
+    // POST /models slug must be the workspace pack (speech-commands, optimized),
+    // not the node id — register looks up artifacts/<slug>/runs/<run_id>.
+    setRegModelSlug(o.slug || runArtifactSlug || '')
+  }
+  const applyModelOptionRef = React.useRef(applyModelOption)
+  applyModelOptionRef.current = applyModelOption
+
+  // Default selection when the form opens: best path's trained model — never untrained.
   React.useEffect(() => {
-    if (!promoteOpen || modelCandidates.length === 0) return
-    if (promoteCandidateId && modelCandidates.some((c) => c.id === promoteCandidateId)) return
-    applyPromoteCandidate(modelCandidates[0])
-  }, [promoteOpen, modelCandidates, promoteCandidateId, applyPromoteCandidate])
+    if (!promoteOpen || !modelOptionsKey) return
+    if (promoteCandidateId && modelOptionsKey.split('|').includes(promoteCandidateId)) return
+    const def = defaultModelOption(modelOptions, bestPath?.pathId)
+    if (def) applyModelOptionRef.current(def)
+    // modelOptionsKey captures the option list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [promoteOpen, modelOptionsKey, promoteCandidateId, bestPath?.pathId])
 
   const canOpenGraph = Boolean(
     selected &&
@@ -1368,6 +1653,9 @@ export default function RunsView() {
   const openGraphInBuilder = async () => {
     if (!selected) return
     try {
+      // The Editor's linked run becomes this run, so its execution log and
+      // node statuses hydrate from this run's journal.
+      setLastRunId(selected)
       if (stackGraph && Array.isArray(stackGraph.nodes) && stackGraph.nodes.length > 0) {
         loadGraphIntoBuilder(stackGraph)
         pushToast('Opened graph in Editor', 'success')
@@ -1625,7 +1913,13 @@ export default function RunsView() {
           ) : null}
           <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200/70">
             {filteredRuns.map((r) => {
-              const metric = formatRunMetric(r.metrics)
+              const metric =
+                listRowMetric({
+                  primary: primaryMetric(r),
+                  paths: pathsFromSummary(r),
+                  bestPathId: bestPathIdFromSummary(r),
+                }) ?? formatRunMetric(r.metrics)
+              const rowReg = regressionOf(r)
               const foreignProject =
                 r.project && String(r.project).trim() && String(r.project) !== activeProject
                   ? String(r.project)
@@ -1680,6 +1974,14 @@ export default function RunsView() {
                   <div className="flex min-w-0 items-center justify-between gap-2 text-[11px] text-ink-500">
                     <span className="min-w-0 truncate tabular-nums" title={metric || foreignProject || undefined}>
                       {metric || foreignProject || '\u00a0'}
+                      {metric && rowReg && rowReg.delta < -0.005 ? (
+                        <span
+                          className="ml-1 font-semibold text-rose-700"
+                          title={`Lower than the best earlier run${rowReg.previousValue != null ? ` (${formatMetric(rowReg.previousValue)})` : ''}`}
+                        >
+                          ↓{formatMetric(Math.abs(rowReg.delta))}
+                        </span>
+                      ) : null}
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       <span title={formatLocaleDateTime(r.created_at)}>
@@ -1803,7 +2105,7 @@ export default function RunsView() {
                   className="min-w-0 max-w-[14rem] truncate text-[13px] font-semibold text-ink-950 sm:max-w-[20rem]"
                   title={selected || undefined}
                 >
-                  {graphName ? humanizeTemplateName(graphName) : shortRunId(selected || '')}
+                  {headerTitle}
                 </span>
                 <span
                   className="text-[11px] text-ink-500"
@@ -1817,7 +2119,7 @@ export default function RunsView() {
                       (detail?.meta as { created_at?: string } | undefined)?.created_at,
                   )}
                 </span>
-                {graphName ? (
+                {!headerTitle.includes(shortRunId(selected || '')) ? (
                   <span className="font-mono text-[11px] text-ink-400" title={selected || undefined}>
                     {shortRunId(selected || '')}
                   </span>
@@ -1903,8 +2205,8 @@ export default function RunsView() {
                       aria-expanded={promoteOpen && panel === 'lineage'}
                       title={
                         promoteOpen && panel === 'lineage'
-                          ? 'Hide the register / stage form'
-                          : 'Open register / stage form on Overview'
+                          ? 'Hide the save-model form'
+                          : 'Save a model from this run to Models'
                       }
                       onClick={() => {
                         setPromoteOpen((v) => {
@@ -1919,7 +2221,7 @@ export default function RunsView() {
                         })
                       }}
                     >
-                      {promoteOpen && panel === 'lineage' ? 'Close register' : 'Register model'}
+                      {promoteOpen && panel === 'lineage' ? 'Close' : 'Register model'}
                     </button>
                   ) : null}
                   {!['running', 'paused'].includes(st) ? (
@@ -1933,6 +2235,25 @@ export default function RunsView() {
                   ) : null}
                 </div>
               </div>
+
+              {!live ? (
+                <RunResultsBanner
+                  paths={pathResults}
+                  bestPathId={bestPath?.pathId ?? null}
+                  dataset={runDataset}
+                  regression={runRegression}
+                  onOpenRun={(rid) => {
+                    pushNextUrlRef.current = true
+                    pendingPanelRef.current = 'lineage'
+                    void open(rid)
+                  }}
+                  onFocusPath={(p) => {
+                    const target = p.metricsNodeId || p.nodeIds[p.nodeIds.length - 1]
+                    if (target) setFocusNodeId(target)
+                    setPanel('lineage')
+                  }}
+                />
+              ) : null}
 
               <IdeTabs
                 aria-label="Run detail"
@@ -2032,9 +2353,9 @@ export default function RunsView() {
                 <div id="run-promote-panel" className="rounded-xl border border-accent-200/70 bg-white px-3 py-2.5 shadow-sm space-y-2">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="text-[12px] font-semibold text-ink-900">Register / stage</div>
+                      <div className="text-[12px] font-semibold text-ink-900">Save a model from this run</div>
                       <p className="mt-0.5 text-[11px] text-ink-500">
-                        Stage this run’s artifact pack, then register one model branch by name for Models / Ship.
+                        Pick the model to keep and give it a name — it appears under Models, ready to test or ship to a device.
                       </p>
                     </div>
                     <button
@@ -2045,87 +2366,88 @@ export default function RunsView() {
                       Close
                     </button>
                   </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[11px] font-medium text-ink-600">Stage artifact pack</span>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <FieldSelect
-                        className="w-[7.5rem]"
-                        allowEmpty={false}
-                        value={promoteAlias}
-                        onChange={(v) => setPromoteAlias(v as 'latest' | 'staging' | 'prod')}
-                        aria-label="Promote alias"
-                        options={[
-                          { value: 'latest', label: 'latest' },
-                          { value: 'staging', label: 'staging' },
-                          { value: 'prod', label: 'prod' },
-                        ]}
-                        triggerClassName="!mt-0 rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
-                      />
-                      <button type="button" className="btn-primary !px-2 !py-1 text-[11px]" onClick={() => void promote()}>
-                        Stage alias
-                      </button>
-                    </div>
-                  </div>
-                  {modelCandidates.length > 0 ? (
-                    <div className="space-y-1.5 border-t border-ink-100 pt-2">
+                  {rankedModelOptions.length > 0 ? (
+                    <div className="space-y-1.5">
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                        Register a model branch
-                        {modelCandidates.length > 1 ? ` (${modelCandidates.length})` : ''}
+                        Which model?
                       </div>
-                      {modelCandidates.length > 1 ? (
-                        <ul
-                          className="max-h-36 space-y-1 overflow-y-auto [scrollbar-gutter:stable]"
-                          role="radiogroup"
-                          aria-label="Model branch"
-                        >
-                          {modelCandidates.map((c) => {
-                            const active = (selectedPromoteCandidate?.id || '') === c.id
-                            return (
-                              <li key={c.id}>
-                                <label
-                                  className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] ${
-                                    active
-                                      ? 'border-accent-300 bg-accent-50/60'
-                                      : 'border-ink-200 hover:bg-ink-50'
-                                  }`}
-                                >
-                                  <input
-                                    type="radio"
-                                    className="mt-0.5"
-                                    name="promote-model-branch"
-                                    checked={active}
-                                    onChange={() => applyPromoteCandidate(c)}
-                                  />
-                                  <span className="min-w-0">
-                                    <span className="font-medium text-ink-900">{c.label}</span>
-                                    {c.pathHint || c.artifactSlug ? (
-                                      <span
-                                        className="mt-0.5 block truncate font-mono text-[11px] text-ink-400"
-                                        title={c.pathHint || c.artifactSlug}
-                                      >
-                                        {c.artifactSlug ? `${c.artifactSlug} · ` : ''}
-                                        {c.pathHint
-                                          ? c.pathHint.split('/').pop()
-                                          : 'artifact pack'}
+                      {visibleModelOptions.length === 0 ? (
+                        <p className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[12px] text-amber-950">
+                          This run has no trained model — only an untrained architecture. Check that training ran, or show
+                          untrained models below.
+                        </p>
+                      ) : null}
+                      <ul
+                        className="max-h-52 space-y-1 overflow-y-auto [scrollbar-gutter:stable]"
+                        role="radiogroup"
+                        aria-label="Model to save"
+                      >
+                        {visibleModelOptions.map((o) => {
+                          const active = selectedModelOption?.id === o.id
+                          const untrained = isUntrained(o)
+                          const isBest = Boolean(multiPath && bestPath && o.pathId === bestPath.pathId)
+                          const pm = Object.keys(o.metrics).length
+                            ? primaryMetric({ metrics: o.metrics })
+                            : null
+                          const fileName = o.path.replace(/\/+$/, '').split('/').pop() || o.path
+                          return (
+                            <li key={o.id}>
+                              <label
+                                className={clsx(
+                                  'flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[12px]',
+                                  active ? 'border-accent-300 bg-accent-50/60' : 'border-ink-200 hover:bg-ink-50',
+                                  untrained && 'opacity-70',
+                                )}
+                                title={o.path}
+                              >
+                                <input
+                                  type="radio"
+                                  className="mt-0.5"
+                                  name="promote-model-option"
+                                  checked={active}
+                                  onChange={() => applyModelOption(o)}
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                                    <span className="font-medium text-ink-900">
+                                      {o.pathLabel || modelKindLabel(o.kind)}
+                                    </span>
+                                    {o.pathLabel ? (
+                                      <span className={clsx('text-[11px]', untrained ? 'text-amber-800' : 'text-ink-500')}>
+                                        {modelKindLabel(o.kind)}
+                                      </span>
+                                    ) : null}
+                                    {isBest && !untrained ? (
+                                      <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-900">
+                                        best
+                                      </span>
+                                    ) : null}
+                                    {pm && !untrained ? (
+                                      <span className="ml-auto shrink-0 text-[11px] font-semibold tabular-nums text-ink-800">
+                                        {metricLabel(pm.name)} {formatMetric(pm.value)}
                                       </span>
                                     ) : null}
                                   </span>
-                                </label>
-                              </li>
-                            )
-                          })}
-                        </ul>
-                      ) : (
-                        <p className="text-[12px] text-ink-600">
-                          {modelCandidates[0].label}
-                          {modelCandidates[0].pathHint
-                            ? ` · ${modelCandidates[0].pathHint.split('/').pop()}`
-                            : ''}
-                        </p>
-                      )}
+                                  <span className="mt-0.5 block truncate text-[11px] text-ink-400">
+                                    {fileName}
+                                    {o.format ? ` · ${o.format}` : ''}
+                                    {o.sizeBytes != null ? ` · ${formatBytes(o.sizeBytes)}` : ''}
+                                    {o.labels.length ? ` · ${o.labels.length} labels` : ''}
+                                  </span>
+                                  {untrained ? (
+                                    <span className="mt-0.5 block text-[11px] text-amber-800">
+                                      Not trained yet — predictions will be random.
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </label>
+                            </li>
+                          )
+                        })}
+                      </ul>
                       <div className="flex flex-wrap items-end gap-2">
-                        <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
-                          Name
+                        <label className="min-w-[10rem] flex-1 text-[11px] text-ink-500">
+                          Model name
                           <input
                             className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
                             value={regModelName}
@@ -2133,32 +2455,78 @@ export default function RunsView() {
                             placeholder="my-model"
                           />
                         </label>
-                        <label className="min-w-[8rem] flex-1 text-[11px] text-ink-500">
-                          Artifact pack
-                          <input
-                            className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
-                            value={regModelSlug}
-                            onChange={(e) => setRegModelSlug(e.target.value)}
-                            placeholder="speech-commands"
-                            title="Workspace pack under artifacts/<slug>/runs/<run_id>"
-                          />
-                        </label>
                         <button
                           type="button"
-                          className="btn-secondary"
-                          disabled={registerBusy}
+                          className="btn-primary !px-2.5 !py-1.5 text-[12px]"
+                          disabled={registerBusy || !selectedModelOption}
                           onClick={() => void registerModelFromRun()}
                         >
-                          {registerBusy ? 'Registering…' : 'Register'}
+                          {registerBusy ? 'Saving…' : 'Save model'}
                         </button>
                       </div>
                     </div>
-                  ) : null}
+                  ) : (
+                    <p className="text-[12px] text-ink-600">No model files were found in this run’s outputs.</p>
+                  )}
+                  <details className="rounded-lg border border-ink-100 bg-ink-50/40">
+                    <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[11px] font-medium text-ink-500">
+                      More options
+                    </summary>
+                    <div className="space-y-2 border-t border-ink-100 px-2.5 py-2">
+                      {untrainedCount > 0 ? (
+                        <label className="flex items-center gap-2 text-[11px] text-ink-600">
+                          <input
+                            type="checkbox"
+                            className="h-3.5 w-3.5 rounded border-ink-300"
+                            checked={showUntrained}
+                            onChange={(e) => setShowUntrained(e.target.checked)}
+                          />
+                          Also list untrained models ({untrainedCount}) — architecture only, not useful for predictions
+                        </label>
+                      ) : null}
+                      <label className="block text-[11px] text-ink-500">
+                        Storage folder
+                        <input
+                          className="mt-0.5 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 font-mono text-xs text-ink-800"
+                          value={regModelSlug}
+                          onChange={(e) => setRegModelSlug(e.target.value)}
+                          placeholder="speech-commands"
+                          title="Workspace folder under artifacts/<folder>/runs/<run id> (filled in automatically)"
+                        />
+                      </label>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] text-ink-600" title="POST /runs/{id}/promote — points latest / staging / production at this whole run’s outputs">
+                          Mark all of this run’s outputs as
+                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <FieldSelect
+                            className="w-[7.5rem]"
+                            allowEmpty={false}
+                            value={promoteAlias}
+                            onChange={(v) => setPromoteAlias(v as 'latest' | 'staging' | 'prod')}
+                            aria-label="Release channel"
+                            options={[
+                              { value: 'latest', label: 'Latest' },
+                              { value: 'staging', label: 'Testing (staging)' },
+                              { value: 'prod', label: 'Production' },
+                            ]}
+                            triggerClassName="!mt-0 rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs text-ink-800"
+                          />
+                          <button type="button" className="btn-secondary !px-2 !py-1 text-[11px]" onClick={() => void promote()}>
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+                      {selectedModelOption ? (
+                        <p className="break-all font-mono text-[10px] text-ink-400">{selectedModelOption.path}</p>
+                      ) : null}
+                    </div>
+                  </details>
                   {runModels.length > 0 ? (
                     <div className="space-y-1.5 border-t border-ink-100 pt-2">
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                          Registered from this run
+                          Already saved from this run
                         </div>
                         <button
                           type="button"
@@ -2170,18 +2538,20 @@ export default function RunsView() {
                       </div>
                       <ul className="space-y-1">
                         {runModels.map((m) => {
-                          const stages = m.stages || {}
-                          const stageBits = Object.entries(stages)
-                            .map(([k, v]) => `${k}${v?.slug ? `:${v.slug}` : ''}`)
-                            .join(' · ')
+                          const stages = Object.keys(m.stages || {})
                           return (
                             <li
                               key={m.name}
                               className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-ink-50 px-2 py-1 text-[12px]"
+                              title={Object.entries(m.stages || {})
+                                .map(([k, v]) => `${k}${v?.slug ? `: ${v.slug}` : ''}`)
+                                .join(' · ')}
                             >
                               <span className="font-medium text-ink-900">{m.name}</span>
-                              <span className="font-mono text-[11px] text-ink-500">
-                                {stageBits || 'registered'}
+                              <span className="text-[11px] text-ink-500">
+                                {stages.length
+                                  ? stages.map((k) => (k === 'prod' ? 'production' : k === 'staging' ? 'testing' : k)).join(' · ')
+                                  : 'saved'}
                               </span>
                             </li>
                           )
@@ -2203,7 +2573,12 @@ export default function RunsView() {
             })()}
 
             {isLiveRunStatus(runStatus) ? (
-              <LiveRunMonitor nodeStats={runNodeStats} workers={runWorkerEntries} />
+              <LiveRunMonitor
+                nodeStats={runNodeStats}
+                workers={runWorkerEntries}
+                progress={[...liveProgress.values()]}
+                labelFor={(id) => pipelineStackItems.find((it) => it.id === id)?.label}
+              />
             ) : null}
 
             <div className="flex min-h-0 flex-1 gap-3 overflow-hidden px-3 py-2">
@@ -2212,6 +2587,11 @@ export default function RunsView() {
                 value={focusNodeId}
                 onChange={setFocusNodeId}
                 laneOf={isMultiTrackShape(pipelineShape) ? pipelineShape.laneOf : null}
+                laneTitle={(lane) => {
+                  const p = lanePaths.get(lane)
+                  return p ? pathDisplayName(p) : null
+                }}
+                progressOf={(id) => liveProgress.get(id) ?? null}
                 className="min-h-0 max-h-full [scrollbar-gutter:stable]"
               />
               <div
@@ -2225,20 +2605,37 @@ export default function RunsView() {
             {panel === 'logs' && (
               <div className="space-y-2">
                 {visibleLogs.length > 0 ? (
-                  <p className="text-[11px] text-ink-500">
-                    {`${visibleLogs.length.toLocaleString()} line${visibleLogs.length === 1 ? '' : 's'}`}
-                    {focusNodeId ? (
-                      <>
-                        {' '}
-                        · <span className="font-medium text-ink-700">{focusLabel}</span>
-                      </>
-                    ) : isMultiTrackShape(pipelineShape) ? (
-                      <> · {pipelineShape.branches.length} paths in this run</>
-                    ) : null}
-                  </p>
+                  <div className="flex items-center gap-2 text-[11px] text-ink-500">
+                    <span>
+                      {`${visibleLogs.length.toLocaleString()} line${visibleLogs.length === 1 ? '' : 's'}`}
+                      {focusNodeId ? (
+                        <>
+                          {' '}
+                          · <span className="font-medium text-ink-700">{focusLabel}</span>
+                        </>
+                      ) : isMultiTrackShape(pipelineShape) ? (
+                        <> · {pipelineShape.branches.length} paths in this run</>
+                      ) : null}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-quiet ml-auto !px-1.5 !py-0.5 text-[11px]"
+                      aria-pressed={rawLogView}
+                      title={
+                        rawLogView
+                          ? 'Readable view: one live line per training step'
+                          : 'Show every recorded event exactly as written'
+                      }
+                      onClick={() => setRawLogView((v) => !v)}
+                    >
+                      {rawLogView ? 'Readable' : 'Raw'}
+                    </button>
+                  </div>
                 ) : null}
                 <VirtualRunLogList
                   rows={visibleLogs}
+                  raw={rawLogView}
+                  labelFor={(hint) => pipelineStackItems.find((it) => it.id === hint)?.label}
                   emptyLabel={
                     focusNodeId
                       ? `No logs for ${focusLabel} — try All.`
@@ -2647,6 +3044,10 @@ export default function RunsView() {
                 labelFor={(id) =>
                   pipelineStackItems.find((i) => focusMatchesNode(id, i.id))?.label
                 }
+                lanePaths={lanePaths}
+                nodePaths={nodePaths}
+                bestPathId={pathResults.length > 1 ? bestPath?.pathId ?? null : null}
+                evaluator={evaluatorOutputs}
                 onFocusStep={setFocusNodeId}
                 onBrowseOutputs={(nodeId) => {
                   setFocusNodeId(nodeId || null)

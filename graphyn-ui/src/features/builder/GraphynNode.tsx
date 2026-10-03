@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import type { NodePlacement, PortDef } from '../../types/graph'
 import { AudioLines, Box, Brain, Copy, GitBranch, Pencil, Sparkles, X } from 'lucide-react'
 import { schemaFieldHint } from '../../lib/format'
+import { progressBadgeText, type NodeProgress } from '../runs/runProgress'
 import { isFieldVisible, numberInputAttrs } from './configValidation'
 import { AugmentationsEditor } from './AugmentationsEditor'
 import { LayersEditor } from './LayersEditor'
@@ -30,6 +31,12 @@ export type GraphynNodeData = {
   catalogDecorated?: boolean
   /** View-only: number of invalid config fields (schema bounds etc.); never saved. */
   configIssues?: number
+  /** View-only: parallel branch this node sits on (fork graphs); never saved. */
+  pathBadge?: { letter: string; description: string } | null
+  /** View-only: label disambiguated by path ("Trainer · Path B"); never saved. */
+  displayLabel?: string
+  /** View-only: latest node_progress while running; never saved. */
+  progress?: NodeProgress | null
   onChangeConfig?: (key: string, value: unknown) => void
   onChangePlacement?: (next: NodePlacement | null) => void
   onDelete?: () => void
@@ -509,6 +516,20 @@ const STATUS_DOT: Record<string, string> = {
   cancelled: 'bg-amber-500',
 }
 
+const PATH_BADGE: Record<string, string> = {
+  A: 'bg-sky-50 text-sky-800 ring-sky-200',
+  B: 'bg-teal-50 text-teal-800 ring-teal-200',
+  C: 'bg-amber-50 text-amber-900 ring-amber-200',
+  X: 'bg-violet-50 text-violet-800 ring-violet-200',
+}
+
+const PATH_EDGE: Record<string, string> = {
+  A: 'border-l-4 border-l-sky-400',
+  B: 'border-l-4 border-l-teal-400',
+  C: 'border-l-4 border-l-amber-400',
+  X: 'border-l-4 border-l-violet-400',
+}
+
 const STATUS_RING: Record<string, string> = {
   pending: 'ring-1 ring-ink-300/80',
   running: 'ring-2 ring-accent-400/80 ring-offset-1 ring-offset-white',
@@ -538,22 +559,14 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
     data.nodeType === 'model_builder' && typeof cfg.architecture === 'string' && cfg.architecture
       ? String(cfg.architecture)
       : null
-  const idCue = (() => {
-    const raw = String(id || '')
-    const type = String(data.nodeType || '')
-    if (!raw || raw === type) return null
-    if (type && raw.startsWith(`${type}_`)) {
-      const rest = raw.slice(type.length + 1)
-      return rest ? rest.slice(0, 8) : null
-    }
-    const m = raw.match(/_([a-f0-9]{6,})$/i)
-    if (m) return m[1].slice(0, 8)
-    return null
-  })()
+  const path = data.pathBadge ?? null
+  const prog = status === 'running' ? data.progress ?? null : null
+  const statusWord =
+    status === 'succeeded' ? 'done' : status === 'skipped' ? 'skipped (not run)' : status === 'pending' ? 'waiting' : status
 
   return (
     <div
-      title={`${data.nodeType}${id ? ` · ${id}` : ''}${status !== 'idle' ? ` · ${status}` : ''}`}
+      title={`${data.displayLabel || data.label || data.nodeType}${path ? ` · Path ${path.letter}${path.description ? ` (${path.description})` : ''}` : ''} — ${data.nodeType}${id ? ` · id ${id}` : ''}${status !== 'idle' ? ` · ${statusWord}` : ''}`}
       className={clsx(
         'graphyn-node relative w-[240px] overflow-visible rounded-[10px] border bg-white',
         selected ? 'is-selected border-ink-900' : 'border-ink-200',
@@ -565,6 +578,7 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
         status === 'cancelled' && 'border-amber-300 opacity-80',
         status === 'pending' && 'border-ink-300',
         data.configIssues ? 'border-rose-400' : null,
+        path ? PATH_EDGE[path.letter] ?? PATH_EDGE.X : null,
       )}
     >
       {inputs.flatMap((p, i) => {
@@ -583,9 +597,17 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <div className={clsx('truncate text-[13px] font-semibold leading-tight', failed ? 'text-rose-900' : 'text-ink-950')}>
+            <div className={clsx('truncate text-[15px] font-semibold leading-tight', failed ? 'text-rose-900' : 'text-ink-950')}>
               {data.label || data.nodeType}
             </div>
+            {path ? (
+              <span
+                className={clsx('shrink-0 rounded px-1.5 py-px text-[11px] font-semibold ring-1', PATH_BADGE[path.letter] ?? PATH_BADGE.X)}
+                title={path.description ? `Path ${path.letter} — ${path.description}` : `Path ${path.letter}`}
+              >
+                Path {path.letter}
+              </span>
+            ) : null}
             {data.configIssues ? (
               <span
                 className="shrink-0 rounded-full bg-rose-100 px-1.5 text-[10px] font-semibold text-rose-800"
@@ -600,14 +622,26 @@ export default function GraphynNode({ id, data, selected }: NodeProps<GraphynNod
               aria-label={`Status ${status}`}
             />
           </div>
-          <div className={clsx('mt-0.5 truncate text-[11px]', failed ? 'text-rose-700' : 'text-ink-500')}>
-            {status === 'skipped' ? 'skipped (not run) · ' : status !== 'idle' ? `${status} · ` : ''}
+          <div className={clsx('mt-0.5 truncate text-[12px]', failed ? 'text-rose-700' : 'text-ink-500')}>
+            {status !== 'idle' ? `${statusWord} · ` : ''}
+            {archCue ? `${archCue.replace(/_/g, '-')} · ` : ''}
             {data.category || 'node'}
-            {archCue ? ` · ${archCue}` : ''}
             {isolated ? ' · isolated' : ''}
-            {visibleEntries.length ? ` · ${visibleEntries.length} fields` : ''}
-            {idCue ? ` · #${idCue}` : ''}
+            {!archCue && visibleEntries.length ? ` · ${visibleEntries.length} settings` : ''}
           </div>
+          {prog ? (
+            <div className="mt-1" aria-live="polite">
+              {prog.pct != null ? (
+                <div className="h-1.5 overflow-hidden rounded-full bg-ink-100">
+                  <div
+                    className="h-full rounded-full bg-accent-500 transition-[width]"
+                    style={{ width: `${Math.max(2, prog.pct)}%` }}
+                  />
+                </div>
+              ) : null}
+              <div className="mt-0.5 truncate text-[11px] tabular-nums text-ink-600">{progressBadgeText(prog)}</div>
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 flex-col gap-0.5 opacity-70 hover:opacity-100">
           {data.onOpenInspector && (

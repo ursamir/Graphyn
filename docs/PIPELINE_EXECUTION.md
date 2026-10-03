@@ -295,6 +295,14 @@ After all attempts exhausted:
 
 Calls `node.process_stream(inputs)` (async generator). Default implementation wraps `process()` as a single-item generator.
 
+### Node progress (`app/core/nodes/progress.py`)
+
+`process()` runs inside `progress_context(node_id, node_type, sink)` (bound by `NodeExecutor.set_progress_sink`, which the orchestrator calls for every executor). A node calls `emit_node_progress({"phase": "train", "epoch": 3, "epochs": 30, "loss": 0.41, …})`; the sink turns it into a `node_progress` event (`node_id`, `node_type`, `ts`, `level`, human `message` such as `Trainer · epoch 3/30 · loss 0.41 · val_acc 0.78`, plus the payload) and hands it to `PipelineLogger.node_progress` → run journal + NDJSON queue. The orchestrator sink also mirrors the latest event per node into `meta.json` `node_progress` and flushes `logs.json` (tmp + replace) at most every 5 s. Throttle: ≤ 2 events/s per node (`final: true` / `pct >= 100` always pass). Outside a run the call is a no-op and never raises.
+
+Isolated plugin workers have no context: `run_isolated_node` captures `current_progress_sink()` in the calling thread, sets `GRAPHYN_PROGRESS_MARKER=1` for the worker, and drains the worker's stdout/stderr with reader threads; stderr lines `@@GRAPHYN_PROGRESS@@ <json>` are parsed live and forwarded (and removed from the captured stderr). Without a sink the old `communicate()` path is used unchanged.
+
+Ingest nodes: `node_end` events of `*ingest*` node types also carry `dataset: {source_path, resolved_path, source_type, clip_count, fallback_used}` (`app/core/runs/run_dataset.py`).
+
 ---
 
 ## `run_pipeline()`

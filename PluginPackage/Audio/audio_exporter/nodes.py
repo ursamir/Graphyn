@@ -33,6 +33,45 @@ from app.models.audio_sample import AudioSample
 
 log = logging.getLogger(__name__)
 
+# ── progress events (Runs UI) ─────────────────────────────────────────────────
+try:
+    from app.core.nodes.progress import emit_node_progress
+except ImportError:  # pragma: no cover - host predates progress events
+    def emit_node_progress(payload: dict) -> None:  # type: ignore[misc]
+        return None
+
+
+class _ItemProgress:
+    """Throttled percent-over-items reporter (about ``steps`` events + the last).
+
+    Best effort: emitter errors are logged at debug level and never fail the node.
+    """
+
+    def __init__(self, phase: str, total: int, steps: int = 20) -> None:
+        self.phase = phase
+        self.total = max(int(total or 0), 0)
+        self.steps = max(int(steps), 1)
+        self._last_bucket = -1
+
+    def update(self, done: int) -> None:
+        if self.total <= 0:
+            return
+        done = max(0, min(int(done), self.total))
+        bucket = done * self.steps // self.total
+        if bucket <= self._last_bucket:
+            return
+        self._last_bucket = bucket
+        try:
+            emit_node_progress({
+                "phase": self.phase,
+                "done": done,
+                "total": self.total,
+                "pct": round(100.0 * done / self.total, 1),
+            })
+        except Exception:
+            log.debug("progress emit failed", exc_info=True)
+
+
 
 class AudioExporterNode(Node):
     """Export a list of AudioSample objects to WAV files on disk.
@@ -88,14 +127,14 @@ class AudioExporterNode(Node):
     }
 
     class Config(NodeConfig):
-        output_dir: str = Field(default="workspace/datasets/output/audio_export", title="Output dir", description="Export root (inside the working directory); files go to {output_dir}/{version_tag}/{split}/{label}/. Ignored when project is set.")
-        project: str = Field(default='', title="Project", description="Optional project name; when set, output_dir becomes workspace/datasets/output/{project}.")
-        format: Literal["wav"] = Field(default='wav', title="Format", description="Output audio format. Currently wav only (soundfile, 16-bit PCM). One of: wav.")
-        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Split name -> weight (each >= 0, at least one > 0); normalised when the sum is not 1.")
-        group_by_source: bool = Field(default=True, title="Group splits by source", description="One split per source recording (metadata.parent or path) so segments/augmented copies never leak across splits.")
+        output_dir: str = Field(default="workspace/datasets/output/audio_export", title="Output dir", description="Folder for the exported dataset; files go to <folder>/<version>/<split>/<label>/. Ignored when Project is set.")
+        project: str = Field(default='', title="Project", description="Optional project name; when set, the dataset is saved in that project's Library folder.")
+        format: Literal["wav"] = Field(default='wav', title="Format", description="Output audio format (16-bit PCM WAV).")
+        split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Train / val / test weights (each 0 or more, at least one above 0); normalised when they do not add up to 1.")
+        group_by_source: bool = Field(default=True, title="Group splits by source", description="Keep every segment and augmented copy of a recording in the same split, so test clips never leak into training (On/Off). Off = random split per sample.")
         version_tag: str = Field(default='v1', pattern=r"^v\d+(\.\d+)*$", title="Version tag", description="Canonical version tag matching vN / vN.N.N (e.g. v1, v1.0.0).")
         random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible split assignment.")
-        append: bool = Field(default=False, title="Append", description="On = merge into an existing {output_dir}/{version_tag}; Off = delete that version dir first.")
+        append: bool = Field(default=False, title="Append", description="On = add to an existing dataset version (its file lists are merged); Off = replace that version.")
 
         @field_validator("split_ratios")
         @classmethod
@@ -194,8 +233,10 @@ class AudioExporterNode(Node):
         meta_entries: list[dict] = []
         group_splits: dict[str, str] = {}
 
+        progress = _ItemProgress("export", len(samples))
         try:
             for idx, sample in enumerate(samples):
+                progress.update(idx)
                 # MEDIUM: skip samples with invalid sample_rate before sf.write
                 if not sample.sample_rate or sample.sample_rate <= 0:
                     log.warning(
@@ -268,6 +309,7 @@ class AudioExporterNode(Node):
                 self._write_manifests(cfg, out_root, rows, meta_entries)
                 self._write_lineage(out_root, version_tag, len(rows))
 
+        progress.update(len(samples))
         # Count by split for logging (uses the rows already written)
         split_counts: dict[str, int] = {}
         for r in rows:

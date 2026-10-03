@@ -16,7 +16,7 @@
         "recursive": false,
         "source_type": "filesystem"
       },
-      "label": null,
+      "label": "Load clips to classify",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -26,7 +26,7 @@
       "config": {
         "target_sample_rate": 16000
       },
-      "label": null,
+      "label": "Clean audio · 16 kHz mono",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -37,7 +37,7 @@
         "silence_threshold_db": 40.0,
         "mode": "silence"
       },
-      "label": null,
+      "label": "Split on silence",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -53,7 +53,7 @@
         "normalize": true,
         "fixed_length": 101
       },
-      "label": null,
+      "label": "MFCC features · 40 × 101 frames",
       "capability_metadata": null,
       "event_trigger": null
     },
@@ -63,7 +63,7 @@
       "config": {
         "model_path": "workspace/artifacts/speech-commands/latest/tflite/model.tflite"
       },
-      "label": null,
+      "label": "Classify · TFLite model",
       "capability_metadata": null,
       "event_trigger": null
     }

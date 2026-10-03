@@ -27,6 +27,135 @@ from app.models.model_artifact import ModelArtifact
 
 log = logging.getLogger(__name__)
 
+# ── progress events (Runs UI) ─────────────────────────────────────────────────
+# Defensive import: plugins must keep working on hosts that predate
+# app.core.nodes.progress (then progress is simply not reported).
+try:
+    from app.core.nodes.progress import emit_node_progress
+except ImportError:  # pragma: no cover - depends on host version
+    def emit_node_progress(payload: dict) -> None:  # type: ignore[misc]
+        return None
+
+
+def _finite(value) -> float | None:
+    """JSON-safe float (None for missing / NaN / inf)."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if out != out or out in (float("inf"), float("-inf")):
+        return None
+    return round(out, 6)
+
+
+def _report_progress(payload: dict) -> None:
+    """Best-effort progress event — never fails training."""
+    try:
+        emit_node_progress(payload)
+    except Exception:
+        log.debug("TrainerNode: progress emit failed", exc_info=True)
+
+
+def _epoch_payload(epoch: int, epochs: int, logs: dict | None) -> dict:
+    """Per-epoch payload: 1-based epoch, metrics and pct of max epochs."""
+    logs = logs or {}
+    epochs = max(int(epochs), 1)
+    return {
+        "phase": "train",
+        "epoch": int(epoch),
+        "epochs": epochs,
+        "loss": _finite(logs.get("loss")),
+        "accuracy": _finite(logs.get("accuracy")),
+        "val_loss": _finite(logs.get("val_loss")),
+        "val_accuracy": _finite(logs.get("val_accuracy")),
+        "pct": round(100.0 * min(int(epoch), epochs) / epochs, 1),
+    }
+
+
+def _early_stop_payload(stopped_epoch: int, epochs: int, patience: int, best_val_acc) -> dict:
+    """Early-stopping notice (training ends before ``epochs``)."""
+    best = _finite(best_val_acc)
+    msg = (
+        f"Early stopping after epoch {stopped_epoch} of {epochs}: "
+        f"validation accuracy did not improve for {patience} epochs"
+    )
+    if best is not None:
+        msg += f" (best {best:.3f})"
+    return {
+        "phase": "train",
+        "event": "early_stopping",
+        "epoch": int(stopped_epoch),
+        "epochs": int(epochs),
+        "best_val_accuracy": best,
+        "pct": 100.0,
+        "message": msg,
+    }
+
+
+def _keras_progress_callback(keras, epochs: int, early_stop=None, patience: int = 0):
+    """Keras callback that reports per-epoch progress and early stopping."""
+
+    class GraphynProgress(keras.callbacks.Callback):
+        def on_train_begin(self, logs=None):
+            _report_progress({"phase": "train", "epoch": 0, "epochs": int(epochs), "pct": 0.0})
+
+        def on_epoch_end(self, epoch, logs=None):
+            _report_progress(_epoch_payload(epoch + 1, epochs, logs))
+
+        def on_train_end(self, logs=None):
+            stopped = int(getattr(early_stop, "stopped_epoch", 0) or 0) if early_stop is not None else 0
+            if stopped > 0:
+                hist = getattr(getattr(self, "model", None), "history", None)
+                vals = (getattr(hist, "history", None) or {}).get("val_accuracy") or []
+                best = max(vals) if vals else getattr(early_stop, "best", None)
+                _report_progress(_early_stop_payload(stopped + 1, epochs, patience, best))
+
+    return GraphynProgress()
+
+
+# ── labels / display names ────────────────────────────────────────────────────
+
+_ARCH_DISPLAY = {
+    "ds_cnn": "DS-CNN",
+    "mobilenet": "MobileNetV2",
+    "simple_cnn": "CNN-small",
+    "custom": "Custom model",
+}
+
+
+def architecture_display_name(architecture: str | None) -> str:
+    """Human name for a model_builder architecture id."""
+    key = str(architecture or "").strip().lower()
+    return _ARCH_DISPLAY.get(key, key.replace("_", " ").title() if key else "Model")
+
+
+def trained_display_name(base: str | None, epochs_run: int, epochs_max: int) -> str:
+    """e.g. 'DS-CNN (30 epochs)' or 'DS-CNN (21 of 50 epochs)' when stopped early."""
+    name = (base or "Model").strip() or "Model"
+    run = int(epochs_run)
+    cap = int(epochs_max)
+    if cap and 0 < run < cap:
+        return f"{name} ({run} of {cap} epochs)"
+    unit = "epoch" if run == 1 else "epochs"
+    return f"{name} ({run} {unit})"
+
+
+def write_labels_txt(directory, labels) -> str | None:
+    """Write ``labels.txt`` (one label per line, class-index order) into directory."""
+    labels = [str(x) for x in (labels or [])]
+    if not labels:
+        return None
+    path = Path(directory)
+    try:
+        if not path.is_dir():
+            return None
+        target = path / "labels.txt"
+        target.write_text("\n".join(labels), encoding="utf-8")
+        return str(target)
+    except OSError as exc:
+        log.warning("could not write labels.txt in %s: %s", path, exc)
+        return None
+
 
 class TrainerNode(Node):
     """Unified model training for Keras and PyTorch with EarlyStopping and checkpointing.
@@ -107,20 +236,20 @@ class TrainerNode(Node):
     }
 
     class Config(NodeConfig):
-        backend: Literal["keras", "pytorch", "auto"] = Field(default='auto', title="Backend", description="keras = TensorFlow/Keras (works with model_builder); pytorch = needs an in-process nn.Module; auto = keras when TensorFlow is importable.")
-        device: Literal["auto", "cpu", "gpu"] = Field(default='auto', title="Device", description="auto = GPU when available and allowed, else CPU; cpu = force CPU; gpu = prefer GPU (falls back to CPU).")
+        backend: Literal["keras", "pytorch", "auto"] = Field(default='auto', title="Backend", description="keras = TensorFlow/Keras (use with Model builder); pytorch = PyTorch (Model builder only produces Keras models); auto = Keras when available, else PyTorch.")
+        device: Literal["auto", "cpu", "gpu"] = Field(default='auto', title="Device", description="auto = use a GPU when one is available, else CPU; cpu = always CPU; gpu = prefer GPU (falls back to CPU with a warning).")
         epochs: int = Field(default=30, ge=1, title="Epochs", description="Maximum training epochs (early stopping may halt sooner).")
         batch_size: int = Field(default=32, ge=1, title="Batch size", description="Mini-batch size for training and validation.")
-        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Directory for model.keras, saved_model/ and checkpoints/ (under workspace/artifacts).")
-        patience: int = Field(default=5, ge=0, title="Patience", description="EarlyStopping patience in epochs on val_accuracy.")
-        mixed_precision: bool = Field(default=False, title="Mixed precision", description="Keras mixed_float16 (restored afterwards) / PyTorch CUDA autocast (On/Off).")
+        output_path: str = Field(default='workspace/artifacts/models', title="Output path", description="Folder for the trained model (model.keras, saved_model/, labels.txt) and checkpoints.")
+        patience: int = Field(default=5, ge=0, title="Patience", description="Stop after this many epochs without a validation-accuracy improvement (the first few warm-up epochs do not count).")
+        mixed_precision: bool = Field(default=False, title="Mixed precision", description="Train with 16-bit floats where safe; mostly faster on GPU (On/Off).")
         min_val_accuracy: float = Field(default=0.0, ge=0, le=1, title="Min val accuracy", description="Warn if best validation accuracy is below this threshold (0 disables).")
-        checkpoint_path: str = Field(default='', title="Checkpoint path", description="Best-val_accuracy checkpoint file; empty = <output_path>/checkpoints/best.keras.")
+        checkpoint_path: str = Field(default='', title="Checkpoint path", description="Where to keep the best checkpoint. Empty = checkpoints/best.keras in the output folder.")
         learning_rate: float | None = Field(
             default=None,
             gt=0,
             title="Learning rate",
-            description="Adam learning rate for training. None = keep the model's compiled learning rate (model_builder.learning_rate).",
+            description="Learning rate for training. Empty = keep the Model builder's learning rate.",
         )
         reduce_lr_factor: float = Field(
             default=0.5,
@@ -380,6 +509,10 @@ class TrainerNode(Node):
                 verbose=1,
             ),
             keras.callbacks.TerminateOnNaN(),  # stop immediately on NaN loss
+            _keras_progress_callback(
+                keras, int(self.config.epochs), early_stop=early_stop,
+                patience=int(self.config.patience),
+            ),
         ]
 
         device = self._configure_keras_device()
@@ -499,12 +632,34 @@ class TrainerNode(Node):
                 self.config.min_val_accuracy,
             )
 
+        labels = self._class_labels(dataset)
+        labels_path = write_labels_txt(out_path, labels)       # next to model.keras
+        write_labels_txt(saved_model_path, labels)             # inside saved_model/
+        write_labels_txt(Path(ckpt_path).parent, labels)       # next to best.keras
+        epochs_run = len(history.history.get("loss") or [])
+        display_name = trained_display_name(
+            getattr(self, "_base_display_name", None), epochs_run, int(self.config.epochs)
+        )
+        metrics = {
+            "keras_model_path": keras_model_path,
+            "display_name": display_name,
+            "labels": list(labels),
+            "epochs_run": epochs_run,
+            "best_val_accuracy": _finite(best_val_acc),
+        }
+        if labels_path:
+            metrics["labels_path"] = labels_path
         return ModelArtifact(
             model_path=saved_model_path,
-            labels=list(dataset.labels),
+            labels=list(labels),
             history=dict(history.history),
-            metrics={"keras_model_path": keras_model_path},
+            metrics=metrics,
         )
+
+    @staticmethod
+    def _class_labels(dataset) -> list[str]:
+        """Class-index order of the trained model (= dataset.labels, y indices)."""
+        return [str(x) for x in (getattr(dataset, "labels", None) or [])]
 
     # ── PyTorch training ──────────────────────────────────────────────────────
 
@@ -582,6 +737,7 @@ class TrainerNode(Node):
             "TrainerNode (pytorch): training for up to %d epochs (batch_size=%d, device=%s)...",
             self.config.epochs, self.config.batch_size, device,
         )
+        _report_progress({"phase": "train", "epoch": 0, "epochs": int(self.config.epochs), "pct": 0.0})
 
         for epoch in range(self.config.epochs):
             # ── Training pass ─────────────────────────────────────────────────
@@ -667,6 +823,10 @@ class TrainerNode(Node):
                 epoch + 1, self.config.epochs,
                 avg_train_loss, avg_train_acc, avg_val_loss, avg_val_acc,
             )
+            _report_progress(_epoch_payload(epoch + 1, int(self.config.epochs), {
+                "loss": avg_train_loss, "accuracy": avg_train_acc,
+                "val_loss": avg_val_loss, "val_accuracy": avg_val_acc,
+            }))
 
             # ── NaN detection ─────────────────────────────────────────────────
             import math as _math
@@ -697,6 +857,9 @@ class TrainerNode(Node):
                         "(patience=%d, best val_acc=%.4f).",
                         epoch + 1, self.config.patience, best_val_acc,
                     )
+                    _report_progress(_early_stop_payload(
+                        epoch + 1, int(self.config.epochs), int(self.config.patience), best_val_acc,
+                    ))
                     break
 
         # Restore best weights
@@ -724,10 +887,24 @@ class TrainerNode(Node):
                 self.config.min_val_accuracy,
             )
 
+        labels = self._class_labels(dataset)
+        labels_path = write_labels_txt(out_path, labels)  # next to model.pt
+        epochs_run = len(history.get("loss") or [])
+        metrics = {
+            "display_name": trained_display_name(
+                getattr(self, "_base_display_name", None), epochs_run, int(self.config.epochs)
+            ),
+            "labels": list(labels),
+            "epochs_run": epochs_run,
+            "best_val_accuracy": _finite(best_val_acc),
+        }
+        if labels_path:
+            metrics["labels_path"] = labels_path
         return ModelArtifact(
             model_path=str(pt_path),
-            labels=list(dataset.labels),
+            labels=list(labels),
             history=history,
+            metrics=metrics,
         )
 
     # ── main process ─────────────────────────────────────────────────────────
@@ -745,6 +922,14 @@ class TrainerNode(Node):
         """
         model = inputs["model"]
         dataset = inputs["dataset"]
+        self._base_display_name = self._upstream_display_name(model)
+        upstream_labels = [str(x) for x in (getattr(model, "labels", None) or [])]
+        if upstream_labels and upstream_labels != self._class_labels(dataset):
+            log.warning(
+                "TrainerNode: model labels %s differ from dataset labels %s — "
+                "using the dataset order (it defines the class indices).",
+                upstream_labels, self._class_labels(dataset),
+            )
 
         backend = self._detect_backend()
 
@@ -763,6 +948,22 @@ class TrainerNode(Node):
             artifact = self._train_pytorch(model, dataset, out_path)
 
         return {"output": artifact}
+
+    @staticmethod
+    def _upstream_display_name(model) -> str | None:
+        """Architecture name handed over by model_builder (or a live model's name)."""
+        metrics = getattr(model, "metrics", None)
+        if isinstance(metrics, dict):
+            name = metrics.get("display_name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+            arch = metrics.get("architecture")
+            if arch:
+                return architecture_display_name(arch)
+        name = str(getattr(model, "name", "") or "").strip().lower()
+        if name in _ARCH_DISPLAY:
+            return architecture_display_name(name)
+        return None
 
 
 class ModelBuilderNode(Node):
@@ -870,8 +1071,8 @@ class ModelBuilderNode(Node):
         )
         dropout_rate: float = Field(default=0.25, ge=0, lt=1, title="Dropout Rate", description="Dropout probability before the classifier head.")
         learning_rate: float = Field(default=0.001, gt=0, title="Learning Rate", description="Adam learning rate compiled into the model (used by trainer unless trainer.learning_rate is set).")
-        backend: Literal["keras", "auto"] = Field(default="auto", title="Backend", description="Implementation backend. One of: keras, auto.")
-        output_path: str = Field(default="workspace/artifacts/models", title="Output path", description="Directory for the compiled_<uuid>.keras hand-off file.")
+        backend: Literal["keras", "auto"] = Field(default="auto", title="Backend", description="Implementation backend: keras, or auto (requires TensorFlow).")
+        output_path: str = Field(default="workspace/artifacts/models", title="Output path", description="Folder for the untrained model that is handed to the Trainer.")
 
         @model_validator(mode="after")
         def _custom_requires_layers(self):
@@ -968,9 +1169,19 @@ class ModelBuilderNode(Node):
         model.save(str(path))
         log.info("ModelBuilderNode: saved compiled model to %s", path)
         labels = list(getattr(dataset, "labels", None) or [])
+        # The compiled_<uuid>.keras file name stays unique; the UI shows display_name.
         return {
             "output": ModelArtifact(
                 model_path=str(path),
                 labels=labels,
+                metrics={
+                    "architecture": self.config.architecture,
+                    "display_name": self._display_name(),
+                    "labels": list(labels),
+                },
             )
         }
+
+    def _display_name(self) -> str:
+        """e.g. 'DS-CNN' / 'MobileNetV2' / 'CNN-small' / 'Custom model'."""
+        return architecture_display_name(self.config.architecture)

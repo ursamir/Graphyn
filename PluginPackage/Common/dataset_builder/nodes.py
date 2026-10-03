@@ -46,6 +46,45 @@ except (ImportError, ModuleNotFoundError):
 
 log = logging.getLogger(__name__)
 
+# ── progress events (Runs UI) ─────────────────────────────────────────────────
+try:
+    from app.core.nodes.progress import emit_node_progress
+except ImportError:  # pragma: no cover - host predates progress events
+    def emit_node_progress(payload: dict) -> None:  # type: ignore[misc]
+        return None
+
+
+class _ItemProgress:
+    """Throttled percent-over-items reporter (about ``steps`` events + the last).
+
+    Best effort: emitter errors are logged at debug level and never fail the node.
+    """
+
+    def __init__(self, phase: str, total: int, steps: int = 20) -> None:
+        self.phase = phase
+        self.total = max(int(total or 0), 0)
+        self.steps = max(int(steps), 1)
+        self._last_bucket = -1
+
+    def update(self, done: int) -> None:
+        if self.total <= 0:
+            return
+        done = max(0, min(int(done), self.total))
+        bucket = done * self.steps // self.total
+        if bucket <= self._last_bucket:
+            return
+        self._last_bucket = bucket
+        try:
+            emit_node_progress({
+                "phase": self.phase,
+                "done": done,
+                "total": self.total,
+                "pct": round(100.0 * done / self.total, 1),
+            })
+        except Exception:
+            log.debug("progress emit failed", exc_info=True)
+
+
 
 class DatasetBuilderNode(Node):
     """Assemble FeatureArray objects into ML-ready train/val/test datasets.
@@ -103,7 +142,7 @@ class DatasetBuilderNode(Node):
         split_ratios: dict = Field(default={'train': 0.7, 'val': 0.15, 'test': 0.15}, title="Split ratios", description="Auto-split only: train/val/test fractions, each in [0, 1], summing to 1.0.")
         shuffle: bool = Field(default=True, title="Shuffle", description="Auto-split only: shuffle before splitting.")
         stratify: bool = Field(default=True, title="Stratify", description="Auto-split only: stratify train/val/test splits by label.")
-        output_format: Literal["numpy", "tensorflow", "pytorch"] = Field(default='numpy', title="Output Format", description="numpy = arrays only; tensorflow / pytorch also attach framework datasets in metadata (in-process only).")
+        output_format: Literal["numpy", "tensorflow", "pytorch"] = Field(default='numpy', title="Output Format", description="numpy = plain arrays (works everywhere); tensorflow / pytorch also attach ready-made framework datasets (in-process runs only).")
         fixed_length: int = Field(default=0, ge=0, title="Fixed length", description="Pad/truncate the time axis to this many frames (0 = pad to the longest clip).")
         random_seed: int = Field(default=42, title="Random seed", description="RNG seed for reproducible auto-splits.")
 
@@ -147,6 +186,8 @@ class DatasetBuilderNode(Node):
         feature_list: list,
         label_to_idx: dict,
         fixed_length: int,
+        progress: "_ItemProgress | None" = None,
+        offset: int = 0,
     ):
         """Stack features into [N, T, F, 1] X array and [N] y array."""
         if not feature_list:
@@ -155,7 +196,9 @@ class DatasetBuilderNode(Node):
                 np.zeros((0,), dtype=np.int32),
             )
         frames = []
-        for f in feature_list:
+        for i, f in enumerate(feature_list, start=1):
+            if progress is not None:
+                progress.update(offset + i)
             arr = f.data  # shape [T, F] or arbitrary
             # Normalise to 2-D: flatten everything except the first axis
             if arr.ndim == 1:
@@ -400,9 +443,13 @@ class DatasetBuilderNode(Node):
             split_groups = self._auto_split(features, labels_arr, label_to_idx)
 
         # ── Build numpy arrays ────────────────────────────────────────────────
-        X_train, y_train = self._to_arrays(split_groups["train"], label_to_idx, fixed_length)
-        X_val,   y_val   = self._to_arrays(split_groups["val"],   label_to_idx, fixed_length)
-        X_test,  y_test  = self._to_arrays(split_groups["test"],  label_to_idx, fixed_length)
+        n_tr, n_va = len(split_groups["train"]), len(split_groups["val"])
+        progress = _ItemProgress(
+            "dataset", n_tr + n_va + len(split_groups["test"])
+        )
+        X_train, y_train = self._to_arrays(split_groups["train"], label_to_idx, fixed_length, progress, 0)
+        X_val,   y_val   = self._to_arrays(split_groups["val"],   label_to_idx, fixed_length, progress, n_tr)
+        X_test,  y_test  = self._to_arrays(split_groups["test"],  label_to_idx, fixed_length, progress, n_tr + n_va)
 
         # Derive input_shape from first non-empty split
         if len(X_train) > 0:

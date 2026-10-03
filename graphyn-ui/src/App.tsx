@@ -22,7 +22,7 @@ import {
   Shield,
 } from 'lucide-react'
 import { apiJson, ApiError, getApiToken, setApiToken } from './api/client'
-import { fetchAllPages } from './api/unwrapList'
+import { fetchAllPages, unwrapList } from './api/unwrapList'
 import {
   commitActiveProject,
   forgetPersistedActiveProject,
@@ -31,6 +31,7 @@ import {
 } from './store/appStore'
 import type { NodeCatalogEntry } from './types/graph'
 import { ErrorBoundary, ToastHost } from './components/ui'
+import { ViewErrorBoundary } from './components/ViewErrorBoundary'
 import { SplitPane } from './components/SplitPane'
 import { LayoutModeControl, LayoutPrefsProvider, LAYOUT_KEYS } from './layout'
 import { shortRunId } from './lib/format'
@@ -397,11 +398,11 @@ export default function App() {
     const NON_TERMINAL = new Set(['running', 'queued', 'pending', 'paused'])
     const fetchLatest = async () => {
       try {
-        const runs = await apiJson<
-          Array<{ run_id: string; status?: string; created_at?: string }>
-        >('/runs', { query: { limit: 8, offset: 0, project } })
+        const runs = unwrapList<{ run_id: string; status?: string; created_at?: string }>(
+          await apiJson('/runs', { query: { limit: 8, offset: 0, project } }),
+        ).filter((r) => r && typeof r.run_id === 'string')
         if (cancelled) return
-        const first = Array.isArray(runs) && runs.length > 0 ? runs[0] : null
+        const first = runs.length > 0 ? runs[0] : null
         setProjectLatest(first ? { run_id: first.run_id, status: first.status } : null)
         // Keep polling while the latest run is still non-terminal — otherwise
         // this one-shot fetch freezes the header chip at "Running" forever
@@ -937,7 +938,7 @@ export default function App() {
           Opening workspace…
         </div>
       ) : (
-        <>
+        <ViewErrorBoundary resetKey={view} viewLabel={VIEW_LABEL[view] ?? view}>
           {view === 'builder' && <BuilderView />}
           {view === 'runs' && <RunsView />}
           {view === 'plugins' && <PluginsView />}
@@ -953,7 +954,7 @@ export default function App() {
           {view === 'models' && <ModelsView />}
           {view === 'access' && <AccessView />}
           {view === 'devices' && <DevicesView workspaceId={activeProject} />}
-        </>
+        </ViewErrorBoundary>
       )}
     </main>
   )

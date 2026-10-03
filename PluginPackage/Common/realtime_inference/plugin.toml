@@ -23,7 +23,7 @@ runtime = "isolated"
 node_types = ["realtime_inference"]
 
 [config_schema.realtime_inference]
-model_path = { type = "string", default = "", title = "Model path", description = "Required model file (.tflite / .pt TorchScript / .onnx) under workspace/artifacts; labels.txt must sit next to it." }
+model_path = { type = "string", default = "", title = "Model path", description = "Model file to run (.tflite, .pt or .onnx); its labels.txt must be in the same folder.", ui = { help_advanced = "Usually under workspace/artifacts/<example>/latest/. .pt must be TorchScript." } }
 backend = { type = "string", title = "Backend", default = "auto", description = "tflite, pytorch (TorchScript), onnx, tflm_host (TFLite interpreter on host), ultralytics (vision models; not usable with audio FeatureArray input), auto = from model file extension.", enum = ["tflite", "pytorch", "onnx", "ultralytics", "tflm_host", "auto"] }
 mode = { type = "string", title = "Mode", default = "classification", description = "classification = top-1 label per input; wake_word = 'wake_word_detected' when top-1 probability >= wake_word_threshold; streaming_asr = average probabilities over streaming_buffer_size inputs. detect / segment are reserved for vision backends and currently behave like classification.", enum = ["classification", "wake_word", "streaming_asr", "detect", "segment"] }
 wake_word_threshold = { type = "number", title = "Wake-word threshold", default = 0.8, minimum = 0, maximum = 1, description = "Top-1 probability threshold in [0, 1]; higher = fewer false accepts.", ui = { visible_if = { mode = "wake_word" } } }

@@ -94,7 +94,7 @@ class RealtimeInferenceNode(Node):
     }
 
     class Config(NodeConfig):
-        model_path: str = Field(default="", title="Model path", description="Required model file (.tflite / .pt / .onnx); labels.txt must sit next to it.")
+        model_path: str = Field(default="", title="Model path", description="Model file to run (.tflite, .pt or .onnx); its labels.txt must be in the same folder.")
         backend: Literal["tflite", "pytorch", "onnx", "ultralytics", "tflm_host", "auto"] = Field(default='auto', title="Backend", description="Implementation backend. One of: tflite, pytorch, onnx, ultralytics, tflm_host, auto.")
         mode: Literal["classification", "wake_word", "streaming_asr", "detect", "segment"] = Field(default='classification', title="Mode", description="classification | wake_word | streaming_asr (detect / segment currently behave like classification).")
         wake_word_threshold: float = Field(default=0.8, ge=0, le=1, title="Wake-word threshold", description="Top-1 probability threshold in [0, 1]; higher = fewer false accepts.")

@@ -145,6 +145,9 @@ def get_environments(project_dir: Path, name: str) -> dict[str, Any]:
     envs = _load_envs(project_dir, name)
     draft_exists = (pipelines_dir(project_dir) / f"{name}.graph.json").is_file()
     return {
+        # Pipeline environments (Graph IR versions), not model registry
+        # stages — see GET /models (``kind: "model_stage"``).
+        "kind": "pipeline_env",
         "pipeline": name,
         "draft": "head" if draft_exists else None,
         "staging": envs.get("staging"),
@@ -479,6 +482,7 @@ def enrich_pipeline_summary(project_dir: Path, item: dict[str, Any]) -> dict[str
         return item
     out = dict(item)
     out["environments"] = {
+        "kind": "pipeline_env",
         "draft": envs.get("draft"),
         "staging": envs.get("staging"),
         "prod": envs.get("prod"),

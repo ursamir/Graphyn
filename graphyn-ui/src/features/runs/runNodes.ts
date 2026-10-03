@@ -97,6 +97,8 @@ export function pipelineNodesFromRun(input: {
   nodeStats?: Array<Record<string, unknown>> | null
   events?: Array<Record<string, unknown>> | null
   runStatus?: unknown
+  /** false → keep plain labels (caller disambiguates by path). Default true (`#cue`). */
+  disambiguate?: boolean
 }): RunNodeItem[] {
   const stats = Array.isArray(input.nodeStats) ? input.nodeStats : []
   const events = Array.isArray(input.events) ? input.events : []
@@ -143,7 +145,37 @@ export function pipelineNodesFromRun(input: {
         status,
       }
     })
-  return disambiguatePipelineLabels(items)
+  return input.disambiguate === false ? items : disambiguatePipelineLabels(items)
+}
+
+/**
+ * Human disambiguation for dual-branch copies: two "Trainer" steps become
+ * "Trainer · Path A" / "Trainer · Path B" (via `pathOf`). Steps whose path is
+ * unknown fall back to the `#cue` suffix. Unique labels are left alone.
+ */
+export function disambiguateByPath<T extends { id: string; label: string; nodeType?: string }>(
+  items: T[],
+  pathOf: (id: string) => string | null | undefined,
+): T[] {
+  const counts = new Map<string, number>()
+  for (const it of items) {
+    const key = it.label.toLowerCase()
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+  const out = items.map((it) => {
+    if ((counts.get(it.label.toLowerCase()) || 0) < 2) return it
+    const path = pathOf(it.id)
+    if (path) return { ...it, label: `${it.label} · ${path}` }
+    return it
+  })
+  // Still-ambiguous labels (same path, or no path) keep the id cue.
+  const after = new Map<string, number>()
+  for (const it of out) after.set(it.label.toLowerCase(), (after.get(it.label.toLowerCase()) || 0) + 1)
+  return out.map((it) => {
+    if ((after.get(it.label.toLowerCase()) || 0) < 2) return it
+    const cue = instanceIdCue(it.id, it.nodeType)
+    return cue ? { ...it, label: `${it.label} #${cue}` } : it
+  })
 }
 
 /** Append `#0` / `#c3f15543` when two steps share the same base label. */

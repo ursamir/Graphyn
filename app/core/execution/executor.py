@@ -416,12 +416,15 @@ class ParallelExecutor:
         node_duration = time.time() - node_start_time
         _node_outputs = node_outputs[node_id]
         _port_counts = port_item_counts(_node_outputs)
+        from app.core.runs.run_dataset import ingest_node_end_extra
+
         logger.node_end(
             node_type,
             idx,
             node_duration,
             output_counts=_port_counts,
             node_id=node_id,
+            extra=ingest_node_end_extra(node, node_type, _port_counts),
         )
 
         # NEW-5 fix: protect node_stats.append() with a lock so ordering is

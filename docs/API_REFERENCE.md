@@ -214,7 +214,13 @@ Each line is a JSON object. Two types of objects are interleaved:
 {"type": "pipeline_summary", "run_id": "…", "timestamp": "..."}
 {"type": "done", "run_id": "…", "duration_s": 1.23, "timestamp": "2024-01-01T00:00:01+00:00"}
 {"type": "error", "run_id": "…", "timestamp": "...", "error_type": "ValueError", "error": "...", "message": "...", "already_reported": true, "node_id": "audio_conditioner_1", "node_type": "audio_conditioner"}
+{"type": "node_progress", "node_id": "trainer_0", "node_type": "trainer", "ts": "...", "timestamp": "...", "level": "INFO", "message": "Trainer · epoch 3/30 · loss 0.41 · val_acc 0.78", "phase": "train", "epoch": 3, "epochs": 30, "loss": 0.41, "accuracy": 0.82, "val_loss": 0.5, "val_accuracy": 0.78, "pct": 10, "run_id": "…"}
 ```
+
+**`node_progress`** — live progress a node reports via `app.core.nodes.progress.emit_node_progress(payload)` (in-process: context variable bound by the node executor; isolated plugin workers: `@@GRAPHYN_PROGRESS@@ <json>` stderr lines parsed live by the isolated executor). The payload keys are passed through (`phase`, `epoch`/`epochs`, `done`/`total`, `loss`, `accuracy`, `val_loss`, `val_accuracy`, `pct`, …) and the host adds `node_id`, `node_type`, `ts`/`timestamp`, `level` and a human `message` (a plugin-supplied `message` is kept as `detail`). At most 2 events/s per node; `final: true` or `pct >= 100` always gets through. The same events land in the run journal (`GET /runs/{id}` `logs`; `logs.json` is flushed at most every 5 s while a node reports progress, the journal keeps ≤ 500 progress rows per node then every 10th), and the latest event per node is mirrored into `meta.json` `node_progress` (`GET /runs/{id}/status`).
+
+**Ingest `node_end`** — for `*ingest*` node types the `node_end` event also carries `dataset: {source_path, resolved_path, source_type, clip_count, fallback_used}` (`fallback_used: true` when the configured path was missing/empty and bundled example data was substituted; `null` when unknown).
+
 
 `node_end.output_count` is the item count of the node's primary `output` port (sum over all ports only when the node has no `output` port); side ports such as a quality gate's `rejected` are not added. `output_counts` gives every port's count and `rejected_count` is present when the node has a `rejected` port.
 
@@ -261,10 +267,17 @@ List available pipeline templates with card summaries for the console.
     "outputs": ["dataset_export"],
     "tags": ["audio", "example"],
     "node_count": 4,
-    "node_types": ["dataset_ingest", "…"]
+    "node_types": ["dataset_ingest", "…"],
+    "runnable": true,
+    "missing_node_types": [],
+    "group": "speech-commands-e2e",
+    "phase": 1,
+    "step_title": "Prepare the dataset"
   }
 ]
 ```
+
+`runnable` is `true` when every node type of the template is registered on this host; `missing_node_types` lists the ones that are not (empty when runnable; with `GRAPHYN_SKIP_PLUGIN_LOAD=1` plugin types show as missing). `group` / `phase` / `step_title` are copied from the graph's `metadata` (multi-step examples such as Example 06 set `metadata.group = "speech-commands-e2e"`, `metadata.phase = 1|2`, `metadata.step_title`); `null` when absent.
 
 `title` is the display name to show on cards. It comes from `metadata.title` when set (the IR loader ignores that key, so it is safe on any graph). Otherwise the id is humanized, and synced numbered examples (`ex-NN-<slug>`) get an `(example NN)` suffix so they never collide with a same-named starter, for example `Call analytics (example 22)` vs `Call analytics (local Whisper + heuristic extract)`. `GET /pipelines/examples` items use the same rule. Workspace copies in `configs/templates/` synced before a source graph gained `metadata.title` fall back to the repo source's title. The source is found from the copy's `metadata.source_example`, or else `examples/templates/<name>.graph.json`. Re-running `POST /pipelines/templates/sync-examples` also refreshes the copy.
 
@@ -403,10 +416,16 @@ List all pipeline runs, newest first.
     "num_nodes": 5,
     "node_stats": [
       {"node_id": "input_0", "node_type": "InputNode", "node_index": 0, "duration_s": 0.1}
-    ]
+    ],
+    "graph_name": "speech_commands_e2e_train_ml",
+    "display_name": "Speech commands E2E · train",
+    "summary": {"primary_metric": {"name": "test_accuracy", "value": 0.561}, "paths": ["…"], "best_path_id": "path-a", "dataset": {"…": "…"}},
+    "regression": {"metric": "test_accuracy", "best_previous_run_id": "1e4f…", "best_previous_value": 0.867, "delta": -0.306}
   }
 ]
 ```
+
+Every row carries `display_name`, `summary` and `regression` — see [Run results](#run-results--display_name-summary-regression). `graph_name` is unchanged (machine id).
 
 ---
 
@@ -430,13 +449,106 @@ Get a run's config YAML and log entries.
     {"node_id": "dataset_ingest_0", "node_type": "dataset_ingest", "label": null, "index": 0, "wave": 0, "status": "completed"},
     {"node_id": "audio_conditioner_1", "node_type": "audio_conditioner", "label": null, "index": 1, "wave": 1, "status": "failed"},
     {"node_id": "segmenter_2", "node_type": "segmenter", "label": null, "index": 2, "wave": 2, "status": "not_run"}
-  ]
+  ],
+  "display_name": "Speech commands E2E · train",
+  "summary": {"…": "see Run results"},
+  "regression": null,
+  "node_progress": {"trainer_0": {"type": "node_progress", "epoch": 3, "epochs": 30, "message": "Trainer · epoch 3/30 · loss 0.41"}}
 }
 ```
+
+`display_name`, `summary`, `regression` are also merged into `meta`. `node_progress` is the latest `node_progress` event per node (live while running; `logs` also contains the `node_progress` rows).
 
 `node_order` lists every node in the run's `graph.json` in execution order (wave-major, matching the planner), including nodes that never ran. `status` comes from `meta.node_stats`, or is `"not_run"` when the node has no stats row. It is computed without the node registry, so it also works when a node's plugin is no longer installed. It is `[]` when `graph.json` is missing. Every `node_error` / `error` log entry has an `error` field. Older logs that only had `error_message` / `message` are filled in when read.
 
 **Errors:** `400` invalid run_id. `404` not found.
+
+---
+
+### Run results — `display_name`, `summary`, `regression`
+
+`GET /runs` rows and `GET /runs/{run_id}` (top level and `meta`) carry the user-facing results of a run (`app.core.runs.run_summary`, cached per run by journal file mtimes — terminal runs are immutable):
+
+```json
+{
+  "display_name": "Speech commands E2E · train",
+  "summary": {
+    "primary_metric": {"name": "test_accuracy", "value": 0.561},
+    "paths": [
+      {
+        "path_id": "path-a",
+        "label": "DS-CNN · 50 epochs",
+        "node_ids": ["model_builder_0", "trainer_0", "evaluator_0", "edge_optimizer_0"],
+        "metrics": {"test_accuracy": 0.561, "roc_auc": 0.857, "final_val_accuracy": 0.672, "final_accuracy": 0.619, "final_val_loss": 1.17, "final_loss": 1.14},
+        "model_artifacts": ["<model rows, see GET /runs/{run_id}/models>"]
+      },
+      {"path_id": "path-b", "label": "CNN-small · 30 epochs", "…": "…"}
+    ],
+    "best_path_id": "path-a",
+    "dataset": {
+      "source_path": "workspace/datasets/input/speech-commands",
+      "resolved_path": "workspace/datasets/input/speech-commands",
+      "clip_count": 1200,
+      "fallback_used": false,
+      "from_ingest_node": "dataset_ingest_0"
+    }
+  },
+  "regression": {"metric": "test_accuracy", "best_previous_run_id": "1e4f…", "best_previous_value": 0.867, "delta": -0.306}
+}
+```
+
+- **Paths** are the fork branches after the last node shared by every sink (each sink's ancestry minus the shared trunk; branches that overlap are merged). A graph with one sink is one path (`path-a`, all nodes). Paths with neither metrics nor models are dropped; `paths` is `[]` for runs without results (e.g. preprocess runs).
+- **Metrics** per path merge, in topological order, the trainer history's last epoch (`final_*`), every `metrics.json` in a node's `output_path`/`output_dir`, and numeric `metrics` of the node's output artifact (`outputs_index.json` → `data.json`); evaluator values win. Only numeric scalars are kept.
+- **`primary_metric`** — first present of `test_accuracy` > `accuracy` > `val_accuracy` > `f1` (then their `final_*` forms); value of the best path. `best_path_id` is the path with the highest primary metric (or the only path).
+- **`label`** describes what differs between parallel paths, from the model_builder/trainer configs: `architecture` (`ds_cnn` → `DS-CNN`, `simple_cnn` → `CNN-small`, …), `epochs`, `batch_size`, `learning_rate`, then any other differing scalar key — at most two facts. A single path shows architecture + epochs. Identical/empty labels fall back to `Path A`, `Path B`, ….
+- **`dataset`** comes from the ingest node's `node_end.dataset` (older runs: recomputed from its config + `output_count`).
+- **`regression`** compares the primary metric with the best **older succeeded** run of the same `graph_name` and `project` that reports the same metric; `null` when there is none.
+- **`display_name`** — `metadata.title` when set; else the graph name split into family · phase · rest (`speech_commands_e2e_preprocess_down` → `Speech commands E2E · preprocess · down`). Generic names (`pipeline`) use `metadata.source_example` / `group` / `step_title`, or the bundled example whose node-type set matches, or the node composition. A `dataset_ingest` path that ends in a label folder (`datasets/input/<ds>/<label>`, `datasets/output/<p>/<v>/<split>/<label>`) appends the label (`Speech commands E2E · infer · down`).
+
+---
+
+### `GET /api/v1/runs/{run_id}/models`
+
+Model files a run produced — for results, register and Ship.
+
+```json
+{
+  "run_id": "2280…",
+  "display_name": "Speech commands E2E · train",
+  "status": "succeeded",
+  "best_path_id": "path-a",
+  "primary_metric": {"name": "test_accuracy", "value": 0.561},
+  "models": [
+    {
+      "path": "workspace/artifacts/speech-commands/runs/2280…/trainer_0/model.keras",
+      "name": "model.keras",
+      "display_name": "DS-CNN (50 epochs)",
+      "node_id": "trainer_0",
+      "node_type": "trainer",
+      "path_id": "path-a",
+      "path_label": "DS-CNN · 50 epochs",
+      "kind": "trained",
+      "format": "keras",
+      "size_bytes": 408505,
+      "created_at": "2026-10-02T18:56:50+00:00",
+      "metrics": {"test_accuracy": 0.561, "roc_auc": 0.857},
+      "labels": ["down", "go", "no", "stop", "up", "yes"],
+      "labels_source": "labels.txt",
+      "suggested_name": "speech-commands-dscnn"
+    }
+  ]
+}
+```
+
+- Detected formats: `.keras`/`.h5` → `keras`, SavedModel dirs (contain `saved_model.pb`) → `saved_model`, `.tflite`, `.onnx`, `.pt`/`.pth` → `pt`. `checkpoints/` is skipped.
+- A model belongs to the node whose `output_path` contains it, else the first node whose output payload (`model_path`, `artifact_path`, `keras_model_path`, …) references it.
+- `kind`: `compiled_untrained` for `model_builder` outputs (and `compiled_*` files), `optimized` for optimizer/quantizer/exporter nodes and `.tflite`, otherwise `trained`.
+- `path` is workspace-relative and is accepted as-is by `POST /models` (`model_path`), Ship (`model_path`) and `edge_optimizer`.
+- `labels` keep the model's class order: `labels.txt` next to (or inside) the model, else the node's output `labels`, else another node of the same path. `display_name` is the plugin-provided human name when present.
+- `suggested_name` — registry-safe slug `<graph family>-<architecture>` (e.g. `speech-commands-dscnn`), distinct per path.
+- Sorted by path, node order, kind (`trained`, `optimized`, `compiled_untrained`), format.
+
+**Errors:** `400` invalid run_id. `404` run not found.
 
 ---
 
@@ -459,9 +571,12 @@ Get the current status of a run.
 {
   "status": "completed",
   "progress_pct": 100.0,
-  "current_node": "ExportNode"
+  "current_node": "ExportNode",
+  "node_progress": {"trainer_0": {"type": "node_progress", "node_id": "trainer_0", "epoch": 3, "epochs": 30, "pct": 10, "message": "Trainer · epoch 3/30 · loss 0.41 · val_acc 0.78"}}
 }
 ```
+
+`node_progress` maps `node_id` → latest progress event (`{}` when no node reported progress).
 
 `status` values: `"running"`, `"completed"`, `"failed"`, `"cancelled"`, `"unknown"`
 
@@ -724,15 +839,25 @@ List output dataset projects and their versions.
 
 ### `GET /api/v1/data/outputs/{project}/{version}`
 
-Get the sample list for a specific project/version dataset.
+Get one project/version dataset: manifest files plus the sample list.
 
-**Response:** Array of sample objects from `labels.csv`.
+**Response:** an **object** (not an array):
 
 ```json
-[
-  {"path": "my-project/v1/train/speech/a1b2c3d4.wav", "split": "train", "label": "speech"}
-]
+{
+  "project": "my-project",
+  "version": "v1",
+  "files": [{"name": "a1b2c3d4.wav", "path": "train/speech/a1b2c3d4.wav", "size": 32044, "sha256": "…"}],
+  "file_count": 1,
+  "content_hash": "64c1…",
+  "created_at": "2026-10-02T18:00:00+00:00",
+  "samples": [
+    {"path": "my-project/v1/train/speech/a1b2c3d4.wav", "split": "train", "label": "speech"}
+  ]
+}
 ```
+
+`files` is always a list of `{name, path, size, sha256}` rows (`path` relative to the version dir, `name` its basename). `samples` comes from `labels.csv`, else the `train|val|test/<label>/*.wav` tree.
 
 **Errors:** `404` if dataset not found.
 
@@ -1069,12 +1194,14 @@ Versions: `pipelines/{name}/versions/vN.graph.json`. Envs: `pipelines/{name}/env
 | PUT | `/api/v1/projects/{name}/pipelines/{pipeline}` | Save draft (secret fail-closed, stamp project) |
 | DELETE | `/api/v1/projects/{name}/pipelines/{pipeline}` | Delete draft file |
 | GET | `.../versions` | Published snapshots |
-| GET | `.../environments` | draft / staging / prod / pending_prod |
+| GET | `.../environments` | `{kind: "pipeline_env", pipeline, draft, staging, prod, pending_prod, updated_at}` |
 | POST | `.../publish` | `{ message?, set_env?: staging\|prod }` |
 | POST | `.../promote` | `{ to_env, version?, from_env?, approve? }` — prod needs `approve: true` |
 | POST | `.../rollback` | `{ version }` → copy onto draft |
 
 **Errors:** `404` if project/pipeline missing; `422` for invalid name, IR, or inline secrets.
+
+**Naming:** pipeline *environments* (draft/staging/prod pointers at Graph IR versions) are not model registry *stages*. Responses that carry them are tagged: pipeline envs `kind: "pipeline_env"` (`.../environments` body and the `environments` object of list rows), model stages `kind: "model_stage"` (`GET /models*` → `stages.*`). Nothing was renamed.
 
 ### Model registry (lite)
 
@@ -1084,12 +1211,56 @@ Versions: `pipelines/{name}/versions/vN.graph.json`. Envs: `pipelines/{name}/env
 |---|---|
 | GET | `/api/v1/models` |
 | GET | `/api/v1/models/{name}` |
-| POST | `/api/v1/models` — `{ name, run_id, slug, stage? }` |
+| POST | `/api/v1/models` — `{ name, run_id, slug?, stage?, description?, model_path?, node_id?, allow_untrained? }` |
 | POST | `/api/v1/models/{name}/request-prod` |
 | POST | `/api/v1/models/{name}/approve-prod` |
 
 Promoting a run to `staging` in the Runs UI also auto-registers a model row when a slug is returned.
 
+**Register (`POST /models`).** The stage records the run's real model file/dir. Pick it with `model_path` (a `path` from `GET /runs/{run_id}/models`, preferred) or `node_id`; otherwise a node id equal to `name` is used (legacy console behaviour), else the best path's trained model. `slug` may be omitted (derived from the model path). Errors: `422 compiled_untrained` when the chosen artifact is a `model_builder` output (compiled, never trained) — `detail.artifact` is the model row; pass `allow_untrained: true` to register it anyway. `422 model_not_in_run` when `model_path` / `node_id` match no model of the run. Use the model row's `suggested_name` (e.g. `speech-commands-dscnn`) as the default name instead of node ids.
+
+**Read (`GET /models`, `GET /models/{name}`).** Each `stages.<stage>` is enriched at read time:
+
+```json
+{
+  "kind": "model_stage", "stage": "staging", "run_id": "2280…", "slug": "speech-commands",
+  "path": "workspace/artifacts/speech-commands/runs/2280…/trainer_0/model.keras",
+  "artifact_path": "workspace/artifacts/speech-commands/runs/2280…/trainer_0/model.keras",
+  "alias_path": "workspace/artifacts/speech-commands/staging",
+  "format": "keras", "artifact_kind": "trained", "node_id": "trainer_0",
+  "path_id": "path-a", "path_label": "DS-CNN · 50 epochs",
+  "size_bytes": 408505, "created_at": "…", "exists": true,
+  "metrics": {"test_accuracy": 0.561}, "labels": ["down", "go", "no", "stop", "up", "yes"],
+  "source_run_id": "2280…", "source_run_display_name": "Speech commands E2E · train",
+  "updated_at": "…"
+}
+```
+
+`path` is the model file/dir itself (do not append `/saved_model`); the alias directory the stage still points at is `alias_path`. Entries written before this change (whose `path` was the alias dir) are resolved at read time — by stored `node_id`, else a node id equal to the model name, else the run's best path — so they also return a real `path`. `pending_prod` is tagged `kind: "model_stage"`, and `request-prod` → `approve-prod` carry the staging artifact into `prod`.
+
+
+### Ship packages
+
+`/api/v1/projects/{name}/ship/packages` — list / create / get / download / promote / transition. Create and promote need an `Idempotency-Key` header.
+
+**`POST /projects/{name}/ship/packages`** body:
+
+```json
+{
+  "model_name": "speech-commands-dscnn",
+  "model_stage_or_version": "staging",
+  "model_path": "workspace/artifacts/speech-commands/runs/2280…/tflite/model.tflite",
+  "run_id": "2280…",
+  "labels": ["down", "go", "no", "stop", "up", "yes"],
+  "target": {"runtime": "tflite", "arch": "arm"},
+  "env": "draft",
+  "unsigned_allowed": true
+}
+```
+
+Give a registered `model_name` (+ `model_stage_or_version`, default `staging`; the stage's real artifact is used), and/or a run `model_path` (+ `run_id`) from `GET /runs/{run_id}/models`. One of the two is required (`422`). The model file or SavedModel dir (≤ 256 MB) and `model/labels.txt` are embedded in `package.zip`; `manifest.model_ref` gains `model_path`, `format`, `node_id`, `labels`, and the manifest has `labels` and `warnings`.
+
+`labels` must equal the model's class order (its `labels.txt`, else the run/registry labels). On mismatch: **`422`** with `error.code = "labels_mismatch"` and `detail = {expected: [...model order...], got: [...], labels_source}`. Response `warnings` (also in the manifest): `labels_unverified` (no labels to check against), `compiled_untrained` (model_builder output), `model_not_embedded` (model larger than 256 MB). `404` when the model file / registered model is missing.
 
 ### Validate secret policy
 

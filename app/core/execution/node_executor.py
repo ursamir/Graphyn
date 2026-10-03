@@ -6,10 +6,12 @@ Owns:             NodeExecutor class — setup/teardown, on_start→process→on
                   sequencing, exponential back-off retry, streaming execution.
 Public Surface:   NodeExecutor(node, run_id), .setup(), .teardown(),
                   .execute(inputs) -> dict, .execute_stream(inputs) -> AsyncGen,
-                  .request_cancel(), .set_cancel_check(), .is_cancel_requested
+                  .request_cancel(), .set_cancel_check(), .is_cancel_requested,
+                  .set_progress_sink(node_id, sink) (node_progress context
+                  bound around process(); see app.core.nodes.progress)
 Must NOT:         Understand pipeline topology, import from app.domain,
                   import from orchestrator or executor (no intra-BC5 cycles).
-Dependencies:     BC2 (nodes.base, nodes.observers, nodes.retry).
+Dependencies:     BC2 (nodes.base, nodes.observers, nodes.retry, nodes.progress).
 Reason To Change: Node lifecycle protocol changes, retry policy evolves,
                   or streaming execution semantics change.
 """
@@ -96,6 +98,11 @@ class NodeExecutor:
         self._torn_down = False
         self._cancel_requested = False
         self._cancel_check: Any = None  # optional Callable[[], bool]
+        # node_progress side-channel (app.core.nodes.progress): set by the
+        # orchestrator so emit_node_progress() inside process() reaches the
+        # run journal / NDJSON stream. None → progress is a no-op.
+        self._progress_node_id: str = ""
+        self._progress_sink: Any = None  # optional Callable[[dict], None]
 
     def setup(self) -> None:
         """Call node.setup() once before the first execution. Subsequent calls are no-ops.
@@ -125,6 +132,11 @@ class NodeExecutor:
     def set_cancel_check(self, cancel_check: Any) -> None:
         """Optional callable polled during execute / isolated subprocess wait."""
         self._cancel_check = cancel_check
+
+    def set_progress_sink(self, node_id: str, sink: Any) -> None:
+        """Bind the node_progress sink (called with a full event dict)."""
+        self._progress_node_id = str(node_id or "")
+        self._progress_sink = sink
 
     def is_cancel_requested(self) -> bool:
         """True if request_cancel() was called or cancel_check() returned True."""
@@ -291,6 +303,14 @@ class NodeExecutor:
 
     def _process(self, node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
         """Run ``node.process`` in-process or via an isolated plugin worker."""
+        from app.core.nodes.progress import progress_context
+
+        with progress_context(
+            self._progress_node_id, stable_node_type(node), self._progress_sink
+        ):
+            return self._process_inner(node, inputs)
+
+    def _process_inner(self, node: Node, inputs: dict[str, Any]) -> dict[str, Any]:
         from app.core.plugins.hydrate import coerce_node_inputs
         from app.core.paths.write_paths import ensure_node_write_dirs
 

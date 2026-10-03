@@ -125,8 +125,8 @@ workspace/
 │               └── pipeline.yaml  # Pipeline config snapshot (if pipeline_config set)
 ├── runs/
 │   └── {run_id}/              # full 32-char UUID4 hex
-│       ├── meta.json          # {run_id, created_at, status, duration_s, num_nodes, node_stats}
-│       ├── logs.json          # All log entries
+│       ├── meta.json          # {run_id, created_at, status, duration_s, num_nodes, node_stats, node_progress}
+│       ├── logs.json          # All log entries (incl. node_progress; flushed ≤ 5 s while nodes report progress)
 │       ├── graph.json         # GraphIR JSON (always written)
 │       ├── resume_state.json  # written when checkpoint=True
 │       └── checkpoints/       # Only when checkpoint=True
@@ -141,6 +141,7 @@ workspace/
 │   │   └── data/
 │   │       ├── manifest.json
 │   │       └── *.wav
+│   ├── _registry/models.json  # model registry: stages.<stage>.path = real model file/dir (alias dir in alias_path)
 │   └── distributed_blobs/     # cross-host transfer (artifact:// URIs)
 ├── provenance/
 │   ├── {artifact_id}.json

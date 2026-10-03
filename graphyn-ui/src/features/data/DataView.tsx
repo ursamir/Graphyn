@@ -9,6 +9,7 @@ import {
   parseError,
 } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
+import { normalizeDatasetRows } from './datasetRows'
 import { useAppStore } from '../../store/appStore'
 import {
   ConfirmButton,
@@ -114,21 +115,21 @@ function humanizeDataError(
     if (kind === 'inputs') {
       return {
         message:
-          'This input label points outside the Graphyn datasets tree (often an external symlink). Pick another label, or set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API.',
-        detail,
+          'This dataset folder links to a location outside the datasets area, so the server blocks it. Pick another folder, or ask an admin to allow external links.',
+        detail: `${detail}\n${'Admin: set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API to allow folders that link outside the datasets area.'}`,
         invalidPath: true,
       }
     }
     if (kind === 'outputs') {
       return {
         message:
-          'That output path is invalid or no longer inside the Graphyn workspace. Selection was cleared — pick a workspace/version again.',
+          'That output version no longer exists. The selection was cleared — pick another workspace and version.',
         detail,
         invalidPath: true,
       }
     }
     return {
-      message: 'A dataset path was rejected by the API. Try refreshing the list.',
+      message: 'The server rejected that dataset location. Try refreshing the list.',
       detail,
       invalidPath: true,
     }
@@ -262,8 +263,14 @@ export default function DataView() {
     setLoading(true)
     try {
       const [out, inp] = await Promise.all([
-        apiJson('/data/outputs').then((r) => unwrapList<OutputProject>(r)),
-        apiJson<InputLabel[]>('/data/inputs'),
+        apiJson('/data/outputs').then((r) =>
+          unwrapList<OutputProject>(r)
+            .filter((o) => o && typeof o.project === 'string')
+            .map((o) => ({ ...o, versions: Array.isArray(o.versions) ? o.versions : [] })),
+        ),
+        apiJson('/data/inputs').then((r) =>
+          unwrapList<InputLabel>(r).filter((i) => i && typeof i.label === 'string'),
+        ),
       ])
       setOutputs(out)
       setInputs(inp)
@@ -398,7 +405,7 @@ export default function DataView() {
         setErrorDetail(null)
         try {
           const [data, st] = await Promise.all([
-            apiJson<Array<Record<string, unknown>>>(
+            apiJson<unknown>(
               `/data/outputs/${encodeURIComponent(project)}/${encodeURIComponent(version)}`,
             ),
             apiJson(
@@ -407,7 +414,7 @@ export default function DataView() {
           ])
           if (cancelled) return
           setPathRecovery(false)
-          setRows(data)
+          setRows(normalizeDatasetRows(data, { project, version }))
           setStats(st)
         } catch (err) {
           if (cancelled) return
@@ -442,11 +449,9 @@ export default function DataView() {
         setError(null)
         setErrorDetail(null)
         try {
-          const data = await apiJson<Array<Record<string, unknown>>>(
-            `/data/inputs/${encodeURIComponent(label)}`,
-          )
+          const data = await apiJson<unknown>(`/data/inputs/${encodeURIComponent(label)}`)
           if (cancelled) return
-          setRows(data)
+          setRows(normalizeDatasetRows(data))
           setStats(null)
         } catch (err) {
           if (cancelled) return
@@ -1139,10 +1144,10 @@ export default function DataView() {
             {blockedInputs.length} external label
             {blockedInputs.length === 1 ? '' : 's'}
           </span>{' '}
-          (symlink outside datasets/input) — skipped in Browse.
+          <span title={'Admin: set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API to allow folders that link outside the datasets area.'}>(link outside the datasets area)</span> — hidden from Browse.
           {accessibleInputs.length === 0
-            ? ' Set GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API (Compose default is on) and Refresh.'
-            : ' Pick an in-tree label below, or enable external symlinks on the API.'}
+            ? ' Ask an admin to allow external links on the server, then Refresh.'
+            : ' Pick another folder below.'}
         </div>
       ) : null}
 
@@ -1334,7 +1339,7 @@ export default function DataView() {
                   </section>
                   <pre className="max-h-48 overflow-auto rounded-xl bg-ink-950 p-3 font-mono text-[11px] text-ink-100">
                     {ingestLog.map((line) => formatExecutionLine(line).text).join('\n') ||
-                      'No ingest events yet — start a job to stream GET /ingest/url/{job_id}/stream progress here.'}
+                      'No import progress yet — start an import above and its progress appears here.'}
                   </pre>
                 </div>
               ) : uxMode === 'manage' && manageTab === 'merge' ? (
@@ -1544,7 +1549,7 @@ export default function DataView() {
                       ? accessibleInputs.length
                         ? 'Choose a label from the list to browse shared input files.'
                         : blockedInputs.length
-                          ? 'All labels are external symlinks. Enable GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1 on the API (Compose defaults to on), then Refresh.'
+                          ? 'Every folder links outside the datasets area and is blocked. Ask an admin to allow external links on the server, then Refresh.'
                           : 'Choose a label from the list to browse shared input files.'
                       : 'This label has no files yet. Upload or ingest to add some.'
               }

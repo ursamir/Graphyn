@@ -177,7 +177,7 @@ class DeploymentPackagerNode(Node):
 
     class Config(NodeConfig):
         target: Literal["mobile", "mcu", "docker", "edge", "cmsis_pack", "arduino", "zephyr", "pte_bundle"] = Field(default='mobile', title="Target", description="Deployment target. One of: mobile, mcu, docker, edge, cmsis_pack, arduino, zephyr, pte_bundle.")
-        output_path: str = Field(default='workspace/artifacts/packages', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
+        output_path: str = Field(default='workspace/artifacts/packages', title="Output path", description="Folder for the deployment package.")
         include_inference_script: bool = Field(default=True, title="Include inference script", description="Bundle a minimal inference script with the package (On/Off).")
         include_metadata: bool = Field(default=True, title="Include metadata", description="Bundle model metadata / labels JSON with the package (On/Off).")
         package_name: str = Field(default='', title="Package name", description="Name of the deployment package artifact (empty = derive from model).")

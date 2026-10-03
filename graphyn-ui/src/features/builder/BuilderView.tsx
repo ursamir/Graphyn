@@ -105,8 +105,21 @@ import {
   type ConfigIssue,
 } from './configValidation'
 import { countErrorRows, dedupeErrorRows, isErrorRow } from './logDedupe'
+import { canvasPathView } from './canvasPaths'
+import { journalToLogEntries, relabelLine } from './journalLog'
+import {
+  collapseProgressRows,
+  finishedNodeIds,
+  formatProgressLine,
+  latestProgressByNode,
+  parseProgress,
+  type NodeProgress,
+} from '../runs/runProgress'
+import { ProgressLogLine } from '../runs/RunResults'
 
 const nodeTypes = { graphyn: GraphynNode }
+/** Fit the whole graph, but never zoom out past readable text. */
+const FIT_VIEW_OPTIONS = { padding: 0.12, minZoom: 0.55, maxZoom: 1 }
 const edgeTypes = { default: DeletableEdge }
 
 const EDGE_STYLE = { stroke: '#555555', strokeWidth: 2.75 }
@@ -255,7 +268,15 @@ function BuilderInner() {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphynNodeData>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, fitView } = useReactFlow()
+  /** Latest node_progress per running node (canvas bar + log line); view-only. */
+  const [nodeProgress, setNodeProgress] = React.useState<Record<string, NodeProgress>>({})
+  /** Run id whose journal currently fills the execution log (hydrated, not streamed). */
+  const hydratedRunRef = React.useRef<string | null>(null)
+  /** Set by loadGraph: the next linked-run hydrate may replace the log. */
+  const allowHydrateRef = React.useRef(false)
+  /** Bumped by loadGraph → fit view + re-check the linked run. */
+  const [loadGen, setLoadGen] = React.useState(0)
   const [filter, setFilter] = React.useState('')
   const [categoryFilter, setCategoryFilter] = React.useState('all')
   const [templateName, setTemplateName] = React.useState('')
@@ -645,6 +666,35 @@ function BuilderInner() {
     [setNodes, executionOrderIds],
   )
 
+  /**
+   * Fill the execution log from the linked run's journal (opening a graph whose
+   * run already happened). Only replaces an empty log, a log this hydrate wrote
+   * for the same run (live refresh), or the log right after a graph load.
+   */
+  const labelOfRef = React.useRef<Map<string, string>>(new Map())
+  const hydrateLogFromJournal = (runId: string, events: Array<Record<string, unknown>>, badge: ExecBadgeStatus) => {
+    const st = useAppStore.getState()
+    if (st.isRunning) return
+    const mayReplace = st.logs.length === 0 || hydratedRunRef.current === runId || allowHydrateRef.current
+    if (!mayReplace || events.length === 0) return
+    allowHydrateRef.current = false
+    hydratedRunRef.current = runId
+    const entries = journalToLogEntries(events, { labelFor: (id) => labelOfRef.current.get(id) })
+    useAppStore.setState({
+      logs: [
+        { message: `Log of run ${shortRunId(runId)}`, level: 'info', ts: new Date().toISOString() },
+        ...entries,
+      ].slice(-500),
+    })
+    if (badge === 'running') {
+      const latest = latestProgressByNode(events)
+      for (const id of finishedNodeIds(events)) latest.delete(id)
+      setNodeProgress(Object.fromEntries(latest))
+    } else {
+      setNodeProgress({})
+    }
+  }
+
   /** Record a terminal outcome for a specific run id (survives Editor remounts). */
   const finishOutcome = React.useCallback(
     (runId: string | null, outcome: KnownRunOutcome) => {
@@ -664,7 +714,7 @@ function BuilderInner() {
   const reconcileRunFromServer = React.useCallback(
     async (
       runId: string,
-      opts: { waitTerminalMs?: number; guardCanvas?: boolean; isStale?: () => boolean } = {},
+      opts: { waitTerminalMs?: number; guardCanvas?: boolean; isStale?: () => boolean; hydrateLog?: boolean } = {},
     ): Promise<ExecBadgeStatus> => {
       const stale = opts.isStale ?? (() => false)
       const deadline = Date.now() + (opts.waitTerminalMs ?? 0)
@@ -705,11 +755,14 @@ function BuilderInner() {
           if (runIds.length === 0 || runIds.some((id) => !canvasIds.has(id))) return badge
         }
         applyStatusesFromEvents(events, badge)
+        if (opts.hydrateLog) hydrateLogFromJournal(runId, events, badge)
       } catch {
         /* best-effort: badge still reflects the server status */
       }
       return badge
     },
+    // hydrateLogFromJournal only touches refs / the store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [applyStatusesFromEvents],
   )
 
@@ -939,13 +992,44 @@ function BuilderInner() {
     }
     return m
   }, [configIssues])
+  // Parallel branches (Path A / Path B) + path-disambiguated labels. Keyed on
+  // structure only, so dragging a node does not recompute it.
+  const pathStructureKey = nodes
+    .map((n) => {
+      const c = n.data.config ?? {}
+      return `${n.id}:${n.data.nodeType}:${n.data.label ?? ''}:${String(c.architecture ?? '')}:${String(c.epochs ?? '')}`
+    })
+    .join('|') + '#' + edges.map((e) => `${e.source}>${e.target}`).join('|')
+  const pathView = React.useMemo(
+    () => canvasPathView(nodesRef.current, edgesRef.current),
+    // pathStructureKey captures ids / labels / arch / epochs / edges
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pathStructureKey],
+  )
+  labelOfRef.current = pathView.labelOf
+  React.useEffect(() => {
+    if (!isRunning && hydratedRunRef.current == null) setNodeProgress({})
+  }, [isRunning])
   const displayNodes = React.useMemo(() => {
-    if (issuesByNode.size === 0) return nodes
+    const hasProgress = Object.keys(nodeProgress).length > 0
+    if (issuesByNode.size === 0 && pathView.pathOf.size === 0 && !hasProgress) return nodes
     return nodes.map((n) => {
       const count = issuesByNode.get(n.id)?.size ?? 0
-      return count ? { ...n, data: { ...n.data, configIssues: count } } : n
+      const path = pathView.pathOf.get(n.id) ?? null
+      const progress = nodeProgress[n.id] ?? null
+      if (!count && !path && !progress) return n
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          ...(count ? { configIssues: count } : {}),
+          pathBadge: path,
+          displayLabel: pathView.labelOf.get(n.id),
+          progress,
+        },
+      }
     })
-  }, [nodes, issuesByNode])
+  }, [nodes, issuesByNode, pathView, nodeProgress])
 
   /** True (and shows a banner listing node › field › rule) when config is invalid. */
   const blockOnInvalidConfig = (verb: 'run' | 'save') => {
@@ -1128,7 +1212,18 @@ function BuilderInner() {
     setNodes(laidOut)
     setEdges(nextEdges)
     setRunHadErrors(false)
+    setNodeProgress({})
+    // A hydrated log belongs to the previous canvas — let the linked run refill it.
+    if (!useAppStore.getState().isRunning) allowHydrateRef.current = true
+    setLoadGen((g) => g + 1)
   }
+
+  // Fit the freshly loaded graph (ReactFlow's `fitView` prop only fits on mount).
+  React.useEffect(() => {
+    if (loadGen === 0) return
+    const t = window.setTimeout(() => fitView(FIT_VIEW_OPTIONS), 60)
+    return () => window.clearTimeout(t)
+  }, [loadGen, fitView])
 
   React.useEffect(() => {
     if (!pendingGraph) return
@@ -1342,6 +1437,9 @@ function BuilderInner() {
     }
 
     clearLogs()
+    hydratedRunRef.current = null
+    allowHydrateRef.current = false
+    setNodeProgress({})
     setRunHadErrors(false)
     setActionError(null)
     setLogCollapsed(false)
@@ -1427,6 +1525,22 @@ function BuilderInner() {
             if (t === 'node_skip') {
               setNodeExecStatus({ index: idx, nodeId, nodeType: typeof ev.node_type === 'string' ? ev.node_type : undefined }, 'skipped')
             }
+            if (t === 'node_progress') {
+              const prog = parseProgress(ev)
+              if (prog) {
+                setNodeProgress((prev) => ({ ...prev, [prog.nodeId]: prog }))
+                addLog(formatProgressLine(prog, labelOfRef.current.get(prog.nodeId)), 'progress', trimmed)
+              }
+              continue
+            }
+            if (nodeId && (t === 'node_end' || t === 'node_complete' || t === 'node_error' || t === 'node_skip')) {
+              setNodeProgress((prev) => {
+                if (!(nodeId in prev)) return prev
+                const next = { ...prev }
+                delete next[nodeId]
+                return next
+              })
+            }
             if (t === 'done' || t === 'pipeline_done') sawDone = true
             if (t === 'error' || t === 'pipeline_error') sawError = true
             if (t === 'node_error' || t === 'error') {
@@ -1449,7 +1563,7 @@ function BuilderInner() {
               formatted = { text: 'Pipeline cancelled', level: 'warning', raw: trimmed }
             }
             addLog(
-              formatted.text,
+              relabelLine(formatted.text, ev, (id) => labelOfRef.current.get(id)),
               formatted.level.includes('error') ? 'error' : formatted.level,
               formatted.raw,
             )
@@ -1854,6 +1968,11 @@ function BuilderInner() {
         (l) => l.message,
         (l) => l.level,
       )
+  // Pretty: each node's node_progress events collapse into one live line
+  // (latest values + sparkline). Raw keeps every event.
+  const logRows = showRawLogs
+    ? prettyLogs.map((row) => ({ kind: 'row' as const, row }))
+    : collapseProgressRows(prettyLogs, (l) => l.raw)
   const hasErrorLogs = prettyLogs.some((l) => isErrorRow(l.level, l.message))
   const errorCount = hasErrorLogs
     ? Math.max(
@@ -1924,7 +2043,11 @@ function BuilderInner() {
         : { runId, status: remembered ?? 'loading' },
     )
     const tick = async () => {
-      const badge = await reconcileRunFromServer(runId, { guardCanvas: true, isStale: () => cancelled })
+      const badge = await reconcileRunFromServer(runId, {
+        guardCanvas: true,
+        isStale: () => cancelled,
+        hydrateLog: true,
+      })
       if (cancelled) return
       if (isTerminalBadge(badge)) {
         // Also corrects the store's (un-keyed) runOutcome for the header chip.
@@ -1944,7 +2067,7 @@ function BuilderInner() {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [lastRunId, isRunning, reconcileRunFromServer, finishOutcome])
+  }, [lastRunId, isRunning, reconcileRunFromServer, finishOutcome, loadGen])
 
   const execBadge: ExecBadgeStatus | null = isRunning
     ? 'running'
@@ -2246,9 +2369,15 @@ function BuilderInner() {
                     const multi = switchable.length > 1
                     return (
                       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <span
+                          className="shrink-0 text-[10px] font-medium text-ink-400"
+                          title="Saved versions of this pipeline (not model stages — those live on Models)"
+                        >
+                          Pipeline version
+                        </span>
                         {multi ? (
                           <SegmentedTabs
-                            aria-label="Open draft, staging, or prod copy of this pipeline"
+                            aria-label="Pipeline version: open the draft, staging, or prod copy of this pipeline"
                             className="shrink-0 text-[10px] font-semibold uppercase tracking-wide"
                             value={pipelineEnv}
                             options={switchable.map((env) => ({ id: env, label: env }))}
@@ -2261,7 +2390,7 @@ function BuilderInner() {
                         ) : (
                           <span
                             className="rounded-full border border-ink-200/80 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600"
-                            title="Working copy — publish to create a staging pointer you can switch to"
+                            title="Pipeline version: working copy — publish to create a staging version you can switch to"
                           >
                             Draft
                           </span>
@@ -2270,10 +2399,10 @@ function BuilderInner() {
                           <button
                             type="button"
                             className="text-[10px] font-medium text-accent-800 hover:underline"
-                            title="Snapshot the saved pipeline and point staging at it"
+                            title="Snapshot the saved pipeline and make it the staging pipeline version"
                             onClick={() => void publishProjectPipeline(pipelinePick, 'staging')}
                           >
-                            Publish → staging
+                            Publish pipeline version → staging
                           </button>
                         ) : null}
                         {pipelinePick && hasStaging && !hasProd && !pending ? (
@@ -2287,8 +2416,9 @@ function BuilderInner() {
                                 approve: false,
                               })
                             }
+                            title="Ask for this staging pipeline version to become the production version"
                           >
-                            Request prod
+                            Request prod version
                           </button>
                         ) : null}
                         {pending ? (
@@ -2302,8 +2432,9 @@ function BuilderInner() {
                                 approve: true,
                               })
                             }
+                            title="Approve the pending production pipeline version"
                           >
-                            Approve prod
+                            Approve prod version
                           </button>
                         ) : null}
                       </div>
@@ -2691,6 +2822,8 @@ function BuilderInner() {
             snapGrid={[20, 20]}
             panOnScroll
             fitView
+            fitViewOptions={FIT_VIEW_OPTIONS}
+            minZoom={0.15}
           >
             <Background gap={22} size={1} color="#c5d0da" />
             <Controls />
@@ -3274,9 +3407,26 @@ function BuilderInner() {
                 </div>
               )}
               {prettyLogs.length === 0 ? (
-                <div className="text-ink-500">No events yet.</div>
+                <div className="text-ink-500">
+                  {lastRunId
+                    ? 'No events for this graph yet — press Run, or open the linked run for its full log.'
+                    : 'No events yet — press Run to see each step’s progress here.'}
+                </div>
               ) : (
-                prettyLogs.map((l, i) => {
+                logRows.map((entry, i) => {
+                  const l = entry.row
+                  if (entry.kind === 'progress') {
+                    return (
+                      <div key={`p-${entry.progress.nodeId}-${i}`} className="text-sky-200" title={`${entry.count} progress updates`}>
+                        <ProgressLogLine
+                          text={formatProgressLine(entry.progress, pathView.labelOf.get(entry.progress.nodeId))}
+                          progress={entry.progress}
+                          history={entry.history}
+                          count={entry.count}
+                        />
+                      </div>
+                    )
+                  }
                   const isErr = isErrorRow(l.level, l.message)
                   return (
                     <div

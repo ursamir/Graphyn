@@ -452,7 +452,7 @@ export default function ProposalsView() {
   return (
     <WorkbenchPage
       title="Agent inbox"
-      description="Generate stub proposals via POST /proposals, or review agent GraphIR from MCP propose_graph."
+      description="Review pipelines proposed by agents (or generate a starter proposal) before they reach the Editor."
       actions={
         <>
           <button
@@ -480,13 +480,14 @@ export default function ProposalsView() {
               className="field-control mt-1 min-h-[4.5rem] w-full text-sm"
               value={generatePrompt}
               onChange={(e) => setGeneratePrompt(e.target.value)}
-              placeholder="Describe the graph change (creates a stub GraphIR proposal for review)…"
+              placeholder="Describe the pipeline change (creates a starter proposal for review)…"
             />
           </label>
-          <p className="text-[11px] text-ink-500">
-            Uses <code className="font-mono">POST /api/v1/proposals</code> with an empty-graph stub. Richer
-            generation still lives in MCP <code className="font-mono">propose_graph</code> /{' '}
-            <code className="font-mono">generate_graph</code>.
+          <p
+            className="text-[11px] text-ink-500"
+            title="POST /api/v1/proposals (empty-graph stub). Full generation: MCP propose_graph / generate_graph."
+          >
+            Creates an empty starter proposal. Connected AI agents can propose complete pipelines.
             {activeProject ? (
               <>
                 {' '}
@@ -514,8 +515,9 @@ export default function ProposalsView() {
       {!bannerDismissed && (
         <div className="shrink-0 flex flex-wrap items-start gap-3 border-b border-ink-100 bg-accent-50/40 px-4 py-2.5 text-sm text-ink-800 sm:px-6">
           <p className="min-w-0 flex-1">
-            Agents create proposals via MCP <code className="font-mono text-[12px]">propose_graph</code> or{' '}
-            <code className="font-mono text-[12px]">POST /api/v1/proposals</code>; review and accept them here.
+            <span title="MCP propose_graph or POST /api/v1/proposals">
+              AI agents send pipeline proposals here; review them and accept the ones you want in the Editor.
+            </span>
           </p>
           <div className="flex shrink-0 items-center gap-2">
             <a
@@ -556,7 +558,7 @@ export default function ProposalsView() {
                 title="No proposals yet"
                 description={
                   filter === 'pending'
-                    ? 'Generate a stub proposal above, or create via MCP propose_graph / POST /api/v1/proposals. Accept loads GraphIR into the Editor.'
+                    ? 'Create a starter proposal above, or ask a connected AI agent to propose a pipeline. Accepting one opens it in the Editor.'
                     : 'Nothing matches this filter.'
                 }
                 action={

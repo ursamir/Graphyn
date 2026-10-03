@@ -16,6 +16,10 @@ import {
   laneLabel,
   type PipelineShape,
 } from './runNodes'
+import { formatMetric, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
+import { pathDisplayName, scalarMetrics, type PathResult } from './runResults'
+import { EvaluatorResult, PathMetricChip } from './RunResults'
+import type { EvaluatorOutputs } from './useRunResults'
 
 function shortStatusLabel(status?: string | null): string {
   const s = String(status || '').toLowerCase()
@@ -278,7 +282,8 @@ function laneToneClass(lane: string): string {
 }
 
 function shortPillLabel(full: string): string {
-  const t = full.trim()
+  // Inside a Path track the "· Path B" suffix is redundant.
+  const t = full.trim().replace(/\s·\sPath [A-Z]$/, '')
   if (t.length <= 22) return t
   // Keep trailing #cue when present.
   const cue = t.match(/\s+(#\S+)$/)
@@ -425,6 +430,8 @@ function PathTrack({
   maxTrackMs,
   focusNodeId,
   onFocusStep,
+  path,
+  best,
 }: {
   lane: string
   ids: string[]
@@ -432,20 +439,36 @@ function PathTrack({
   maxTrackMs: number
   focusNodeId?: string | null
   onFocusStep?: (nodeId: string | null) => void
+  /** Results for this path (description + metrics) when known. */
+  path?: PathResult | null
+  best?: boolean
 }) {
   const total = trackDurationMs(ids, byId)
   const tip = trackTipWrote(ids, byId)
+  const letter = path?.letter || lane
   return (
-    <div className="min-w-0 rounded-lg border border-ink-100 bg-ink-50/40 px-2.5 py-2">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
-        <span
-          className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${laneToneClass(lane)}`}
-        >
-          {laneLabel(lane)}
+    <div
+      className={`min-w-0 rounded-lg border px-2.5 py-2 ${
+        best ? 'border-emerald-200 bg-emerald-50/40' : 'border-ink-100 bg-ink-50/40'
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span
+            className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${laneToneClass(letter)}`}
+          >
+            {laneLabel(letter)}
+          </span>
+          {path?.description ? (
+            <span className="truncate text-[11px] font-medium text-ink-700">{path.description}</span>
+          ) : null}
         </span>
-        <span className="tabular-nums text-[11px] text-ink-500">{formatDuration(total)}</span>
+        <span className="flex items-center gap-1.5">
+          {path ? <PathMetricChip path={path} best={best} /> : null}
+          <span className="tabular-nums text-[11px] text-ink-500">{formatDuration(total)}</span>
+        </span>
       </div>
-      {maxTrackMs > 0 ? <DurationBar ms={total} maxMs={maxTrackMs} tone={lane} /> : null}
+      {maxTrackMs > 0 ? <DurationBar ms={total} maxMs={maxTrackMs} tone={letter} /> : null}
       <div className="mt-2">
         <PillSpine ids={ids} byId={byId} focusNodeId={focusNodeId} onFocusStep={onFocusStep} />
       </div>
@@ -472,6 +495,8 @@ function RunStoryMap({
   onFocusStep,
   savedFiles,
   provenance,
+  lanePaths,
+  bestPathId,
 }: {
   shape: PipelineShape
   stories: StepStory[]
@@ -479,6 +504,8 @@ function RunStoryMap({
   onFocusStep?: (nodeId: string | null) => void
   savedFiles?: number | null
   provenance?: number | null
+  lanePaths?: Map<string, PathResult> | null
+  bestPathId?: string | null
 }) {
   const byId = storyById(stories)
   const multi = isMultiTrackShape(shape)
@@ -489,8 +516,10 @@ function RunStoryMap({
   let outcomeBlock: React.ReactNode = null
   if (!multi) {
     const got = linearOutcome(stories)
+    const single = lanePaths?.get('shared')
     outcomeBlock = got ? (
-      <p className="text-[12px] leading-relaxed text-ink-700">
+      <p className="flex flex-wrap items-center gap-1.5 text-[12px] leading-relaxed text-ink-700">
+        {single?.primary ? <PathMetricChip path={single} /> : null}
         <span className="text-ink-400">Got </span>
         {got}
       </p>
@@ -532,6 +561,7 @@ function RunStoryMap({
           >
             {shape.branches.map((branch, i) => {
               const lane = String.fromCharCode(65 + i)
+              const path = lanePaths?.get(lane) ?? null
               return (
                 <PathTrack
                   key={lane}
@@ -541,6 +571,8 @@ function RunStoryMap({
                   maxTrackMs={maxTrackMs}
                   focusNodeId={focusNodeId}
                   onFocusStep={onFocusStep}
+                  path={path}
+                  best={Boolean(path && bestPathId && path.pathId === bestPathId && shape.branches.length > 1)}
                 />
               )
             })}
@@ -574,6 +606,7 @@ type TimelineRow = { story: StepStory; execIndex: number }
 function timelineSections(
   stories: StepStory[],
   shape: PipelineShape,
+  lanePaths?: Map<string, PathResult> | null,
 ): Array<{ key: string; label: string | null; rows: TimelineRow[] }> {
   const indexed = stories.map((story, i) => ({ story, execIndex: i + 1 }))
   if (!isMultiTrackShape(shape)) {
@@ -586,9 +619,10 @@ function timelineSections(
   for (const lane of laneOrder) {
     const rows = indexed.filter((r) => (shape.laneOf.get(r.story.id) || 'shared') === lane)
     if (!rows.length) continue
+    const path = lane === 'shared' ? null : lanePaths?.get(lane)
     sections.push({
       key: lane,
-      label: laneLabel(lane),
+      label: path ? pathDisplayName(path) : laneLabel(lane),
       rows,
     })
   }
@@ -627,6 +661,10 @@ export function RunLineagePanel({
   labelFor,
   orderedNodeIds,
   overview,
+  lanePaths,
+  nodePaths,
+  bestPathId,
+  evaluator,
 }: {
   runId: string
   runMeta?: Record<string, unknown> | null
@@ -642,6 +680,13 @@ export function RunLineagePanel({
   /** Same order as the left Pipeline stack. */
   orderedNodeIds?: string[]
   overview?: OverviewExtras | null
+  /** Shape lane → path results (description + metrics) for fork/parallel maps. */
+  lanePaths?: Map<string, PathResult> | null
+  /** Node id → its path (for evaluator step stories). */
+  nodePaths?: Map<string, PathResult> | null
+  bestPathId?: string | null
+  /** Parsed evaluator metrics.json per node (+ confusion matrix image paths). */
+  evaluator?: EvaluatorOutputs | null
 }) {
   const [trace, setTrace] = React.useState<TracePayload | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -754,7 +799,7 @@ export function RunLineagePanel({
   )
   const edgesWired = stories.some((s) => s.wired)
   const multiTrack = isMultiTrackShape(shape)
-  const sections = timelineSections(stories, shape)
+  const sections = timelineSections(stories, shape, lanePaths)
   const hotSpots = [...stories]
     .filter((s) => s.durationMs != null && s.durationMs > 0)
     .sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0))
@@ -814,6 +859,8 @@ export function RunLineagePanel({
               stories={stories}
               focusNodeId={focusNodeId}
               onFocusStep={onFocusStep}
+              lanePaths={lanePaths}
+              bestPathId={bestPathId}
               savedFiles={
                 typeof (ov?.artifactCount ?? trace?.lineage?.artifact_count) === 'number'
                   ? Number(ov?.artifactCount ?? trace?.lineage?.artifact_count)
@@ -870,28 +917,24 @@ export function RunLineagePanel({
         </div>
       ) : null}
 
-      {metrics && Object.keys(metrics).length > 0 ? (
+      {metrics && Object.keys(scalarMetrics(metrics)).length > 0 ? (
         <div className="overflow-hidden rounded-xl border border-ink-200">
           <div className="border-b border-ink-100 bg-ink-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
             Metrics
           </div>
           <ul className="divide-y divide-ink-100">
-            {Object.entries(metrics)
+            {Object.entries(scalarMetrics(metrics))
               .slice(0, 12)
               .map(([k, v]) => (
                 <li
                   key={k}
                   className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm"
                 >
-                  <span className="min-w-0 truncate font-medium text-ink-900">
-                    {k.replace(/_/g, ' ')}
+                  <span className="min-w-0 truncate font-medium text-ink-900" title={k}>
+                    {metricLabel(k)}
                   </span>
-                  <span className="shrink-0 tabular-nums text-[11px] text-ink-500">
-                    {typeof v === 'number' && Number.isFinite(v)
-                      ? Number.isInteger(v)
-                        ? v.toLocaleString()
-                        : v.toFixed(4)
-                      : String(v)}
+                  <span className="shrink-0 tabular-nums text-[12px] font-semibold text-ink-800">
+                    {Number.isInteger(v) ? v.toLocaleString() : formatMetric(v)}
                   </span>
                 </li>
               ))}
@@ -973,6 +1016,9 @@ export function RunLineagePanel({
       {focused ? (
         <StepDetailCard
           story={focused}
+          evaluatorMetrics={evaluator?.metricsByNode[focused.id]}
+          confusionImagePath={evaluator?.confusionImageByNode[focused.id]}
+          path={nodePaths?.get(focused.id) ?? null}
           labelById={labelById}
           onBrowseOutputs={onBrowseOutputs}
           onClearFocus={onFocusStep ? () => onFocusStep(null) : undefined}
@@ -1036,6 +1082,14 @@ export function RunLineagePanel({
                                 cached
                               </span>
                             ) : null}
+                            {(() => {
+                              const pm = pickPrimaryMetric(evaluator?.metricsByNode[s.id])
+                              return pm ? (
+                                <span className="rounded-md bg-white px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-ink-800 ring-1 ring-ink-200">
+                                  {metricLabel(pm.name)} {formatMetric(pm.value)}
+                                </span>
+                              ) : null
+                            })()}
                             <span className="ml-auto shrink-0 tabular-nums text-[11px] text-ink-500">
                               {formatDuration(s.durationMs)}
                             </span>
@@ -1114,7 +1168,13 @@ function StepDetailCard({
   labelById,
   onBrowseOutputs,
   onClearFocus,
+  evaluatorMetrics,
+  confusionImagePath,
+  path,
 }: {
+  evaluatorMetrics?: unknown
+  confusionImagePath?: string
+  path?: PathResult | null
   story: StepStory
   labelById: Map<string, string>
   onBrowseOutputs?: (nodeId?: string | null) => void
@@ -1170,6 +1230,9 @@ function StepDetailCard({
         <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-[12px] text-rose-900">
           {story.error}
         </p>
+      ) : null}
+      {evaluatorMetrics != null || confusionImagePath ? (
+        <EvaluatorResult metrics={evaluatorMetrics} confusionImagePath={confusionImagePath} path={path} />
       ) : null}
       {onBrowseOutputs ? (
         <div className="mt-2">

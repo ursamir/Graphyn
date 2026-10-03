@@ -3,11 +3,13 @@
 Bounded Context:  BC3 / BC5 — Isolated plugin execution bridge
 Responsibility:   Run an isolated plugin node's process() in a subprocess
                   using that plugin's venv Python, with pickle IPC via files.
-Owns:             run_isolated_node(), recast_plugin_types()
+Owns:             run_isolated_node(), recast_plugin_types(); live parsing
+                  of worker ``@@GRAPHYN_PROGRESS@@ <json>`` stderr lines
+                  forwarded as node_progress events (app.core.nodes.progress).
 Public Surface:   run_isolated_node, recast_plugin_types, load_isolated_outputs,
                   hydrate_platform_models (via app.core.plugins.hydrate)
 Must NOT:         Import from app.domain or app.api.
-Dependencies:     stdlib, runtime_registry
+Dependencies:     stdlib, runtime_registry, app.core.nodes.progress (lazy)
 Reason To Change: IPC protocol or worker CLI changes.
 
 IPC / pickle (B3)
@@ -314,6 +316,7 @@ def _run_isolated_subprocess(
     timeout: float,
     cancel_check: Callable[[], bool] | None = None,
     cancel_poll_s: float = _CANCEL_POLL_S,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run the worker in a new session; terminate the group on timeout/cancel/failure.
 
@@ -322,7 +325,21 @@ def _run_isolated_subprocess(
 
     When ``cancel_check`` is provided, communicate is polled in short slices so
     mid-flight cancel can SIGTERM+SIGKILL the process group promptly.
+
+    When ``on_progress`` is provided, stdout/stderr are drained by reader
+    threads instead of ``communicate``: stderr lines starting with
+    ``@@GRAPHYN_PROGRESS@@`` are parsed live and passed to ``on_progress``
+    (and removed from the captured stderr); everything else is kept.
     """
+    if on_progress is not None:
+        return _run_isolated_subprocess_streaming(
+            cmd,
+            env=env,
+            timeout=timeout,
+            cancel_check=cancel_check,
+            cancel_poll_s=cancel_poll_s,
+            on_progress=on_progress,
+        )
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -385,6 +402,101 @@ def _run_isolated_subprocess(
             terminate_process_group(pgid)
         raise
     result = subprocess.CompletedProcess(cmd, proc.returncode or 0, stdout, stderr)
+    if result.returncode != 0:
+        terminate_process_group(pgid)
+    return result
+
+
+def _run_isolated_subprocess_streaming(
+    cmd: list[str],
+    *,
+    env: dict[str, str],
+    timeout: float,
+    cancel_check: Callable[[], bool] | None,
+    cancel_poll_s: float,
+    on_progress: Callable[[dict[str, Any]], None],
+) -> subprocess.CompletedProcess:
+    """Like :func:`_run_isolated_subprocess` but forwards progress lines live."""
+    import threading
+
+    from app.core.nodes.progress import parse_progress_line
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        env=env,
+        start_new_session=True,
+    )
+    pgid = proc.pid
+    out_chunks: list[str] = []
+    err_lines: list[str] = []
+
+    def _drain_stdout() -> None:
+        try:
+            for chunk in iter(proc.stdout.readline, ""):
+                out_chunks.append(chunk)
+        except Exception:
+            pass
+
+    def _drain_stderr() -> None:
+        try:
+            for line in iter(proc.stderr.readline, ""):
+                payload = parse_progress_line(line)
+                if payload is None:
+                    err_lines.append(line)
+                    continue
+                try:
+                    on_progress(payload)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    readers = [
+        threading.Thread(target=_drain_stdout, daemon=True, name="iso-stdout"),
+        threading.Thread(target=_drain_stderr, daemon=True, name="iso-stderr"),
+    ]
+    for t in readers:
+        t.start()
+
+    def _join_readers(limit: float = 8.0) -> None:
+        for t in readers:
+            t.join(timeout=limit)
+
+    deadline = time.monotonic() + float(timeout)
+    poll = max(0.05, float(cancel_poll_s))
+    try:
+        while True:
+            if cancel_check is not None and cancel_check():
+                terminate_process_group(pgid)
+                _join_readers()
+                raise RuntimeError(
+                    "cancelled by control plane (isolated process group terminated)"
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                terminate_process_group(pgid)
+                _join_readers()
+                raise RuntimeError(
+                    f"Isolated plugin worker timed out after {timeout}s "
+                    "(process group terminated)"
+                )
+            try:
+                proc.wait(timeout=min(poll, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    except BaseException:
+        if proc.poll() is None:
+            terminate_process_group(pgid)
+        raise
+    _join_readers()
+    result = subprocess.CompletedProcess(
+        cmd, proc.returncode or 0, "".join(out_chunks), "".join(err_lines)
+    )
     if result.returncode != 0:
         terminate_process_group(pgid)
     return result
@@ -475,6 +587,17 @@ def run_isolated_node(
         # Do not hide GPUs here; GRAPHYN_TF_DEVICE=cpu is the only path that
         # sets CUDA_VISIBLE_DEVICES=-1 (in configure_tf_stable_defaults).
 
+        # node_progress (app.core.nodes.progress): the worker has no run
+        # context, so emit_node_progress() writes ``@@GRAPHYN_PROGRESS@@``
+        # stderr lines that are forwarded live to the host sink below.
+        from app.core.nodes.progress import PROGRESS_ENV_MARKER, current_progress_sink
+
+        progress_sink = current_progress_sink()
+        if progress_sink is not None:
+            env[PROGRESS_ENV_MARKER] = "1"
+        else:
+            env.pop(PROGRESS_ENV_MARKER, None)
+
         cmd = [
             spec.venv_python,
             "-m",
@@ -489,7 +612,11 @@ def run_isolated_node(
             timeout,
         )
         result = _run_isolated_subprocess(
-            cmd, env=env, timeout=timeout, cancel_check=cancel_check
+            cmd,
+            env=env,
+            timeout=timeout,
+            cancel_check=cancel_check,
+            on_progress=progress_sink,
         )
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()

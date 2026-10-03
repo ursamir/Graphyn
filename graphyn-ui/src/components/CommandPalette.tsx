@@ -4,6 +4,7 @@ import { useAppStore, type AppView } from '../store/appStore'
 import { apiJson } from '../api/client'
 import { unwrapList } from '../api/unwrapList'
 import { shortRunId } from '../lib/format'
+import { runDisplayName } from '../lib/runDisplay'
 import { pathForView } from '../routes/viewMap'
 import { navigatePath } from '../routes/parsePath'
 import { paths } from '../routes/paths'
@@ -89,7 +90,7 @@ export function CommandPalette({
   const [activeIdx, setActiveIdx] = React.useState(0)
   const [projects, setProjects] = React.useState<Array<{ name: string }>>([])
   const [recentRuns, setRecentRuns] = React.useState<
-    Array<{ run_id: string; status?: string; graph_name?: string; project?: string }>
+    Array<{ run_id: string; status?: string; graph_name?: string; project?: string; display_name?: string }>
   >([])
   const inputRef = React.useRef<HTMLInputElement | null>(null)
 
@@ -113,10 +114,15 @@ export function CommandPalette({
       try {
         const [plist, runs] = await Promise.all([
           apiJson('/projects').then(unwrapList<{ name: string }>).catch(() => []),
-          apiJson<Array<{ run_id: string; status?: string; graph_name?: string; project?: string }>>(
-            '/runs',
-            { query: { limit: 12, offset: 0, ...(activeProject ? { project: activeProject } : {}) } },
-          ).catch(() => []),
+          apiJson<unknown>('/runs', {
+            query: { limit: 12, offset: 0, ...(activeProject ? { project: activeProject } : {}) },
+          })
+            .then((r) =>
+              unwrapList<{ run_id: string; status?: string; graph_name?: string; project?: string; display_name?: string }>(r).filter(
+                (x) => x && typeof x.run_id === 'string',
+              ),
+            )
+            .catch(() => []),
         ])
         if (cancelled) return
         setProjects(Array.isArray(plist) ? plist : [])
@@ -292,10 +298,10 @@ export function CommandPalette({
     for (const r of recentRuns.slice(0, 8)) {
       out.push({
         id: `run:${r.run_id}`,
-        label: `${shortRunId(r.run_id)}${r.graph_name ? ` · ${r.graph_name}` : ''}`,
+        label: `${runDisplayName(r)} · ${shortRunId(r.run_id)}`,
         hint: r.status || r.project || undefined,
         group: 'Runs',
-        keywords: `${r.run_id} ${r.graph_name || ''} ${r.project || ''} ${r.status || ''}`,
+        keywords: `${r.run_id} ${r.display_name || ''} ${r.graph_name || ''} ${r.project || ''} ${r.status || ''}`,
         run: () => {
           openRun(r.run_id)
           setOpen(false)

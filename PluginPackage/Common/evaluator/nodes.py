@@ -28,6 +28,38 @@ from app.models.model_artifact import ModelArtifact
 
 log = logging.getLogger(__name__)
 
+# ── progress events (Runs UI) ─────────────────────────────────────────────────
+try:
+    from app.core.nodes.progress import emit_node_progress
+except ImportError:  # pragma: no cover - host predates progress events
+    def emit_node_progress(payload: dict) -> None:  # type: ignore[misc]
+        return None
+
+
+def _report_progress(payload: dict) -> None:
+    """Best-effort progress event — never fails evaluation."""
+    try:
+        emit_node_progress(payload)
+    except Exception:
+        log.debug("EvaluatorNode: progress emit failed", exc_info=True)
+
+
+def _write_labels_txt(directory, labels) -> str | None:
+    """Write labels.txt (class-index order) into an existing directory."""
+    labels = [str(x) for x in (labels or [])]
+    if not labels:
+        return None
+    path = Path(directory)
+    try:
+        if not path.is_dir():
+            return None
+        target = path / "labels.txt"
+        target.write_text("\n".join(labels), encoding="utf-8")
+        return str(target)
+    except OSError as exc:
+        log.warning("EvaluatorNode: could not write labels.txt in %s: %s", path, exc)
+        return None
+
 
 # ── Plot helpers ──────────────────────────────────────────────────────────────
 
@@ -218,11 +250,11 @@ class EvaluatorNode(Node):
     }
 
     class Config(NodeConfig):
-        output_path: str = Field(default='workspace/artifacts/evaluation', title="Output path", description="Write under workspace/artifacts (relative to the Graphyn workspace).")
-        plot_confusion_matrix: bool = Field(default=True, title="Plot Confusion Matrix", description="Save confusion_matrix.png (needs matplotlib + seaborn) (On/Off).")
+        output_path: str = Field(default='workspace/artifacts/evaluation', title="Output path", description="Folder for metrics.json, labels.txt and the plots.")
+        plot_confusion_matrix: bool = Field(default=True, title="Plot Confusion Matrix", description="Save a confusion-matrix image (On/Off).")
         plot_training_curves: bool = Field(default=True, title="Plot Training Curves", description="Save training_curves.png from the trainer history (On/Off).")
         compute_roc: bool = Field(default=True, title="Compute ROC", description="Compute macro ROC AUC (OvR for multi-class) and save roc_curves.png (On/Off).")
-        compute_fairness: bool = Field(default=False, title="Compute Fairness", description="Per-group test accuracy sliced by fairness_attribute_key (On/Off).")
+        compute_fairness: bool = Field(default=False, title="Compute Fairness", description="Report test accuracy per group (see Fairness attribute key) and warn when a group is more than 10% off (On/Off).")
         fairness_attribute_key: str = Field(default='speaker_id', title="Fairness attribute key", description="Metadata key used to slice fairness metrics (e.g. gender).")
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -438,7 +470,14 @@ class EvaluatorNode(Node):
         # ── Resolve test data ─────────────────────────────────────────────────
         X_test = dataset.X_test
         y_test = np.asarray(dataset.y_test, dtype=np.int64)
+        # Class-index order of the model (trainer copies dataset.labels).
         labels = list(artifact.labels) if artifact.labels else list(dataset.labels)
+        ds_labels = [str(x) for x in (getattr(dataset, "labels", None) or [])]
+        if ds_labels and [str(x) for x in labels] != ds_labels:
+            log.warning(
+                "EvaluatorNode: model labels %s differ from dataset labels %s — "
+                "per-class metrics follow the model order.", labels, ds_labels,
+            )
         n_classes = len(labels)
 
         log.info("EvaluatorNode: evaluating on %d test samples...", len(X_test))
@@ -463,6 +502,7 @@ class EvaluatorNode(Node):
                 metrics={"error": "PyTorch state dict loaded — architecture required for inference"},
             )}
 
+        _report_progress({"phase": "evaluate", "n_test": int(len(X_test)), "pct": 0.0})
         y_pred_probs = model.predict(X_test, verbose=0)
         y_pred = np.argmax(y_pred_probs, axis=1)
 
@@ -565,16 +605,35 @@ class EvaluatorNode(Node):
                     exc,
                 )
 
+        # labels.txt next to every model file of this artifact (class-index order)
+        # and next to metrics.json so the confusion matrix can be read standalone.
+        self._write_model_labels(artifact, labels)
+        _write_labels_txt(out_path, labels)
+
         self._publish_eval_tree(out_path)
+
+        _report_progress({
+            "phase": "evaluate",
+            "n_test": int(len(X_test)),
+            "test_accuracy": round(float(test_acc), 6),
+            "roc_auc": metrics.get("roc_auc"),
+            "pct": 100.0,
+            "message": f"Test accuracy {float(test_acc):.1%} on {int(len(X_test))} held-out samples",
+        })
 
         # ── Return enriched artifact ──────────────────────────────────────────
         # Keep upstream hand-off keys (e.g. keras_model_path) so edge_optimizer
         # can still locate the .keras / calibration data next to the model.
+        upstream_metrics = artifact.metrics or {}
         upstream = {
-            k: v for k, v in (artifact.metrics or {}).items()
+            k: v for k, v in upstream_metrics.items()
             if k.endswith("_path") and k not in metrics
         }
         metrics.update(upstream)
+        for key in ("display_name", "epochs_run", "best_val_accuracy", "architecture"):
+            if key in upstream_metrics and key not in metrics:
+                metrics[key] = upstream_metrics[key]
+        metrics["labels"] = list(labels)
         return {
             "output": ModelArtifact(
                 model_path=artifact.model_path,
@@ -584,6 +643,24 @@ class EvaluatorNode(Node):
             )
         }
 
+    @staticmethod
+    def _write_model_labels(artifact, labels) -> None:
+        """Ensure labels.txt sits next to the SavedModel / .keras of the artifact."""
+        dirs: list[Path] = []
+        mp = Path(str(getattr(artifact, "model_path", "") or ""))
+        if str(mp) not in ("", "."):
+            dirs.append(mp if mp.is_dir() else mp.parent)
+        keras_path = str((getattr(artifact, "metrics", None) or {}).get("keras_model_path") or "")
+        if keras_path:
+            dirs.append(Path(keras_path).parent)
+        seen: set[str] = set()
+        for d in dirs:
+            key = str(d)
+            if key in seen:
+                continue
+            seen.add(key)
+            _write_labels_txt(d, labels)
+
     def _publish_eval_tree(self, out_path: Path) -> None:
         """Announce metrics/plots via Node.publish_files (generic inventory)."""
         names = (
@@ -591,6 +668,7 @@ class EvaluatorNode(Node):
             "confusion_matrix.png",
             "training_curves.png",
             "roc_curves.png",
+            "labels.txt",
         )
         files: list[dict] = []
         for name in names:

@@ -86,11 +86,11 @@ class AudioConditionerNode(Node):
         mono: bool = Field(default=True, title="Mono", description="Downmix to a single channel (On/Off).")
 
         trim_silence: bool = Field(default=True, title="Trim silence", description="Trim leading/trailing silence quieter than trim_threshold_db below the clip peak (On/Off).")
-        trim_threshold_db: float = Field(default=40.0, gt=0, le=120, title="Trim threshold (dB below peak)", description="librosa top_db: frames quieter than (peak - this) dB count as silence. Higher = less audio trimmed.")
+        trim_threshold_db: float = Field(default=40.0, gt=0, le=120, title="Trim threshold (dB below peak)", description="Frames quieter than (clip peak minus this many dB) count as silence. Higher = less audio trimmed.")
 
         normalize: bool = Field(default=True, title="Normalize", description="Normalize audio amplitude with normalize_method (On/Off).")
-        normalize_method: Literal["peak", "rms", "lufs"] = Field(default='peak', title="Normalize method", description="Loudness normalization method. One of: peak, rms, lufs (lufs needs pyloudnorm; falls back to rms at target_level_db).")
-        target_level_db: float = Field(default=-1.0, ge=-96, le=0, title="Target level (dBFS)", description="Peak/RMS target level in dBFS when normalize_method is peak or rms (also the rms fallback for lufs without pyloudnorm).")
+        normalize_method: Literal["peak", "rms", "lufs"] = Field(default='peak', title="Normalize method", description="Loudness normalization method: peak, rms or lufs (perceived loudness; uses rms at the target level when LUFS measurement is unavailable).")
+        target_level_db: float = Field(default=-1.0, ge=-96, le=0, title="Target level (dBFS)", description="Target level in dBFS for peak or rms normalization.")
         target_lufs: float = Field(default=-23.0, ge=-70, le=0, title="Target LUFS", description="EBU R128 integrated loudness target when normalize_method is lufs.")
 
         remove_dc_offset: bool = Field(default=True, title="Remove DC offset", description="Subtract DC bias before further processing (On/Off).")

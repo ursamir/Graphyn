@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { apiFetch, apiJson, downloadOutputFile } from '../../api/client'
 import { unwrapList } from '../../api/unwrapList'
+import { apiErrorCode, apiErrorDetail } from '../../api/errorCode'
 import { useAppStore } from '../../store/appStore'
 import type { GraphIR } from '../../types/graph'
 import {
@@ -40,6 +41,19 @@ import {
   type EdgeTarget,
 } from './edgeDeployTemplate'
 import { isTerminalFailure, isTerminalSuccess } from '../../lib/runStatus'
+import { formatRelativeTime } from '../../lib/format'
+import { runDisplayName } from '../../lib/runDisplay'
+import {
+  checkLabelsAgainstModel,
+  isShippableSource,
+  normalizeRunModels,
+  parseLabelsCsv,
+  pickDefaultRunModel,
+  runModelSummary,
+  runModelTitle,
+  runModelsFromOutputs,
+  type RunModel,
+} from './runModels'
 import DevicesView from '../ship/DevicesView'
 import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
@@ -48,25 +62,44 @@ type WizardStep = 1 | 2 | 3 | 4
 type ShipTab = 'package' | 'devices'
 
 const STEP_LABELS: Record<WizardStep, string> = {
-  1: 'Graph',
+  1: 'Source run',
   2: 'Configure',
   3: 'Package run',
   4: 'Download',
 }
 
-/** Placeholder model path. Never probed — it only exists if a run wrote there. */
-const DEFAULT_MODEL_PATH = 'workspace/artifacts/models/saved_model'
+type RegistryStage = {
+  run_id?: string
+  slug?: string
+  path?: string
+  /** UX API: resolved model file for this stage (+ `exists` false when gone). */
+  artifact_path?: string
+  artifact_kind?: string
+  format?: string
+  exists?: boolean
+  labels?: string[]
+  path_label?: string
+  source_run_display_name?: string
+}
 
 type RegistryModel = {
   name: string
-  stages?: Record<string, { run_id?: string; slug?: string; path?: string }>
+  stages?: Record<string, RegistryStage>
 }
 
 function cloneTemplate(): GraphIR {
   return structuredClone(EDGE_DEPLOY_TEMPLATE)
 }
 
-function parseEdgeLocation(): { project?: string; version?: string; runId?: string; tab?: ShipTab } {
+function parseEdgeLocation(): {
+  project?: string
+  version?: string
+  runId?: string
+  tab?: ShipTab
+  model?: string
+  stage?: string
+  modelPath?: string
+} {
   const params = readSearchParams()
   const pathname = window.location.pathname
   const parts = pathname.replace(/\/+$/, '').split('/').filter(Boolean)
@@ -84,6 +117,10 @@ function parseEdgeLocation(): { project?: string; version?: string; runId?: stri
     version: (params.get('version') || '').trim() || undefined,
     runId: (params.get('run_id') || '').trim() || undefined,
     tab: devicesPath ? 'devices' : 'package',
+    // Carried from Models → "Use in Ship" so Configure preselects that model.
+    model: (params.get('model') || '').trim() || undefined,
+    stage: (params.get('stage') || '').trim() || undefined,
+    modelPath: (params.get('model_path') || '').trim() || undefined,
   }
 }
 
@@ -117,7 +154,13 @@ export default function EdgeWizardView() {
   const [linkedVersion, setLinkedVersion] = React.useState(initialEdge.version ?? '')
   const [sourceRunId, setSourceRunId] = React.useState(initialEdge.runId ?? '')
   const [projectRuns, setProjectRuns] = React.useState<
-    Array<{ run_id: string; status?: string; graph_name?: string }>
+    Array<{
+      run_id: string
+      status?: string
+      graph_name?: string
+      display_name?: string
+      summary?: { best_path_id?: string | null } | null
+    }>
   >([])
   const [sourceArtifacts, setSourceArtifacts] = React.useState<
     Array<{
@@ -137,8 +180,21 @@ export default function EdgeWizardView() {
 
   const [step, setStep] = React.useState<WizardStep>(1)
   const [graph, setGraph] = React.useState<GraphIR | null>(null)
-  const [modelPath, setModelPath] = React.useState(DEFAULT_MODEL_PATH)
-  const [labelsCsv, setLabelsCsv] = React.useState('yes, no, up, down, go, stop')
+  // Never prefill a guessed path — it is set only from a real run model / verified probe.
+  const [modelPath, setModelPath] = React.useState(initialEdge.modelPath ?? '')
+  const [labelsCsv, setLabelsCsv] = React.useState('')
+  /** User typed labels by hand — stop auto-filling from the picked model. */
+  const [labelsTouched, setLabelsTouched] = React.useState(false)
+  const [runModels, setRunModels] = React.useState<RunModel[]>([])
+  /** Run id whose models are in `runModels` (null while loading / none). */
+  const [runModelsRun, setRunModelsRun] = React.useState<string | null>(null)
+  const [runModelsLoading, setRunModelsLoading] = React.useState(false)
+  /** Model carried from Models → Use in Ship (`?model=&stage=`). */
+  const [carriedModel] = React.useState<{ name?: string; stage?: string }>(() => ({
+    name: initialEdge.model,
+    stage: initialEdge.stage,
+  }))
+  const autoAdvancedRef = React.useRef(false)
   const [backend, setBackend] = React.useState<EdgeBackend>('tflite')
   const [quantization, setQuantization] = React.useState<EdgeQuantization>('float32')
   const [target, setTarget] = React.useState<EdgeTarget>('edge')
@@ -213,9 +269,9 @@ export default function EdgeWizardView() {
   React.useEffect(() => {
     let cancelled = false
     const path = modelPath.trim()
-    if (!path || path === DEFAULT_MODEL_PATH) {
-      // The hardcoded placeholder is not a real location — don't fire a GET that 404s.
-      setModelPathMissing(true)
+    if (!path) {
+      // Nothing picked yet — Configure shows "pick a model", not "missing on disk".
+      setModelPathMissing(false)
       setModelPathChecking(false)
       return
     }
@@ -333,6 +389,41 @@ export default function EdgeWizardView() {
     }
   }, [sourceRunId])
 
+  // Models this run produced (GET /runs/{id}/models; fallback: scan run outputs).
+  React.useEffect(() => {
+    const rid = sourceRunId.trim()
+    if (!rid) {
+      setRunModels([])
+      setRunModelsRun(null)
+      setRunModelsLoading(false)
+      return
+    }
+    let cancelled = false
+    setRunModelsLoading(true)
+    void (async () => {
+      let models: RunModel[] = []
+      try {
+        models = normalizeRunModels(await apiJson(`/runs/${encodeURIComponent(rid)}/models`))
+      } catch {
+        models = []
+      }
+      if (models.length === 0) {
+        try {
+          models = runModelsFromOutputs(await apiJson(`/runs/${encodeURIComponent(rid)}/outputs`))
+        } catch {
+          models = []
+        }
+      }
+      if (cancelled) return
+      setRunModels(models)
+      setRunModelsRun(rid)
+      setRunModelsLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [sourceRunId])
+
   React.useEffect(() => {
     if (!linkedProject && activeProject) setLinkedProject(activeProject)
   }, [activeProject, linkedProject])
@@ -346,11 +437,10 @@ export default function EdgeWizardView() {
     }
     void (async () => {
       try {
-        const runs = await apiJson<Array<{ run_id: string; status?: string; graph_name?: string }>>(
-          '/runs',
-          { query: { limit: 20, offset: 0, project } },
-        )
-        if (!cancelled) setProjectRuns(Array.isArray(runs) ? runs : [])
+        const runs = unwrapList<{ run_id: string; status?: string; graph_name?: string }>(
+          await apiJson('/runs', { query: { limit: 20, offset: 0, project } }),
+        ).filter((r) => r && typeof r.run_id === 'string')
+        if (!cancelled) setProjectRuns(runs)
       } catch {
         if (!cancelled) setProjectRuns([])
       }
@@ -419,6 +509,113 @@ export default function EdgeWizardView() {
     if (ok?.run_id) setSourceRunId(ok.run_id)
   }, [modelRuns, sourceRunId])
 
+  /* Registry stage carried from Models → Use in Ship. Its resolved
+     `artifact_path` (UX API) is the preferred model when it belongs to the
+     selected source run and still exists. */
+  const carriedStage = React.useMemo<RegistryStage | null>(() => {
+    if (!carriedModel.name) return null
+    const m = registryModels.find((r) => r.name === carriedModel.name)
+    const stages = m?.stages || {}
+    const key =
+      (carriedModel.stage && stages[carriedModel.stage] ? carriedModel.stage : '') ||
+      (stages.staging ? 'staging' : stages.prod ? 'prod' : stages.latest ? 'latest' : Object.keys(stages)[0] || '')
+    return key ? stages[key] ?? null : null
+  }, [carriedModel, registryModels])
+  const preferredModelPath = React.useMemo(() => {
+    if (initialEdge.modelPath) return initialEdge.modelPath
+    const st = carriedStage
+    if (!st || st.exists === false) return null
+    if (st.run_id && sourceRunId.trim() && st.run_id !== sourceRunId.trim()) return null
+    return typeof st.artifact_path === 'string' && st.artifact_path.trim() ? st.artifact_path.trim() : null
+  }, [carriedStage, sourceRunId, initialEdge.modelPath])
+  const bestPathId = React.useMemo(() => {
+    const row = projectRuns.find((r) => r.run_id === sourceRunId.trim())
+    const id = row?.summary?.best_path_id
+    return typeof id === 'string' ? id : null
+  }, [projectRuns, sourceRunId])
+
+  /** Path we set automatically (so a run switch can clear it without eating user input). */
+  const autoModelPathRef = React.useRef<string | null>(null)
+  const autoPickKeyRef = React.useRef<string>('')
+  React.useEffect(() => {
+    const rid = sourceRunId.trim()
+    if (!rid || runModelsRun !== rid) return
+    const key = `${rid}|${preferredModelPath ?? ''}|${bestPathId ?? ''}|${runModels.length}`
+    if (autoPickKeyRef.current === key) return
+    autoPickKeyRef.current = key
+    const userPath = modelPath.trim() && modelPath !== autoModelPathRef.current
+    if (userPath && runModels.some((m) => m.path === modelPath)) return
+    const pick = pickDefaultRunModel(runModels, { preferredPath: preferredModelPath, bestPathId })
+    if (pick) {
+      autoModelPathRef.current = pick.path
+      setModelPath(pick.path)
+      setSourceArtifactId('')
+      return
+    }
+    if (preferredModelPath) {
+      // Old API: no model list, but the registry resolved an existing file.
+      autoModelPathRef.current = preferredModelPath
+      setModelPath(preferredModelPath)
+      return
+    }
+    if (!userPath) {
+      autoModelPathRef.current = null
+      setModelPath('')
+    }
+  }, [sourceRunId, runModelsRun, runModels, preferredModelPath, bestPathId, modelPath])
+
+  const selectedRunModel = React.useMemo(
+    () => runModels.find((m) => m.path === modelPath.trim()) ?? null,
+    [runModels, modelPath],
+  )
+  const modelLabels = React.useMemo<string[] | null>(() => {
+    if (selectedRunModel?.labels?.length) return selectedRunModel.labels
+    if (carriedStage?.labels?.length && preferredModelPath && preferredModelPath === modelPath.trim()) {
+      return carriedStage.labels.map(String)
+    }
+    return null
+  }, [selectedRunModel, carriedStage, preferredModelPath, modelPath])
+  // Prefill labels in the model's class order (labels.txt) unless the user typed their own.
+  React.useEffect(() => {
+    if (labelsTouched || !modelLabels) return
+    setLabelsCsv(modelLabels.join(', '))
+  }, [modelLabels, labelsTouched])
+  const enteredLabels = React.useMemo(() => parseLabelsCsv(labelsCsv), [labelsCsv])
+  const labelCheck = React.useMemo(
+    () => checkLabelsAgainstModel(modelLabels, enteredLabels),
+    [modelLabels, enteredLabels],
+  )
+  const configBlocker: string | null = !modelPath.trim()
+    ? 'Pick a model to ship.'
+    : enteredLabels.length === 0
+      ? 'Enter the class labels.'
+      : labelCheck.status === 'order'
+        ? `Labels are in a different order than the model's classes (${labelCheck.expected.join(', ')}). Every prediction would be mislabeled.`
+        : labelCheck.status === 'set'
+          ? `Labels don't match the model's classes (${labelCheck.expected.join(', ')}).`
+          : null
+
+  const pickRunModel = (m: RunModel) => {
+    if (!isShippableSource(m)) return
+    autoModelPathRef.current = null
+    setModelPath(m.path)
+    setSourceArtifactId('')
+    if (m.labels?.length) {
+      setLabelsTouched(false)
+      setLabelsCsv(m.labels.join(', '))
+    }
+  }
+
+  // Step 1 is optional: once workspace + source run are known, load the edge
+  // template and land on Configure automatically (once — Back still works).
+  React.useEffect(() => {
+    if (autoAdvancedRef.current || step !== 1) return
+    if (!linkedProject.trim() || !sourceRunId.trim()) return
+    autoAdvancedRef.current = true
+    setGraph((g) => g ?? cloneTemplate())
+    setStep(2)
+  }, [linkedProject, sourceRunId, step])
+
   // Prefer path workspace id; devices tab via pathname segment.
   // Do not mirror ?project= when /workspaces/:id/ship already carries the id.
   React.useEffect(() => {
@@ -458,12 +655,16 @@ export default function EdgeWizardView() {
       const candidates = resolveModelPathCandidates(input)
       if (candidates.length === 0) return
       const { path, verified } = await pickExistingModelPath(candidates, probeFetch)
-      if (path) {
+      // Only adopt a path that exists on disk — a guessed alias path that 404s
+      // (…/staging/saved_model) is worse than an honest "pick a model".
+      if (path && verified) {
         setModelPath(path)
-        setModelPathMissing(!verified)
+        setModelPathMissing(false)
+      } else {
+        pushToast('That model file is no longer on disk — pick one of the run’s models instead', 'error')
       }
     },
-    [probeFetch],
+    [probeFetch, pushToast],
   )
 
   const createShipPackageFromRegistry = async () => {
@@ -472,8 +673,8 @@ export default function EdgeWizardView() {
       pushToast('Select a workspace first', 'error')
       return
     }
-    if (!pickedModel) {
-      pushToast('Pick a registered model first', 'error')
+    if (!pickedModel && !modelPath.trim()) {
+      pushToast('Pick a model first', 'error')
       return
     }
     const model = registryModels.find((m) => m.name === pickedModel)
@@ -499,8 +700,11 @@ export default function EdgeWizardView() {
           'Idempotency-Key': `ui-ship-${project}-${pickedModel}-${Date.now()}`,
         },
         body: JSON.stringify({
-          model_name: pickedModel,
-          model_stage_or_version: stageKey,
+          ...(pickedModel ? { model_name: pickedModel, model_stage_or_version: stageKey } : {}),
+          // UX API: ship the exact model file + labels picked in Configure.
+          ...(modelPath.trim() ? { model_path: modelPath.trim() } : {}),
+          ...(sourceRunId.trim() ? { run_id: sourceRunId.trim() } : {}),
+          ...(enteredLabels.length ? { labels: enteredLabels } : {}),
           target: { runtime: backend || 'tflite', arch: 'any' },
           env: 'draft',
           unsigned_allowed: true,
@@ -508,9 +712,14 @@ export default function EdgeWizardView() {
       })
       const sha = res?.manifest?.checksums?.sha256
       if (sha) setPackageChecksum(sha)
+      const warnings = Array.isArray((res as { warnings?: unknown })?.warnings)
+        ? ((res as { warnings: Array<{ message?: string }> }).warnings
+            .map((w) => (w && typeof w.message === 'string' ? w.message : ''))
+            .filter(Boolean))
+        : []
       pushToast(
-        `Ship package ${res?.package_id || ''} created (${res?.status || 'ready'})`,
-        'success',
+        `Device package created${warnings.length ? ` — note: ${warnings.join('; ')}` : ''}`,
+        warnings.length ? 'info' : 'success',
       )
       // refresh list
       const listed = await apiJson<{ items?: Array<Record<string, unknown>> }>(
@@ -527,7 +736,19 @@ export default function EdgeWizardView() {
         })),
       )
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Ship package create failed', 'error')
+      if (apiErrorCode(err) === 'labels_mismatch') {
+        const expected = apiErrorDetail(err)?.expected
+        pushToast(
+          `Labels are in the wrong order for this model${Array.isArray(expected) ? ` — model class order is ${expected.join(', ')}` : ''}`,
+          'error',
+        )
+        if (Array.isArray(expected)) {
+          setLabelsTouched(false)
+          setLabelsCsv(expected.map(String).join(', '))
+        }
+      } else {
+        pushToast(err instanceof Error ? err.message : 'Device package create failed', 'error')
+      }
     } finally {
       setCreatingShipPkg(false)
     }
@@ -551,6 +772,23 @@ export default function EdgeWizardView() {
               : Object.keys(stages)[0] || ''
     const stage = stageKey ? stages[stageKey] : null
     if (stage?.run_id) setSourceRunId(stage.run_id)
+    // UX API: stages carry the real model file (`artifact_path`, and `path` is
+    // no longer an alias dir) — use it as-is, never append /saved_model.
+    const resolved = (stage?.artifact_path || '').trim()
+    if (resolved && stage?.exists !== false) {
+      autoModelPathRef.current = null
+      setModelPath(resolved)
+      if (stage?.labels?.length) {
+        setLabelsTouched(false)
+        setLabelsCsv(stage.labels.map(String).join(', '))
+      }
+      pushToast(`Using ${name}${stageKey ? ` (model stage ${stageKey})` : ''}`, 'info')
+      return
+    }
+    if (stage?.exists === false) {
+      pushToast(`${name}'s model file is missing on disk — pick another model`, 'error')
+      return
+    }
     const slug =
       stage?.slug ||
       (typeof stage?.path === 'string'
@@ -590,12 +828,13 @@ export default function EdgeWizardView() {
 
   // Source run artifacts arrived and the model path is still the placeholder:
   // adopt the run's first model artifact instead of a guessed default path.
+  // Only when the run has no model list (old API, no model files in outputs).
   React.useEffect(() => {
-    if (modelPath !== DEFAULT_MODEL_PATH || sourceArtifactId) return
+    if (modelPath.trim() || sourceArtifactId || runModelsLoading || runModels.length > 0) return
     const first = sourceArtifacts.find(isModelLikeArtifact)
     if (first?.artifact_id) applySourceArtifact(String(first.artifact_id))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceArtifacts])
+  }, [sourceArtifacts, runModelsLoading, runModels.length])
 
   const configuredGraph = React.useMemo(() => {
     const base = graph ?? EDGE_DEPLOY_TEMPLATE
@@ -611,16 +850,16 @@ export default function EdgeWizardView() {
 
   const useEdgeTemplate = () => {
     if (!linkedProject.trim()) {
-      pushToast('Select a workspace first — Edge packages must hang off a workspace', 'error')
+      pushToast('Open a workspace first', 'error')
       return
     }
     if (!sourceRunId.trim()) {
-      pushToast('Pick a source run (train lineage) before loading the edge template', 'error')
+      pushToast('Pick the training run whose model you want to ship', 'error')
       return
     }
     setGraph(cloneTemplate())
     setStep(2)
-    pushToast('Loaded edge-deploy template (optimize → package)', 'success')
+    pushToast('Ready to configure the package', 'success')
   }
 
   const openInBuilder = () => {
@@ -630,8 +869,13 @@ export default function EdgeWizardView() {
 
   const startRun = async () => {
     if (!linkedProject.trim() || !sourceRunId.trim()) {
-      pushToast('Workspace + source run_id required for accountable edge packaging', 'error')
+      pushToast('Pick the training run whose model you want to ship first', 'error')
       setStep(1)
+      return
+    }
+    if (configBlocker) {
+      pushToast(configBlocker, 'error')
+      setStep(2)
       return
     }
     setRunning(true)
@@ -662,7 +906,10 @@ export default function EdgeWizardView() {
       pushToast(`Edge run started: ${res.run_id.slice(0, 8)}…`, 'success')
       setStep(3)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const raw = err instanceof Error ? err.message : String(err)
+      const msg = apiErrorCode(err) === 'labels_mismatch' || /labels_mismatch/i.test(raw)
+        ? `The labels don't match the model's class order. ${raw}`
+        : raw
       setRunError(msg)
       setRunStatus('failed')
       pushToast(msg, 'error')
@@ -845,7 +1092,9 @@ export default function EdgeWizardView() {
       ) : (
         <>
           <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-white/95 px-3 py-2 text-sm shadow-sm backdrop-blur">
-            <span className="text-ink-500">Lineage</span>
+            <span className="text-ink-500" title="The workspace and the training run whose model you are shipping">
+              Ship from
+            </span>
             <input
               className="rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
               placeholder="workspace"
@@ -864,16 +1113,19 @@ export default function EdgeWizardView() {
               mono
               options={(modelRuns.length > 0 ? modelRuns : projectRuns).map((r) => ({
                 value: r.run_id,
-                label: `${r.run_id.slice(0, 8)} ${r.status || ''}`.trim(),
-                description:
-                  modelRuns.length > 0
-                    ? [r.graph_name, 'has model'].filter(Boolean).join(' · ')
-                    : [r.graph_name, 'no model artifacts found'].filter(Boolean).join(' · '),
+                label: runDisplayName(r),
+                description: [
+                  r.status,
+                  modelRuns.length > 0 ? 'has a model' : 'no model files found',
+                  `id ${r.run_id.slice(0, 8)}`,
+                ]
+                  .filter(Boolean)
+                  .join(' · '),
               }))}
             />
             <input
               className="min-w-[12rem] flex-1 rounded-lg border border-ink-200 px-2 py-1 font-mono text-[12px]"
-              placeholder="or paste run_id"
+              placeholder="or paste a run id"
               value={sourceRunId}
               onChange={(e) => setSourceRunId(e.target.value.trim())}
               aria-label="Source run id"
@@ -954,12 +1206,10 @@ export default function EdgeWizardView() {
 
           {step === 1 && (
             <div className="rounded-lg border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
-              <h3 className="text-sm font-semibold text-ink-900">Graph</h3>
+              <h3 className="text-sm font-semibold text-ink-900">Source run</h3>
               <p className="text-sm text-ink-500">
-                This wizard is{' '}
-                <strong className="font-medium text-ink-700">optimize → package → download</strong>{' '}
-                — not collect/train. Set workspace + source train run in the lineage bar above, then
-                load the edge template.
+                Ship turns a trained model into a package for devices: convert → package → download.
+                Pick the training run above — Configure opens automatically.
               </p>
               {linkedProject.trim() && !sourceRunId.trim() ? (
                 <EmptyState icon={EmptyRocket}
@@ -990,8 +1240,8 @@ export default function EdgeWizardView() {
                 />
               ) : !linkedProject.trim() || !sourceRunId.trim() ? (
                 <EmptyState icon={EmptyRocket}
-                  title="Workspace + source run required"
-                  description="Open a workspace, run a train pipeline from Templates/Editor, then return here with that run_id in the lineage bar."
+                  title="Pick a workspace and a training run"
+                  description="Open a workspace and train a model from Templates or the Editor, then pick that run above."
                   action={
                     <div className="flex flex-wrap justify-center gap-2">
                       <button
@@ -1015,21 +1265,19 @@ export default function EdgeWizardView() {
                     onClick={useEdgeTemplate}
                   >
                     <div className="flex items-center gap-2 text-sm font-semibold text-ink-900">
-                      <Cpu className="h-4 w-4 text-accent-700" /> Use edge template
+                      <Cpu className="h-4 w-4 text-accent-700" /> Continue to Configure
                     </div>
                     <p className="mt-1 text-xs text-ink-500">
-                      Loads <code className="font-mono">edge-deploy</code> for source run{' '}
-                      <code className="font-mono">{sourceRunId.slice(0, 8)}…</code>
+                      Uses the standard convert → package pipeline for{' '}
+                      {runDisplayName(projectRuns.find((r) => r.run_id === sourceRunId.trim()) ?? { run_id: sourceRunId })}
                     </p>
                   </button>
                   {sourceArtifactsRun === sourceRunId.trim() &&
                   !modelRunIds.has(sourceRunId.trim()) &&
                   !sourceArtifacts.some(isModelLikeArtifact) ? (
                     <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                      Run <code className="font-mono">{sourceRunId.slice(0, 8)}</code> produced no model
-                      artifacts. Pick a train run that registered or saved a model
-                      {modelRuns.length > 0 ? ` (${modelRuns.length} in this workspace)` : ''}, or set the
-                      model path by hand in the next step.
+                      This run saved no model files. Pick a training run that saved a model
+                      {modelRuns.length > 0 ? ` (${modelRuns.length} in this workspace)` : ''}.
                     </p>
                   ) : null}
                   <button
@@ -1055,15 +1303,151 @@ export default function EdgeWizardView() {
             <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
               <h3 className="text-sm font-semibold text-ink-900">Configure</h3>
               <p className="text-xs text-ink-500">
-                Required: a Keras SavedModel directory or <code className="font-mono">.keras</code>{' '}
-                file under <code className="font-mono">workspace/artifacts/…</code> (from trainer /
-                Example 06). INT8 needs <code className="font-mono">X_train_repr.npy</code> beside
-                the model.
+                Choose the trained model to convert and package for devices. INT8 quantization also
+                needs the representative sample file the trainer saves next to the model.
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2 sm:col-span-2">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                      Model to ship
+                    </span>
+                    {carriedModel.name ? (
+                      <span className="text-[11px] text-ink-500" title="Chosen on the Models page">
+                        From Models: <span className="font-medium text-ink-700">{carriedModel.name}</span>
+                        {carriedModel.stage ? ` · model stage ${carriedModel.stage}` : ''}
+                      </span>
+                    ) : null}
+                  </div>
+                  {runModelsLoading || (sourceRunId.trim() && runModelsRun !== sourceRunId.trim()) ? (
+                    <LoadingBlock label="Looking for this run’s models…" />
+                  ) : runModels.length > 0 ? (
+                    <ul
+                      role="radiogroup"
+                      aria-label="Model to ship"
+                      className="divide-y divide-ink-100 overflow-hidden rounded-xl border border-ink-200"
+                    >
+                      {runModels.map((m) => {
+                        const shippable = isShippableSource(m)
+                        const active = m.path === modelPath.trim()
+                        return (
+                          <li key={m.path}>
+                            <button
+                              type="button"
+                              role="radio"
+                              aria-checked={active}
+                              disabled={!shippable}
+                              title={m.path}
+                              onClick={() => pickRunModel(m)}
+                              className={[
+                                'flex w-full items-start gap-3 px-3 py-2 text-left transition',
+                                active ? 'bg-accent-50' : 'bg-white hover:bg-ink-50',
+                                shippable ? '' : 'cursor-not-allowed opacity-60',
+                              ].join(' ')}
+                            >
+                              <span
+                                aria-hidden
+                                className={[
+                                  'mt-1 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
+                                  active ? 'border-accent-600 bg-accent-500' : 'border-ink-300 bg-white',
+                                ].join(' ')}
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="flex flex-wrap items-center gap-2 text-[13px] font-medium text-ink-900">
+                                  <span className="truncate">{runModelTitle(m)}</span>
+                                  {bestPathId && m.path_id === bestPathId && shippable ? (
+                                    <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">
+                                      Best result
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="block text-[11px] text-ink-500">
+                                  {runModelSummary(m)}
+                                  {m.created_at ? ` · ${formatRelativeTime(m.created_at)}` : ''}
+                                  {m.labels?.length ? ` · ${m.labels.length} classes` : ''}
+                                </span>
+                                {!shippable ? (
+                                  <span className="block text-[11px] text-amber-800">
+                                    {m.kind === 'compiled_untrained'
+                                      ? 'Not trained yet — this is the empty model before training.'
+                                      : 'Already converted — pick the trained model it came from.'}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  ) : (
+                    <EmptyState
+                      compact
+                      icon={EmptyRocket}
+                      title="This run saved no model files"
+                      description="Pick a different training run in the bar above, or train a model first."
+                      action={
+                        <button type="button" className="btn-secondary" onClick={() => goView('templates')}>
+                          Open Templates
+                        </button>
+                      }
+                    />
+                  )}
+                  {!runModelsLoading && runModels.length === 0 && modelPath.trim() && !modelPathMissing && !modelPathChecking ? (
+                    <p className="text-[11px] text-emerald-700" title={modelPath}>
+                      Using the registered model file (found on disk).
+                    </p>
+                  ) : null}
+                </div>
                 <label className="block text-sm sm:col-span-2">
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                    Auto-pick from model registry
+                    Class labels, in the model's output order
+                  </span>
+                  <input
+                    className={[
+                      'field-control mt-0 w-full text-xs',
+                      labelCheck.status === 'order' || labelCheck.status === 'set' ? '!border-rose-400' : '',
+                    ].join(' ')}
+                    value={labelsCsv}
+                    placeholder={modelLabels ? modelLabels.join(', ') : 'e.g. down, go, no, stop, up, yes'}
+                    aria-invalid={labelCheck.status === 'order' || labelCheck.status === 'set'}
+                    onChange={(e) => {
+                      setLabelsTouched(true)
+                      setLabelsCsv(e.target.value)
+                    }}
+                  />
+                  {labelCheck.status === 'ok' ? (
+                    <span className="mt-1 block text-[11px] text-emerald-700">Matches the model's class order.</span>
+                  ) : labelCheck.status === 'unknown' ? (
+                    <span className="mt-1 block text-[11px] text-ink-400">
+                      Comma-separated. The order must match the order the model was trained with.
+                    </span>
+                  ) : (
+                    <div className="mt-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-900" role="alert">
+                      {labelCheck.status === 'order'
+                        ? 'Same classes, different order — every prediction would get the wrong name.'
+                        : `Different classes than the model${labelCheck.missing.length ? ` (missing: ${labelCheck.missing.join(', ')})` : ''}${labelCheck.extra.length ? ` (unknown: ${labelCheck.extra.join(', ')})` : ''}.`}{' '}
+                      Model class order is <span className="font-medium">{labelCheck.expected.join(', ')}</span>.{' '}
+                      <button
+                        type="button"
+                        className="font-medium underline"
+                        onClick={() => {
+                          setLabelsTouched(false)
+                          setLabelsCsv(labelCheck.expected.join(', '))
+                        }}
+                      >
+                        Use model order
+                      </button>
+                    </div>
+                  )}
+                </label>
+                <details className="rounded-xl border border-ink-100 bg-ink-50/50 px-3 py-2 sm:col-span-2">
+                  <summary className="cursor-pointer select-none text-[12px] font-medium text-ink-600">
+                    Advanced — registered models, file path
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                <div className="block text-sm">
+                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    Registered model (model registry)
                   </span>
                   <FieldSelect
                     className="mb-2 w-full"
@@ -1086,30 +1470,40 @@ export default function EdgeWizardView() {
                                 : Object.keys(stages)[0] || ''
                       const stage = stageKey ? stages[stageKey] : undefined
                       const pathHint =
+                        (typeof stage?.artifact_path === 'string' && stage.artifact_path.trim()) ||
                         (typeof stage?.path === 'string' && stage.path.trim()) ||
                         (stage?.slug ? `workspace/artifacts/${stage.slug}` : '')
                       return {
                         value: m.name,
-                        label: stageKey ? `${m.name} · ${stageKey}` : m.name,
-                        description: pathHint
-                          ? preferSavedModelPath(pathHint)
-                          : undefined,
+                        label: stageKey ? `${m.name} · model stage ${stageKey}` : m.name,
+                        description:
+                          stage?.exists === false
+                            ? 'model file missing'
+                            : [stage?.path_label, stage?.format, stage?.source_run_display_name]
+                                .filter(Boolean)
+                                .join(' · ') ||
+                              (pathHint
+                                ? stage?.artifact_path
+                                  ? pathHint
+                                  : preferSavedModelPath(pathHint)
+                                : undefined),
                       }
                     })}
                   />
                   {registryModels.length === 0 ? (
                     <p className="mb-2 text-[11px] text-ink-400">
-                      No models in GET /models yet — register from Runs, or paste a path below.
+                      No registered models yet — register one from Models, or paste a path below.
                     </p>
                   ) : (
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         className="ide-quiet-btn text-[12px]"
-                        disabled={creatingShipPkg || !pickedModel}
+                        disabled={creatingShipPkg || (!pickedModel && !modelPath.trim()) || Boolean(configBlocker)}
+                        title="Build a package with the model file and labels, without the convert step"
                         onClick={() => void createShipPackageFromRegistry()}
                       >
-                        {creatingShipPkg ? 'Creating ship package…' : 'Create ship package (API)'}
+                        {creatingShipPkg ? 'Creating package…' : 'Package as-is (no conversion)'}
                       </button>
                       {shipPackages.length > 0 ? (
                         <span className="text-[11px] text-ink-400">
@@ -1118,10 +1512,10 @@ export default function EdgeWizardView() {
                       ) : null}
                     </div>
                   )}
-                </label>
-                <label className="block text-sm sm:col-span-2">
+                </div>
+                <div className="block text-sm">
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                    Model path
+                    Model file path
                   </span>
                   {sourceArtifacts.length > 0 ? (
                     <FieldSelect
@@ -1161,8 +1555,7 @@ export default function EdgeWizardView() {
                     />
                   ) : (
                     <p className="mb-2 text-[11px] text-ink-400">
-                      No artifacts listed for this run yet — paste a workspace model path below
-                      (fail-closed if missing).
+                      Paste a model file or SavedModel folder inside the workspace. Missing paths are rejected.
                     </p>
                   )}
                   <input
@@ -1176,25 +1569,12 @@ export default function EdgeWizardView() {
                       Verified on disk: <code className="font-mono">{modelPath}</code>
                     </span>
                   ) : null}
-                  {linkedProject ? (
-                    <span className="mt-1 block text-[11px] text-ink-400">
-                      Linked dataset <code className="font-mono">{linkedProject}</code>
-                      {linkedVersion ? (
-                        <>
-                          {' '}
-                          / <code className="font-mono">{linkedVersion}</code>
-                        </>
-                      ) : null}{' '}
-                      — path comes from registry / run artifacts, not the workspace name.
-                    </span>
-                  ) : null}
-                  {!modelPathChecking && modelPathMissing ? (
+                  {!modelPathChecking && modelPathMissing && modelPath.trim() ? (
                     <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
                       <p className="font-medium">Model path not found on disk</p>
                       <p className="mt-1 text-amber-900/90">
-                        <code className="font-mono">{modelPath || '(empty)'}</code> is missing. Train
-                        or export a model first — do not invent a fake path. Use Templates/Editor to
-                        train, or pick an existing artifact.
+                        <code className="font-mono">{modelPath}</code> does not exist. Pick one of the
+                        run’s models above, or train a model first from Templates.
                       </p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         <button
@@ -1214,17 +1594,9 @@ export default function EdgeWizardView() {
                       </div>
                     </div>
                   ) : null}
-                </label>
-                <label className="block text-sm sm:col-span-2">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-                    Labels (comma-separated)
-                  </span>
-                  <input
-                    className="field-control mt-0 w-full text-xs"
-                    value={labelsCsv}
-                    onChange={(e) => setLabelsCsv(e.target.value)}
-                  />
-                </label>
+                </div>
+                  </div>
+                </details>
                 <label className="block text-sm">
                   <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
                     Optimizer backend
@@ -1272,6 +1644,9 @@ export default function EdgeWizardView() {
                   />
                 </label>
               </div>
+              {configBlocker && modelPath.trim() ? (
+                <p className="text-right text-[11px] text-rose-700">{configBlocker}</p>
+              ) : null}
               <div className="flex flex-wrap justify-between gap-2">
                 <button type="button" className="btn-secondary" onClick={() => setStep(1)}>
                   Back
@@ -1283,6 +1658,8 @@ export default function EdgeWizardView() {
                   <button
                     type="button"
                     className="btn-primary"
+                    disabled={Boolean(configBlocker)}
+                    title={configBlocker ?? undefined}
                     onClick={() => {
                       if (!graph) setGraph(cloneTemplate())
                       setStep(3)
@@ -1299,9 +1676,8 @@ export default function EdgeWizardView() {
             <div className="rounded-2xl border border-ink-200/80 bg-white p-5 shadow-sm space-y-4">
               <h3 className="text-sm font-semibold text-ink-900">Package run</h3>
               <p className="text-sm text-ink-500">
-                Executes the configured optimize → package graph via{' '}
-                <code className="font-mono">POST /pipelines/run-async</code>. Needs TensorFlow (or
-                ONNX stack) in the plugin runtime.
+                Converts the model and builds the device package. This needs the TensorFlow (or
+                ONNX) runtime on the server.
               </p>
               {runError && !runFailed && <ErrorBanner message={runError} />}
               {runId && !runFailed && (

@@ -11,8 +11,12 @@ Must NOT:         Understand audio domain logic, parse API requests,
 Dependencies:     BC1 (ir.models, ir.loader), BC2 (nodes.base, nodes.observers),
                   BC3 (registry_runtime), BC4 (planner), BC6 (checkpoint,
                   artifact_store, run_journal, run_control, pipeline_cache,
-                  logger), app.core.utils, app.core.execution.conditions, app.core.execution.events,
+                  logger, run_dataset — ingest node_end ``dataset`` block),
+                  app.core.utils, app.core.execution.conditions, app.core.execution.events,
                   app.core.execution.cache_rescope (run-local cache hits).
+                  node_progress sink per executor (journal + NDJSON queue +
+                  meta.json ``node_progress`` latest-per-node, logs.json
+                  flushed ≤ every 5 s while nodes report progress).
 Reason To Change: Runtime execution semantics evolve (new execution mode,
                   cancellation protocol, resume logic, partial execution).
 """
@@ -28,6 +32,7 @@ from typing import Any
 
 from app.core.nodes.errors import ResumeError
 from app.core.nodes.observers import NodeObserver
+from app.core.runs.run_dataset import ingest_node_end_extra
 from app.core.artifacts.artifact_store import infer_artifact_type
 from app.core.execution.planner import (
     PipelineConfig,
@@ -42,6 +47,59 @@ from app.core.execution.cache_rescope import node_is_cacheable, rescope_cached_o
 from app.core.logger import port_item_counts
 
 log = logging.getLogger(__name__)
+
+
+def _progress_sink_for(logger: Any, run: Any):
+    """Build the node_progress sink: journal + NDJSON queue + live meta.
+
+    Each event goes to ``logger.node_progress`` (logs.json + stream). The
+    latest event per node is mirrored into ``meta.json["node_progress"]``
+    and ``logs.json`` is flushed at most every 5 s so polling clients
+    (GET /runs/{id}, /status) see live progress of async runs.
+    """
+    import threading as _threading
+
+    state = {"last_flush": 0.0}
+    lock = _threading.Lock()
+
+    def _sink(event: dict) -> None:
+        try:
+            logger.node_progress(event)
+        except Exception:
+            return
+        try:
+            with lock:
+                latest = dict(getattr(run, "_latest_node_progress", None) or {})
+                latest[str(event.get("node_id") or event.get("node_type") or "")] = event
+                run._latest_node_progress = latest
+                run._write_meta_field("node_progress", latest)
+                now = time.time()
+                if now - state["last_flush"] >= 5.0:
+                    state["last_flush"] = now
+                    _flush_logs_atomic(run, logger)
+        except Exception:
+            pass
+
+    return _sink
+
+
+def _flush_logs_atomic(run: Any, logger: Any) -> None:
+    """Write logs.json via tmp+replace (mid-run progress flush)."""
+    base = getattr(run, "base_path", None)
+    if not base:
+        return
+    path = os.path.join(base, "logs.json")
+    tmp = f"{path}.progress.tmp"
+    try:
+        entries = list(logger.logs)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(entries, fh, indent=2, default=str)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _persist_node_stats(run: Any, node_stats: list) -> None:
@@ -509,6 +567,7 @@ async def _run_pipeline_body(
         exec_ = NodeExecutor(graph_obj.get_node(node_id), run_id=run_id)
         # Mode A cancel: kill isolated subprocesses / interrupt retry back-off.
         exec_.set_cancel_check(_cancel_check)
+        exec_.set_progress_sink(node_id, _progress_sink_for(logger, run))
         exec_.setup()
         resources.executors[node_id] = exec_
     executors = resources.executors
@@ -860,6 +919,7 @@ async def _run_pipeline_body(
                 node_duration,
                 output_counts=_port_counts,
                 node_id=node_id,
+                extra=ingest_node_end_extra(node, node_type, _port_counts),
             )
             node_stats.append(
                 _node_stat_record(
@@ -1083,6 +1143,7 @@ async def _run_event_driven(
             logger.node_end(
                 exec_node_type, exec_idx, _node_duration,
                 output_counts=_port_counts, node_id=exec_node_id,
+                extra=ingest_node_end_extra(exec_node, exec_node_type, _port_counts),
             )
             node_stats.append(
                 _node_stat_record(exec_node_id, exec_node_type, exec_idx, _node_duration)

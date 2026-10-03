@@ -96,11 +96,11 @@ class AudioQualityGateNode(Node):
     }
 
     class Config(NodeConfig):
-        min_snr_db: float = Field(default=10.0, title="Min SNR (dB)", description="Reject audio whose estimated SNR (mean power vs 5th-percentile amplitude floor) is below this (dB).")
+        min_snr_db: float = Field(default=10.0, title="Min SNR (dB)", description="Reject audio whose estimated signal-to-noise ratio is below this (dB). Clips with a near-silent noise floor are not checked.")
         max_clipping_ratio: float = Field(default=0.01, ge=0, le=1, title="Max clipping ratio", description="Reject if the fraction of samples with |x| >= 0.99 exceeds this (0–1).")
         min_duration_s: float = Field(default=0.1, ge=0, title="Min duration (s)", description="Reject clips shorter than this many seconds.")
         max_duration_s: float = Field(default=60.0, ge=0, title="Max duration (s)", description="Reject clips longer than this many seconds (0 = no max).")
-        min_lufs: float = Field(default=-70.0, le=0, title="Min LUFS", description="Reject if integrated loudness is below this LUFS.")
+        min_lufs: float = Field(default=-70.0, le=0, title="Min LUFS", description="Reject if integrated loudness is below this LUFS (clips shorter than 0.4 s are not checked).")
         max_lufs: float = Field(default=-10.0, le=0, title="Max LUFS", description="Reject if integrated loudness is above this LUFS.")
         min_bandwidth_hz: float = Field(default=1000.0, ge=0, title="Min bandwidth (Hz)", description="Reject if the mean 85% spectral rolloff is below this (Hz).")
         rejection_policy: Literal["skip", "warn", "raise"] = Field(default='skip', title="Rejection Policy", description="skip = route to 'rejected' silently; warn = same plus a warning log; raise = fail the run.")

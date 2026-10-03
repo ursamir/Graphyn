@@ -3,9 +3,12 @@
 Bounded Context:  REST API Layer
 Responsibility:   Workspace template and marketplace catalog routes under /pipelines.
 Owns:             /pipelines/templates/*, /pipelines/examples, marketplace search and materialize.
+                  Template cards carry ``runnable`` / ``missing_node_types``
+                  (vs the host node registry) and ``group`` / ``phase`` /
+                  ``step_title`` from graph metadata.
 Public Surface:   router — included by app.api.routers.pipelines.
 Must NOT:         Run pipelines. Must not own validate or /run.
-Dependencies:     fastapi, app.core.templates
+Dependencies:     fastapi, app.core.templates, app.core.host.registry_runtime
 Reason To Change: Template storage or marketplace browse changes.
 """
 from __future__ import annotations
@@ -98,6 +101,13 @@ def _summarize_template(name: str) -> dict[str, Any]:
         "tags": [],
         "node_count": 0,
         "node_types": [],
+        # UX: can this template run on this host? (all node types registered)
+        "runnable": False,
+        "missing_node_types": [],
+        # Multi-step example grouping (metadata.group / phase / step_title).
+        "group": None,
+        "phase": None,
+        "step_title": None,
     }
     graph = _load_template_graph_dict(name)
     if not graph:
@@ -147,6 +157,12 @@ def _summarize_template(name: str) -> dict[str, Any]:
                 break
         return out
 
+    summary["missing_node_types"] = _missing_node_types(node_types)
+    summary["runnable"] = bool(node_types) and not summary["missing_node_types"]
+    for key in ("group", "phase", "step_title"):
+        val = meta.get(key)
+        if isinstance(val, (str, int, float)) and not isinstance(val, bool) and str(val).strip():
+            summary[key] = val.strip() if isinstance(val, str) else val
     summary["node_count"] = len(node_types)
     summary["node_types"] = _uniq(node_types, 12)
     summary["inputs"] = _uniq(inputs)
@@ -164,6 +180,27 @@ def _summarize_template(name: str) -> dict[str, Any]:
         derived = [p for p in _uniq(packs, 10) if p not in skip and len(p) > 2]
         summary["required_plugins"] = derived[:8]
     return summary
+
+
+def _missing_node_types(node_types: list[str]) -> list[str]:
+    """Node types of a template that are not registered on this host."""
+    try:
+        from app.core.host.registry_runtime import get_registry
+
+        reg = get_registry()
+    except Exception:
+        return []
+    missing: list[str] = []
+    for nt in node_types:
+        if not nt or nt in missing:
+            continue
+        try:
+            known = nt in reg or f"Isolated_{nt}" in reg
+        except Exception:
+            known = True
+        if not known:
+            missing.append(nt)
+    return missing
 
 
 def _write_template_meta(name: str, meta: dict[str, Any]) -> None:

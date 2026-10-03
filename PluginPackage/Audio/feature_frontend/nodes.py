@@ -16,6 +16,45 @@ from app.models.feature_array import FeatureArray
 
 log = logging.getLogger(__name__)
 
+# ── progress events (Runs UI) ─────────────────────────────────────────────────
+try:
+    from app.core.nodes.progress import emit_node_progress
+except ImportError:  # pragma: no cover - host predates progress events
+    def emit_node_progress(payload: dict) -> None:  # type: ignore[misc]
+        return None
+
+
+class _ItemProgress:
+    """Throttled percent-over-items reporter (about ``steps`` events + the last).
+
+    Best effort: emitter errors are logged at debug level and never fail the node.
+    """
+
+    def __init__(self, phase: str, total: int, steps: int = 20) -> None:
+        self.phase = phase
+        self.total = max(int(total or 0), 0)
+        self.steps = max(int(steps), 1)
+        self._last_bucket = -1
+
+    def update(self, done: int) -> None:
+        if self.total <= 0:
+            return
+        done = max(0, min(int(done), self.total))
+        bucket = done * self.steps // self.total
+        if bucket <= self._last_bucket:
+            return
+        self._last_bucket = bucket
+        try:
+            emit_node_progress({
+                "phase": self.phase,
+                "done": done,
+                "total": self.total,
+                "pct": round(100.0 * done / self.total, 1),
+            })
+        except Exception:
+            log.debug("progress emit failed", exc_info=True)
+
+
 
 class FeatureFrontendNode(Node):
     """
@@ -134,11 +173,11 @@ class FeatureFrontendNode(Node):
         fmin: float = Field(default=0.0, ge=0, title="Min frequency (Hz)", description="Lowest frequency included in the mel/spectrogram filterbank.")
         fmax: float | None = Field(default=None, gt=0, title="Max frequency (Hz)", description="Highest frequency included (null = Nyquist / sample_rate/2).")
 
-        log_scale: bool = Field(default=True, title="Log scale", description="Convert energies to dB (spectrogram: amplitude_to_db; log_mel: power_to_db; Off = linear mel power) (On/Off).")
+        log_scale: bool = Field(default=True, title="Log scale", description="Convert energies to decibels (Off = linear power) (On/Off).")
 
         normalize: bool = Field(default=True, title="Normalize", description="Normalize feature or audio amplitude (On/Off).")
 
-        center: bool = Field(default=True, title="Center frames", description="Pad so frames are centered on the signal (librosa center=True).")
+        center: bool = Field(default=True, title="Center frames", description="Pad the signal so frames are centred on it (On/Off).")
 
         # Delta / delta-delta (applies to mfcc; also stacked onto log_mel if set)
         delta: bool = Field(default=False, title="Delta features", description="Append first-order delta (velocity) coefficients (On/Off).")
@@ -296,8 +335,10 @@ class FeatureFrontendNode(Node):
 
     def process(self, samples: list[AudioSample]) -> list[FeatureArray]:
         outputs: list[FeatureArray] = []
+        progress = _ItemProgress("features", len(samples))
 
-        for sample in samples:
+        for done, sample in enumerate(samples, start=1):
+            progress.update(done - 1)
             # Finding 1: guard against None or empty data
             if sample.data is None or len(sample.data) == 0:
                 log.warning(
@@ -403,4 +444,5 @@ class FeatureFrontendNode(Node):
 
             outputs.append(feature_array)
 
+        progress.update(len(samples))
         return outputs

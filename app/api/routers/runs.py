@@ -4,7 +4,10 @@ Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for run history, status, checkpoints,
                   artifacts, and provenance.
 Owns:             Route definitions for GET /runs, GET /runs/{run_id}
-                  (logs with a consistent ``error`` field + ``node_order``),
+                  (logs with a consistent ``error`` field + ``node_order``;
+                  rows/detail carry ``display_name``, ``summary``,
+                  ``regression`` from app.core.runs.run_summary),
+                  GET /runs/{run_id}/models (model files for Ship/register),
                   GET /runs/{run_id}/graph,
                   GET /runs/{run_id}/status,
                   GET /runs/{run_id}/checkpoints/**,
@@ -18,6 +21,7 @@ Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
                   ArtifactStore, and ProvenanceStore.
 Dependencies:     fastapi, app.core.runs.run_journal, app.core.runs.run_nodes,
+                  app.core.runs.run_summary,
                   app.core.artifacts.artifact_store,
                   app.core.config, stdlib (json, pathlib, re).
 Reason To Change: New run history endpoint added, or response schema changes.
@@ -177,7 +181,21 @@ def list_runs(
     # Shared lister (app.core.runs.run_listing): created_at desc + run_id tiebreak,
     # per-entry error isolation — same order as MCP list_runs / CLI runs list.
     page = _list_runs(_get_runs_root(), limit=limit, offset=offset, project=project)
-    return [_enrich_run_summary(meta, entry) for entry, meta in page.rows]
+    return [_with_results(_enrich_run_summary(meta, entry), entry) for entry, meta in page.rows]
+
+
+def _with_results(row: dict, run_path: Path) -> dict:
+    """Attach ``display_name`` / ``summary`` / ``regression`` (cached, best-effort)."""
+    from app.core.runs.run_summary import run_summary_fields
+
+    run_id = str(row.get("run_id") or run_path.name)
+    try:
+        fields = run_summary_fields(run_id, run_path, row)
+    except Exception:
+        fields = {"display_name": row.get("graph_name") or run_id, "summary": None, "regression": None}
+    out = dict(row)
+    out.update(fields)
+    return out
 
 
 # ── Get run ───────────────────────────────────────────────────────────────────
@@ -204,7 +222,7 @@ def get_run(run_id: str):
             logs = []
 
     meta: dict = _load_meta(run_path)
-    meta = _enrich_run_summary(meta, run_path)
+    meta = _with_results(_enrich_run_summary(meta, run_path), run_path)
     slug, artifacts_dir = _run_slug_and_artifacts(run_id, run_path, meta)
     is_latest = False
     if slug:
@@ -232,6 +250,40 @@ def get_run(run_id: str):
         "artifacts_dir": artifacts_dir,
         # Graph nodes in execution order (incl. nodes that never ran).
         "node_order": node_order,
+        # UX results (also under meta.*): human title, per-path metrics +
+        # models, best path, dataset used, regression vs best previous run.
+        "display_name": meta.get("display_name"),
+        "summary": meta.get("summary"),
+        "regression": meta.get("regression"),
+        "node_progress": meta.get("node_progress") if isinstance(meta.get("node_progress"), dict) else {},
+    }
+
+
+# ── Run models (Ship / register) ──────────────────────────────────────────────
+
+@router.get("/{run_id}/models", summary="List model files produced by a run")
+def list_run_models(run_id: str):
+    """Model artifacts (keras / SavedModel / tflite / onnx / pt) of a run.
+
+    Each row: ``{path, name, node_id, node_type, path_id, path_label, kind
+    (trained|compiled_untrained|optimized), format, size_bytes, created_at,
+    metrics, labels, labels_source, suggested_name}``. ``path`` is
+    workspace-relative (``workspace/artifacts/...``) and can be passed to
+    Ship / edge_optimizer / POST /models as-is.
+    """
+    from app.core.runs.run_summary import run_insights
+
+    run_path = _run_dir(run_id)
+    meta = _enrich_run_summary(_load_meta(run_path), run_path)
+    ins = run_insights(run_id, run_path, meta)
+    summary = ins.get("summary") or {}
+    return {
+        "run_id": run_id,
+        "display_name": ins.get("display_name"),
+        "status": ins.get("status"),
+        "best_path_id": summary.get("best_path_id"),
+        "primary_metric": summary.get("primary_metric"),
+        "models": ins.get("models") or [],
     }
 
 
@@ -317,10 +369,13 @@ def get_run_status(run_id: str):
     elif status in ("completed", "succeeded"):
         progress_pct = 100.0
 
+    node_progress = meta.get("node_progress")
     return {
         "status": status,
         "progress_pct": progress_pct,
         "current_node": current_node,
+        # Latest node_progress event per node_id (live training progress).
+        "node_progress": node_progress if isinstance(node_progress, dict) else {},
     }
 
 

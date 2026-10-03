@@ -19,7 +19,7 @@
 | Pipelines | `list_pipelines`, `get_pipeline`, `save_pipeline`, `publish_pipeline`, `promote_pipeline`, `rollback_pipeline` |
 | Execution | `execute_pipeline`, `inspect_run`, `pause_run`, `resume_run`, `cancel_run`, `list_runs`, `get_run`, `get_run_outputs`, `compare_runs`, `replay_run`, `optimize_execution` |
 | Artifacts / lineage | `list_artifacts`, `get_artifact_lineage` |
-| Models | `register_model`, `list_models`, `get_model`, `request_model_prod`, `approve_model_prod` |
+| Models | `register_model` (optional `model_path` / `node_id` / `allow_untrained`; compiled_untrained model_builder outputs are refused by default), `list_models`, `get_model`, `request_model_prod`, `approve_model_prod` |
 | Ship | `create_ship_package`, `get_ship_package`, `list_ship_packages`, `download_ship_package`, `promote_ship_package` |
 | Schedules / webhooks | `list_schedules`, `upsert_schedule`, `enable_schedule`, `delete_schedule`, `run_schedule_now`, `get_webhooks`, `put_webhooks`, `test_webhook` |
 | Datasets / workers | `list_dataset_versions`, `get_dataset_version`, `upload_dataset_file`, `list_workers`, `list_jobs` |

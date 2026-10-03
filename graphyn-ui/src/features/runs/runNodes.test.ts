@@ -220,3 +220,20 @@ describe('computePipelineShape', () => {
     ])
   })
 })
+
+describe('disambiguateByPath', () => {
+  it('replaces id cues with path names, falls back to cue', async () => {
+    const { disambiguateByPath } = await import('./runNodes')
+    const items = [
+      { id: 'trainer_0', label: 'Trainer', nodeType: 'trainer' },
+      { id: 'trainer_b66a5330', label: 'Trainer', nodeType: 'trainer' },
+      { id: 'ingest_0', label: 'Ingest', nodeType: 'ingest' },
+    ]
+    expect(disambiguateByPath(items, (id) => (id === 'trainer_0' ? 'Path A' : 'Path B')).map((i) => i.label)).toEqual([
+      'Trainer · Path A',
+      'Trainer · Path B',
+      'Ingest',
+    ])
+    expect(disambiguateByPath(items, () => null).map((i) => i.label)).toEqual(['Trainer #0', 'Trainer #b66a5330', 'Ingest'])
+  })
+})

@@ -50,7 +50,7 @@ venv/bin/python examples/06_speech_commands_e2e/run_infer.py \
 
 Training is split into two sequential phases.
 
-### Phase 1 — Data Preprocessing (runs 6× — once per label)
+### Phase 1 — Data Preprocessing (template Step 1: one run for all six labels; CLI: 6× — once per label)
 
 ```
 dataset_ingest(data/{label}/)
@@ -103,7 +103,7 @@ model_builder  ◄── receives dataset (port: "input")
     ▼
 trainer  ◄── receives model (port: "model") + dataset (port: "dataset")
     │  Up to 50 epochs, batch_size=32, EarlyStopping(val_accuracy, patience=15)
-    │  Saves: output/saved_model/, output/checkpoints/
+    │  Saves: output/model.keras, saved_model/, checkpoints/ (+ labels.txt in each)
     ▼
 evaluator  ◄── receives model_artifact + dataset
     │  Test accuracy, per-class precision/recall/F1, confusion matrix
@@ -111,7 +111,7 @@ evaluator  ◄── receives model_artifact + dataset
     ▼
 edge_optimizer
     │  TFLite INT8 conversion with representative calibration data
-    └─ Saves: output/tflite/model.tflite, output/tflite/labels.txt
+    └─ Saves: output/tflite/model.tflite, output/tflite/labels.txt (class-index order)
 ```
 
 ### Inference Pipeline
@@ -130,15 +130,26 @@ realtime_inference
 
 ---
 
-### Console (template `ex-06-speech-commands-e2e`)
+### Console (Templates → "Speech commands E2E", two steps)
 
-The Builder template is **Phase 2** (`pipeline_train_ml.graph.json`). Run the
-six `pipeline_preprocess*.graph.json` graphs first (CLI `run_preprocess.sh`, or
-paste each into the Editor) — otherwise training falls back to the raw clips.
-Picking a workspace in the console stamps `audio_exporter` with
-`project=<workspace>`, which moves the Phase-1 output to
-`workspace/datasets/output/<workspace>/v1`; in that case point the template's
-`dataset_ingest.path` at that folder. Coverage, live run results and known
+The example is a two-template group (`metadata.group = "speech-commands-e2e"`):
+
+| Step | Template id | Graph |
+|---|---|---|
+| 1 · Prepare dataset | `speech-commands-e2e-prepare` | `examples/templates/speech-commands-e2e-prepare.graph.json` — all six labels in one run (recursive ingest of `workspace/datasets/input/speech-commands`), writes `workspace/artifacts/speech-commands/dataset/speech_commands/v1` |
+| 2 · Train model | `ex-06-speech-commands-e2e` | `pipeline_train_ml.graph.json` — reads that dataset, trains, evaluates, exports INT8 TFLite |
+
+Run Step 1, then Step 2. Re-running Step 1 replaces the dataset (`append=false`).
+Picking a workspace in the console does **not** move Step 1's output: exporters
+that write a `workspace/artifacts/<slug>/dataset/...` hand-off folder are left
+alone by the project stamp. The six `pipeline_preprocess*.graph.json` shards
+(one label each, chained with `append=true`) remain for the CLI scripts.
+
+Every model folder gets a `labels.txt` in the model's class-index order
+(alphabetical: `down, go, no, stop, up, yes`) — deploy from that file, not from
+a hand-typed label list. Runs show live progress (epochs with loss/accuracy,
+evaluation, INT8 calibration) and a readable model name such as
+`DS-CNN (50 epochs) · TFLite INT8`. Coverage, live run results and known
 limitations: [`docs/EXAMPLE_06_COVERAGE.md`](../../docs/EXAMPLE_06_COVERAGE.md).
 
 ## What This Demonstrates

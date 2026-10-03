@@ -147,7 +147,7 @@ export default function WorkersView() {
       ? 'Mode B (distributed) — workers register with this control plane.'
       : backendMode === 'local'
         ? 'Mode A (local) — pipelines run in-process; workers are optional.'
-        : 'Set GRAPHYN_BACKEND=distributed on the control plane for Mode B.'
+        : 'This server runs everything itself (single machine). Switch it to multi-machine mode to use workers.'
 
   return (
     <WorkbenchPage
@@ -279,7 +279,7 @@ export default function WorkersView() {
       ) : !workers || workers.length === 0 ? (
         <EmptyState icon={EmptyServer}
           title="No workers registered"
-          description="Mode A needs no workers. For Mode B, set GRAPHYN_BACKEND=distributed on the control plane, start a worker, then refresh."
+          description="Single-machine mode needs no workers. For multi-machine mode, switch the server to distributed (see the setting below), start a worker, then refresh."
           action={
             <div className="flex flex-col items-center gap-3">
               <div className="w-full max-w-xl rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-left">

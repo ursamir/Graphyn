@@ -1,23 +1,45 @@
 # Example 06 — Speech Commands E2E: coverage report
 
-Template `ex-06-speech-commands-e2e` ("Speech commands E2E (example 06)") and the
-graphs under `examples/06_speech_commands_e2e/`. Verified 2026-10-01 against the
-live Docker API (`graphyn-api`, plugins from `./plugins`) and against the
-fixed `PluginPackage/` sources (unit tests + a local node-level E2E run).
+Templates `speech-commands-e2e-prepare` ("Speech commands E2E · Step 1 · Prepare
+dataset") and `ex-06-speech-commands-e2e` ("Speech commands E2E · Step 2 · Train
+model"), plus the graphs under `examples/06_speech_commands_e2e/`. Verified
+2026-10-01 against the live Docker API (`graphyn-api`, plugins from `./plugins`)
+and against the fixed `PluginPackage/` sources (unit tests + a local node-level
+E2E run); the two-step template flow was re-verified 2026-10-03 in-process via
+the SDK (§2, "Two-step templates").
 
-Which graph is the template? `app/core/templates/example_templates.py`
-picks the first of `pipeline.graph.json`, `composed.graph.json`,
-`edge_inference.graph.json`, `pipeline_train_ml.graph.json`,
-`pipeline_preprocess.graph.json`, so the Builder template is
-**`pipeline_train_ml.graph.json` (Phase 2 only)**. The six
-`pipeline_preprocess*.graph.json` shards and `pipeline_infer.graph.json` are
-CLI/SDK graphs; they are not in the template list.
+Which graphs are templates? `app/core/templates/example_templates.py` takes one
+canonical graph per example folder — for 06 the first of `pipeline.graph.json`,
+`composed.graph.json`, `edge_inference.graph.json`, **`pipeline_train_ml.graph.json`**
+— plus every `examples/templates/*.graph.json` starter. So:
+
+| Template id | Source | Title | `metadata.group` / `phase` / `step_title` |
+|---|---|---|---|
+| `speech-commands-e2e-prepare` | `examples/templates/speech-commands-e2e-prepare.graph.json` | Speech commands E2E · Step 1 · Prepare dataset | `speech-commands-e2e` / 1 / Prepare dataset (`next_template: ex-06-speech-commands-e2e`) |
+| `ex-06-speech-commands-e2e` | `examples/06_speech_commands_e2e/pipeline_train_ml.graph.json` | Speech commands E2E · Step 2 · Train model | `speech-commands-e2e` / 2 / Train model (`previous_template: speech-commands-e2e-prepare`) |
+
+Step 1 prepares all six labels in **one** graph: a single recursive
+`dataset_ingest` over `workspace/datasets/input/speech-commands` (the seeded
+`examples/02_speech_commands/data`, one sub-folder per label → label = folder
+name) feeds the same conditioner → segmenter → gates → augmentation → exporter
+chain as the per-label shards, and one exporter (`append=false`) writes the
+`v1/{train,val,test}/{label}/` tree Step 2 ingests. No merge node is needed:
+every node is per-clip, `group_by_source` seeds each source clip's split
+independently of batch order, and re-running replaces the dataset instead of
+appending duplicates. (Six ingest chains with chained `append=true` exporters
+were rejected: parallel branches have no ordering, so the `append=false` reset
+could run after another label was written.) The six
+`pipeline_preprocess*.graph.json` shards and `pipeline_infer.graph.json` stay
+CLI/SDK graphs. Every node in these graphs carries a human `label` (e.g.
+"Model builder · DS-CNN (64 filters × 4 blocks)", "Trainer · up to 50 epochs",
+"Edge optimizer · TFLite INT8").
 
 ## 1. Pipeline
 
 ```
-Phase 1 — preprocess (6 runs: yes [append=false] → no, up, down, go, stop [append=true])
-  dataset_ingest_0 (examples/02 data/<label>, flat)
+Phase 1 — preprocess (template Step 1: one run, recursive ingest of all 6 label folders;
+CLI shards: 6 runs, yes [append=false] → no, up, down, go, stop [append=true])
+  dataset_ingest_0 (workspace/datasets/input/speech-commands, recursive — or examples/02 data/<label>, flat)
     → audio_conditioner_1 (16 kHz, mono, DC removal, trim 40 dB below peak, peak → -1 dBFS)
     → segmenter_2 (mode=silence, 40 dB below peak; ~1.1 segments per clip)
     → audio_quality_gate_3 (SNR ≥ 5 dB + clipping/silence/bandwidth; duration off)
@@ -25,7 +47,7 @@ Phase 1 — preprocess (6 runs: yes [append=false] → no, up, down, go, stop [a
     → augmentation_pipeline_5 (pitch ±2 st + time-stretch 0.9–1.1, 2 copies → 3×)
     → audio_exporter_6 (workspace/artifacts/speech-commands/dataset/speech_commands/v1/{split}/{label}, 70/15/15)
 
-Phase 2 — train (template)
+Phase 2 — train (template Step 2)
   dataset_ingest_0 (…/dataset/speech_commands/v1, recursive)
     → feature_frontend_0 (MFCC 40, n_fft 512, hop 160, fmax 8 kHz, per-clip normalise)
     → dataset_builder_0 (fixed_length 101 → X: N×101×40×1; splits from /train|val|test/ path)
@@ -86,6 +108,18 @@ Why the live numbers are misleading (both fixed in `PluginPackage`, see §4):
 | INT8 TFLite (100 spread calibration rows) on test split via `pipeline_infer` preprocessing | 0.672 (direct features 0.670) |
 | INT8 with 500 calibration rows | 0.420 — INT8 accuracy is unstable for this model (see Known limitations) |
 | float32 TFLite | 0.793 (matches Keras) |
+
+### Two-step templates (SDK, in-process, 2026-10-03)
+
+Template graphs as synced (`rewrite_graph_paths`), run with `Pipeline.from_json(...).run()`
+against a scratch `GRAPHYN_PROJECT_DIR` (trainer/evaluator/edge_optimizer/dataset_builder
+in their isolated venvs; trainer forced to CPU, epochs reduced):
+
+| Run | Wall | Result |
+|---|---|---|
+| Step 1 `speech-commands-e2e-prepare` | 46 s | 3705 wav (down 606 · go 594 · no 609 · stop 633 · up 645 · yes 618 — same total as the six live shard runs), train 2556 / val 594 / test 555, **0** of 1182 source clips in more than one split |
+| Step 2 `ex-06-speech-commands-e2e`, 3 epochs | 105 s | runs end-to-end; labels.txt (`down…yes`) in trainer/, saved_model/, checkpoints/, evaluation/, tflite/ |
+| Step 2, 15 epochs | 265 s | float test acc 0.728, AUC 0.929; INT8 `model.tflite` 48 976 B; run log shows 16 trainer progress events (epoch 0–15 with loss/acc/val_*), evaluator "Test accuracy 72.8 % on 555 held-out samples", edge_optimizer calibrate 10→100 % and "Saved model.tflite (47 KB, int8)" |
 
 ## 3. Nodes and config fields
 
@@ -234,6 +268,11 @@ default, enum, bounds) and that `ui.visible_if` references valid fields/values.
 13. Bounds (`minimum/maximum/exclusive*`, `pattern`) and `ui.visible_if` on all Example 06 plugins, mirrored by Pydantic `Field(ge/le/gt/lt/pattern)` / validators.
 14. Graphs: train template reads the Phase-1 dataset (`workspace/artifacts/speech-commands/dataset/speech_commands/v1`, no `limit: 8`); quality gate 4 no longer re-applies SNR ≥ 10 dB (default) and gate 3 no longer applies duration; README corrected (thresholds, append chain, paths, epochs).
 
+15. **Two-step templates (UX overhaul):** new Step 1 template `speech-commands-e2e-prepare` (all six labels, one graph); Step 2 (`pipeline_train_ml`) gets `title`, `group`/`phase`/`step_title`, a user-facing description ("run Step 1 first"; no CLI file names, no stale raw-clip fallback claim) and human node labels; the preprocess shards and the infer graph get node labels too. Tests: `unit_test/plugins/test_ux_plugins_templates.py`.
+16. **Live progress:** trainer (per epoch: loss/accuracy/val_loss/val_accuracy/pct; early-stopping notice), evaluator (`evaluate` 0→100 with `test_accuracy`), edge_optimizer (`convert`, int8 `calibrate`), feature_frontend / dataset_builder / augmentation_pipeline / audio_exporter (pct over items) call `emit_node_progress` (defensive import). Isolated nodes reach the run log through the worker stderr marker. Tests: `test_ux_plugins_progress.py`.
+17. **labels.txt everywhere:** trainer writes it beside `model.keras`, inside `saved_model/` and `checkpoints/`; evaluator beside the model and `metrics.json`; edge_optimizer beside `model.tflite`/`model.onnx` (falls back to the source folder's `labels.txt` when the artifact has none). Always the model's class-index order (`down, go, no, stop, up, yes`) — the console Ship default `yes, no, up, down, go, stop` does **not** match and must be replaced by this file / `labels` metadata. Outputs carry `labels`, `labels_path` and a `display_name` (`DS-CNN (30 epochs)`, `DS-CNN (21 of 50 epochs)`, `… · TFLite INT8`) in `ModelArtifact.metrics` / `DeploymentArtifact.metadata`; `metrics.json` stays numeric. Tests: `test_ux_plugins_labels.py`.
+18. **Inspector text:** plugin.toml / Config descriptions no longer show env-var names, internal file names or library calls; those moved to `ui.help_advanced`. Output locations (`output_path`, `output_dir`, `checkpoint_path`, `resume_from`) are in the Advanced group (`realtime_inference.model_path` stays visible because it is required). Tests: `test_ux_plugins_schema_ux.py`.
+
 ## 5. Known limitations
 
 * The live container still runs the pre-fix plugin copies in `./plugins`; reinstall from `PluginPackage/` (`graphyn plugin install --upgrade` / Plugins UI) to pick the fixes up.
@@ -264,6 +303,15 @@ GRAPHYN_SKIP_PLUGIN_LOAD=1 venv/bin/pytest -q unit_test/plugins/test_example06_s
     unit_test/plugins/test_example06_audio_nodes.py
 GRAPHYN_RUN_HEAVY=1 GRAPHYN_TF_DEVICE=cpu CUDA_VISIBLE_DEVICES=-1 GRAPHYN_SKIP_PLUGIN_LOAD=1 \
     venv/bin/pytest -q unit_test/plugins/test_example06_ml_nodes.py
+
+# UX overhaul tests (progress, labels, templates, inspector text)
+GRAPHYN_RUN_HEAVY=1 GRAPHYN_TF_DEVICE=cpu CUDA_VISIBLE_DEVICES=-1 GRAPHYN_SKIP_PLUGIN_LOAD=1 \
+    venv/bin/pytest -q unit_test/plugins/test_ux_plugins_*.py
+
+# Step 1 → Step 2 templates in-process via the SDK (scratch workspace; seed the input first:
+#   mkdir -p $W/datasets/input && ln -s $PWD/examples/02_speech_commands/data $W/datasets/input/speech-commands)
+#   load each template with rewrite_graph_paths(graph, slug=<template id>), then
+#   initialize_registry(); Pipeline.from_json(path).run()   with GRAPHYN_PROJECT_DIR=$W, cwd=$(dirname $W)
 
 # in-process E2E with the PluginPackage sources (≈ 25 min on CPU)
 GRAPHYN_SKIP_PLUGIN_LOAD=1 GRAPHYN_TF_DEVICE=cpu CUDA_VISIBLE_DEVICES=-1 \

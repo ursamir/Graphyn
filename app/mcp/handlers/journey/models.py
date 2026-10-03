@@ -47,6 +47,9 @@ REGISTER_MODEL_SCHEMA = {
         "stage": {"type": "string"},
         "description": {"type": "string"},
         "actor": {"type": "string"},
+        "model_path": {"type": "string"},
+        "node_id": {"type": "string"},
+        "allow_untrained": {"type": "boolean"},
         **meta_props(),
     },
     "required": ["name", "run_id", "slug"],
@@ -112,8 +115,12 @@ def register_model_handler(arguments: dict[str, Any] | None = None) -> dict[str,
             stage=str(args.get("stage") or "staging"),
             description=args.get("description"),
             actor=str(args.get("actor") or "mcp"),
+            node_id=(str(args["node_id"]).strip() or None) if args.get("node_id") else None,
+            model_path=(str(args["model_path"]).strip() or None) if args.get("model_path") else None,
+            allow_untrained=bool(args.get("allow_untrained")),
         )
     except ValueError as exc:
+        # ModelUntrained message names ``compiled_untrained`` / allow_untrained.
         return handler_error("validation_failed", str(exc))
 
 

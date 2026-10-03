@@ -15,6 +15,15 @@ import { loadMarketplaceCatalog } from './marketplaceCatalog'
 import { humanizeTemplateName, humanNodeLabel, stripIsolatedPrefix } from '../../lib/format'
 import { workspaceErrorMessage, workspaceNameError } from '../../lib/workspaceName'
 import { buildNodeTypePluginMap, summarizeMissing, type PluginManifestLike } from './missingPlugins'
+import { apiFetch } from '../../api/client'
+import { probePathExists } from '../edge/edgeDeployTemplate'
+import {
+  findStep,
+  groupTemplates,
+  isTemplateRunnable,
+  templateMissing,
+  type TemplateEntry,
+} from './templateGroups'
 
 function isExampleTemplate(name: string): boolean {
   return name.startsWith('ex-')
@@ -32,7 +41,28 @@ export type TemplateSummary = {
   node_types?: string[]
   /** Display title from the API (unique across starters/examples). */
   title?: string
+  /** UX API: can every node run on this host? (null/absent on older APIs) */
+  runnable?: boolean | null
+  missing_node_types?: string[] | null
+  /** Guided multi-step series (e.g. Example 06 prepare → train). */
+  group?: string | null
+  phase?: string | number | null
+  step_title?: string | null
 }
+
+const RUNNABLE_ONLY_KEY = 'graphyn.templates.runnableOnly'
+
+function readRunnableOnly(): boolean {
+  try {
+    return window.localStorage.getItem(RUNNABLE_ONLY_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+/** Do the dataset paths a later step reads exist in this workspace yet? */
+type StepReadiness = 'checking' | 'ready' | 'missing' | 'unknown'
+
 
 /* Removed: isDatasetRelatedTemplate(). It keyword-matched a template's text to
    decide whether to show a context-free "Open Datasets" button — which landed you
@@ -77,8 +107,7 @@ const HIDDEN_TAGS = new Set(['example'])
 const CARD_MENU_HEIGHT_PX = 120
 
 function normalizeList(raw: unknown): TemplateSummary[] {
-  if (!Array.isArray(raw)) return []
-  return raw.map((item) => {
+  return unwrapList<unknown>(raw).map((item) => {
     if (typeof item === 'string') return { name: item }
     if (item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string') {
       return item as TemplateSummary
@@ -140,6 +169,15 @@ export default function TemplatesView() {
      with no way to narrow to "the ASR ones" short of guessing the right word. */
   const [activePlugins, setActivePlugins] = React.useState<string[]>([])
   const [sortBy, setSortBy] = React.useState<TemplateSort>('name')
+  const [runnableOnly, setRunnableOnlyState] = React.useState<boolean>(readRunnableOnly)
+  const setRunnableOnly = (v: boolean) => {
+    setRunnableOnlyState(v)
+    try {
+      window.localStorage.setItem(RUNNABLE_ONLY_KEY, v ? '1' : '0')
+    } catch {
+      /* per-viewer convenience only */
+    }
+  }
   const togglePlugin = (p: string) =>
     setActivePlugins((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]))
   const [headerMoreOpen, setHeaderMoreOpen] = React.useState(false)
@@ -172,6 +210,12 @@ export default function TemplatesView() {
       )
     },
     [catalogTypes],
+  )
+
+  /** Backend `missing_node_types` when the API sends it, else the catalog diff. */
+  const effectiveMissing = React.useCallback(
+    (tpl: TemplateSummary | undefined): string[] => (tpl ? templateMissing(tpl, missingNodeTypes) : []),
+    [missingNodeTypes],
   )
 
   /* node_type → plugin name from manifests (installed incl. disabled / failed
@@ -448,12 +492,25 @@ export default function TemplatesView() {
     .filter(([p, n]) => n > 1 || activePlugins.includes(p))
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 
-  const filtered = facetPool
-    .filter((t) =>
-      /* AND across selected plugins: picking "asr" + "pii" means templates that
-         need both, which is how you actually narrow a catalogue. */
-      activePlugins.every((p) => (t.required_plugins ?? []).includes(p)),
-    )
+  /* "Runnable here": backend `runnable`, else no missing node types vs the
+     loaded catalog. Unknown (no backend flag and catalog not loaded yet) never
+     hides anything. A guided group stays visible when any of its steps runs. */
+  const runnabilityKnown =
+    catalogTypes.size > 0 || (items ?? []).some((t) => typeof t.runnable === 'boolean')
+  const runnableOf = (t: TemplateSummary) => !runnabilityKnown || isTemplateRunnable(t, effectiveMissing(t))
+  const runnableGroups = new Set(
+    (items ?? []).filter((t) => t.group && runnableOf(t)).map((t) => String(t.group)),
+  )
+  const passesRunnable = (t: TemplateSummary) =>
+    !runnableOnly || runnableOf(t) || Boolean(t.group && runnableGroups.has(String(t.group)))
+  const pluginFiltered = facetPool.filter((t) =>
+    /* AND across selected plugins: picking "asr" + "pii" means templates that
+       need both, which is how you actually narrow a catalogue. */
+    activePlugins.every((p) => (t.required_plugins ?? []).includes(p)),
+  )
+  const hiddenNotRunnable = pluginFiltered.filter((t) => !passesRunnable(t)).length
+  const filtered = pluginFiltered
+    .filter(passesRunnable)
     .sort((a, b) => {
       if (sortBy === 'nodes') {
         return (b.node_count ?? 0) - (a.node_count ?? 0) || a.name.localeCompare(b.name)
@@ -485,16 +542,70 @@ export default function TemplatesView() {
     return `${filtered.length} shown`
   })()
 
+  const entries: TemplateEntry<TemplateSummary>[] = groupTemplates(filtered)
+  /** List order as rendered (groups expanded in step order). */
+  const orderedNames = entries.flatMap((e) => (e.kind === 'single' ? [e.tpl.name] : e.steps.map((st) => st.tpl.name)))
+  const firstRunnableName =
+    orderedNames.find((n) => {
+      const t = filtered.find((x) => x.name === n)
+      return t ? runnableOf(t) : false
+    }) ?? orderedNames[0] ?? null
+
   React.useEffect(() => {
     if (filter === 'marketplace') return
-    if (filtered.length === 0) {
+    if (!firstRunnableName) {
       setSelectedName(null)
       return
     }
-    if (!selectedName || !filtered.some((t) => t.name === selectedName)) {
-      setSelectedName(filtered[0].name)
+    if (!selectedName || !orderedNames.includes(selectedName)) {
+      setSelectedName(firstRunnableName)
     }
-  }, [filter, filtered, selectedName])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, firstRunnableName, orderedNames.join('\n'), selectedName])
+
+  /* Guided series: a later step (e.g. "Train model") reads what Step 1 wrote.
+     Probe the step's declared input paths (GET /outputs/file: 200 file /
+     400 "directory" = present) and fall back to the Datasets input labels. */
+  const [stepReadiness, setStepReadiness] = React.useState<Record<string, StepReadiness>>({})
+  const selectedStepInfo = selectedName ? findStep(entries, selectedName) : null
+  const readinessTpl = selectedStepInfo && selectedStepInfo.step.step > 1 ? selectedStepInfo.step.tpl : null
+  const readinessName = readinessTpl?.name ?? null
+  const readinessInputs = (readinessTpl?.inputs ?? []).join('\n')
+  React.useEffect(() => {
+    if (!readinessName) return
+    const inputs = readinessInputs.split('\n').filter((x) => x.trim())
+    if (inputs.length === 0) {
+      setStepReadiness((m) => ({ ...m, [readinessName]: 'unknown' }))
+      return
+    }
+    let cancelled = false
+    setStepReadiness((m) => ({ ...m, [readinessName]: 'checking' }))
+    void (async () => {
+      const fetchFn = (path: string) => apiFetch('/outputs/file', { query: { path } })
+      let ok = true
+      for (const path of inputs) {
+        if (!(await probePathExists(path, fetchFn))) {
+          ok = false
+          break
+        }
+      }
+      if (!ok) {
+        try {
+          const labels = unwrapList<{ label?: string; file_count?: number }>(await apiJson('/data/inputs'))
+          ok = inputs.every((path) => {
+            const m = /datasets\/input\/([^/]+)/.exec(path)
+            return m ? labels.some((l) => l.label === m[1] && (l.file_count ?? 1) > 0) : false
+          })
+        } catch {
+          /* keep "missing" */
+        }
+      }
+      if (!cancelled) setStepReadiness((m) => ({ ...m, [readinessName]: ok ? 'ready' : 'missing' }))
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [readinessName, readinessInputs, activeProject])
 
   const filterToolbar = (
     <div className="flex flex-wrap items-center gap-2">
@@ -536,7 +647,8 @@ export default function TemplatesView() {
     const versions = versionsMap[name] ?? []
     const latest = latestMap[name]
     const inputLabel = datasetInputLabel(tpl)
-    const missing = missingNodeTypes(tpl)
+    const missing = effectiveMissing(tpl)
+    const stepInfo = findStep(entries, name)
     return (
       <article className="flex flex-col gap-3 rounded-lg border border-ink-200/70 bg-white p-4 shadow-sm">
         <div className="flex items-start gap-2">
@@ -564,6 +676,80 @@ export default function TemplatesView() {
                 ? tpl.description
                 : 'Open in Editor to inspect nodes and run this pipeline.'}
             </p>
+            {stepInfo ? (
+              <div
+                className="mt-3 rounded-lg border border-accent-200 bg-accent-50/50 p-3 text-[12px] text-ink-700"
+                data-testid="template-guided-steps"
+              >
+                <div className="font-semibold text-ink-900">
+                  {stepInfo.entry.title} · Step {stepInfo.step.step} of {stepInfo.entry.steps.length}:{' '}
+                  {stepInfo.step.title}
+                </div>
+                <ol className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {stepInfo.entry.steps.map((st, i) => (
+                    <li key={st.tpl.name} className="flex items-center gap-1.5">
+                      {i > 0 ? <ChevronRight className="h-3 w-3 text-ink-300" aria-hidden /> : null}
+                      <button
+                        type="button"
+                        className={clsx(
+                          'rounded-full border px-2 py-0.5 text-[11px]',
+                          st.tpl.name === name
+                            ? 'border-accent-400 bg-white font-medium text-ink-950'
+                            : 'border-ink-200 bg-white/70 text-ink-600 hover:border-accent-300',
+                        )}
+                        aria-current={st.tpl.name === name ? 'step' : undefined}
+                        onClick={() => setSelectedName(st.tpl.name)}
+                      >
+                        Step {st.step} · {st.title}
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+                {stepInfo.step.step > 1 ? (
+                  (() => {
+                    const prev = stepInfo.entry.steps[stepInfo.step.step - 2]
+                    const state = stepReadiness[name] ?? 'checking'
+                    if (state === 'ready') {
+                      return (
+                        <p className="mt-2 text-emerald-800">
+                          Step {prev.step} output found — the dataset is ready, you can run this step.
+                        </p>
+                      )
+                    }
+                    return (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className={state === 'missing' ? 'text-amber-900' : 'text-ink-600'}>
+                          {state === 'checking'
+                            ? `Checking whether Step ${prev.step} has been run…`
+                            : state === 'missing'
+                              ? `Run Step ${prev.step} first — the dataset this step trains on isn’t there yet.`
+                              : `Run Step ${prev.step} first if you haven’t already — this step uses its output.`}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn-secondary !py-0.5 text-[11px]"
+                          onClick={() => setSelectedName(prev.tpl.name)}
+                        >
+                          Open Step {prev.step}
+                        </button>
+                      </div>
+                    )
+                  })()
+                ) : stepInfo.entry.steps[stepInfo.step.step] ? (
+                  <p className="mt-2 text-ink-600">
+                    Run this first. Then continue with{' '}
+                    <button
+                      type="button"
+                      className="font-medium text-accent-800 hover:underline"
+                      onClick={() => setSelectedName(stepInfo.entry.steps[stepInfo.step.step].tpl.name)}
+                    >
+                      Step {stepInfo.step.step + 1} · {stepInfo.entry.steps[stepInfo.step.step].title}
+                    </button>
+                    .
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             {missing.length > 0 ? (
               <div
                 className="mt-2 inline-flex max-w-full items-start gap-1 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-type-meta text-amber-900"
@@ -926,6 +1112,27 @@ export default function TemplatesView() {
                     ))}
                   </select>
                 </label>
+                <label
+                  className="flex items-center gap-1.5 text-[12px] text-ink-600"
+                  title="Hide templates that use nodes this server doesn't have installed"
+                >
+                  <input
+                    type="checkbox"
+                    checked={runnableOnly}
+                    onChange={(e) => setRunnableOnly(e.target.checked)}
+                    data-testid="templates-runnable-only"
+                  />
+                  Runnable here
+                  {runnableOnly && hiddenNotRunnable > 0 ? (
+                    <button
+                      type="button"
+                      className="text-ink-400 underline-offset-2 hover:text-ink-800 hover:underline"
+                      onClick={() => setRunnableOnly(false)}
+                    >
+                      ({hiddenNotRunnable} hidden — show all)
+                    </button>
+                  ) : null}
+                </label>
                 <span className="ml-auto text-[12px] text-ink-400">{shownLabel}</span>
               </>
             )}
@@ -1009,7 +1216,9 @@ export default function TemplatesView() {
                     : 'No templates'
               }
               description={
-                activePlugins.length > 0
+                hiddenNotRunnable > 0
+                  ? `${hiddenNotRunnable} template${hiddenNotRunnable === 1 ? '' : 's'} need plugins this server doesn't have. Turn off “Runnable here” to see them.`
+                  : activePlugins.length > 0
                   ? `Nothing requires ${activePlugins.join(' + ')}${search.trim() ? ` and matches “${search.trim()}”` : ''}.`
                   : search.trim()
                     ? `Nothing matches “${search.trim()}”. Try another term or clear search.`
@@ -1018,7 +1227,11 @@ export default function TemplatesView() {
                       : 'Sync examples, save from Editor, or upload a graph file.'
               }
               action={
-                activePlugins.length > 0 ? (
+                hiddenNotRunnable > 0 ? (
+                  <button type="button" className="btn-secondary" onClick={() => setRunnableOnly(false)}>
+                    Show all templates
+                  </button>
+                ) : activePlugins.length > 0 ? (
                   <button
                     type="button"
                     className="btn-secondary"
@@ -1044,8 +1257,43 @@ export default function TemplatesView() {
             detailClassName="!pl-4"
             master={
               <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white">
-                {filtered.map((tpl) => {
+                {entries.map((entry) => {
+                  if (entry.kind === 'group') {
+                    return (
+                      <li key={`group:${entry.group}`} className="bg-accent-50/30 px-1 py-1.5">
+                        <div className="px-2 pb-1">
+                          <span className="block truncate text-[12px] font-semibold text-ink-950">{entry.title}</span>
+                          <span className="text-[10px] uppercase tracking-wide text-ink-400">
+                            Guided · {entry.steps.length} steps
+                          </span>
+                        </div>
+                        {entry.steps.map((st) => {
+                          const active = st.tpl.name === selectedName
+                          const runnable = runnableOf(st.tpl)
+                          return (
+                            <button
+                              key={st.tpl.name}
+                              type="button"
+                              onClick={() => setSelectedName(st.tpl.name)}
+                              title={st.tpl.name}
+                              className={clsx('ide-row w-full !py-1.5 !px-3', active && 'is-active')}
+                            >
+                              <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-accent-100 text-[10px] font-semibold text-accent-900">
+                                {st.step}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-ink-900">{st.title}</span>
+                              {!runnable ? (
+                                <Puzzle className="h-3 w-3 shrink-0 text-amber-700" aria-label="Needs plugins" />
+                              ) : null}
+                            </button>
+                          )
+                        })}
+                      </li>
+                    )
+                  }
+                  const tpl = entry.tpl
                   const active = tpl.name === selectedName
+                  const runnable = runnableOf(tpl)
                   return (
                     <li key={tpl.name}>
                       <button
@@ -1056,8 +1304,18 @@ export default function TemplatesView() {
                           active && 'is-active',
                         )}
                       >
-                        <span className="w-full truncate font-medium text-ink-950">
-                          {tpl.title || humanizeTemplateName(tpl.name)}
+                        <span className="flex w-full items-center gap-1.5">
+                          <span className="min-w-0 flex-1 truncate font-medium text-ink-950">
+                            {tpl.title || humanizeTemplateName(tpl.name)}
+                          </span>
+                          {!runnable ? (
+                            <span
+                              className="shrink-0 rounded bg-amber-50 px-1 text-[10px] font-medium text-amber-800"
+                              title="Uses nodes this server doesn't have installed"
+                            >
+                              Needs plugins
+                            </span>
+                          ) : null}
                         </span>
                         <span
                           className="w-full truncate font-mono text-[11px] text-ink-400"
@@ -1105,7 +1363,7 @@ export default function TemplatesView() {
               Create or select a workspace, then open the graph in the Editor.
             </p>
             {(() => {
-              const missing = missingNodeTypes(items?.find((t) => t.name === projectGate.template))
+              const missing = effectiveMissing(items?.find((t) => t.name === projectGate.template))
               if (missing.length === 0) return null
               const summary = summarizeMissing(missing, nodeTypePlugins, 8)
               return (

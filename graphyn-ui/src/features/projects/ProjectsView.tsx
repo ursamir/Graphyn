@@ -38,8 +38,11 @@ import {
   StatusBadge,
 } from '../../components/ui'
 import { paths } from '../../routes/paths'
-import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
+import { goView, guardedNavigatePath, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { formatRelativeTime, shortRunId } from '../../lib/format'
+import { runDisplayName } from '../../lib/runDisplay'
+import { pickLatestResult, regressionTone } from './latestResult'
+import { formatDelta, formatMetric, isRatioMetric, metricLabel, primaryMetric } from '../../lib/metrics'
 import {
   forgetRecentWorkspace,
   noteRecentWorkspace,
@@ -74,6 +77,18 @@ type RunRow = {
   project?: string
   graph_name?: string
   created_at?: string
+  /** UX API: human title + summary (primary metric) + regression vs best previous. */
+  display_name?: string
+  summary?: Record<string, unknown> | null
+  regression?: Record<string, unknown> | null
+  metrics?: Record<string, unknown> | null
+}
+
+/** "Test accuracy 0.561" for a run row, or null. */
+function runMetricText(r: unknown): string | null {
+  const pm = primaryMetric(r)
+  if (!pm) return null
+  return `${metricLabel(pm.name)} ${formatMetric(pm.value, { percent: isRatioMetric(pm.name, pm.value) })}`
 }
 
 type WorkspaceSort = 'recent' | 'updated' | 'activity' | 'name'
@@ -105,6 +120,14 @@ const DOC_TAB_OPTIONS: { id: Tab; label: string }[] = [
 /** API ProjectManager.set_status enum (never 'active'). */
 const STATUSES = ['draft', 'in-progress', 'ready', 'archived'] as const
 type ProjectStatus = (typeof STATUSES)[number]
+
+/** Plain-language workspace status (the API enum stays as-is). */
+const WORKSPACE_STATUS_LABEL: Record<ProjectStatus, string> = {
+  draft: 'Getting started',
+  'in-progress': 'In progress',
+  ready: 'Ready',
+  archived: 'Archived',
+}
 
 /** Map legacy stored 'active' → 'in-progress' for display / select value. */
 function normalizeProjectStatus(raw: unknown): ProjectStatus {
@@ -217,7 +240,7 @@ export default function ProjectsView() {
   const [diffB, setDiffB] = React.useState('')
   const [diffResult, setDiffResult] = React.useState<unknown>(null)
   const [lineage, setLineage] = React.useState<unknown>(null)
-  const [recentRuns, setRecentRuns] = React.useState<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>([])
+  const [recentRuns, setRecentRuns] = React.useState<RunRow[]>([])
   const [projectPipelines, setProjectPipelines] = React.useState<
     Array<{
       name: string
@@ -281,8 +304,8 @@ export default function ProjectsView() {
   const [allRuns, setAllRuns] = React.useState<RunRow[] | null>(null)
   const loadAllRuns = React.useCallback(async () => {
     try {
-      const rows = await apiJson<RunRow[]>('/runs', { query: { limit: 60, offset: 0 } })
-      setAllRuns(Array.isArray(rows) ? rows : [])
+      const rows = unwrapList<RunRow>(await apiJson('/runs', { query: { limit: 60, offset: 0 } }))
+      setAllRuns(rows.filter((r) => r && typeof r.run_id === 'string'))
     } catch {
       /* The workspace list is the page; a missing activity feed degrades it but
          must not blank it, so this failure is deliberately not surfaced as an
@@ -293,6 +316,32 @@ export default function ProjectsView() {
   React.useEffect(() => {
     if (!selected) void loadAllRuns()
   }, [selected, loadAllRuns])
+
+  /* Registered models — the Home "Latest result" card links a run to the
+     model registered from it. Non-blocking; absent registry → no link. */
+  const [homeModels, setHomeModels] = React.useState<
+    Array<{ name: string; stages?: Record<string, { run_id?: string; source_run_id?: string } | null> }>
+  >([])
+  React.useEffect(() => {
+    if (!selected) return
+    let cancelled = false
+    apiJson<{ models?: unknown }>('/models')
+      .then((r) => {
+        if (cancelled) return
+        const list = Array.isArray(r?.models) ? r.models : unwrapList(r)
+        setHomeModels(
+          list.filter(
+            (m): m is { name: string } => !!m && typeof (m as { name?: unknown }).name === 'string',
+          ),
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setHomeModels([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selected])
 
   const open = async (name: string) => {
     const seq = ++openSeqRef.current
@@ -345,7 +394,7 @@ export default function ProjectsView() {
       setLineage(lin)
       try {
         const [runs, linkData, inputs, pipes, sched] = await Promise.all([
-          apiJson<Array<{ run_id: string; status?: string; graph_name?: string; created_at?: string; project?: string }>>('/runs', {
+          apiJson<unknown>('/runs', {
             query: { limit: 8, offset: 0, project: name },
           }),
           apiJson<{ inputs?: string[]; outputs?: Array<{ version: string }> }>(`/projects/${encodeURIComponent(name)}/links`).catch(() => ({ inputs: [], outputs: [] })),
@@ -371,8 +420,12 @@ export default function ProjectsView() {
           })),
         ])
         if (stale()) return
-        setRecentRuns(Array.isArray(runs) ? runs.slice(0, 8) : [])
-        setProjectPipelines(Array.isArray(pipes) ? pipes : [])
+        setRecentRuns(
+          unwrapList<RunRow>(runs)
+            .filter((r) => r && typeof r.run_id === 'string')
+            .slice(0, 8),
+        )
+        setProjectPipelines(unwrapList<(typeof projectPipelines)[number]>(pipes).filter((p) => p && typeof p.name === 'string'))
         {
           const schedList = Array.isArray(sched?.schedules) ? sched.schedules : []
           const typed = schedList.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
@@ -856,7 +909,7 @@ export default function ProjectsView() {
         { method: 'POST', body: JSON.stringify({ inputs: [linkPick.trim()] }) },
       )
       setLinks({ inputs: next.inputs ?? [], outputs: next.outputs ?? [] })
-      pushToast(`Linked input "${linkPick.trim()}"`, 'success')
+      pushToast(`Added dataset folder "${linkPick.trim()}"`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -870,7 +923,7 @@ export default function ProjectsView() {
         { method: 'DELETE', body: JSON.stringify({ inputs: [label] }) },
       )
       setLinks({ inputs: next.inputs ?? [], outputs: next.outputs ?? [] })
-      pushToast(`Unlinked "${label}"`, 'success')
+      pushToast(`Removed "${label}"`, 'success')
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
     }
@@ -1216,7 +1269,8 @@ export default function ProjectsView() {
             }`}
           />
           <span className="min-w-0 truncate">
-            {r.graph_name || shortRunId(r.run_id)} · {formatRelativeTime(r.created_at)}
+            {runDisplayName(r)}
+            {runMetricText(r) ? ` · ${runMetricText(r)}` : ''} · {formatRelativeTime(r.created_at)}
           </span>
         </button>
       )
@@ -1290,10 +1344,13 @@ export default function ProjectsView() {
               loading || projects == null ? '—' : list.length,
               recentNames.length ? `${recentNames.length} opened recently` : 'None opened yet',
             )}
+            {/* Was "Active = runsByProject.size", which also counted runs tagged
+                with deleted / unlisted workspaces — so "Active 3" could exceed
+                "Workspaces 2". Count only listed workspaces with a recent run. */}
             {statTile(
-              'Active',
-              allRuns ? runsByProject.size : '—',
-              'with runs in recent history',
+              'With recent runs',
+              allRuns && projects != null ? list.filter((p) => runsByProject.has(p.name)).length : '—',
+              projects != null ? `of ${list.length} workspace${list.length === 1 ? '' : 's'}` : undefined,
             )}
             {statTile(
               'Failed runs',
@@ -1595,11 +1652,12 @@ export default function ProjectsView() {
                             }`}
                           />
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[12px] font-medium text-ink-900">
-                              {r.graph_name || shortRunId(r.run_id)}
+                            <span className="block truncate text-[12px] font-medium text-ink-900" title={`Run ${r.run_id}`}>
+                              {runDisplayName(r)}
                             </span>
                             <span className="block truncate text-[11px] text-ink-500">
-                              {r.project} · {formatRelativeTime(r.created_at)}
+                              {r.project}
+                              {runMetricText(r) ? ` · ${runMetricText(r)}` : ''} · {formatRelativeTime(r.created_at)}
                             </span>
                           </span>
                         </button>
@@ -1698,8 +1756,12 @@ export default function ProjectsView() {
               {selected}
             </h1>
             <p className="mt-0.5 text-type-meta text-ink-500">
-              Workspace · {statusVal}
-              {versionFocus ? ` · ${versionFocus}` : ''}
+              <span title="Workspace status — change it under Spec & metadata">
+                Status: {WORKSPACE_STATUS_LABEL[statusVal]}
+              </span>
+              {versionFocus ? (
+                <span title="The dataset version this page is focused on"> · Dataset version {versionFocus}</span>
+              ) : null}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -1735,12 +1797,17 @@ export default function ProjectsView() {
             </dd>
           </div>
           <div className="flex gap-1.5">
-            <dt className="text-ink-400">Pinned inputs</dt>
+            <dt
+              className="text-ink-400"
+              title="Dataset folders this workspace's pipelines read from (you choose them below)"
+            >
+              Datasets in use
+            </dt>
             <dd>
               <button
                 type="button"
                 className="font-medium text-accent-800 hover:underline"
-                title="Jump to Linked inputs"
+                title="Jump to Datasets in use"
                 onClick={() => jumpToCard('inputs')}
               >
                 {links.inputs.length}
@@ -1751,8 +1818,13 @@ export default function ProjectsView() {
             <dt className="text-ink-400">Last run</dt>
             <dd>
               {lastRun ? (
-                <button type="button" className="font-medium text-accent-800 hover:underline" onClick={openLastRun}>
-                  {lastRun.status || 'unknown'} · {lastRun.run_id.slice(0, 8)}…
+                <button
+                  type="button"
+                  className="font-medium text-accent-800 hover:underline"
+                  title={`Run ${lastRun.run_id}`}
+                  onClick={openLastRun}
+                >
+                  {runDisplayName(lastRun)} · {lastRun.status || 'unknown'}
                 </button>
               ) : (
                 <span className="text-ink-400">—</span>
@@ -1761,11 +1833,16 @@ export default function ProjectsView() {
           </div>
           {(stagingHint || prodHint) && (
             <div className="flex gap-1.5">
-              <dt className="text-ink-400">Envs</dt>
+              <dt
+                className="text-ink-400"
+                title="Published versions of this workspace's saved pipelines (graphs). Not the same as a model stage on the Models page."
+              >
+                Pipeline versions
+              </dt>
               <dd className="font-medium text-ink-800">
                 {stagingHint ? `staging ${stagingHint}` : null}
                 {stagingHint && prodHint ? ' · ' : null}
-                {prodHint ? `prod ${prodHint}` : null}
+                {prodHint ? `production ${prodHint}` : null}
               </dd>
             </div>
           )}
@@ -1781,7 +1858,7 @@ export default function ProjectsView() {
               <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-semibold text-ink-950">Start from template</h2>
                 <p className="mt-1 flex-1 text-[12px] leading-relaxed text-ink-500">
-                  Stamp starter GraphIR into this workspace, then edit and run in the Editor.
+                  Copy a ready-made pipeline into this workspace, then edit and run it in the Editor.
                 </p>
                 <button type="button" className="btn-secondary mt-3 w-full" onClick={goTemplates}>
                   Open Templates
@@ -1790,7 +1867,7 @@ export default function ProjectsView() {
               <div className="flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm">
                 <h2 className="text-sm font-semibold text-ink-950">Link dataset</h2>
                 <p className="mt-1 flex-1 text-[12px] leading-relaxed text-ink-500">
-                  Upload or ingest shared Inputs under Datasets, then pin labels here for pipelines.
+                  Upload or import data in Datasets, then choose the folders this workspace uses.
                 </p>
                 <button type="button" className="btn-secondary mt-3 w-full" onClick={goLinkDataset}>
                   Open Datasets
@@ -1805,8 +1882,8 @@ export default function ProjectsView() {
               className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-ink-200 bg-ink-50/80 px-3 py-2 text-[12px] leading-relaxed text-ink-700"
             >
               <p>
-                <strong className="font-medium text-ink-900">Pipelines:</strong> Templates are starters
-                · Workspace pipelines are the canonical saved graphs · Editor edits the active graph.
+                <strong className="font-medium text-ink-900">Pipelines:</strong> Templates are starting
+                points · Saved pipelines live in this workspace · The Editor is where you change and run them.
               </p>
               <button
                 type="button"
@@ -1824,6 +1901,71 @@ export default function ProjectsView() {
               </button>
             </div>
           ) : null}
+
+          {/* Latest result — newest successful run with a headline metric. */}
+          {(() => {
+            const latest = pickLatestResult(recentRuns, homeModels)
+            if (!latest || opening) return null
+            const pct = isRatioMetric(latest.metric.name, latest.metric.value)
+            const tone = regressionTone(latest.regression, /loss|error|mae|mse/i.test(latest.metric.name))
+            return (
+              <section
+                className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm"
+                data-testid="home-latest-result"
+              >
+                <div className="min-w-0">
+                  <div className="ide-section-title">Latest result</div>
+                  <div className="mt-1 flex flex-wrap items-baseline gap-2">
+                    <span className="text-2xl font-semibold tabular-nums text-ink-950" title={`${latest.metric.name} = ${latest.metric.value}`}>
+                      {formatMetric(latest.metric.value, { percent: pct })}
+                    </span>
+                    <span className="text-[12px] text-ink-500">{metricLabel(latest.metric.name)}</span>
+                    {latest.regression && tone ? (
+                      <span
+                        className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                          tone === 'worse'
+                            ? 'bg-rose-100 text-rose-800'
+                            : tone === 'better'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-ink-100 text-ink-600'
+                        }`}
+                        title={
+                          latest.regression.previousValue != null
+                            ? `Best earlier run: ${formatMetric(latest.regression.previousValue, { percent: pct })}`
+                            : undefined
+                        }
+                      >
+                        {tone === 'worse' ? 'Regression ' : tone === 'better' ? 'Improved ' : 'No change '}
+                        {formatDelta(latest.regression.delta, { percent: pct })} vs best earlier run
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-0.5 truncate text-[12px] text-ink-500" title={`Run ${latest.run.run_id}`}>
+                    {runDisplayName(latest.run)}
+                    {latest.run.created_at ? ` · ${formatRelativeTime(latest.run.created_at)}` : ''}
+                  </p>
+                </div>
+                <div className="ml-auto flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => useAppStore.getState().openRun(latest.run.run_id, { project: selected })}
+                  >
+                    Open run
+                  </button>
+                  {latest.modelName ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => guardedNavigatePath(paths.model(selected, latest.modelName!))}
+                    >
+                      Open model
+                    </button>
+                  ) : null}
+                </div>
+              </section>
+            )
+          })()}
 
           {/* Activity feed */}
           <section>
@@ -1872,9 +2014,11 @@ export default function ProjectsView() {
                         }
                       >
                         <History className="h-3.5 w-3.5 shrink-0 text-ink-400" />
-                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-700">
-                          {r.run_id.slice(0, 10)}…
-                          {r.graph_name ? ` · ${r.graph_name}` : ''}
+                        <span className="min-w-0 flex-1 truncate text-[12px] text-ink-700" title={`Run ${r.run_id}`}>
+                          <span className="font-medium text-ink-900">{runDisplayName(r)}</span>
+                          {runMetricText(r) ? (
+                            <span className="ml-1.5 text-ink-500">· {runMetricText(r)}</span>
+                          ) : null}
                         </span>
                         {r.created_at ? (
                           <time
@@ -1989,11 +2133,12 @@ export default function ProjectsView() {
                         {(envs.staging || envs.prod || envs.pending_prod) && (
                           <details className="mt-1">
                             <summary className="cursor-pointer text-[11px] text-ink-400 hover:text-ink-700">
-                              Environments & promote
+                              Pipeline versions & publishing
                             </summary>
                             <div className="mt-1.5 flex flex-wrap gap-1.5 pb-1">
                               <p className="w-full text-[10px] text-ink-500">
-                                Model prod approval is API-only (POST /models/.../request-prod | approve-prod).
+                                These publish the saved pipeline (graph). To move a trained model to
+                                production, use the Models page.
                               </p>
                               <button type="button" className="btn-secondary !px-2 !py-0.5 text-[10px]" onClick={() => void publishPipeline(p.name, 'staging')}>
                                 Publish → staging
@@ -2142,7 +2287,12 @@ export default function ProjectsView() {
                 where the card points, and Artifacts moved up to Activity where the
                 runs that produce them live. */}
             <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="ide-section-title">Linked inputs</div>
+              <div
+                className="ide-section-title"
+                title="Datasets input folders this workspace uses"
+              >
+                Datasets in use
+              </div>
               <button
                 type="button"
                 className="ide-quiet-btn text-[11px]"
@@ -2152,16 +2302,17 @@ export default function ProjectsView() {
               </button>
             </div>
             <p className="mb-2 text-[12px] text-ink-500">
-              Pin Datasets input labels here so Editor runs know which folders to use. Completing a run does not auto-link.
+              Choose which dataset folders this workspace uses, so the Editor offers them first. Runs
+              don’t add folders here automatically.
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <select
                 className="rounded-md border border-ink-200 bg-white px-2 py-1 text-[12px]"
                 value={linkPick}
                 onChange={(e) => setLinkPick(e.target.value)}
-                aria-label="Link input label"
+                aria-label="Add a dataset folder"
               >
-                <option value="">Select input…</option>
+                <option value="">Select a dataset folder…</option>
                 {inputLabels.map((label) => (
                   <option key={label} value={label} disabled={links.inputs.includes(label)}>
                     {label}
@@ -2169,8 +2320,8 @@ export default function ProjectsView() {
                 ))}
               </select>
               <ConfirmButton
-                label="Link"
-                confirmLabel={linkPick ? `Link “${linkPick}”?` : 'Confirm'}
+                label="Add"
+                confirmLabel={linkPick ? `Add “${linkPick}”?` : 'Confirm'}
                 onConfirm={() => void linkInput()}
                 disabled={!linkPick || links.inputs.includes(linkPick)}
               />
@@ -2182,8 +2333,8 @@ export default function ProjectsView() {
                 <EmptyState
                   compact
                   icon={Database}
-                  title="No inputs pinned"
-                  description="Pick a label above, or open Datasets and come back to Link."
+                  title="No dataset folders chosen"
+                  description="Pick one above, or upload data in Datasets first."
                 />
               </div>
             )}
@@ -2199,7 +2350,7 @@ export default function ProjectsView() {
                     >
                       {label}
                     </button>
-                    <button type="button" className="text-ink-400 hover:text-rose-600" onClick={() => void unlinkInput(label)} aria-label={`Unlink ${label}`}>
+                    <button type="button" className="text-ink-400 hover:text-rose-600" onClick={() => void unlinkInput(label)} aria-label={`Remove ${label}`}>
                       ×
                     </button>
                   </li>

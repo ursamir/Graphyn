@@ -65,6 +65,24 @@ target_lufs      = { type = "number", default = -23.0, minimum = -70, maximum = 
 target_level_db  = { type = "number", default = -1.0, minimum = -96, maximum = 0, ui = { visible_if = { normalize_method = ["peak", "rms"] } } }
 ```
 
+**Inspector text (what users read):** `description` is shown in the Builder inspector — write it
+for the person configuring the node. No environment-variable names, internal file names
+(`X_train_repr.npy`, `compiled_<uuid>.keras`), library calls (`librosa top_db`, `tf.lite.Optimize`)
+or implementation notes there; put those in `ui.help_advanced` (rendered as the field's
+"advanced help", passed through unchanged by `plugin_ui.py`). Output-location fields
+(`output_path`, `output_dir`, `checkpoint_path`) go in `ui.group = "Advanced"`; a **required**
+input path (e.g. `realtime_inference.model_path`) stays visible.
+`unit_test/plugins/test_ux_plugins_schema_ux.py` enforces this for the bundled plugins.
+
+```toml
+device      = { type = "string", default = "auto", enum = ["auto", "cpu", "gpu"],
+                description = "auto = use a GPU when one is available, else CPU; cpu = always CPU; gpu = prefer GPU (falls back to CPU with a warning).",
+                ui = { group = "Basic", help_advanced = "auto honours GRAPHYN_TF_DEVICE, CUDA_VISIBLE_DEVICES and GRAPHYN_ML_FORCE_CPU." } }
+output_path = { type = "string", default = "workspace/artifacts/models",
+                description = "Folder for the trained model and checkpoints.",
+                ui = { group = "Advanced", help_advanced = "Relative to the Graphyn workspace; runs are scoped to runs/<run_id>/." } }
+```
+
 **model_builder architectures** (`PluginPackage/Common/trainer/`):
 
 | `architecture` | Source | Tunables (topology fixed) |
@@ -172,6 +190,48 @@ Every node that transforms audio adds a key to `AudioSample.metadata`:
 ```python
 sample.metadata.update({"my_node": {"key": "value"}})
 ```
+
+### Live progress (`emit_node_progress`)
+
+Long-running nodes report progress to the Runs view. Import it defensively so the
+plugin still loads on hosts without the progress channel:
+
+```python
+try:
+    from app.core.nodes.progress import emit_node_progress
+except ImportError:  # older host — progress is simply not shown
+    def emit_node_progress(payload: dict) -> None:
+        return None
+```
+
+Payloads are plain JSON dicts; the host adds `node_id` / `node_type` / timestamps, a human
+`message`, and throttles to ≤ 2 events/s (a payload with `pct >= 100` or `final: true` always
+goes through). In-process nodes deliver through a context variable; isolated workers write
+`@@GRAPHYN_PROGRESS@@ <json>` lines to stderr that the host forwards. Conventions used by the
+bundled plugins:
+
+| Node | Payload |
+|---|---|
+| `trainer` | `{"phase": "train", "epoch": n, "epochs": N, "loss", "accuracy", "val_loss", "val_accuracy", "pct"}` per epoch (`epoch: 0` at start); early stop → `{"phase": "train", "event": "early_stopping", "epoch", "epochs", "best_val_accuracy", "pct": 100, "message"}` |
+| `evaluator` | `{"phase": "evaluate", "n_test", "pct": 0}` then `{…, "test_accuracy", "roc_auc", "pct": 100, "message"}` |
+| `edge_optimizer` | `{"phase": "convert", "pct": 0}`, `{"phase": "calibrate", "done", "total", "pct"}` (int8), `{"phase": "convert", "file_size_bytes", "pct": 100, "message"}` |
+| `feature_frontend` / `dataset_builder` / `augmentation_pipeline` / `audio_exporter` | `{"phase": "features" \| "dataset" \| "augment" \| "export", "done", "total", "pct"}` — ~20 steps per run |
+
+Never let progress fail a node (wrap the call or rely on the host's no-raise contract), keep
+floats finite (`NaN` → `None`) and call it from the thread that runs `process()`.
+Tests: `unit_test/plugins/test_ux_plugins_progress.py` (fake emitter via `monkeypatch`).
+
+### Model artifacts: labels and display names
+
+Any node that writes a classifier file also writes `labels.txt` (one label per line, **class-index
+order**, no trailing newline) in the same folder — `trainer` beside `model.keras`, inside
+`saved_model/` and `checkpoints/`; `evaluator` beside the model and `metrics.json`;
+`edge_optimizer` beside `model.tflite` / `model.onnx`. The order is `DatasetArtifact.labels`
+(sorted by `dataset_builder`), never a hand-typed list — deploy steps must read it from
+`labels.txt` or the artifact. File names stay unique (`compiled_<uuid>.keras`); the human name is
+`ModelArtifact.metrics["display_name"]` (e.g. `DS-CNN (30 epochs)`, `DS-CNN (21 of 50 epochs)` when
+stopped early) / `DeploymentArtifact.metadata["display_name"]` (`… · TFLite INT8`), next to
+`labels` and `labels_path`. `metrics.json` itself stays numeric.
 
 ### Custom Data Types
 

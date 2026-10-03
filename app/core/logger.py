@@ -5,7 +5,7 @@ Responsibility:   Structured event logging for pipeline execution. Emits typed
                   events to an in-memory deque and an optional streaming queue.
 Owns:             PipelineLogger — all pipeline/node lifecycle event methods.
 Public Surface:   PipelineLogger (pipeline_start, node_start, node_end,
-                  node_error, node_skip, wave_start, wave_end, summary, etc.),
+                  node_progress, node_error, node_skip, wave_start, wave_end, summary, etc.),
                   port_item_counts(), primary_output_count().
 Must NOT:         Import from app.domain, app.api, or any execution module.
                   Must not persist logs directly (that is run_journal's job).
@@ -50,6 +50,8 @@ def primary_output_count(port_counts: dict[str, int]) -> int:
 # Maximum number of log entries kept in memory per logger instance (B-09 fix).
 # Prevents unbounded memory growth for long-running pipelines.
 _MAX_LOG_ENTRIES = 10_000
+# node_progress rows kept verbatim per node before thinning to every 10th.
+_MAX_PROGRESS_PER_NODE = 500
 
 
 class PipelineLogger:
@@ -162,8 +164,12 @@ class PipelineLogger:
         output_count: int = 0,
         node_id=None,
         output_counts: dict[str, int] | None = None,
+        extra: dict | None = None,
     ):
         """Emit a node_end event.
+
+        ``extra`` (optional) is merged into the event without overriding the
+        canonical keys — e.g. ``{"dataset": {...}}`` for ingest nodes.
 
         Args:
             output_count: Item count of the node's primary output (used when
@@ -196,7 +202,40 @@ class PipelineLogger:
                 end_event["rejected_count"] = output_counts["rejected"]
         if node_id:
             end_event["node_id"] = node_id
+        if isinstance(extra, dict):
+            for key, value in extra.items():
+                end_event.setdefault(str(key), value)
         self._emit_structured(end_event)
+
+    def node_progress(self, event: dict) -> None:
+        """Record a ``node_progress`` event (see app.core.nodes.progress).
+
+        Always forwarded to the streaming queue; the in-memory journal keeps
+        at most ``_MAX_PROGRESS_PER_NODE`` progress rows per node (older
+        ones are thinned) so long trainings cannot evict lifecycle events
+        from the bounded deque.
+        """
+        if not isinstance(event, dict):
+            return
+        entry = dict(event)
+        entry.setdefault("type", "node_progress")
+        entry.setdefault("timestamp", self._timestamp())
+        key = str(entry.get("node_id") or entry.get("node_type") or "")
+        counts = getattr(self, "_progress_counts", None)
+        if counts is None:
+            counts = {}
+            self._progress_counts = counts
+        n = counts.get(key, 0) + 1
+        counts[key] = n
+        keep = n <= _MAX_PROGRESS_PER_NODE or n % 10 == 0 or entry.get("final") is True
+        if keep:
+            self.logs.append(entry)
+        _log.debug("node_progress %s", entry.get("message"))
+        if self.queue:
+            try:
+                self.queue.put_nowait(entry)
+            except Exception:
+                pass
 
     def node_error(self, node_type, index, error, node_id=None):
         _log.error("[%s] %s — FAILED: %s", index, node_type, error)

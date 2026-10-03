@@ -2,7 +2,9 @@
 """
 Bounded Context:  REST API Layer
 Responsibility:   Ship package REST (§9.2.14) under /projects/{name}/ship/packages.
-Owns:             list/create/get/download/promote/transition routes.
+Owns:             list/create/get/download/promote/transition routes;
+                  create accepts model_name@stage or run model_path (+labels;
+                  422 ``labels_mismatch`` with ``expected`` order).
 Public Surface:   FastAPI router mounted at /api/v1.
 Must NOT:         Contain persistence — delegate to app.core.mlops.ship_packages.
 Dependencies:     fastapi, ship_packages, idempotency, actor, errors patterns.
@@ -55,8 +57,19 @@ def _invalid_transition(package_id: str, current: str, action: str) -> HTTPExcep
 
 
 class CreateShipPackageBody(BaseModel):
-    model_name: str = Field(..., min_length=1, max_length=64)
-    model_stage_or_version: str = Field(..., min_length=1, max_length=64)
+    model_name: Optional[str] = Field(
+        None, min_length=1, max_length=64, description="Registered model (or use model_path)"
+    )
+    model_stage_or_version: Optional[str] = Field(
+        "staging", min_length=1, max_length=64
+    )
+    model_path: Optional[str] = Field(
+        None, description="Row ``path`` from GET /runs/{run_id}/models (workspace-relative)"
+    )
+    run_id: Optional[str] = Field(None, description="Run that produced model_path")
+    labels: Optional[list[str]] = Field(
+        None, description="Class order; must equal the model's labels.txt (else labels_mismatch)"
+    )
     target: dict[str, Any] = Field(..., description="runtime/arch and optional extras")
     env: Optional[str] = Field("draft", description="draft|staging")
     notes: Optional[str] = None
@@ -93,8 +106,17 @@ def list_ship_packages(
 def create_ship_package(name: str, body: CreateShipPackageBody, request: Request):
     """POST create — Idempotency-Key required (API-CONV-004 / §9.2.14)."""
     from app.api.idempotency import begin_idempotent, complete_idempotent, idempotency_guard
-    from app.core.mlops.ship_packages import InvalidPackageTransition, create_package
+    from app.core.mlops.ship_packages import (
+        InvalidPackageTransition,
+        LabelsMismatch,
+        create_package,
+    )
 
+    if not body.model_name and not body.model_path:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "validation_failed", "message": "model_name or model_path is required"},
+        )
     key = request.headers.get("Idempotency-Key") or request.headers.get("idempotency-key")
     if not key or not str(key).strip():
         raise HTTPException(
@@ -123,7 +145,21 @@ def create_ship_package(name: str, body: CreateShipPackageBody, request: Request
                 actor=resolve_actor(request),
                 notes=body.notes,
                 unsigned_allowed=body.unsigned_allowed,
+                model_path=body.model_path,
+                run_id=body.run_id,
+                labels=body.labels,
             )
+        except LabelsMismatch as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "labels_mismatch",
+                    "message": str(exc),
+                    "expected": exc.expected,
+                    "got": exc.got,
+                    "labels_source": exc.source,
+                },
+            ) from exc
         except FileNotFoundError as exc:
             raise HTTPException(
                 status_code=404,

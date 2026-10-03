@@ -2,12 +2,15 @@
 """
 Bounded Context:  BC6 — Observability & Storage / Ship packages
 Responsibility:   File-backed ship package store + lifecycle (§19 / §9.2.14).
-Owns:             create/list/get/download/promote/transition helpers.
+Owns:             create/list/get/download/promote/transition helpers;
+                  model payload + labels.txt embedding and label-order
+                  validation (LabelsMismatch → ``labels_mismatch``).
                   If-Match check + manifest write run under a per-package
                   lock (project_pipelines.resource_lock) — no lost updates.
-Public Surface:   Same helpers for API / MCP; InvalidPackageTransition.
+Public Surface:   Same helpers for API / MCP; InvalidPackageTransition,
+                  LabelsMismatch.
 Must NOT:         Import app.api or app.domain.
-Dependencies:     stdlib; model_registry (lazy); project_pipelines
+Dependencies:     stdlib; model_registry (lazy); run_summary (lazy); project_pipelines
                   (resource_lock, lazy); audit (lazy).
 Reason To Change: Manifest schema or lifecycle matrix changes.
 """
@@ -245,6 +248,101 @@ def _resolve_model_ref(
     }
 
 
+class LabelsMismatch(ValueError):
+    """Requested label order differs from the model's labels.txt → 422 ``labels_mismatch``."""
+
+    def __init__(self, expected: list[str], got: list[str], source: str | None = None) -> None:
+        self.expected = list(expected)
+        self.got = list(got)
+        self.source = source
+        super().__init__(
+            "labels do not match the model's class order "
+            f"(expected {self.expected}, got {self.got})"
+        )
+
+
+# Max bytes of model payload copied into package.zip (bigger → pointer only).
+MAX_EMBED_MODEL_BYTES = 256 * 1024 * 1024
+
+
+def _resolve_model_file(
+    *,
+    model_path: str | None,
+    run_id: str | None,
+    stage_artifact: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return ``{path, fs_path, format, kind, node_id, labels, labels_source}`` or None."""
+    from app.core.runs.run_summary import (
+        model_row_for_path,
+        read_labels_txt,
+        resolve_workspace_path,
+        to_workspace_rel,
+        MODEL_FILE_FORMATS,
+    )
+
+    raw = model_path or (stage_artifact or {}).get("artifact_path")
+    if not raw:
+        return None
+    fs = resolve_workspace_path(str(raw))
+    if fs is None or not fs.exists():
+        raise FileNotFoundError(f"Model file not found: {raw}")
+    try:
+        from app.core.config import project_dir
+
+        root = project_dir().resolve()
+        if not fs.resolve().is_relative_to(root):
+            raise ValueError(f"model_path must be inside the workspace: {raw}")
+    except OSError:
+        pass
+    row: dict[str, Any] | None = None
+    rid = run_id or (stage_artifact or {}).get("source_run_id") or (stage_artifact or {}).get("run_id")
+    if rid:
+        try:
+            from app.core.config import runs_dir
+
+            rp = runs_dir() / str(rid)
+            if rp.is_dir():
+                row = model_row_for_path(str(rid), rp, str(raw))
+        except Exception:
+            row = None
+    if fs.is_dir():
+        fmt = "saved_model" if (fs / "saved_model.pb").is_file() else "directory"
+    else:
+        fmt = MODEL_FILE_FORMATS.get(fs.suffix.lower(), fs.suffix.lstrip(".").lower() or "file")
+    txt = read_labels_txt(fs)
+    labels = txt or list((row or {}).get("labels") or (stage_artifact or {}).get("labels") or [])
+    return {
+        "path": to_workspace_rel(fs),
+        "fs_path": fs,
+        "format": (row or {}).get("format") or fmt,
+        "kind": (row or {}).get("kind") or (stage_artifact or {}).get("artifact_kind"),
+        "node_id": (row or {}).get("node_id") or (stage_artifact or {}).get("node_id"),
+        "run_id": rid,
+        "labels": labels,
+        "labels_source": "labels.txt" if txt else ((row or {}).get("labels_source") or ("registry" if labels else None)),
+    }
+
+
+def _embed_model(zf: zipfile.ZipFile, fs: Path) -> list[tuple[str, bytes | Path]]:
+    """Return [(arcname, path)] of model payload files (size-capped)."""
+    items: list[tuple[str, Path]] = []
+    if fs.is_file():
+        items.append((f"model/{fs.name}", fs))
+    elif fs.is_dir():
+        for p in sorted(fs.rglob("*")):
+            if p.is_file():
+                items.append((f"model/{fs.name}/{p.relative_to(fs).as_posix()}", p))
+    total = 0
+    for _arc, p in items:
+        try:
+            total += p.stat().st_size
+        except OSError:
+            pass
+    if total > MAX_EMBED_MODEL_BYTES:
+        return []
+    return items  # type: ignore[return-value]
+
+
 def _summary(manifest: dict[str, Any]) -> dict[str, Any]:
     checksums = manifest.get("checksums") if isinstance(manifest.get("checksums"), dict) else {}
     return {
@@ -302,16 +400,26 @@ def create_package(
     project_dir: Path,
     *,
     project_name: str,
-    model_name: str,
-    model_stage_or_version: str,
+    model_name: str | None,
+    model_stage_or_version: str | None,
     target: dict[str, Any],
     env: str = "draft",
     actor: str = "api",
     notes: str | None = None,
     unsigned_allowed: bool = True,
     package_id: str | None = None,
+    model_path: str | None = None,
+    run_id: str | None = None,
+    labels: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create package, write archive+manifest, advance to ``built`` (SHIP-001)."""
+    """Create package, write archive+manifest, advance to ``built`` (SHIP-001).
+
+    Model source: a registered ``model_name``@``model_stage_or_version``
+    (its stage's real artifact), and/or ``model_path`` (+ ``run_id``) from
+    GET /runs/{id}/models. The model file (≤ 256 MB) and ``labels.txt`` are
+    embedded in the archive. ``labels`` must match the model's labels.txt
+    order exactly, else :class:`LabelsMismatch` (``labels_mismatch``).
+    """
     if not isinstance(target, dict) or not target:
         raise ValueError("target object required (runtime/arch)")
     runtime = str(target.get("runtime") or "").strip()
@@ -321,7 +429,62 @@ def create_package(
     if env_s not in ("draft", "staging", "prod"):
         raise ValueError("env must be draft, staging, or prod")
 
-    model_ref = _resolve_model_ref(model_name, model_stage_or_version)
+    warnings: list[dict[str, Any]] = []
+    stage_artifact: dict[str, Any] | None = None
+    if model_name:
+        model_ref = _resolve_model_ref(model_name, model_stage_or_version or "staging")
+        try:
+            from app.core.mlops.model_registry import describe_model
+
+            described = describe_model(model_name)
+            st = (described.get("stages") or {}).get(model_ref.get("stage_or_version"))
+            if isinstance(st, dict):
+                stage_artifact = st
+        except Exception:
+            stage_artifact = None
+    elif model_path:
+        model_ref = {
+            "name": None,
+            "stage_or_version": "run",
+            "run_id": str(run_id or ""),
+            "artifact_id": "",
+            "slug": "",
+        }
+    else:
+        raise ValueError("model_name or model_path is required")
+    model_file = _resolve_model_file(
+        model_path=model_path,
+        run_id=run_id or (model_ref.get("run_id") or None),
+        stage_artifact=stage_artifact,
+    )
+    if model_file is not None:
+        expected = list(model_file.get("labels") or [])
+        if labels is not None:
+            got = [str(x) for x in labels]
+            if expected and got != expected:
+                raise LabelsMismatch(expected, got, model_file.get("labels_source"))
+            if not expected and got:
+                warnings.append(
+                    {"code": "labels_unverified", "message": "model has no labels.txt to verify against"}
+                )
+                model_file["labels"] = got
+        if model_file.get("kind") == "compiled_untrained":
+            warnings.append(
+                {
+                    "code": "compiled_untrained",
+                    "message": "model is a compiled-but-untrained model_builder output",
+                }
+            )
+        model_ref.update(
+            {
+                "model_path": model_file["path"],
+                "format": model_file.get("format"),
+                "node_id": model_file.get("node_id"),
+                "labels": model_file.get("labels") or [],
+            }
+        )
+        if not model_ref.get("run_id") and model_file.get("run_id"):
+            model_ref["run_id"] = str(model_file["run_id"])
     pid = (package_id or f"pkg-{uuid4().hex[:12]}").strip()
     if not PACKAGE_ID_RE.match(pid):
         raise ValueError(f"Invalid package_id {pid!r}")
@@ -354,7 +517,7 @@ def create_package(
     )
     readme = (
         f"Graphyn ship package {pid}\n"
-        f"model={model_name}@{model_ref.get('stage_or_version')}\n"
+        f"model={model_name or model_ref.get('model_path')}@{model_ref.get('stage_or_version')}\n"
         f"runtime={runtime}\n"
     ).encode("utf-8")
     files_meta.append(
@@ -369,6 +532,25 @@ def create_package(
     with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("model/ref.json", model_json)
         zf.writestr("README.txt", readme)
+        if model_file is not None:
+            embedded = _embed_model(zf, model_file["fs_path"])
+            if not embedded:
+                warnings.append(
+                    {"code": "model_not_embedded", "message": "model too large; package holds a pointer only"}
+                )
+            for arc, src in embedded:
+                data = Path(src).read_bytes()
+                zf.writestr(arc, data)
+                files_meta.append(
+                    {"path": arc, "sha256": _sha256_bytes(data), "size": len(data), "role": "model"}
+                )
+            lbls = model_file.get("labels") or []
+            if lbls:
+                ltxt = ("\n".join(lbls) + "\n").encode("utf-8")
+                zf.writestr("model/labels.txt", ltxt)
+                files_meta.append(
+                    {"path": "model/labels.txt", "sha256": _sha256_bytes(ltxt), "size": len(ltxt), "role": "labels"}
+                )
     archive_data = archive_bytes.getvalue()
     archive_sha = _sha256_bytes(archive_data)
     archive_path = pkg / "package.zip"
@@ -410,6 +592,8 @@ def create_package(
             "dataset_versions": list(target.get("dataset_versions") or []),
         },
         "notes": notes or "",
+        "warnings": warnings,
+        "labels": list((model_file or {}).get("labels") or []),
         "unsigned_allowed": bool(unsigned_allowed),
         "deployment_status": "not_deployed",
         "resource_version": 1,
@@ -447,6 +631,7 @@ def create_package(
         "package_id": pid,
         "status": wire_status(str(manifest["status"])),
         "manifest": manifest,
+        "warnings": warnings,
     }
 
 

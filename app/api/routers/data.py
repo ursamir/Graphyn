@@ -288,7 +288,12 @@ def list_output_datasets(
 
 @router.get("/outputs/{project}/{version}", summary="Get an output dataset")
 def get_output_dataset(project: str, version: str):
-    """Return dataset version detail with files + content_hash (DATA-VER-002)."""
+    """Return dataset version detail with files + content_hash (DATA-VER-002).
+
+    Response is an OBJECT (not an array): ``{project, version, files:
+    [{name, path, size, sha256}], file_count, content_hash, created_at,
+    samples: [{path, split, label}]}``.
+    """
     from app.core.mlops.dataset_versions import read_manifest
 
     output_root = _output_root()
@@ -297,7 +302,7 @@ def get_output_dataset(project: str, version: str):
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     man = read_manifest(dataset_path, ensure=True, enforce_sha256=True)
-    files = list(man.get("files") or [])
+    files = _file_rows(man.get("files"))
     created_at = None
     try:
         created_at = datetime.fromtimestamp(
@@ -342,10 +347,36 @@ def get_output_dataset(project: str, version: str):
         "project": project,
         "version": version,
         "files": files,
+        "file_count": len(files),
         "content_hash": man.get("content_hash") or man.get("sha256"),
         "created_at": created_at,
         "samples": samples,
     }
+
+
+def _file_rows(raw) -> list[dict]:
+    """Normalize manifest ``files`` to ``[{name, path, size, sha256}]`` rows.
+
+    Always a list (never a dict/None) so clients can iterate safely.
+    """
+    rows: list[dict] = []
+    if isinstance(raw, dict):
+        raw = [{"path": k, **(v if isinstance(v, dict) else {"sha256": v})} for k, v in raw.items()]
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, str):
+            item = {"path": item}
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or item.get("name") or "")
+        if not path:
+            continue
+        row = dict(item)
+        row["path"] = path
+        row["name"] = str(item.get("name") or path.rsplit("/", 1)[-1])
+        size = item.get("size")
+        row["size"] = int(size) if isinstance(size, (int, float)) else None
+        rows.append(row)
+    return rows
 
 
 @router.delete("/outputs/{project}/{version}", summary="Delete an output dataset version")
