@@ -1,3 +1,5 @@
+import { errorMessageFromBody, humanizeErrorText } from '../lib/errorText'
+
 const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL
 
 export const API_BASE_URL =
@@ -81,49 +83,25 @@ function requestId(): string {
   return crypto.randomUUID()
 }
 
-/** snake_case error code -> readable fragment, e.g. "run_not_found" -> "Run not found". */
-function humanizeErrorCode(code: string): string {
-  const s = code.replace(/_/g, ' ').trim()
-  return s ? s[0].toUpperCase() + s.slice(1) : code
-}
-
-/**
- * Some routers (run_control.py, plugins.py) raise HTTPException with an
- * object `detail` — e.g. {"error": "run_not_found", "run_id": "..."} or
- * {"error": "PluginAlreadyInstalledError", "detail": "already installed…"}
- * — instead of a string. Turn either shape into one readable line so the
- * real backend reason reaches the user instead of a bare "HTTP 404".
- */
-function stringifyObjectDetail(d: Record<string, unknown>): string {
-  if (typeof d.detail === 'string' && d.detail.trim()) return d.detail
-  if (typeof d.error === 'string') {
-    const extras = Object.entries(d)
-      .filter(([k, v]) => k !== 'error' && k !== 'detail' && v != null && v !== '')
-      .map(([k, v]) => `${k}=${String(v)}`)
-      .join(', ')
-    const msg = humanizeErrorCode(d.error)
-    return extras ? `${msg} (${extras})` : msg
-  }
-  return JSON.stringify(d)
-}
-
 export async function parseError(res: Response, path: string): Promise<ApiError> {
   let body: unknown
   let detail = `HTTP ${res.status}`
+  // One readable line from any API error shape ({detail}, {detail:{code,message}},
+  // {error:{code,message}}, {code,message}, pydantic lists) — never raw JSON.
+  let text = ''
   try {
-    body = await res.json()
-    const b = body as Record<string, unknown>
-    if (typeof b?.detail === 'string') detail = b.detail
-    else if (Array.isArray(b?.detail)) detail = JSON.stringify(b.detail)
-    else if (b?.detail && typeof b.detail === 'object')
-      detail = stringifyObjectDetail(b.detail as Record<string, unknown>)
-    else if (typeof b?.error === 'string')
-      detail = `${b.error}${b.detail ? `: ${String(b.detail)}` : ''}`
+    text = await res.text()
   } catch {
+    /* ignore */
+  }
+  if (text.trim()) {
     try {
-      detail = (await res.text()) || detail
+      body = JSON.parse(text) as unknown
+      detail = errorMessageFromBody(body) || detail
     } catch {
-      /* ignore */
+      // Plain-text / HTML error page: keep it short and readable.
+      const plain = humanizeErrorText(text.trim())
+      detail = /^\s*</.test(plain) ? detail : plain.slice(0, 500)
     }
   }
   if (res.status === 401) detail = `Unauthorized — set API token in Settings. (${detail})`

@@ -11,7 +11,8 @@ Must NOT:         Contain run control logic beyond transition gating —
                   delegate signals to get_active_run() / RunManager.
 Dependencies:     fastapi, app.core.runs.run_control, app.core.runs.run_status,
                   app.core.config, app.core.runs.run_journal (durable cancel marker).
-Reason To Change: Transition matrix or run_id validation changes.
+Reason To Change: Transition matrix or run_id validation changes (unique
+                  prefixes >= 8 chars resolve via app.api.run_ids).
 
 Illegal transitions → 409 error.code=invalid_transition (RT-SM-001).
 Cancel on already-cancelled → 200 idempotent ack.
@@ -35,14 +36,26 @@ from app.core.runs.run_status import (
 router = APIRouter(prefix="/runs", tags=["run-control"])
 
 
-def _validate_run_id(run_id: str) -> None:
-    """Raise HTTP 400 if run_id contains invalid characters."""
+def _validate_run_id(run_id: str) -> str:
+    """Raise HTTP 400 if run_id contains invalid characters; return the full id.
+
+    A unique prefix >= 8 chars resolves to the full run id (ambiguous → 409
+    ``run_id_ambiguous``); unknown ids pass through so the handlers keep their
+    ``run_not_found`` / ``run_not_active`` semantics.
+    """
     sanitized = run_id.replace("-", "")
     if not sanitized or not sanitized.isalnum():
         raise HTTPException(
             status_code=400,
             detail={"error": "invalid_run_id", "run_id": run_id, "message": "Invalid run_id"},
         )
+    from app.api.run_ids import resolve_run_id_http
+
+    try:
+        root = _runs_dir()
+    except Exception:
+        return run_id
+    return resolve_run_id_http(run_id, allow_missing=True, runs_root=root)
 
 
 def _run_dir(run_id: str):
@@ -98,7 +111,7 @@ def _run_elsewhere_error(run_id: str) -> HTTPException:
 @router.post("/{run_id}/pause")
 def pause_run(run_id: str):
     """Pause an active pipeline run after the current node completes."""
-    _validate_run_id(run_id)
+    run_id = _validate_run_id(run_id)
     status = _durable_status(run_id)
     if status is not None:
         try:
@@ -130,7 +143,7 @@ def pause_run(run_id: str):
 @router.post("/{run_id}/resume")
 def resume_run(run_id: str):
     """Resume a paused pipeline run. Terminal statuses → 409 invalid_transition."""
-    _validate_run_id(run_id)
+    run_id = _validate_run_id(run_id)
     status = _durable_status(run_id)
     if status is not None:
         try:
@@ -155,7 +168,7 @@ def resume_run(run_id: str):
 @router.post("/{run_id}/cancel")
 def cancel_run(run_id: str, request: Request):
     """Cancel an active/paused/pending run; already-cancelled → 200 idempotent."""
-    _validate_run_id(run_id)
+    run_id = _validate_run_id(run_id)
     status = _durable_status(run_id)
 
     if status is not None:

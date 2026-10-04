@@ -11,7 +11,9 @@ Owns:             prepare_graph(), rewire_for_execution(), stamp_graph_project()
                   check_graph_executable(), GraphPrepareError,
                   PreparedGraph, persist_project_fields(), record_run_start(),
                   persist_run_identity() (meta actor / trigger / declared
-                  saved-pipeline ref), normalize_trigger(), graph_display_name().
+                  saved-pipeline ref / declared ``lineage`` model),
+                  sanitize_lineage_request(), normalize_trigger(),
+                  graph_display_name().
 Public Surface:   Same symbols (used by app.api.routers.pipelines, app.core.sdk,
                   app.cli.main via SDK, app.mcp.handlers.execution).
 Must NOT:         Execute graphs; import app.api or app.domain; raise HTTP
@@ -25,6 +27,7 @@ Reason To Change: A new pre-execution step must apply to every interface, or
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -196,12 +199,47 @@ def persist_project_fields(run_manager: Any, fields: dict[str, str]) -> None:
                 log.debug("graph_prepare: could not persist %s", key, exc_info=True)
 
 
-_TRIGGERS = frozenset({"ui", "api", "cli", "sdk", "mcp", "schedule", "replay", "agent", "webhook"})
+_TRIGGERS = frozenset({"ui", "api", "cli", "sdk", "mcp", "schedule", "replay", "agent", "webhook", "ship"})
 
 
 def normalize_trigger(value: Any, default: str = "api") -> str:
     text = str(value or "").strip().lower()
     return text if text in _TRIGGERS else default
+
+
+_LINEAGE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}$")
+
+
+def sanitize_lineage_request(raw: Any) -> dict[str, Any] | None:
+    """Validate the optional run payload ``lineage`` declaration.
+
+    Shape: ``{"model": {"name": str, "version"?: str, "stage"?: str},
+    "source_run_id"?: str}`` — e.g. the Ship wizard declaring which
+    registered model a package run ships. Unknown keys are dropped; invalid
+    tokens make the whole field ``None`` (never raises).
+    """
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, Any] = {}
+    model = raw.get("model")
+    if isinstance(model, str):
+        model = {"name": model}
+    if isinstance(model, dict):
+        m: dict[str, str] = {}
+        for key in ("name", "version", "stage"):
+            val = model.get(key)
+            if val is None or val == "":
+                continue
+            text = str(val).strip()
+            if not _LINEAGE_TOKEN.match(text):
+                return None
+            m[key] = text
+        if m.get("name"):
+            out["model"] = m
+    src = raw.get("source_run_id")
+    if isinstance(src, str) and _LINEAGE_TOKEN.match(src.strip()):
+        out["source_run_id"] = src.strip()
+    return out or None
 
 
 def persist_run_identity(
@@ -217,6 +255,9 @@ def persist_run_identity(
     every run.* platform audit event. Optional payload keys ``pipeline``,
     ``pipeline_env`` and ``pipeline_version`` declare which saved pipeline the
     graph came from (otherwise the audit record infers it by content hash).
+    Optional ``lineage: {model: {name, version|stage}}`` declares the
+    registered model a run ships (meta ``lineage_request`` → the sealed
+    record's ``lineage.models``).
     """
     writer = getattr(run_manager, "_write_meta_field", None)
     if not callable(writer):
@@ -235,6 +276,9 @@ def persist_run_identity(
     ver = body.get("pipeline_version")
     if isinstance(ver, str) and ver.strip():
         fields["pipeline_version_id"] = ver.strip()[:32]
+    lineage = sanitize_lineage_request(body.get("lineage"))
+    if lineage:
+        fields["lineage_request"] = lineage
     for key, value in fields.items():
         try:
             writer(key, value)

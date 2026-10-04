@@ -198,6 +198,22 @@ export function RunRecordCard({
         <Field label="Seed">
           {view.seed != null ? <span className="font-mono">{view.seed}</span> : <NotRecorded gap={gapFor(view, 'seed')} />}
         </Field>
+        {view.lineageModels.length ? (
+          <Field label={view.lineageModels.length > 1 ? 'Models' : 'Model'}>
+            <span className="inline-flex flex-wrap items-center gap-1">
+              {view.lineageModels.map((m) => (
+                <span key={`${m.name}:${m.version}:${m.stage}`} className="inline-flex items-center gap-1">
+                  <span className="font-medium text-ink-800">{m.name}</span>
+                  {[m.stage, m.version && `v${m.version}`].filter(Boolean).length ? (
+                    <span className="text-ink-500">{[m.stage, m.version && `v${m.version}`].filter(Boolean).join(' · ')}</span>
+                  ) : null}
+                  {m.modelHash ? <HashChip value={m.modelHash} label="model_hash" /> : null}
+                  {!m.resolved ? <span className="text-amber-700">not found in registry</span> : null}
+                </span>
+              ))}
+            </span>
+          </Field>
+        ) : null}
         <Field label="Record">
           {view.recordHash ? (
             <span className="inline-flex flex-wrap items-center gap-1">
@@ -323,15 +339,32 @@ export function RunRecordCard({
             </summary>
             {view.environment ? (
               <dl className="grid gap-x-4 gap-y-1 px-3 pb-2 text-[11px] sm:grid-cols-2">
-                <Field label="Image">{view.environment.image ? <HashChip value={view.environment.image} label="image" /> : <span className="text-ink-400">not in a container / not recorded</span>}</Field>
+                <Field label="Image">
+                  {!view.environment.image ? (
+                    <span className="text-ink-400">not recorded</span>
+                  ) : !/^(sha256:)?[0-9a-f]{32,}$/i.test(view.environment.image) ? (
+                    // Names like "graphyn-api:local" or "docker container <id> (…)"
+                    // are read as text; only digests get the shortened hash chip.
+                    <span className="font-mono text-ink-600">{view.environment.image}</span>
+                  ) : (
+                    <HashChip value={view.environment.image} label="image" />
+                  )}
+                </Field>
                 <Field label="Git">{view.environment.git ? <span className="font-mono">{view.environment.git}</span> : <span className="text-ink-400">—</span>}</Field>
                 {view.environment.libs.length ? (
-                  <Field label="Libraries" wide>
+                  <Field label="API host libraries" wide>
                     <span className="font-mono text-[10px] text-ink-600">
                       {view.environment.libs.map(([k, v]) => `${k} ${v}`).join(' · ')}
                     </span>
                   </Field>
                 ) : null}
+                {view.environment.pluginLibs.map((p) => (
+                  <Field key={p.plugin} label={`Plugin env · ${p.plugin}`} wide>
+                    <span className="font-mono text-[10px] text-ink-600">
+                      {[p.python && `Python ${p.python}`, ...p.libs.map(([k, v]) => `${k} ${v}`)].filter(Boolean).join(' · ')}
+                    </span>
+                  </Field>
+                ))}
               </dl>
             ) : null}
           </details>

@@ -52,6 +52,7 @@ import {
   runModelSummary,
   runModelTitle,
   runModelsFromOutputs,
+  shipLineageModel,
   type RunModel,
 } from './runModels'
 import DevicesView from '../ship/DevicesView'
@@ -70,6 +71,7 @@ const STEP_LABELS: Record<WizardStep, string> = {
 
 type RegistryStage = {
   run_id?: string
+  version?: string | number | null
   slug?: string
   path?: string
   /** UX API: resolved model file for this stage (+ `exists` false when gone). */
@@ -867,6 +869,14 @@ export default function EdgeWizardView() {
     pushToast('Opened edge graph in Editor', 'info')
   }
 
+  /** Registered model (name · stage · version) whose file this package ships, if any. */
+  const lineageModel = shipLineageModel({
+    registry: registryModels,
+    modelPath,
+    preferredName: pickedModel || carriedModel.name || null,
+    preferredStage: pickedModel ? null : carriedModel.stage || null,
+  })
+
   const startRun = async () => {
     if (!linkedProject.trim() || !sourceRunId.trim()) {
       pushToast('Pick the training run whose model you want to ship first', 'error')
@@ -895,6 +905,12 @@ export default function EdgeWizardView() {
         project: linkedProject.trim(),
         source_run_id: sourceRunId.trim(),
         ...(sourceArtifactId.trim() ? { source_artifact_id: sourceArtifactId.trim() } : {}),
+        // `ship` → "via Ship wizard" in the run record (API reads it from the
+        // top level of the run payload).
+        trigger: 'ship',
+        // Registered model being shipped (sealed into the run record's lineage;
+        // older APIs ignore the field).
+        ...(lineageModel ? { lineage: { model: lineageModel } } : {}),
       }
       const res = await apiJson<{ run_id: string }>('/pipelines/run-async', {
         method: 'POST',
@@ -1091,7 +1107,11 @@ export default function EdgeWizardView() {
         <DevicesView workspaceId={activeProject || linkedProject || null} embedded />
       ) : (
         <>
-          <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-white/95 px-3 py-2 text-sm shadow-sm backdrop-blur">
+          {/* Sticky "Ship from" band: an opaque full-bleed strip pinned to the very
+              top of the scroll area (cancels .workbench-scroll's px-4/py-3), so the
+              model list never shows through above or behind the bar when scrolled. */}
+          <div className="sticky -top-3 z-20 -mx-4 -mt-3 border-b border-ink-100 bg-white px-4 pb-2 pt-3">
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm shadow-sm">
             <span className="text-ink-500" title="The workspace and the training run whose model you are shipping">
               Ship from
             </span>
@@ -1144,6 +1164,7 @@ export default function EdgeWizardView() {
                 <GitBranch className="h-3.5 w-3.5" /> Lineage
               </button>
             ) : null}
+          </div>
           </div>
 
           <ol className="flex flex-wrap gap-2">

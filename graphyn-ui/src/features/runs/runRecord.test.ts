@@ -314,3 +314,30 @@ describe('per-node failures + compact labels', () => {
     expect(compactNodeLabel('Trainer')).toBe('Trainer')
   })
 })
+
+describe('buildRunRecord — plugin envs and shipped model lineage', () => {
+  it('reads plugin_environments and lineage.models', () => {
+    const v = buildRunRecord({
+      runId: 'pkg1',
+      prove: {
+        environment: {
+          python: '3.12.1',
+          image: 'docker container 1a2b3c (image not recorded)',
+          plugin_environments: {
+            trainer: { python: '3.11.9', libraries: { tensorflow: '2.16.1', numpy: '1.26.4' } },
+            empty: { python: '3.11.9', libraries: {} },
+          },
+        },
+        lineage: { models: [{ name: 'qa-e2e-mobilenet', stage: 'staging', version: '3', model_hash: 'sha256:aa' }, { name: 'ghost', resolved: false }] },
+      },
+    })
+    expect(v.environment?.pluginLibs).toEqual([
+      { plugin: 'trainer', python: '3.11.9', libs: [['numpy', '1.26.4'], ['tensorflow', '2.16.1']] },
+    ])
+    expect(v.environment?.image).toBe('docker container 1a2b3c (image not recorded)')
+    expect(v.lineageModels).toEqual([
+      { name: 'qa-e2e-mobilenet', stage: 'staging', version: '3', modelHash: 'sha256:aa', resolved: true },
+      { name: 'ghost', stage: '', version: '', modelHash: '', resolved: false },
+    ])
+  })
+})

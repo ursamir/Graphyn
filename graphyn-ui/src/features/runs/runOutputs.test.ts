@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   executionOrderFromRun,
   guessNodeFromPath,
+  isPackageRun,
   isInternalRunFile,
   artifactSlugFromPath,
   listRunModelCandidates,
@@ -159,6 +160,30 @@ describe('runHasModelOutput', () => {
     // Trainer / metrics alone — workflow ran, but no model artifact to promote.
     expect(runHasModelOutput({ nodeStats: [{ node_id: 'trainer_3', node_type: 'trainer' }] })).toBe(false)
     expect(runHasModelOutput({ metrics: { val_accuracy: 0.9 } })).toBe(false)
+  })
+
+  it('is false for Ship / deploy package runs even with an optimized model file', () => {
+    const files = [{ name: 'model.tflite', path: 'a/model.tflite', kind: 'model' }]
+    expect(
+      runHasModelOutput({ files, graphNodeTypes: ['python_code', 'edge_optimizer', 'deployment_packager'] }),
+    ).toBe(false)
+    expect(runHasModelOutput({ files, graphName: 'edge-deploy' })).toBe(false)
+    expect(runHasModelOutput({ files, artifacts: [{ artifact_type: 'deployment_package' }] })).toBe(false)
+  })
+
+  it('needs a trained model: untrained-only runs do not count', () => {
+    expect(runHasModelOutput({ modelKinds: ['compiled_untrained'] })).toBe(false)
+    expect(runHasModelOutput({ modelKinds: ['compiled_untrained', 'trained'] })).toBe(true)
+    expect(
+      runHasModelOutput({ files: [{ name: 'compiled_abc123.keras', path: 'm/compiled_abc123.keras', kind: 'model' }] }),
+    ).toBe(false)
+  })
+})
+
+describe('isPackageRun', () => {
+  it('detects package graphs only', () => {
+    expect(isPackageRun({ graphNodeTypes: ['trainer', 'evaluator'] })).toBe(false)
+    expect(isPackageRun({ graphNodeTypes: ['deployment_packager'] })).toBe(true)
   })
 })
 

@@ -37,6 +37,59 @@ except ImportError:  # pragma: no cover - depends on host version
         return None
 
 
+def _determinism_enabled() -> bool:
+    """Op determinism on unless ``GRAPHYN_ISOLATED_DETERMINISTIC=0``."""
+    import os
+
+    raw = os.environ.get("GRAPHYN_ISOLATED_DETERMINISTIC", "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def seed_everything(seed: int) -> int:
+    """Make Keras/TF model init + training reproducible for *seed*.
+
+    Seeds Python ``random``, NumPy and TensorFlow (``keras.utils.set_random_seed``
+    does all three) and enables ``tf.config.experimental.enable_op_determinism``
+    when available, so GPU kernels (cuDNN conv / reductions) and tf.data
+    shuffles are deterministic. ``TF_DETERMINISTIC_OPS`` /
+    ``TF_CUDNN_DETERMINISTIC`` are also set (no-op if TF already read them; the
+    platform sets them before the worker starts). Returns the effective seed.
+
+    Not covered (documented in docs/EXAMPLE_06_COVERAGE.md): a run on GPU vs
+    one on CPU (device=auto picks by free VRAM) give different floats; the
+    GPU→CPU retry on a GPU failure changes the device mid-run.
+    """
+    import os
+    import random
+
+    s = int(seed) % (2 ** 32)
+    deterministic = _determinism_enabled()
+    if deterministic:
+        os.environ.setdefault("TF_DETERMINISTIC_OPS", "1")
+        os.environ.setdefault("TF_CUDNN_DETERMINISTIC", "1")
+    random.seed(s)
+    np.random.seed(s)
+    try:
+        import keras
+
+        keras.utils.set_random_seed(s)
+    except Exception:
+        try:
+            import tensorflow as tf  # type: ignore
+
+            tf.random.set_seed(s)
+        except Exception:
+            pass
+    if deterministic:
+        try:
+            import tensorflow as tf  # type: ignore
+
+            tf.config.experimental.enable_op_determinism()
+        except Exception as exc:  # TF < 2.8 or no TF
+            log.debug("enable_op_determinism unavailable: %s", exc)
+    return s
+
+
 def _finite(value) -> float | None:
     """JSON-safe float (None for missing / NaN / inf)."""
     try:
@@ -194,7 +247,7 @@ class TrainerNode(Node):
         label="Trainer",
         description="Unified model training for Keras and PyTorch with EarlyStopping and checkpointing.",
         category="ML",
-        version="1.0.0",
+        version="1.1.0",
         tags=["ml", "training", "keras", "pytorch", "common"],
         requires_gpu=False,
         supports_cpu=True,
@@ -441,6 +494,9 @@ class TrainerNode(Node):
         import keras
         import tensorflow as tf  # type: ignore
 
+        # Seed before load_model / clone_model so any fresh-initialised
+        # variables (clone, optimizer slots) and fit's shuffle are reproducible.
+        seed_everything(self.seed)
         model = self._keras_model_from_input(model)
 
         prev_policy = None
@@ -465,7 +521,7 @@ class TrainerNode(Node):
         import tensorflow as tf  # type: ignore
 
 
-        keras.utils.set_random_seed(self.seed)
+        seed_everything(self.seed)
 
         ckpt_path = self.config.checkpoint_path
         if not ckpt_path:
@@ -552,6 +608,8 @@ class TrainerNode(Node):
                 or "out of memory" in low
                 or "oom" in low
                 or "cuda_error_out_of_memory" in low
+                # op determinism: GPU op without a deterministic kernel
+                or "determinis" in low
             )
             if is_gpu_fail:
                 log.warning(
@@ -690,6 +748,22 @@ class TrainerNode(Node):
             device = torch.device("cpu")
         model = model.to(device)
 
+        # Reproducible shuffling / dropout for a given node seed.
+        _seed = int(self.seed) % (2 ** 32)
+        import random as _random
+
+        _random.seed(_seed)
+        np.random.seed(_seed)
+        torch.manual_seed(_seed)
+        if _determinism_enabled():
+            try:
+                torch.use_deterministic_algorithms(True, warn_only=True)
+                torch.backends.cudnn.benchmark = False
+            except Exception:
+                pass
+        _loader_gen = torch.Generator()
+        _loader_gen.manual_seed(_seed)
+
         # Build DataLoaders from dataset attributes
         X_train = torch.from_numpy(np.asarray(dataset.X_train, dtype=np.float32))
         y_train = torch.from_numpy(np.asarray(dataset.y_train, dtype=np.int64))
@@ -700,6 +774,7 @@ class TrainerNode(Node):
             TensorDataset(X_train, y_train),
             batch_size=self.config.batch_size,
             shuffle=bool(self.config.shuffle),
+            generator=_loader_gen,
         )
         val_loader = DataLoader(
             TensorDataset(X_val, y_val),
@@ -1000,7 +1075,7 @@ class ModelBuilderNode(Node):
             "layer-wise control (Load from preset in the Builder)."
         ),
         category="ML",
-        version="1.1.0",
+        version="1.2.0",
         tags=["ml", "model", "keras", "ds_cnn", "mobilenet", "custom", "common"],
         requires_gpu=False,
         supports_cpu=True,
@@ -1138,6 +1213,9 @@ class ModelBuilderNode(Node):
                 )
 
         if backend == "keras":
+            # Initial weights come from here — unseeded, every run started from
+            # different weights (Example 06: 71.1% vs 75.6% test acc, same seed).
+            seed_everything(self.seed)
             try:
                 from app.core.ml.tf_runtime import select_keras_device
                 import tensorflow as tf  # type: ignore

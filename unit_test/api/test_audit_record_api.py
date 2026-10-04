@@ -40,11 +40,15 @@ def test_ambiguous_and_short_prefix(api_client, aud_env):
         (runs / rid).mkdir(parents=True)
         (runs / rid / "meta.json").write_text(json.dumps({"run_id": rid, "status": "succeeded"}))
     resp = api_client.get("/api/v1/runs/deadbeef")
-    assert resp.status_code == 404 and "Ambiguous" in resp.json()["detail"]
-    assert api_client.get("/api/v1/runs/deadbee").status_code == 404
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "run_id_ambiguous"
+    assert detail["matches"] == ["deadbeef0001", "deadbeef0002"]
+    short = api_client.get("/api/v1/runs/deadbee")
+    assert short.status_code == 404 and short.json()["detail"]["code"] == "run_not_found"
     assert _get(api_client, "/api/v1/runs/deadbeef0002")["run_id"] == "deadbeef0002"
     cmp = api_client.get("/api/v1/experiments/compare?run_ids=deadbeef")
-    assert cmp.status_code == 404
+    assert cmp.status_code == 409
 
 
 def test_verify_endpoint(api_client, aud_env):

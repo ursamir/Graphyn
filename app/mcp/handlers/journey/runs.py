@@ -85,6 +85,14 @@ def list_runs_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]
     return {"runs": rows, "count": len(rows), "total_matched": page.total_matched}
 
 
+def _full_run_id(run_id: str) -> str:
+    """Unique prefix (>= 8 chars) → full run id; unknown ids pass through."""
+    from app.core.config import runs_dir
+    from app.core.runs.run_resolve import resolve_run_id_soft
+
+    return resolve_run_id_soft(runs_dir(), run_id)
+
+
 def get_run_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     import json
 
@@ -95,6 +103,10 @@ def get_run_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     run_id = str(args.get("run_id") or "").strip()
     if not run_id:
         return handler_error("validation_failed", "run_id required")
+    try:
+        run_id = _full_run_id(run_id)
+    except LookupError as exc:  # RunIdAmbiguous
+        return handler_error("validation_failed", str(exc))
     path = runs_dir() / run_id / "meta.json"
     if not path.is_file():
         return handler_error("not_found", f"Run '{run_id}' not found")
@@ -118,6 +130,10 @@ def get_run_outputs_handler(arguments: dict[str, Any] | None = None) -> dict[str
     run_id = str(args.get("run_id") or "").strip()
     if not run_id:
         return handler_error("validation_failed", "run_id required")
+    try:
+        run_id = _full_run_id(run_id)
+    except LookupError as exc:  # RunIdAmbiguous
+        return handler_error("validation_failed", str(exc))
     run_path = runs_dir() / run_id
     if not run_path.is_dir():
         return handler_error("not_found", f"Run '{run_id}' not found")

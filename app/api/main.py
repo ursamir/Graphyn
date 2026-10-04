@@ -79,6 +79,8 @@ from app.models.audio_artifact_serializer import register_audio_serializer as _r
 _reg_audio()
 from app.models.dataset_artifact_serializer import register_dataset_serializer as _reg_dataset
 _reg_dataset()
+from app.models.feature_array_serializer import register_feature_array_serializer as _reg_features
+_reg_features()
 from app.core.artifacts.file_tree import register_file_tree_serializer as _reg_file_tree
 _reg_file_tree()
 

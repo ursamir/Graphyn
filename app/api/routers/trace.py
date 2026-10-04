@@ -6,7 +6,8 @@ Owns:             GET /trace, GET /audit (offset / run_id / resource_id / action
                   filters over the whole log; total + has_more).
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain storage logic — delegate to app.core.runs.trace / audit.
-Dependencies:     fastapi, app.core.runs.trace, app.core.trust.audit.
+Dependencies:     fastapi, app.core.runs.trace, app.core.trust.audit,
+                  app.api.run_ids (run_id prefix resolution).
 Reason To Change: Trace/audit response schema changes or new query modes.
 """
 from __future__ import annotations
@@ -35,6 +36,12 @@ def get_trace(
         )
     from app.core.runs.trace import assemble_trace
 
+    if run_id and run_id.strip():
+        from app.api.run_ids import resolve_run_id_http
+
+        # Unique prefix >= 8 → full id; ambiguous → 409 run_id_ambiguous.
+        # Unknown ids still return a partial payload (``run_not_found`` warning).
+        run_id = resolve_run_id_http(run_id, allow_missing=True)
     try:
         return assemble_trace(artifact_id=artifact_id, run_id=run_id, node_id=node_id)
     except ValueError as exc:

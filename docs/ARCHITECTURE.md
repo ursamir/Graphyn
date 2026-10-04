@@ -189,13 +189,13 @@ sdk.py
 
 api/main.py
   ├── initialize_registry()              ← explicit startup call
-  ├── register_audio_serializer() / register_dataset_serializer() / register_file_tree_serializer()
+  ├── register_audio_serializer() / register_dataset_serializer() / register_feature_array_serializer() / register_file_tree_serializer()
   └── api/routers/*.py
         └── sdk.py (Pipeline, PipelineNode)
 
 mcp/server.py
   ├── initialize_registry()              ← explicit startup call
-  ├── register_audio_serializer() / register_dataset_serializer() / register_file_tree_serializer()
+  ├── register_audio_serializer() / register_dataset_serializer() / register_feature_array_serializer() / register_file_tree_serializer()
   └── mcp/tool_registry.py
         └── mcp/handlers/*.py
               └── runtime_backend.py (get_backend().execute())
@@ -203,7 +203,7 @@ mcp/server.py
 
 cli/main.py
   ├── initialize_registry()              ← explicit startup call
-  ├── register_audio_serializer() / register_dataset_serializer() / register_file_tree_serializer()
+  ├── register_audio_serializer() / register_dataset_serializer() / register_feature_array_serializer() / register_file_tree_serializer()
   └── sdk.py (Pipeline.from_json, Pipeline.from_yaml)
   └── runtime_backend.py (get_backend().execute())
   └── registry_runtime.py (resolve_capability)  ← inspect command
@@ -323,7 +323,7 @@ Node produces output
              (None → shallow generic fallback of that data_dir only)
 ```
 
-**ArtifactSerializerRegistry** is the indirection layer that keeps platform infrastructure free of domain knowledge. At startup, `register_audio_serializer()`, `register_dataset_serializer()`, and `register_file_tree_serializer()` register handlers for `"audio_samples"`, `"dataset_artifact"`, and the platform-generic `"file_tree"`. Handlers may implement optional `list_files(src_dir) → FileListing` so run-output listing never parses domain inventories (`labels.csv`, …) in core. The registry is fail-open: unregistered types fall back to JSON, and that fallback writes ndarrays as sibling `.npy` files instead of `.tolist()`.
+**ArtifactSerializerRegistry** is the indirection layer that keeps platform infrastructure free of domain knowledge. At startup, `register_audio_serializer()`, `register_dataset_serializer()`, `register_feature_array_serializer()`, and `register_file_tree_serializer()` register handlers for `"audio_samples"`, `"dataset_artifact"`, `"feature_arrays"` (`list[FeatureArray]` → `features.npz` + manifest), and the platform-generic `"file_tree"`. `infer_type()` must be strict: the audio handler only claims waveform-shaped items (`data` + `sample_rate` + `path`, no `feature_type`) — a looser duck-type once stored MFCC matrices as WAVs and cache hits fed `AudioSample`s to Dataset Builder. Handlers may implement optional `list_files(src_dir) → FileListing` so run-output listing never parses domain inventories (`labels.csv`, …) in core. The registry is fail-open: unregistered types fall back to JSON, and that fallback writes ndarrays as sibling `.npy` files instead of `.tolist()`.
 
 ---
 
@@ -387,7 +387,7 @@ Application startup (API / CLI / MCP)
          │               ├── DependencyChecker.verify()
          │               └── import entry_points → register node types
          │
-         └── register_audio_serializer() / register_dataset_serializer() / register_file_tree_serializer()
+         └── register_audio_serializer() / register_dataset_serializer() / register_feature_array_serializer() / register_file_tree_serializer()
              └── ArtifactSerializerRegistry.register("audio_samples" | "dataset_artifact" | "file_tree", …)
 
     For each Node subclass found:

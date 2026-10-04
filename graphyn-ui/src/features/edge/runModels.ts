@@ -144,7 +144,7 @@ export function pickDefaultRunModel(
 
 const KIND_LABEL: Record<string, string> = {
   trained: 'Trained',
-  compiled_untrained: 'Untrained (compiled only)',
+  compiled_untrained: 'Untrained (architecture only)',
   optimized: 'Optimized',
 }
 
@@ -153,12 +153,23 @@ export function runModelKindLabel(kind?: string): string {
   return KIND_LABEL[kind] ?? kind.replace(/_/g, ' ')
 }
 
+/**
+ * Metrics that belong to this artifact. The API copies a path's evaluation
+ * metrics onto every model row of that path, but they describe the *trained*
+ * model only — an untrained (compiled-only) or converted artifact never shows
+ * the path's accuracy.
+ */
+export function runModelOwnMetrics(m: Pick<RunModel, 'kind' | 'metrics'>): Record<string, unknown> | undefined {
+  if (m.kind && m.kind !== 'trained') return undefined
+  return m.metrics
+}
+
 /** One-line picker label: "Trained · keras · 1.2 MB · Test accuracy 0.561". */
 export function runModelSummary(m: RunModel): string {
   const parts = [runModelKindLabel(m.kind)]
   if (m.format) parts.push(m.format)
   if (typeof m.size_bytes === 'number' && m.size_bytes > 0) parts.push(formatBytes(m.size_bytes))
-  const pm = pickPrimaryMetric(m.metrics)
+  const pm = pickPrimaryMetric(runModelOwnMetrics(m))
   if (pm) parts.push(`${metricLabel(pm.name)} ${formatMetric(pm.value, { percent: isRatioMetric(pm.name, pm.value) })}`)
   return parts.join(' · ')
 }
@@ -200,4 +211,66 @@ export function checkLabelsAgainstModel(modelLabels: string[] | undefined | null
     return { status: 'order', expected: modelLabels }
   }
   return { status: 'set', expected: modelLabels, missing, extra }
+}
+
+type LineageStage = { artifact_path?: string; version?: string | number | null; exists?: boolean }
+type LineageRegistryModel = { name: string; stages?: Record<string, LineageStage | undefined> }
+
+/** `lineage.model` for a Ship package run: the registered model being shipped. */
+export type ShipLineageModel = { name: string; version?: string; stage: string }
+
+const STAGE_PREFERENCE = ['prod', 'production', 'staging', 'latest']
+
+function normModelPath(p: string): string {
+  return p
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/^workspace\//, '')
+}
+
+/**
+ * Which registered model (name + stage [+ version]) a Ship package run ships,
+ * for the run payload's optional `lineage: { model }`. The explicitly chosen
+ * registry model (Advanced picker, or Models → Use in Ship) wins when its
+ * stage's file is the model being shipped (or the file is unknown); otherwise
+ * the registry is searched for a stage whose `artifact_path` is `modelPath`
+ * (prod → staging → latest). Null when the shipped file is not registered.
+ */
+export function shipLineageModel(input: {
+  registry: LineageRegistryModel[]
+  modelPath: string
+  preferredName?: string | null
+  preferredStage?: string | null
+}): ShipLineageModel | null {
+  const path = normModelPath(input.modelPath || '')
+  const stageKeys = (stages: Record<string, LineageStage | undefined>, first?: string | null): string[] => {
+    const keys = Object.keys(stages).filter((k) => stages[k])
+    const order = [...(first ? [first] : []), ...STAGE_PREFERENCE]
+    return [...order.filter((k) => keys.includes(k)), ...keys.filter((k) => !order.includes(k))]
+  }
+  const out = (name: string, stage: string, st: LineageStage): ShipLineageModel => {
+    const v = st.version
+    return v != null && String(v).trim() ? { name, stage, version: String(v) } : { name, stage }
+  }
+  const preferred = input.preferredName
+    ? input.registry.find((m) => m.name === input.preferredName)
+    : undefined
+  if (preferred) {
+    const stages = preferred.stages || {}
+    for (const k of stageKeys(stages, input.preferredStage)) {
+      const st = stages[k]!
+      const ap = normModelPath(st.artifact_path || '')
+      if (!path || !ap || ap === path) return out(preferred.name, k, st)
+    }
+  }
+  if (!path) return null
+  for (const m of input.registry) {
+    const stages = m.stages || {}
+    for (const k of stageKeys(stages)) {
+      const st = stages[k]!
+      if (normModelPath(st.artifact_path || '') === path) return out(m.name, k, st)
+    }
+  }
+  return null
 }

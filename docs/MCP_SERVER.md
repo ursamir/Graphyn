@@ -183,7 +183,7 @@ Before execution the graph goes through the same shared preparation as REST `/pi
 
 ### `inspect_run`
 
-Inspect run metadata, logs, graph, and checkpoints.
+Inspect run metadata, logs, graph, and checkpoints. `run_id` may be a unique prefix (≥ 8 chars) — as for `get_run`, `get_run_outputs`, `register_model` and `request_model_prod` (the registry stores the full id); an ambiguous prefix returns a validation error listing the matches.
 
 | Arguments | Returns |
 |---|---|

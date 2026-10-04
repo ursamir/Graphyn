@@ -1,6 +1,6 @@
 [plugin]
 name             = "trainer"
-version          = "1.0.0"
+version          = "1.1.0"
 description      = "Unified model training orchestration for Keras and PyTorch."
 author           = "Graphyn Plugins"
 platform_version = ">=0.0"

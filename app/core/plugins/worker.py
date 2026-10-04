@@ -3,7 +3,9 @@
 Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
 Responsibility:   Subprocess entry point that loads one plugin node and runs
                   process() for isolated runtimes.
-Owns:             main() CLI for ``python -m app.core.plugins.worker``; the
+Owns:             main() CLI for ``python -m app.core.plugins.worker``;
+                  per-node seeding of ``random`` / ``np.random`` before
+                  process() (reproducibility); the
                   structured failure file (job key ``error_path``: JSON with
                   error_type, error_module, message, traceback) read by
                   isolated_executor to surface the real exception.
@@ -57,6 +59,8 @@ def _run(job: dict[str, Any]) -> None:
         module = discovery._import_file(ep_path, package_prefix=None)  # noqa: SLF001
         discovery._process_module(module)  # noqa: SLF001
 
+    _seed_process(seed)
+
     node_cls = registry.get_class(node_type)
     inputs = coerce_node_inputs(inputs, node_cls)
     node = node_cls(config=config, seed=seed)
@@ -91,6 +95,30 @@ def _run(job: dict[str, Any]) -> None:
     }
     with outputs_path.open("wb") as fh:
         pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _seed_process(seed: int) -> None:
+    """Seed Python ``random`` and the NumPy legacy global RNG with the node seed.
+
+    Plugins that draw from the global RNGs (``random.*``, ``np.random.*``)
+    become reproducible per (graph seed, node). TensorFlow is seeded by the
+    plugin itself (``keras.utils.set_random_seed``) — the worker never imports
+    TF. Skipped when ``GRAPHYN_ISOLATED_DETERMINISTIC=0``.
+    """
+    from app.core.config import isolated_deterministic
+
+    if not isolated_deterministic():
+        return
+    import random
+
+    s = int(seed) % (2 ** 32)
+    random.seed(s)
+    try:
+        import numpy as np
+
+        np.random.seed(s)
+    except Exception:
+        pass
 
 
 def _write_error_file(job: dict[str, Any] | None, exc: BaseException) -> None:

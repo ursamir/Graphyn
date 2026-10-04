@@ -5,12 +5,15 @@ Responsibility:   HTTP endpoints for the lightweight model registry.
 Owns:             /api/v1/models routes; registry error → HTTP mapping
                   (run missing 404, run not succeeded 409, direct
                   stage=prod 403 — prod only via request-prod/approve-prod,
-                  compiled_untrained 422, model_not_in_run 422). GET rows
+                  compiled_untrained 422, model_not_in_run 422). Body
+                  ``run_id`` accepts a unique prefix >= 8 chars (stored as
+                  the full id; ambiguous → 409 run_id_ambiguous). GET rows
                   carry enriched stages (``kind: "model_stage"``, resolved
                   artifact path/format/size/metrics/labels).
 Public Surface:   FastAPI router mounted at /api/v1.
 Must NOT:         Contain registry persistence — delegate to model_registry.
-Dependencies:     fastapi, app.core.mlops.model_registry, app.api.actor.
+Dependencies:     fastapi, app.core.mlops.model_registry, app.api.actor,
+                  app.api.run_ids.
 Reason To Change: New registry endpoint or response schema.
 """
 from __future__ import annotations
@@ -117,12 +120,15 @@ def _registry_http_error(exc: Exception) -> HTTPException | None:
 
 @router.post("", summary="Register model from a run (point stage alias)")
 def register_model_endpoint(body: RegisterBody, request: Request):
+    from app.api.run_ids import resolve_run_id_http
     from app.core.mlops.model_registry import register_model
 
+    # Short ids (unique prefix >= 8) resolve here; the registry stores the FULL id.
+    run_id = resolve_run_id_http(body.run_id)
     try:
         return register_model(
             body.name,
-            run_id=body.run_id,
+            run_id=run_id,
             slug=body.slug or "",
             stage=body.stage,
             description=body.description,
@@ -140,10 +146,12 @@ def register_model_endpoint(body: RegisterBody, request: Request):
 
 @router.post("/{name}/request-prod", summary="Request prod stage (approval)")
 def request_prod_endpoint(name: str, request: Request, body: RequestProdBody = RequestProdBody()):
+    from app.api.run_ids import resolve_run_id_http
     from app.core.mlops.model_registry import request_prod
 
+    run_id = resolve_run_id_http(body.run_id) if (body.run_id or "").strip() else body.run_id
     try:
-        return request_prod(name, run_id=body.run_id, actor=resolve_actor(request))
+        return request_prod(name, run_id=run_id, actor=resolve_actor(request))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

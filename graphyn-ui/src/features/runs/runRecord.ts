@@ -129,6 +129,17 @@ export type EnvironmentView = {
   image: string
   git: string
   libs: Array<[string, string]>
+  /** Isolated plugin venvs the run used: plugin → sorted [lib, version] pairs. */
+  pluginLibs: Array<{ plugin: string; python: string; libs: Array<[string, string]> }>
+}
+
+/** Registered model a run consumed or shipped (record `lineage.models`). */
+export type LineageModelView = {
+  name: string
+  stage: string
+  version: string
+  modelHash: string
+  resolved: boolean
 }
 
 export type PipelineVersionView =
@@ -163,6 +174,7 @@ export type RunRecordView = {
   inputs: InputRow[]
   datasetVersions: DatasetVersionRow[]
   environment: EnvironmentView | null
+  lineageModels: LineageModelView[]
   recordHash: string
   chainPosition: number | null
   prevRecordHash: string
@@ -243,7 +255,10 @@ function inputRows(prove: Rec): InputRow[] {
       const o = asRec(item)
       if (!o) continue
       const hash = firstStr(o.sha256, o.hash, o.content_hash, o.digest)
-      const label = firstStr(o.path, o.uri, o.name, o.label, o.source, o.artifact_id)
+      const where = firstStr(o.path, o.uri, o.name, o.source, o.artifact_id)
+      // Backend rows carry `label: "<node label> · <config key>"` — show where
+      // the input entered the graph next to the path it points at.
+      const label = [str(o.label), where].filter(Boolean).join(' — ')
       const ds = asRec(o.dataset)
       const datasetVersion = ds
         ? [firstStr(ds.project, ds.name), firstStr(ds.version)].filter(Boolean).join(' ')
@@ -320,14 +335,48 @@ function environmentView(prove: Rec): EnvironmentView | null {
         .filter(Boolean)
         .join(' · ')
     : str(gitRaw)
+  const pluginEnvs = asRec(env.plugin_environments)
+  const pluginLibs = pluginEnvs
+    ? Object.entries(pluginEnvs)
+        .map(([plugin, raw]) => {
+          const pe = asRec(raw)
+          const libsRec = asRec(pe?.libraries)
+          const libs = libsRec
+            ? Object.entries(libsRec)
+                .map(([k, v]) => [k, str(v)] as [string, string])
+                .filter(([, v]) => Boolean(v))
+                .sort((a, b) => a[0].localeCompare(b[0]))
+            : []
+          return { plugin, python: str(pe?.python), libs }
+        })
+        .filter((p) => p.libs.length > 0)
+        .sort((a, b) => a.plugin.localeCompare(b.plugin))
+    : []
   const view: EnvironmentView = {
     python: [firstStr(env.python, env.python_version), str(env.implementation)].filter(Boolean).join(' '),
     platform: [firstStr(env.platform, env.os), str(env.machine)].filter(Boolean).join(' · '),
     image: firstStr(env.image, env.container_image, env.container_image_digest, env.docker_image, env.image_digest),
     git,
     libs,
+    pluginLibs,
   }
   return view.python || view.platform || view.image || view.git || view.libs.length ? view : null
+}
+
+function lineageModelsView(prove: Rec): LineageModelView[] {
+  const lineage = asRec(prove.lineage)
+  const models = Array.isArray(lineage?.models) ? lineage.models : []
+  return models
+    .map((m) => asRec(m))
+    .filter((m): m is Rec => Boolean(m && str(m.name)))
+    .map((m) => ({
+      name: str(m.name),
+      stage: str(m.stage),
+      // Older records put the stage name in `version` ("staging") — not a version.
+      version: str(m.version) === str(m.stage) ? '' : str(m.version),
+      modelHash: str(m.model_hash),
+      resolved: m.resolved !== false,
+    }))
 }
 
 function pipelineView(prove: Rec, meta: Rec | null): PipelineVersionView | null {
@@ -412,6 +461,7 @@ export function buildRunRecord(input: {
     inputs: inputRows(prove),
     datasetVersions: datasetVersionRows(prove),
     environment: environmentView(prove),
+    lineageModels: lineageModelsView(prove),
     recordHash: firstStr(prove.record_hash, prove.hash, detail?.record_hash, meta?.record_hash),
     chainPosition,
     prevRecordHash: firstStr(chain?.prev_hash, chain?.previous_hash, prove.prev_record_hash, prove.previous_record_hash),
@@ -487,6 +537,7 @@ export function triggerLabel(trigger: string): string {
     webhook: 'Webhook',
     replay: 'Replay',
     sdk: 'Python SDK',
+    ship: 'Ship wizard',
   }
   return map[t] || (trigger ? trigger.charAt(0).toUpperCase() + trigger.slice(1) : '')
 }

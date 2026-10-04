@@ -7,6 +7,7 @@ import {
   pickDefaultRunModel,
   runModelSummary,
   runModelsFromOutputs,
+  shipLineageModel,
 } from './runModels'
 
 describe('normalizeRunModels', () => {
@@ -81,5 +82,46 @@ describe('summary', () => {
     expect(
       runModelSummary({ path: 'm.keras', kind: 'trained', format: 'keras', size_bytes: 2048, metrics: { test_accuracy: 0.5611 } }),
     ).toBe('Trained · keras · 2.0 KB · Test accuracy 56.1%')
+  })
+  it('never shows the path accuracy on an untrained (architecture-only) artifact', () => {
+    expect(
+      runModelSummary({ path: 'compiled_abc123.keras', kind: 'compiled_untrained', format: 'keras', metrics: { test_accuracy: 0.633 } }),
+    ).toBe('Untrained (architecture only) · keras')
+    expect(runModelSummary({ path: 'm.tflite', kind: 'optimized', format: 'tflite', metrics: { test_accuracy: 0.633 } })).toBe(
+      'Optimized · tflite',
+    )
+  })
+})
+
+describe('shipLineageModel', () => {
+  const registry = [
+    {
+      name: 'kws',
+      stages: {
+        staging: { artifact_path: 'workspace/artifacts/sc/runs/r1/trainer_c/model.keras', version: 3 },
+        latest: { artifact_path: 'workspace/artifacts/sc/runs/r1/trainer_c/model.keras' },
+      },
+    },
+    { name: 'other', stages: { prod: { artifact_path: 'artifacts/sc/runs/r0/trainer_a/model.keras' } } },
+  ]
+  it('uses the chosen registry model + stage when its file is shipped', () => {
+    expect(
+      shipLineageModel({
+        registry,
+        modelPath: 'workspace/artifacts/sc/runs/r1/trainer_c/model.keras',
+        preferredName: 'kws',
+        preferredStage: 'staging',
+      }),
+    ).toEqual({ name: 'kws', stage: 'staging', version: '3' })
+  })
+  it('finds the registered model by file path when none was chosen', () => {
+    expect(
+      shipLineageModel({ registry, modelPath: 'workspace/artifacts/sc/runs/r0/trainer_a/model.keras' }),
+    ).toEqual({ name: 'other', stage: 'prod' })
+  })
+  it('ignores a chosen model whose file is not the one shipped; null when unregistered', () => {
+    expect(
+      shipLineageModel({ registry, modelPath: 'x/unregistered.keras', preferredName: 'kws' }),
+    ).toBeNull()
   })
 })

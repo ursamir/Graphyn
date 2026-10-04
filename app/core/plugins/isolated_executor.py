@@ -9,7 +9,8 @@ Owns:             run_isolated_node(), recast_plugin_types(); live parsing
                   IsolatedNodeError (real worker exception: worker
                   ``error.json`` first, else noise-filtered stderr traceback).
 Public Surface:   run_isolated_node, recast_plugin_types, load_isolated_outputs,
-                  IsolatedNodeError, parse_worker_stderr,
+                  IsolatedNodeError, parse_worker_stderr, apply_determinism_env
+                  (seed-derived PYTHONHASHSEED + TF determinism env),
                   hydrate_platform_models (via app.core.plugins.hydrate)
 Must NOT:         Import from app.domain or app.api.
 Dependencies:     stdlib, runtime_registry, app.core.nodes.progress (lazy)
@@ -748,6 +749,33 @@ def load_isolated_outputs(path: Path) -> dict[str, Any]:
     return load_isolated_result(path).outputs
 
 
+def apply_determinism_env(env: dict[str, str], seed: int) -> dict[str, str]:
+    """Set reproducibility env for an isolated worker (in place; returns *env*).
+
+    - ``PYTHONHASHSEED`` = node seed (mod 2**32) — set/dict iteration order of
+      str keys is stable across runs (it is fixed at interpreter start, so it
+      can only be set from the parent).
+    - ``TF_DETERMINISTIC_OPS=1`` / ``TF_CUDNN_DETERMINISTIC=1`` — deterministic
+      cuDNN / reduction kernels (setdefault: an explicit operator value wins).
+    - ``GRAPHYN_NODE_SEED`` — the seed, for plugin code that seeds before import.
+
+    Disabled with ``GRAPHYN_ISOLATED_DETERMINISTIC=0``.
+    """
+    from app.core.config import isolated_deterministic
+
+    if not isolated_deterministic():
+        return env
+    try:
+        s = int(seed) % (2 ** 32)
+    except (TypeError, ValueError):
+        return env
+    env["PYTHONHASHSEED"] = str(s)
+    env.setdefault("TF_DETERMINISTIC_OPS", "1")
+    env.setdefault("TF_CUDNN_DETERMINISTIC", "1")
+    env["GRAPHYN_NODE_SEED"] = str(s)
+    return env
+
+
 def run_isolated_node(
     spec: IsolatedPluginSpec,
     *,
@@ -804,6 +832,10 @@ def run_isolated_node(
             project_root if not prev else f"{project_root}{os.pathsep}{prev}"
         )
         env["PYTHONNOUSERSITE"] = "1"
+        # Reproducibility: same graph + seed must give the same model. The
+        # node seed is known here, so pin hash randomisation and ask TF for
+        # deterministic kernels before the worker imports TensorFlow.
+        apply_determinism_env(env, seed)
         # Inherit host/container NVIDIA libs (LD_LIBRARY_PATH, NVIDIA_*).
         # Do not hide GPUs here; GRAPHYN_TF_DEVICE=cpu is the only path that
         # sets CUDA_VISIBLE_DEVICES=-1 (in configure_tf_stable_defaults).

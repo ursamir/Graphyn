@@ -6,7 +6,9 @@ Responsibility:   HTTP endpoints for run history, status, checkpoints,
 Owns:             Route definitions for GET /runs, GET /runs/{run_id}
                   (logs with a consistent ``error`` field + ``node_order``;
                   rows/detail carry ``display_name``, ``summary``,
-                  ``regression`` from app.core.runs.run_summary),
+                  ``regression`` from app.core.runs.run_summary; ``metrics``
+                  is the BEST path's for multi-path runs, plus
+                  ``metrics_path`` / ``metrics_by_path``),
                   GET /runs/{run_id}/models (model files for Ship/register),
                   GET /runs/{run_id}/graph,
                   GET /runs/{run_id}/status,
@@ -20,7 +22,7 @@ Owns:             Route definitions for GET /runs, GET /runs/{run_id}
                   POST /runs/{run_id}/replay; GET /runs/{run_id} adds
                   ``record`` (sealed prove.json), ``record_status``,
                   ``pipeline_drift``. Every {run_id} accepts a unique
-                  prefix >= 8 chars (app.core.runs.run_resolve).
+                  prefix >= 8 chars (app.api.run_ids; ambiguous → 409).
                   GET /runs/{run_id}/provenance.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
@@ -55,34 +57,17 @@ def _get_runs_root() -> Path:
 
 
 def _run_dir(run_id: str) -> Path:
-    """Return the run directory path, raising 400/404 as appropriate.
+    """Return the run directory path, raising 400/404/409 as appropriate.
 
     Accepts the full run id or a unique prefix of >= 8 characters
-    (``app.core.runs.run_resolve``); ambiguous prefixes are a 404 with the
-    candidate ids. Validates run_id is alphanumeric (hyphens allowed) and that
-    the resolved path stays within the runs root (SEC-7 fix — consistent with
-    _safe_child()). Callers use ``path.name`` as the canonical full id.
+    (``app.api.run_ids`` → ``app.core.runs.run_resolve``): unknown → 404
+    ``run_not_found``, ambiguous prefix → 409 ``run_id_ambiguous`` (with the
+    candidate ids), invalid → 400. The resolved path must stay within the
+    runs root (SEC-7). Callers use ``path.name`` as the canonical full id.
     """
-    from app.core.runs.run_resolve import RunIdAmbiguous, RunIdNotFound, resolve_run_id
+    from app.api.run_ids import run_dir_http
 
-    if not _RUN_ID_RE.match(run_id):
-        raise HTTPException(status_code=400, detail="Invalid run_id")
-    runs_root = _get_runs_root().resolve()
-    try:
-        full = resolve_run_id(runs_root, run_id)
-    except RunIdAmbiguous as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except RunIdNotFound:
-        raise HTTPException(status_code=404, detail="Run not found")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid run_id")
-    path = (runs_root / full).resolve()
-    # Guard against path traversal — resolved path must stay inside runs root
-    if not path.is_relative_to(runs_root):
-        raise HTTPException(status_code=400, detail="Invalid run_id")
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Run not found")
-    return path
+    return run_dir_http(run_id, runs_root=_get_runs_root())
 
 
 def _load_meta(run_path: Path) -> dict:
@@ -227,6 +212,13 @@ def _with_results(row: dict, run_path: Path, *, include_regression: bool = True)
         fields = {"display_name": row.get("graph_name") or run_id, "summary": None, "regression": None}
     out = dict(row)
     out.update(fields)
+    try:
+        from app.core.runs.run_summary import apply_headline_metrics
+
+        # Run-level ``metrics`` = best path's (same pick as the results banner).
+        out = apply_headline_metrics(out, fields.get("summary"))
+    except Exception:
+        pass
     return out
 
 

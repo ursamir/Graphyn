@@ -114,6 +114,12 @@ def _validate_safe_id(value: str, field: str) -> str:
 def _safe_run_dir(root: Path, run_id: str) -> Path:
     _validate_safe_id(run_id, "run_id")
     resolved_root = root.resolve()
+    from app.core.runs.run_resolve import RunIdAmbiguous, resolve_run_id_soft
+
+    try:  # unique prefix >= 8 chars → full run id
+        run_id = resolve_run_id_soft(resolved_root, run_id)
+    except RunIdAmbiguous as exc:
+        raise ValueError(str(exc)) from exc
     run_dir = (resolved_root / run_id).resolve()
     if not run_dir.is_relative_to(resolved_root):
         raise ValueError("run_id resolves outside runs directory")

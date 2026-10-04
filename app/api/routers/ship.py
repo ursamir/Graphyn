@@ -134,6 +134,11 @@ def create_ship_package(name: str, body: CreateShipPackageBody, request: Request
 
     with idempotency_guard(request):
         project_dir = _require_project(name)
+        run_id = body.run_id
+        if (run_id or "").strip():
+            from app.api.run_ids import resolve_run_id_http
+
+            run_id = resolve_run_id_http(run_id)  # short prefix → full id (404/409)
         try:
             result = create_package(
                 project_dir,
@@ -146,7 +151,7 @@ def create_ship_package(name: str, body: CreateShipPackageBody, request: Request
                 notes=body.notes,
                 unsigned_allowed=body.unsigned_allowed,
                 model_path=body.model_path,
-                run_id=body.run_id,
+                run_id=run_id,
                 labels=body.labels,
             )
         except LabelsMismatch as exc:

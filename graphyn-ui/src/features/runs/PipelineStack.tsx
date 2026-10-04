@@ -23,7 +23,8 @@ function statusDotClass(status?: string): string {
   const s = String(status || '').toLowerCase()
   if (['succeeded', 'completed', 'success', 'done'].includes(s)) return 'bg-emerald-500'
   if (['failed', 'error'].includes(s)) return 'bg-rose-500'
-  if (['running', 'queued', 'paused', 'pending'].includes(s)) return 'bg-sky-500'
+  if (s === 'running') return 'bg-sky-500 animate-pulse ring-2 ring-sky-200'
+  if (['queued', 'paused', 'pending'].includes(s)) return 'bg-sky-500'
   if (['cancelled', 'canceled'].includes(s)) return 'bg-ink-400'
   if (s === 'skipped') return 'border border-dashed border-ink-400 bg-transparent'
   return 'bg-ink-300'

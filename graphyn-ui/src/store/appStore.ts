@@ -3,6 +3,7 @@ import type { GraphIR, NodeCatalogEntry } from '../types/graph'
 import { paths } from '../routes/paths'
 import { navigatePath, parsePathname } from '../routes/parsePath'
 import { resolveArtifactRunId } from '../lib/resolveArtifact'
+import { humanizeErrorText } from '../lib/errorText'
 import { isWorkspaceKnownValid } from '../lib/workspaceValidity'
 
 export type AppView =
@@ -496,7 +497,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...s.toasts,
         {
           id,
-          message,
+          // Never show a raw JSON error body / bare error code in an error toast.
+          message: tone === 'error' || message.trim().startsWith('{') ? humanizeErrorText(message) : message,
           tone,
           createdAt: Date.now(),
           actionLabel: opts?.actionLabel,

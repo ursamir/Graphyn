@@ -68,6 +68,19 @@ The API image installs via **one path** (see `Dockerfile`):
 
 **Source of truth for package *names*:** `setup.py` `install_requires`. Optional Redis / MCP / TF / HF / webrtcvad are extras (`pip install -e ".[redis,mcp,...]"`) and are **not** baked into the default image. Validate sync with `python scripts/check_deps.py`.
 
+## Build provenance in run records (git commit / image)
+
+The image has no `.git`, so sealed run records (`prove.json` → `environment`) take the commit and image from build args baked into `/app/BUILD_INFO.json` and the `GRAPHYN_GIT_SHA` / `GRAPHYN_IMAGE` env:
+
+```bash
+GRAPHYN_GIT_SHA=$(git rev-parse HEAD) GRAPHYN_IMAGE=graphyn-api:$(git rev-parse --short HEAD) \
+  docker compose build graphyn-api
+# optional, at run time (e.g. from `docker inspect --format '{{.Id}}' <image>`):
+GRAPHYN_IMAGE_DIGEST=sha256:… docker compose up -d graphyn-api
+```
+
+Defaults: `GRAPHYN_IMAGE=graphyn-api:local`, empty commit (record shows no git). Lookup order for the commit: env `GRAPHYN_GIT_SHA` → `BUILD_INFO.json` (`/app`, repo root, or `GRAPHYN_BUILD_INFO`) → `.git`. Container detection (`/.dockerenv`, cgroup, mountinfo) works without any env; without an image name the record shows `docker container <id> (image not recorded)`.
+
 ## Credentials & env bootstrap for live providers
 
 Do **not** put API keys in Graph IR. Prefer **Admin → Credentials** (connection ids on nodes).
@@ -144,6 +157,7 @@ Full runbook, env vars, cancel/lease, and UI (**Deploy → Workers**): [DISTRIBU
 |---|---|---|---|
 | `GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS` | unset in the process; Compose `1` | `app/api/routers/data.py` | When unset, input-label symlinks that resolve outside `datasets/input` are listed as `accessible: false` and cannot be browsed. Compose defaults to `1` so the bundled `examples/` dataset links work. Set `0` to fail closed. |
 | `GRAPHYN_BUNDLED_PLUGIN_ALLOWLIST` | unset | `app/core/config.py` | Comma-separated plugin slugs startup may install. Branch `test/example-06-plugins` sets Example 06 plus `deployment-packager` and `python-code`, and Compose sets `GRAPHYN_AUTO_INSTALL_PLUGINS=0` so a restart does not restore removed plugins. |
+| `GRAPHYN_ISOLATED_DETERMINISTIC` | on | `app/core/config.py`, `app/core/plugins/isolated_executor.py`, `worker.py` | Isolated plugin workers run with `PYTHONHASHSEED=<node seed>`, `TF_DETERMINISTIC_OPS=1`, `TF_CUDNN_DETERMINISTIC=1` and seeded `random`/`np.random`; the trainer plugin also enables TF op determinism. `0` opts out. Startup also re-copies bundled plugin code whose content hash changed at the same version (venv kept) — see `PLUGIN_GUIDE.md` → Bundled auto-install. |
 | `GRAPHYN_SECRET_ENV_ALLOWLIST` | empty | `app/core/trust/secrets.py` | Comma-separated env names that node-selected secret names may read even if not secret-shaped / `GRAPHYN_*` (default: only `*_API_KEY`, `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_DSN`, `*_URL`, `*_URI` not starting with `GRAPHYN_`) |
 | `GRAPHYN_LLM_BASE_URL_ALLOWLIST` | empty | `app/core/ml/llm_client.py` | Comma-separated hosts an env/secret LLM key may be sent to when a node `base_url` differs from the provider default (connections bind to their own `base_url`) |
 | `GRAPHYN_ALLOWED_HOSTS` | empty | `app/api/main.py` | Extra `Host` names accepted while `GRAPHYN_API_TOKEN` is unset; `*` disables the guard |

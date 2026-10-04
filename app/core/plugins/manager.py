@@ -5,7 +5,10 @@ Responsibility:   Orchestrate all plugin lifecycle operations — install,
                   uninstall, enable, disable, startup loading.
 Owns:             Install workflow (resolve → manifest → copy → load → persist),
                   uninstall workflow (unload → delete record → remove dir),
-                  enable/disable (registry reload/unload), startup loading.
+                  enable/disable (registry reload/unload), startup loading,
+                  bundled PluginPackage sync (version drift → full reinstall;
+                  same-version content-hash drift → code-only refresh that
+                  keeps the isolated venv unless requirements changed).
 Public Surface:   PluginManager.install(), uninstall(), enable(), disable(),
                   list_installed(), get(), load_enabled_plugins(),
                   install_bundled_plugins(), maybe_auto_install_and_load()
@@ -13,7 +16,7 @@ Must NOT:         Import from app.domain or app.api.
                   Must not call PluginLoader, PluginStore, or PluginInstaller
                   directly from outside this package.
 Dependencies:     app.core.plugins.{installer, loader, store, index, manifest,
-                  errors}, app.core.config (plugins_home — lazy import),
+                  errors, content_hash}, app.core.config (plugins_home — lazy import),
                   stdlib (logging, os, shutil, datetime, threading, fcntl,
                   contextlib).
 Security:         install() forwards expected_sha256 to PluginInstaller.resolve()
@@ -287,6 +290,9 @@ class PluginManager:
                 from app.core.plugins.installer import reject_tree_symlinks
 
                 reject_tree_symlinks(resolved_dir)
+                # Content hash of the source tree (stored on the record) so a
+                # later same-version code change is still detected at startup.
+                source_hash = self._safe_tree_hash(resolved_dir)
                 shutil.copytree(str(resolved_dir), str(install_path), symlinks=False)
 
             except Exception:
@@ -335,6 +341,7 @@ class PluginManager:
                     enabled=True,
                     installed_at=datetime.now(UTC).isoformat(),
                     manifest=manifest.model_dump(),
+                    source_hash=source_hash,
                 )
                 self._store.save(record)
             except Exception:
@@ -601,10 +608,189 @@ class PluginManager:
         names = {r.name for r in self._store.list()}
         return PluginVenvManager().gc_unused(names)
 
+    # ------------------------------------------------------------------
+    # bundled PluginPackage sync (version drift + same-version code drift)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _safe_tree_hash(path: Path) -> str | None:
+        """``plugin_tree_hash(path)`` or None when the tree cannot be hashed."""
+        from app.core.plugins.content_hash import plugin_tree_hash
+
+        try:
+            return plugin_tree_hash(path)
+        except Exception as exc:
+            log.debug("Could not hash plugin tree %s: %s", path, exc)
+            return None
+
+    def _installed_code_hash(self, record: PluginRecord) -> str | None:
+        """Hash of the code currently installed for *record*.
+
+        Prefers the source hash stored at install time; for records written
+        before that field existed, hashes the installed tree directly.
+        """
+        if record.source_hash:
+            return record.source_hash
+        path = self._resolve_loadable_install_path(record)
+        if path is None:
+            return None
+        return self._safe_tree_hash(path)
+
+    def _sync_bundled_plugin(self, plugin_dir: Path, manifest, *, install_missing: bool) -> str:
+        """Bring the installed copy of one bundled plugin in line with *plugin_dir*.
+
+        Returns one of:
+
+        - ``"installed"``  — no record existed (only when *install_missing*).
+        - ``"absent"``     — no record and *install_missing* is False.
+        - ``"upgraded"``   — version differs, or same version but requirements
+          changed → full :meth:`install` (isolated venv is rebuilt).
+        - ``"refreshed"``  — same version + same requirements but the code hash
+          differs → code recopied only; the isolated venv is kept.
+        - ``"unchanged"``  — same version and same code hash.
+        """
+        from app.core.plugins.content_hash import requirements_signature
+
+        try:
+            record = self._store.get(manifest.name)
+        except PluginNotFoundError:
+            record = None
+        if record is None:
+            if not install_missing:
+                return "absent"
+            self.install(str(plugin_dir), upgrade=True)
+            return "installed"
+
+        if record.version != manifest.version:
+            log.info(
+                "Bundled plugin '%s' drift %s → %s — upgrading",
+                manifest.name,
+                record.version,
+                manifest.version,
+            )
+            self.install(str(plugin_dir), upgrade=True)
+            return "upgraded"
+
+        install_path = self._resolve_loadable_install_path(record)
+        if install_path is None:
+            # Install dir vanished / has no manifest — full reinstall.
+            self.install(str(plugin_dir), upgrade=True)
+            return "upgraded"
+
+        src_hash = self._safe_tree_hash(plugin_dir)
+        if src_hash is None:
+            return "unchanged"
+        installed_hash = self._installed_code_hash(record)
+        if installed_hash == src_hash:
+            if not record.source_hash:
+                # Backfill so later boots skip re-hashing the installed tree.
+                try:
+                    self._store.save(record.model_copy(update={"source_hash": src_hash}))
+                except Exception:
+                    pass
+            return "unchanged"
+
+        old_reqs = requirements_signature(record.manifest or {})
+        new_reqs = requirements_signature(manifest)
+        if old_reqs != new_reqs:
+            log.warning(
+                "Bundled plugin '%s' v%s: code AND requirements changed at the same "
+                "version (installed hash %s, source %s) — full reinstall (venv rebuilt)",
+                manifest.name,
+                manifest.version,
+                (installed_hash or "?")[:12],
+                src_hash[:12],
+            )
+            self.install(str(plugin_dir), upgrade=True)
+            return "upgraded"
+
+        log.warning(
+            "Bundled plugin '%s' v%s: source code changed at the same version "
+            "(installed hash %s, source %s) — reinstalling code from %s "
+            "(isolated venv kept; requirements unchanged)",
+            manifest.name,
+            manifest.version,
+            (installed_hash or "?")[:12],
+            src_hash[:12],
+            plugin_dir,
+        )
+        self._refresh_plugin_code(record, plugin_dir, manifest, src_hash, install_path)
+        return "refreshed"
+
+    def _refresh_plugin_code(
+        self,
+        record: PluginRecord,
+        plugin_dir: Path,
+        manifest,
+        src_hash: str,
+        install_path: Path,
+    ) -> PluginRecord:
+        """Recopy plugin code into *install_path* without touching its venv.
+
+        Unlike ``install(upgrade=True)`` this never calls :meth:`_do_uninstall`,
+        so the isolated plugin venv (slow to rebuild: TF/Keras) survives. Node
+        types are unloaded and reloaded only when the plugin was already loaded
+        in this process; at startup the subsequent ``load_enabled_plugins``
+        picks the new code up.
+        """
+        from app.core.plugins.installer import reject_tree_symlinks
+
+        with self._lifecycle_lock():
+            reject_tree_symlinks(plugin_dir)
+            was_loaded = manifest.name in self._loader._loaded_plugins
+            staging = install_path.parent / (install_path.name + ".__staging__")
+            backup = install_path.parent / (install_path.name + ".__backup__")
+            shutil.rmtree(staging, ignore_errors=True)
+            shutil.rmtree(backup, ignore_errors=True)
+            shutil.copytree(
+                str(plugin_dir),
+                str(staging),
+                symlinks=False,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+            )
+            if was_loaded:
+                self._unload_node_types(record)
+            try:
+                os.replace(install_path, backup)
+                os.replace(staging, install_path)
+            except Exception:
+                if backup.exists() and not install_path.exists():
+                    os.replace(backup, install_path)
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+            shutil.rmtree(backup, ignore_errors=True)
+            self._clear_plugin_pycache(install_path)
+
+            updated = record.model_copy(
+                update={
+                    "install_path": str(install_path.resolve()),
+                    "manifest": manifest.model_dump(),
+                    "installed_at": datetime.now(UTC).isoformat(),
+                    "source_hash": src_hash,
+                }
+            )
+            self._store.save(updated)
+            if was_loaded and updated.enabled:
+                try:
+                    self._loader.load(install_path)
+                except Exception as exc:
+                    log.warning(
+                        "Plugin '%s' code refreshed but reload failed: %s",
+                        manifest.name,
+                        exc,
+                    )
+            return updated
+
     def _upgrade_bundled_plugins_on_version_drift(
         self, package_root: Path | None = None
     ) -> int:
-        """Reinstall bundled plugins when PluginPackage version exceeds the record."""
+        """Reinstall bundled plugins whose PluginPackage copy drifted.
+
+        Drift = a different ``version`` (full reinstall) **or** the same
+        version with a different content hash (code-only refresh, venv kept,
+        unless requirements also changed). Only plugins that already have a
+        record are considered. Returns the number upgraded or refreshed.
+        """
         from app.core.config import plugin_package_dir as _plugin_package_dir
 
         root = Path(package_root) if package_root is not None else _plugin_package_dir()
@@ -614,31 +800,20 @@ class PluginManager:
         for toml_path in sorted(root.glob("*/*/plugin.toml")):
             plugin_dir = toml_path.parent
             try:
-                from app.core.plugins.manifest import load_manifest
-
                 manifest = load_manifest(plugin_dir)
             except Exception:
                 continue
             try:
-                record = self._store.get(manifest.name)
-            except Exception:
-                continue
-            if record.version != manifest.version:
-                log.info(
-                    "Bundled plugin '%s' drift %s → %s — upgrading",
+                outcome = self._sync_bundled_plugin(plugin_dir, manifest, install_missing=False)
+            except Exception as exc:
+                log.warning(
+                    "Failed to upgrade bundled plugin '%s' on drift: %s",
                     manifest.name,
-                    record.version,
-                    manifest.version,
+                    exc,
                 )
-                try:
-                    self.install(str(plugin_dir), upgrade=True)
-                    upgraded += 1
-                except Exception as exc:
-                    log.warning(
-                        "Failed to upgrade bundled plugin '%s' on drift: %s",
-                        manifest.name,
-                        exc,
-                    )
+                continue
+            if outcome in ("upgraded", "refreshed"):
+                upgraded += 1
         return upgraded
 
     def install_bundled_plugins(
@@ -646,17 +821,23 @@ class PluginManager:
         package_root: Path | None = None,
         *,
         upgrade: bool = True,
+        force: bool = False,
     ) -> int:
         """Install every ``plugin.toml`` under ``PluginPackage/*/*/``.
 
-        Idempotent when ``upgrade=True`` (reinstalls over existing records).
+        Idempotent. With ``upgrade=True`` an existing record is synced via
+        :meth:`_sync_bundled_plugin`: skipped when version + content hash
+        match, code-refreshed (venv kept) when only code changed, fully
+        reinstalled when the version or requirements changed. ``force=True``
+        restores the old behaviour (always ``install(upgrade=True)``).
         Failures are logged and do not abort remaining installs. No network
         I/O for local path sources.
 
         Returns
         -------
         int
-            Number of plugins successfully passed to :meth:`install`.
+            Number of plugins successfully installed, upgraded, refreshed or
+            verified unchanged.
         """
         from app.core.config import plugin_package_dir as _plugin_package_dir
 
@@ -665,7 +846,6 @@ class PluginManager:
             log.warning("Bundled PluginPackage directory missing: %s", root)
             return 0
         from app.core.config import bundled_plugin_allowlist
-        from app.core.plugins.manifest import load_manifest
 
         allow = bundled_plugin_allowlist()
         tomls = sorted(root.glob("*/*/plugin.toml"))
@@ -673,9 +853,13 @@ class PluginManager:
         for toml_path in tomls:
             plugin_dir = toml_path.parent
             try:
-                if allow is not None and load_manifest(plugin_dir).name not in allow:
+                manifest = load_manifest(plugin_dir)
+                if allow is not None and manifest.name not in allow:
                     continue
-                self.install(str(plugin_dir), upgrade=upgrade)
+                if upgrade and not force:
+                    self._sync_bundled_plugin(plugin_dir, manifest, install_missing=True)
+                else:
+                    self.install(str(plugin_dir), upgrade=upgrade)
                 installed += 1
             except Exception as exc:
                 log.warning(

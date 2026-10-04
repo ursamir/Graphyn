@@ -4,6 +4,7 @@ Bounded Context:  REST API Layer
 Responsibility:   HTTP endpoints for artifact discovery, lineage, and replay.
 Owns:             Route definitions for GET /artifacts, GET /artifacts/{id},
                   GET /artifacts/{id}/lineage, POST /artifacts/{id}/replay.
+                  ``?run_id=`` accepts a unique prefix >= 8 chars (app.api.run_ids).
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain artifact storage logic — delegate to ArtifactStore
                   and ProvenanceStore.
@@ -65,6 +66,11 @@ def list_artifacts(
     from app.core.persist.store_integrity import StoreCorrupt
 
     ensure_store_readable()
+    if run_id and run_id.strip():
+        from app.api.run_ids import resolve_run_id_http
+
+        # Short prefix → full id; unknown ids still filter (empty result).
+        run_id = resolve_run_id_http(run_id, allow_missing=True)
     try:
         store = ArtifactStore()
         records = store.list(run_id=run_id, node_type=node_type, artifact_type=artifact_type)

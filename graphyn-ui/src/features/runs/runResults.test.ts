@@ -11,6 +11,7 @@ import {
   lanePathMap,
   listRowMetric,
   normalizeRunModels,
+  overviewMetrics,
   pathDisplayName,
   pathsFromSummary,
   perClassRows,
@@ -189,5 +190,33 @@ describe('models', () => {
   it('suggests a slug from graph + path', () => {
     expect(suggestModelName(null, 'speech_commands_e2e', 'DS-CNN · 50 epochs')).toBe('speech-commands-e2e-ds-cnn-50-epochs')
     expect(slugifyModelName('', '')).toBe('model')
+  })
+})
+
+describe('overviewMetrics', () => {
+  const mk = (letter: string, acc: number) => ({
+    pathId: `path-${letter.toLowerCase()}`,
+    letter,
+    description: '',
+    nodeIds: [],
+    metrics: { test_accuracy: acc, auc: acc + 0.1 },
+    primary: { name: 'test_accuracy', value: acc },
+  })
+  it('shows the best path on multi-path runs, not the flat run metrics', () => {
+    const r = overviewMetrics({
+      runMetrics: { test_accuracy: 0.633, auc: 0.893 },
+      paths: [mk('A', 0.633), mk('B', 0.65), mk('C', 0.711)],
+    })
+    expect(r.pathLabel).toBe('Path C')
+    expect(r.metrics).toEqual({ test_accuracy: 0.711, auc: 0.711 + 0.1 })
+    expect(r.others.map((o) => o.label)).toEqual(['Path A', 'Path B'])
+  })
+  it('honours the backend best path id', () => {
+    const r = overviewMetrics({ runMetrics: null, paths: [mk('A', 0.6), mk('B', 0.7)], backendBest: 'path-a' })
+    expect(r.pathLabel).toBe('Path A')
+  })
+  it('falls back to run metrics for linear runs', () => {
+    const r = overviewMetrics({ runMetrics: { accuracy: 0.5 }, paths: [mk('A', 0.9)] })
+    expect(r).toEqual({ metrics: { accuracy: 0.5 }, pathLabel: null, others: [] })
   })
 })

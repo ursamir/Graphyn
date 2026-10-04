@@ -9,21 +9,30 @@ Responsibility:   Capture everything needed to trace and reproduce a run —
                   tamper-evident record, and verify a sealed run later.
 Owns:             capture_run_start(), seal_run_record(), verify_run(),
                   check_external_inputs(), pipeline_drift(),
-                  node_implementations(), capture_environment(),
-                  collect_external_inputs(), resolve_pipeline_ref(),
+                  node_implementations(), capture_environment() (container
+                  detection, image name/tag/digest, git commit via env /
+                  BUILD_INFO.json / .git), run_environment() +
+                  venv_environment() (per isolated-plugin venv libraries,
+                  cached by site-packages mtime), resolve_model_lineage()
+                  (record ``lineage``: source run + registered models),
+                  collect_external_inputs() (named rows; write sinks and
+                  the run's own outputs excluded), resolve_pipeline_ref(),
                   record_hash(), the per-project chain files
                   ``{project}/audit/chains/<project>.jsonl`` and the
                   ``runs/<id>/graph.logical.json`` / ``outputs_manifest.json``
                   sidecars.
 Public Surface:   capture_run_start, seal_run_record, verify_run,
                   check_external_inputs, pipeline_drift, record_hash,
+                  capture_environment, detect_container, build_info,
+                  venv_environment, resolve_model_lineage, is_write_key,
                   chain_path, load_record, logical_graph_for_run,
                   RECORD_SCHEMA_VERSION
 Must NOT:         Import app.api, orchestrator or app.domain; raise into run
                   lifecycle callers (capture/seal are best-effort).
 Dependencies:     stdlib; app.core.runs.audit_hashing; app.core.config;
                   app.core.nodes registry / plugins runtime registry / store,
-                  app.core.pipelines (lazy); app.core.paths.workspace_paths (lazy).
+                  app.core.pipelines (lazy); app.core.paths.workspace_paths (lazy);
+                  app.core.mlops.model_registry, app.core.artifacts (lazy).
 Reason To Change: Audit record schema, chain format or verify checks change.
 """
 from __future__ import annotations
@@ -152,10 +161,29 @@ def _dist_version(name: str) -> str | None:
         return None
 
 
-def _git_commit() -> str | None:
-    env = (os.environ.get("GRAPHYN_GIT_SHA") or "").strip()
+_BUILD_INFO_FILE = "BUILD_INFO.json"
+
+
+def _build_info_paths() -> list[Path]:
+    paths: list[Path] = []
+    env = (os.environ.get("GRAPHYN_BUILD_INFO") or "").strip()
     if env:
-        return env
+        paths.append(Path(env))
+    repo = Path(__file__).resolve().parents[3]
+    paths.extend([repo / _BUILD_INFO_FILE, Path("/app") / _BUILD_INFO_FILE])
+    return paths
+
+
+def build_info() -> dict[str, Any]:
+    """Baked build facts (``BUILD_INFO.json`` written by ``docker build``), or {}."""
+    for path in _build_info_paths():
+        data = _read_json(path) if path.is_file() else None
+        if isinstance(data, dict):
+            return {str(k): v for k, v in data.items() if v not in (None, "")}
+    return {}
+
+
+def _git_from_dotgit() -> str | None:
     here = Path(__file__).resolve()
     for parent in list(here.parents)[:6]:
         git = parent / ".git"
@@ -194,23 +222,118 @@ def _git_commit() -> str | None:
     return None
 
 
-def _container_info() -> tuple[str | None, str | None]:
-    digest = (os.environ.get("GRAPHYN_IMAGE_DIGEST") or "").strip() or None
-    cid = None
-    for path in ("/proc/self/cgroup", "/proc/self/mountinfo"):
-        try:
-            text = Path(path).read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+def _git_commit_info(info: dict[str, Any] | None = None) -> tuple[str | None, str | None]:
+    """``(commit, source)``: env GRAPHYN_GIT_SHA → BUILD_INFO.json → .git."""
+    env = (os.environ.get("GRAPHYN_GIT_SHA") or "").strip()
+    if env:
+        return env, "env:GRAPHYN_GIT_SHA"
+    info = build_info() if info is None else info
+    baked = str(info.get("git_sha") or info.get("git_commit") or "").strip()
+    if baked:
+        return baked, _BUILD_INFO_FILE
+    sha = _git_from_dotgit()
+    return (sha, ".git") if sha else (None, None)
+
+
+def _git_commit() -> str | None:
+    return _git_commit_info()[0]
+
+
+_HEX64_RE = re.compile(r"(?<![0-9a-f])([0-9a-f]{64})(?![0-9a-f])")
+_CGROUP_HINT_RE = re.compile(r"docker|containerd|kubepods|libpod|crio")
+_ETC_MOUNTS = ("/etc/hostname", "/etc/hosts", "/etc/resolv.conf")
+
+
+def _read_text(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+
+
+def detect_container() -> dict[str, Any]:
+    """Best-effort container detection (docker / podman / kubernetes).
+
+    Signals: ``/.dockerenv``, ``/run/.containerenv`` (podman),
+    ``KUBERNETES_SERVICE_HOST``, ``/proc/1/cgroup`` / ``/proc/self/cgroup`` /
+    ``/proc/self/mountinfo`` mentioning docker/containerd/kubepods (container
+    id = 64-hex), ``container`` env. Image facts come from env
+    ``GRAPHYN_IMAGE`` / ``GRAPHYN_IMAGE_DIGEST`` or ``BUILD_INFO.json``.
+    """
+    signals: list[str] = []
+    runtime: str | None = None
+    if os.path.exists("/.dockerenv"):
+        signals.append("/.dockerenv")
+        runtime = "docker"
+    if os.path.exists("/run/.containerenv"):
+        signals.append("/run/.containerenv")
+        runtime = runtime or "podman"
+    if (os.environ.get("KUBERNETES_SERVICE_HOST") or "").strip():
+        signals.append("env:KUBERNETES_SERVICE_HOST")
+        runtime = runtime or "kubernetes"
+    env_container = (os.environ.get("container") or "").strip()
+    if env_container:
+        signals.append("env:container")
+        runtime = runtime or env_container
+    cid: str | None = None
+    for path in ("/proc/1/cgroup", "/proc/self/cgroup"):
+        text = _read_text(path)
+        for line in text.splitlines():
+            if not _CGROUP_HINT_RE.search(line):
+                continue
+            if path not in signals:
+                signals.append(path)
+            runtime = runtime or ("kubernetes" if "kubepods" in line else "podman" if "libpod" in line else "docker")
+            m = _HEX64_RE.search(line)
+            if m and cid is None:
+                cid = m.group(1)
+    # mountinfo: only the bind mounts a runtime puts on /etc/hostname etc.
+    # (the host's own mountinfo lists other containers' overlay/shm mounts).
+    for line in _read_text("/proc/self/mountinfo").splitlines():
+        fields = line.split()
+        if len(fields) < 5 or fields[4] not in _ETC_MOUNTS:
             continue
-        m = re.search(r"(?:docker|containers|cri-containerd)[-/]([0-9a-f]{64})", text)
-        if m:
+        if not re.search(r"docker|containers|containerd|kubelet|libpod", fields[3]):
+            continue
+        if "/proc/self/mountinfo" not in signals:
+            signals.append("/proc/self/mountinfo")
+        runtime = runtime or ("kubernetes" if "kubelet" in fields[3] else "podman" if "libpod" in fields[3] else "docker")
+        m = _HEX64_RE.search(fields[3])
+        if m and cid is None:
             cid = m.group(1)
-            break
-    return digest, cid
+    if cid is None and signals:
+        # cgroup v2 hides the id; docker sets HOSTNAME to the 12-char short id.
+        host = (os.environ.get("HOSTNAME") or socket.gethostname() or "").strip()
+        if re.fullmatch(r"[0-9a-f]{12}", host):
+            cid = host
+    return {"in_container": bool(signals), "runtime": runtime, "container_id": cid, "signals": signals}
+
+
+def _container_info() -> tuple[str | None, str | None]:
+    """Back-compat ``(image digest, container id)``."""
+    digest = (os.environ.get("GRAPHYN_IMAGE_DIGEST") or "").strip() or None
+    return digest, detect_container().get("container_id")
+
+
+def _image_facts(container: dict[str, Any], info: dict[str, Any]) -> dict[str, Any]:
+    name = (os.environ.get("GRAPHYN_IMAGE") or "").strip() or str(info.get("image") or "").strip() or None
+    digest = (os.environ.get("GRAPHYN_IMAGE_DIGEST") or "").strip() or str(info.get("image_digest") or "").strip() or None
+    tag = None
+    if name and ":" in name.rsplit("/", 1)[-1]:
+        tag = name.rsplit(":", 1)[1]
+    label = None
+    if name and digest:
+        label = f"{name}@{digest}" if not name.endswith(digest) else name
+    elif name or digest:
+        label = name or digest
+    elif container.get("in_container"):
+        cid = str(container.get("container_id") or "")[:12]
+        label = f"{container.get('runtime') or 'container'} container" + (f" {cid}" if cid else "") + " (image not recorded)"
+    return {"image": label, "image_name": name, "image_tag": tag, "image_digest": digest}
 
 
 def capture_environment(*, refresh: bool = False) -> dict[str, Any]:
-    """Python / OS / key library versions / image digest / git commit (cached)."""
+    """Python / OS / key library versions / container image / git commit (cached)."""
     global _env_cache
     if _env_cache is not None and not refresh:
         return dict(_env_cache)
@@ -219,7 +342,10 @@ def capture_environment(*, refresh: bool = False) -> dict[str, Any]:
         ver = _dist_version(name)
         if ver is not None or name in ("numpy", "tensorflow", "keras", "librosa", "torch", "onnx"):
             libs[name] = ver
-    digest, cid = _container_info()
+    info = build_info()
+    container = detect_container()
+    image = _image_facts(container, info)
+    git_sha, git_source = _git_commit_info(info)
     try:
         from app import __version__ as gv
     except Exception:
@@ -232,9 +358,13 @@ def capture_environment(*, refresh: bool = False) -> dict[str, Any]:
         "machine": platform.machine(),
         "hostname": socket.gethostname(),
         "libraries": libs,
-        "container_image_digest": digest,
-        "container_id": cid,
-        "git_commit": _git_commit(),
+        **image,
+        "container_image_digest": image["image_digest"],
+        "container_id": container.get("container_id"),
+        "container": container,
+        "git_commit": git_sha,
+        "git_source": git_source,
+        "build_info": info or None,
         "graphyn_version": _dist_version("graphyn-sdk") or gv,
         "backend": (os.environ.get("GRAPHYN_BACKEND") or "local_python").strip() or "local_python",
     }
@@ -242,22 +372,125 @@ def capture_environment(*, refresh: bool = False) -> dict[str, Any]:
     return dict(env)
 
 
-def _venv_libraries(venv_python: str) -> dict[str, str]:
-    """Key library versions inside an isolated plugin venv (dist-info scan)."""
-    out: dict[str, str] = {}
+def run_environment(impls: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Host environment + ``plugin_environments`` of the isolated plugins used."""
+    env = capture_environment()
     try:
-        root = Path(venv_python).resolve().parent.parent
-        wanted = {n.replace("-", "_").lower() for n in _LIBS}
-        for sp in root.glob("lib/python*/site-packages"):
-            for info in sp.glob("*.dist-info"):
-                stem = info.name[: -len(".dist-info")]
-                if "-" not in stem:
-                    continue
-                name, ver = stem.rsplit("-", 1)
-                if name.replace("-", "_").lower() in wanted:
-                    out[name.lower().replace("_", "-")] = ver
+        env["plugin_environments"] = plugin_environments(impls or {})
     except Exception:
+        env["plugin_environments"] = {}
+    return env
+
+
+# Key libraries reported per isolated plugin venv (plus a full-freeze hash).
+_VENV_KEY_LIBS = _LIBS + (
+    "tf-keras", "ml-dtypes", "h5py", "protobuf", "tensorflow-io-gcs-filesystem",
+    "transformers", "datasets", "tokenizers", "sentencepiece", "opencv-python",
+    "opencv-python-headless", "pillow", "numba", "llvmlite", "webrtcvad",
+)
+_venv_cache: dict[str, tuple[tuple, dict[str, Any]]] = {}
+_venv_cache_lock = threading.Lock()
+
+
+def _venv_root(venv_python: str | Path) -> Path:
+    """Venv root WITHOUT following the interpreter symlink.
+
+    ``<venv>/bin/python`` is usually a symlink to the base interpreter;
+    resolving it would scan the API host's site-packages instead of the venv.
+    """
+    p = Path(os.path.abspath(str(venv_python)))
+    root = p.parent.parent
+    if (root / "pyvenv.cfg").is_file():
+        return root
+    for cand in (p.parent, p.parent.parent.parent):
+        if (cand / "pyvenv.cfg").is_file():
+            return cand
+    return root
+
+
+def _site_packages(root: Path) -> list[Path]:
+    return [*root.glob("lib/python*/site-packages"), *root.glob("Lib/site-packages")]
+
+
+def _norm_dist(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def venv_environment(venv_python: str | Path) -> dict[str, Any]:
+    """Library versions inside an isolated plugin venv (dist-info scan).
+
+    ``{venv, python, libraries (key libs), package_count, freeze_hash}`` —
+    ``freeze_hash`` is sha256 over the sorted ``name==version`` list, so any
+    package change in the venv changes it. Cached per venv path, invalidated
+    by the site-packages directory mtime (installs/uninstalls touch it).
+    """
+    root = _venv_root(venv_python)
+    sps = _site_packages(root)
+    sig: tuple = tuple((str(sp), sp.stat().st_mtime_ns) for sp in sps if sp.is_dir())
+    key = str(root)
+    with _venv_cache_lock:
+        hit = _venv_cache.get(key)
+        if hit is not None and hit[0] == sig:
+            return dict(hit[1])
+    wanted = {_norm_dist(n) for n in _VENV_KEY_LIBS}
+    packages: dict[str, str] = {}
+    for sp in sps:
+        try:
+            infos = list(sp.glob("*.dist-info"))
+        except OSError:
+            continue
+        for info in infos:
+            stem = info.name[: -len(".dist-info")]
+            if "-" not in stem:
+                continue
+            name, ver = stem.rsplit("-", 1)
+            packages[_norm_dist(name)] = ver
+    python = None
+    cfg = root / "pyvenv.cfg"
+    try:
+        for line in cfg.read_text(encoding="utf-8").splitlines():
+            k, _, v = line.partition("=")
+            if k.strip().lower() in ("version", "version_info"):
+                python = v.strip()
+                break
+    except OSError:
         pass
+    freeze = "\n".join(f"{n}=={v}" for n, v in sorted(packages.items()))
+    out = {
+        "venv": str(root),
+        "python": python,
+        "libraries": {n: v for n, v in sorted(packages.items()) if n in wanted},
+        "package_count": len(packages),
+        "freeze_hash": ("sha256:" + hashlib.sha256(freeze.encode("utf-8")).hexdigest()) if packages else None,
+    }
+    with _venv_cache_lock:
+        _venv_cache[key] = (sig, out)
+    return dict(out)
+
+
+def _venv_libraries(venv_python: str) -> dict[str, str]:
+    """Key library versions inside an isolated plugin venv (back-compat)."""
+    try:
+        return dict(venv_environment(venv_python).get("libraries") or {})
+    except Exception:
+        return {}
+
+
+def plugin_environments(impls: dict[str, Any]) -> dict[str, Any]:
+    """``plugin → venv_environment`` for the isolated plugins a run used."""
+    out: dict[str, Any] = {}
+    for impl in (impls or {}).values():
+        if not isinstance(impl, dict):
+            continue
+        plugin = impl.get("plugin")
+        venv_py = impl.get("venv_python")
+        if not plugin or not venv_py or plugin in out:
+            continue
+        try:
+            env = venv_environment(venv_py)
+        except Exception:
+            continue
+        out[str(plugin)] = {**env, "plugin_version": impl.get("version")}
     return out
 
 
@@ -326,9 +559,15 @@ def _node_impl(node_type: str) -> dict[str, Any]:
         plugin_dir = Path(spec.install_path)
         plugin_name = spec.plugin_name
         info["runtime"] = "isolated"
-        libs = _venv_libraries(spec.venv_python)
-        if libs:
-            info["venv_libraries"] = libs
+        info["venv_python"] = str(spec.venv_python)
+        try:
+            venv_env = venv_environment(spec.venv_python)
+        except Exception:
+            venv_env = {}
+        if venv_env.get("libraries"):
+            info["venv_libraries"] = venv_env["libraries"]
+        if venv_env.get("freeze_hash"):
+            info["venv_freeze_hash"] = venv_env["freeze_hash"]
     elif cls is not None:
         try:
             import inspect
@@ -428,23 +667,147 @@ def _run_scoped(raw: str, run_id: str) -> bool:
     return f"/runs/{run_id}" in "/" + raw.replace("\\", "/")
 
 
+_WRITE_KEY_RE = re.compile(
+    r"^(?:out|output|outputs|dest|destination|export|save|target_dir|log|cache|checkpoint)(?:_|$)"
+    r"|(?:^|_)(?:output|outputs|out|dest|destination|export|save)_?(?:path|dir|file|folder|root|uri)?$"
+)
+
+
+def is_write_key(key: str) -> bool:
+    """Config keys that name write sinks (outputs), never external inputs."""
+    k = str(key or "").strip().lower()
+    if not k:
+        return False
+    if k in _WRITE_KEYS:
+        return True
+    if k in _INPUT_KEYS:
+        return False
+    return bool(_WRITE_KEY_RE.search(k))
+
+
+# Quoted path-ish literals inside code/source config strings (python_code).
+_CODE_ASSIGN_RE = re.compile(
+    r"""(?:["']([A-Za-z_][A-Za-z0-9_]*)["']\s*:|\b([A-Za-z_][A-Za-z0-9_]*)\s*=)\s*["']([^"'\n]{1,512})["']"""
+)
+_CODE_LITERAL_RE = re.compile(r"""["']((?:workspace|datasets|artifacts|examples)/[^"'\n]{1,500}|/[^"'\n]{2,500})["']""")
+
+
+def _code_paths(text: str) -> list[tuple[str, str]]:
+    """``(inner key, path)`` for path literals in a multi-line code string."""
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for m in _CODE_ASSIGN_RE.finditer(text):
+        inner = m.group(1) or m.group(2) or ""
+        val = m.group(3).strip()
+        if val and val not in seen and _PATHISH_RE.search(val) and "/" in val and "://" not in val:
+            seen.add(val)
+            found.append((inner, val))
+    for m in _CODE_LITERAL_RE.finditer(text):
+        val = m.group(1).strip()
+        if val and val not in seen and "://" not in val:
+            seen.add(val)
+            found.append(("", val))
+    return found
+
+
+def _node_label(node: dict[str, Any]) -> str:
+    return str(node.get("label") or node.get("id") or "").strip()
+
+
+def _specific_root(path: Path) -> bool:
+    """False for broad write roots (workspace, workspace/artifacts, /, …) that
+    would swallow legitimate inputs living elsewhere under them."""
+    try:
+        rel = os.path.relpath(os.path.abspath(path), os.path.abspath(_project_root()))
+    except ValueError:
+        return len(Path(path).parts) > 3
+    if rel.startswith(".."):
+        return len(Path(os.path.abspath(path)).parts) > 3
+    parts = [p for p in Path(rel).parts if p not in (".", "")]
+    return len(parts) >= 2
+
+
+def _write_roots(graph: dict[str, Any], run_id: str) -> list[Path]:
+    """Resolved write locations of this run (output-ish config keys + run dir)."""
+    roots: list[Path] = []
+    for node in _graph_nodes(graph):
+        for key, raw in _walk_config(node.get("config") or {}):
+            if not raw or not is_write_key(key):
+                continue
+            text = raw.strip()
+            if not text or "\n" in text or "://" in text or len(text) > 1024:
+                continue
+            try:
+                cand = resolve_path(text)
+            except Exception:
+                continue
+            if _specific_root(cand):
+                roots.append(cand)
+    if run_id:
+        try:
+            from app.core.config import runs_dir
+
+            roots.append(runs_dir() / run_id)
+        except Exception:
+            pass
+    return roots
+
+
+def _under_any(path: Path, roots: list[Path]) -> bool:
+    try:
+        p = Path(os.path.abspath(path))
+    except Exception:
+        return False
+    for r in roots:
+        try:
+            ra = Path(os.path.abspath(r))
+        except Exception:
+            continue
+        if p == ra or ra in p.parents:
+            return True
+    return False
+
+
 def collect_external_inputs(graph: dict[str, Any], run_id: str = "") -> list[dict[str, Any]]:
-    """Every external path a node reads (config path strings), hashed."""
+    """Every external path a node reads (config path strings), hashed.
+
+    Each row names its source: ``node_id`` / ``node_label`` / ``key`` (config
+    key; ``source:model_path`` for a literal inside a code string) and a
+    human ``label`` (``"<node label> · <key>"``). Write sinks are excluded:
+    output-ish config keys (``output_path`` / ``out_*`` / ``*_output_dir`` …),
+    anything under one of this graph's output locations, and anything under
+    this run's own scope (``…/runs/<run_id>``) — a run's own output (e.g. a
+    package archive left from a previous run at the same output path) is
+    never recorded as its input.
+    """
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
+    write_roots = _write_roots(graph, run_id)
     for node in _graph_nodes(graph):
         nid = str(node.get("id") or "")
         ntype = _node_type(node)
+        label = _node_label(node)
+        candidates: list[tuple[str, str, bool]] = []  # (key, text, from_code)
         for key, raw in _walk_config(node.get("config") or {}):
-            if not raw or not raw.strip() or key in _WRITE_KEYS or "://" in raw:
+            if not raw or not raw.strip() or "://" in raw:
                 continue
-            text = raw.strip()
-            if len(text) > 1024 or "\n" in text:
+            if "\n" in raw.strip():
+                for inner, val in _code_paths(raw):
+                    if inner and is_write_key(inner):
+                        continue
+                    candidates.append((f"{key}:{inner}" if inner else key, val, True))
+                continue
+            if is_write_key(key):
+                continue
+            candidates.append((key, raw.strip(), False))
+        for key, text, from_code in candidates:
+            if len(text) > 1024:
                 continue
             if run_id and _run_scoped(text, run_id):
                 continue  # produced by this run
-            known = key in _INPUT_KEYS or key.endswith(("_path", "_dir", "_file"))
-            if not known and not _PATHISH_RE.search(text):
+            base_key = key.split(":", 1)[-1] if from_code else key
+            known = (not from_code) and (base_key in _INPUT_KEYS or base_key.endswith(("_path", "_dir", "_file")))
+            if not from_code and not known and not _PATHISH_RE.search(text):
                 continue
             if not known and "/" not in text:
                 continue
@@ -456,8 +819,10 @@ def collect_external_inputs(graph: dict[str, Any], run_id: str = "") -> list[dic
                     path = resolve_ingest_dir(text)
                 except Exception:
                     pass
+            if _under_any(path, write_roots):
+                continue  # this run's own output location
             exists = path.exists()
-            if not exists and not known:
+            if not exists and (from_code or not known):
                 continue
             if (nid, text) in seen:
                 continue
@@ -466,7 +831,9 @@ def collect_external_inputs(graph: dict[str, Any], run_id: str = "") -> list[dic
             entry = {
                 "node_id": nid,
                 "node_type": ntype,
+                "node_label": label or nid,
                 "key": key,
+                "label": f"{label or nid} · {key}",
                 "path": text,
                 "resolved": to_rel(path),
                 **res,
@@ -789,6 +1156,7 @@ def capture_run_start(run: Any, logical_graph: dict[str, Any], materialized_grap
         except Exception:
             log.debug("meta write %s failed", key, exc_info=True)
 
+    impls: dict[str, Any] = {}
     try:
         impls, versions, hashes = node_implementations(_node_type(n) for n in _graph_nodes(materialized_graph))
         _w("node_implementations", impls)
@@ -797,7 +1165,7 @@ def capture_run_start(run: Any, logical_graph: dict[str, Any], materialized_grap
     except Exception:
         log.debug("node implementation capture failed", exc_info=True)
     try:
-        _w("environment_info", capture_environment())
+        _w("environment_info", run_environment(impls))
     except Exception:
         log.debug("environment capture failed", exc_info=True)
     try:
@@ -891,15 +1259,164 @@ def _cache_rows(meta: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _input_artifact_hashes(meta: dict[str, Any], artifacts: list[Any] | None) -> list[str]:
+def _art_get(a: Any, key: str) -> Any:
+    return a.get(key) if isinstance(a, dict) else getattr(a, key, None)
+
+
+def _input_artifact_hashes(meta: dict[str, Any], artifacts: list[Any] | None, run_id: str = "") -> list[str]:
+    """Content hashes of artifacts this run CONSUMED but did not produce.
+
+    ``artifacts`` are the run's own registered (output) artifacts — they are
+    never inputs. Consumed ids come from the run's provenance records
+    (``input_artifact_ids``); ids/hashes produced by this run are dropped.
+    """
+    produced_ids = {str(_art_get(a, "artifact_id")) for a in artifacts or [] if _art_get(a, "artifact_id")}
+    produced_hashes = {str(_art_get(a, "content_hash")) for a in artifacts or [] if _art_get(a, "content_hash")}
     if isinstance(meta.get("input_artifact_hashes"), list):
-        return [str(x) for x in meta["input_artifact_hashes"]]
+        return [str(x) for x in meta["input_artifact_hashes"] if str(x) not in produced_hashes]
+    if not run_id:
+        return []
+    consumed: list[str] = []
+    try:
+        from app.core.artifacts.provenance import ProvenanceStore
+
+        for rec in ProvenanceStore().find_by_run(run_id):
+            for aid in getattr(rec, "input_artifact_ids", None) or []:
+                if aid and aid not in produced_ids and aid not in consumed:
+                    consumed.append(str(aid))
+    except Exception:
+        return []
     out: list[str] = []
-    for a in artifacts or []:
-        h = getattr(a, "content_hash", None) if not isinstance(a, dict) else a.get("content_hash")
-        if h:
-            out.append(str(h))
+    if consumed:
+        try:
+            from app.core.artifacts.artifact_store import ArtifactStore
+
+            store = ArtifactStore()
+            for aid in consumed[:500]:
+                try:
+                    h = store.get(aid).content_hash
+                except Exception:
+                    continue
+                if h and h not in produced_hashes and h not in out:
+                    out.append(str(h))
+        except Exception:
+            return out
     return out
+
+
+# ── model lineage ────────────────────────────────────────────────────────────
+
+
+def _registry_models() -> list[dict[str, Any]]:
+    try:
+        from app.core.mlops.model_registry import list_models
+
+        return [m for m in list_models() if isinstance(m, dict)]
+    except Exception:
+        return []
+
+
+def _model_entry(name: str, stage: str, rec: dict[str, Any], *, match: str, **extra: Any) -> dict[str, Any]:
+    art = str(rec.get("artifact_path") or rec.get("path") or "")
+    entry: dict[str, Any] = {
+        "name": name,
+        "stage": stage,
+        "version": stage,
+        "run_id": rec.get("run_id"),
+        "artifact_path": art or None,
+        "node_id": rec.get("node_id"),
+        "format": rec.get("format"),
+        "model_hash": None,
+        "match": match,
+        **{k: v for k, v in extra.items() if v is not None},
+    }
+    if art:
+        try:
+            res = hash_path(resolve_path(art))
+            entry["model_hash"] = res.get("content_hash")
+            entry["hash_mode"] = res.get("hash_mode")
+        except Exception:
+            pass
+    return entry
+
+
+def _same_or_nested(a: Path, b: Path) -> bool:
+    try:
+        pa, pb = Path(os.path.abspath(a)), Path(os.path.abspath(b))
+    except Exception:
+        return False
+    return pa == pb or pb in pa.parents or pa in pb.parents
+
+
+def resolve_model_lineage(meta: dict[str, Any], inputs: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """Which registered model(s) this run consumed / shipped.
+
+    Sources: the declared payload ``lineage.model`` (meta ``lineage_request``,
+    match ``declared``) and any external input whose path is (inside) a
+    registered model stage's artifact (match ``input_path``). Each model row:
+    ``{name, stage, version, run_id, artifact_path, model_hash, match, …}``.
+    """
+    req = meta.get("lineage_request") if isinstance(meta.get("lineage_request"), dict) else {}
+    source_run = str(meta.get("source_run_id") or req.get("source_run_id") or "").strip() or None
+    if source_run:
+        try:
+            from app.core.config import runs_dir
+            from app.core.runs.run_resolve import resolve_run_id_soft
+
+            source_run = resolve_run_id_soft(runs_dir(), source_run)
+        except Exception:
+            pass
+    models: list[dict[str, Any]] = []
+    registry = {str(m.get("name")): m for m in _registry_models()}
+    declared = req.get("model") if isinstance(req.get("model"), dict) else None
+    if declared and declared.get("name"):
+        name = str(declared["name"])
+        want = str(declared.get("stage") or declared.get("version") or "").strip()
+        rec = registry.get(name)
+        stages = rec.get("stages") if isinstance(rec, dict) and isinstance(rec.get("stages"), dict) else {}
+        stage = want if want in stages else (want or None)
+        if stage is None:
+            stage = next((s for s in ("prod", "staging", "latest") if s in stages), None)
+        srec = stages.get(stage) if stage else None
+        if isinstance(srec, dict):
+            models.append(_model_entry(name, str(stage), srec, match="declared", requested_version=declared.get("version")))
+        else:
+            models.append({
+                "name": name, "stage": stage, "version": declared.get("version") or stage,
+                "run_id": None, "artifact_path": None, "model_hash": None,
+                "match": "declared", "resolved": False,
+            })
+    seen = {(m.get("name"), m.get("stage")) for m in models}
+    for row in inputs or []:
+        if not isinstance(row, dict) or not row.get("path"):
+            continue
+        try:
+            ipath = resolve_path(str(row.get("resolved") or row["path"]))
+        except Exception:
+            continue
+        for name, rec in registry.items():
+            stages = rec.get("stages") if isinstance(rec.get("stages"), dict) else {}
+            for stage, srec in stages.items():
+                if not isinstance(srec, dict) or (name, stage) in seen:
+                    continue
+                art = srec.get("artifact_path") or srec.get("path")
+                if not art:
+                    continue
+                try:
+                    apath = resolve_path(str(art))
+                except Exception:
+                    continue
+                if _same_or_nested(ipath, apath):
+                    seen.add((name, stage))
+                    models.append(_model_entry(name, str(stage), srec, match="input_path",
+                                               node_id_input=row.get("node_id"), key=row.get("key")))
+    if not models and not source_run and not meta.get("source_artifact_id"):
+        return None
+    return {
+        "source_run_id": source_run,
+        "source_artifact_id": meta.get("source_artifact_id"),
+        "models": models,
+    }
 
 
 def build_record(
@@ -925,11 +1442,22 @@ def build_record(
     hashes = meta.get("plugin_code_hashes")
     if not isinstance(impls, dict) or not impls:
         impls, versions, hashes = node_implementations(node_types)
-    env_info = meta.get("environment_info") if isinstance(meta.get("environment_info"), dict) else capture_environment()
+    env_info = meta.get("environment_info") if isinstance(meta.get("environment_info"), dict) else run_environment(impls)
+    if isinstance(env_info, dict) and "plugin_environments" not in env_info:
+        env_info = {**env_info, "plugin_environments": plugin_environments(impls if isinstance(impls, dict) else {})}
     inputs = meta.get("external_inputs")
     if not isinstance(inputs, list):
         inputs = collect_external_inputs(graph, run_id)
     ds_versions = meta.get("dataset_versions") if isinstance(meta.get("dataset_versions"), list) else dataset_versions_from_inputs(inputs)
+    try:
+        lineage = resolve_model_lineage(meta, inputs)
+    except Exception:
+        log.debug("model lineage resolve failed", exc_info=True)
+        lineage = None
+    model_version = meta.get("model_version") if isinstance(meta.get("model_version"), dict) else None
+    if model_version is None and lineage and lineage.get("models"):
+        first = lineage["models"][0]
+        model_version = {k: first.get(k) for k in ("name", "stage", "version", "run_id", "model_hash")}
     labels = meta.get("node_labels")
     if not isinstance(labels, dict):
         try:
@@ -973,12 +1501,13 @@ def build_record(
         "plugin_code_hashes": {str(k): str(v) for k, v in (hashes or {}).items()},
         "external_inputs": inputs,
         "dataset_versions": ds_versions,
-        "input_artifact_hashes": _input_artifact_hashes(meta, artifacts),
+        "input_artifact_hashes": _input_artifact_hashes(meta, artifacts, run_id),
         "outputs": outputs,
         "outputs_manifest_hash": manifest_hash,
         "cache": _cache_rows(meta),
         "node_labels": labels,
-        "model_version": meta.get("model_version") if isinstance(meta.get("model_version"), dict) else None,
+        "model_version": model_version,
+        "lineage": lineage,
         "environment": env_info,
         "runtime_version": f"python-{platform.python_version()}/{platform.system()}",
         "graphyn_version": str(env_info.get("graphyn_version") or gv),

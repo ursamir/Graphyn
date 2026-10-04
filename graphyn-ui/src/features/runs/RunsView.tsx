@@ -1,10 +1,11 @@
 import React from 'react'
 import clsx from 'clsx'
-import { Archive, Download, MoreHorizontal, Pause, Play, RefreshCw, Repeat, ShieldCheck, SlidersHorizontal, Workflow } from 'lucide-react'
+import { Archive, Download, Loader2, MoreHorizontal, Pause, Play, RefreshCw, Repeat, ShieldCheck, SlidersHorizontal, Workflow } from 'lucide-react'
 import { ApiError, apiJson, apiUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { emptyGraph } from '../../types/graph'
 import { fetchRunGraph } from '../../lib/runGraph'
+import { resolveFullRunId } from '../../lib/runDisplay'
 import { useAppStore } from '../../store/appStore'
 import { runMatchesProject } from '../../lib/projectStamp'
 import { usePolling } from '../../lib/usePolling'
@@ -77,6 +78,7 @@ import { dedupeErrorRows } from '../builder/logDedupe'
 import { formatMetricDelta, formatMetricValue, metricLabel, primaryMetric, regressionOf } from '../../lib/metrics'
 import {
   bestPathIdFromSummary,
+  overviewMetrics,
   datasetFromRun,
   defaultModelOption,
   fallbackPathResults,
@@ -104,7 +106,9 @@ import {
   formatProgressLine,
   latestProgressByNode,
   parseProgress,
+  runningNodesOf,
   type NodeProgress,
+  type RunningNode,
 } from './runProgress'
 import { ProgressLogLine, RunResultsBanner } from './RunResults'
 import { useEvaluatorOutputs } from './useRunResults'
@@ -583,15 +587,32 @@ function LiveRunMonitor({
   workers,
   progress = [],
   labelFor,
+  running = [],
+  steps = [],
 }: {
   nodeStats: Array<Record<string, unknown>>
   workers: Array<[string, string]>
   /** Latest node_progress per still-running node. */
   progress?: NodeProgress[]
   labelFor?: (nodeId: string) => string | undefined
+  /** Nodes executing right now (all of them on parallel paths), path-labelled. */
+  running?: RunningNode[]
+  /** Pipeline steps with status (journal-derived) — includes running ones, unlike node_stats. */
+  steps?: Array<{ id: string; label: string; status?: string }>
 }) {
   const wave = waveBucketsFromNodeStats(nodeStats)
-  if (wave.length === 0 && workers.length === 0 && nodeStats.length === 0 && progress.length === 0) return null
+  if (
+    wave.length === 0 &&
+    workers.length === 0 &&
+    nodeStats.length === 0 &&
+    progress.length === 0 &&
+    running.length === 0
+  )
+    return null
+  const runningIds = new Set(running.map((r) => r.id))
+  // Running steps first (with spinner), then finished ones in pipeline order.
+  const doneSteps = steps.filter((s) => !runningIds.has(s.id) && s.status && s.status !== 'pending')
+  const useSteps = steps.length > 0
   return (
     <div className="shrink-0 space-y-2 border-b border-ink-100 bg-ink-50/60 px-3 py-2">
       {progress.map((p) => (
@@ -619,7 +640,27 @@ function LiveRunMonitor({
           ))}
         </div>
       ) : null}
-      {nodeStats.length > 0 ? (
+      {useSteps && (running.length > 0 || doneSteps.length > 0) ? (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-ink-500">
+          <span className="font-semibold uppercase tracking-wide text-ink-400">Steps</span>
+          {running.map((r) => (
+            <span key={r.id} className="inline-flex items-center gap-1 font-medium text-sky-800" title={`${r.id} · running`}>
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+              {r.label}
+              <span className="font-mono text-[10px] text-sky-600">running</span>
+            </span>
+          ))}
+          {doneSteps.slice(0, Math.max(0, 8 - running.length)).map((st) => (
+            <span key={st.id} className="inline-flex items-center gap-1" title={st.id}>
+              <span className="font-medium text-ink-800">{st.label}</span>
+              <span className="font-mono text-[10px] text-ink-400">{st.status}</span>
+            </span>
+          ))}
+          {doneSteps.length > Math.max(0, 8 - running.length) ? (
+            <span className="text-ink-400">+{doneSteps.length - Math.max(0, 8 - running.length)} more</span>
+          ) : null}
+        </div>
+      ) : !useSteps && nodeStats.length > 0 ? (
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-ink-500">
           <span className="font-semibold uppercase tracking-wide text-ink-400">Nodes</span>
           {nodeStats.slice(0, 8).map((n, i) => (
@@ -694,6 +735,10 @@ export default function RunsView() {
   /** Which model branch to register when a run has multiple builders/trainers. */
   const [promoteCandidateId, setPromoteCandidateId] = React.useState<string | null>(null)
   const [regModelName, setRegModelName] = React.useState('')
+  /** Every registered model → its stages (to warn before overwriting a stage). */
+  const [allModelStages, setAllModelStages] = React.useState<
+    Map<string, Record<string, { run_id?: string; updated_at?: string }>>
+  >(new Map())
   const [regModelSlug, setRegModelSlug] = React.useState('')
   const [registerBusy, setRegisterBusy] = React.useState(false)
   const [explainBusy, setExplainBusy] = React.useState(false)
@@ -887,7 +932,10 @@ export default function RunsView() {
     setPurgeText('')
   }
 
-  const open = async (id: string) => {
+  const open = async (requestedId: string) => {
+    // `id` is rebound to the full run id once the detail resolves a short /
+    // prefix id (/runs/96505918) — every later API call must use the full id.
+    let id = requestedId
     const switching = selected !== id
     // Latest-request guard: a slower open(A) must never paint A's detail
     // under run B after the user switched selection.
@@ -957,6 +1005,16 @@ export default function RunsView() {
         }
       }
       if (stale()) return
+      // Short-id deep link: adopt the full id (selection, URL via the
+      // replaceState effect, header Last run) before any further request.
+      const fullId = resolveFullRunId(id, d)
+      if (fullId !== id) {
+        const shortId = id
+        id = fullId
+        selectedRef.current = fullId
+        setSelected(fullId)
+        if (useAppStore.getState().lastRunId === shortId) setLastRunId(fullId)
+      }
       const embedded = (d?.graph ?? (d?.meta as { graph?: unknown } | undefined)?.graph) as GraphIR | undefined
       // Empty edges[] still counts as Array.isArray — fetch the real graph so Lineage
       // can show from→to. Prefer embedded only when it has both nodes and edges.
@@ -1098,6 +1156,7 @@ export default function RunsView() {
       const res = await apiJson<{ models?: Array<{ name: string; stages?: Record<string, { run_id?: string; slug?: string; updated_at?: string }> }> }>('/models')
       if (selectedRef.current !== runId) return
       const list = Array.isArray(res?.models) ? res.models : []
+      setAllModelStages(new Map(list.map((m) => [m.name, m.stages || {}])))
       setRunModels(
         list.filter((m) => {
           const stages = m.stages || {}
@@ -1535,19 +1594,6 @@ export default function RunsView() {
       )
 
 
-  React.useEffect(() => {
-    // Only seed Focus from current_node while the run is live — on completed runs
-    // that would leave the last node selected and hide most Logs / Outputs.
-    if (!selected || focusSeededForRun.current === selected) return
-    if (!isLiveRunStatus(runStatus)) {
-      focusSeededForRun.current = selected
-      return
-    }
-    const cur = status?.current_node != null ? String(status.current_node).trim() : ''
-    if (!cur) return
-    setFocusNodeId(cur)
-    focusSeededForRun.current = selected
-  }, [status?.current_node, selected, runStatus])
 
   React.useEffect(() => {
     if (!focusNodeId || panel !== 'checkpoints' || !selected) return
@@ -1578,15 +1624,6 @@ export default function RunsView() {
     null
   const runWorkerEntries: Array<[string, string]> =
     runWorkerMap && typeof runWorkerMap === 'object' ? Object.entries(runWorkerMap) : []
-  // Promote only when this run actually wrote a model artifact — a graph is a
-  // workflow; trainers/metrics alone do not imply something to stage.
-  const runProducedModel = runHasModelOutput({
-    files: outputFiles,
-    artifacts: runArtifacts,
-    metrics: (selectedSummary?.metrics ?? detailMeta?.metrics ?? null) as Record<string, unknown> | null,
-    nodeStats: runNodeStats,
-    registeredModels: runModels.length + (runModelRows?.length ?? 0),
-  })
   const runMetrics = (selectedSummary?.metrics ?? detailMeta?.metrics ?? null) as
     | Record<string, unknown>
     | null
@@ -1620,6 +1657,22 @@ export default function RunsView() {
     embeddedGraph.edges.length > 0
       ? embeddedGraph
       : runGraph
+  // Promote only when this run actually wrote a model artifact — a graph is a
+  // workflow; trainers/metrics alone do not imply something to stage.
+  const runProducedModel = runHasModelOutput({
+    files: outputFiles,
+    artifacts: runArtifacts,
+    metrics: (selectedSummary?.metrics ?? detailMeta?.metrics ?? null) as Record<string, unknown> | null,
+    nodeStats: runNodeStats,
+    // Registered models whose stage points at this run (rows from /runs/{id}/models
+    // are candidates, not registrations — their kinds gate trained vs untrained).
+    registeredModels: runModels.length,
+    modelKinds: runModelRows ? runModelRows.map((r) => r.kind) : null,
+    graphNodeTypes: Array.isArray(stackGraph?.nodes)
+      ? stackGraph.nodes.map((n) => (n as { node_type?: string }).node_type)
+      : null,
+    graphName,
+  })
   /**
    * Node list for the run: every graph node in execution order (so a node that
    * never ran after a failure still shows, numbered correctly), status from
@@ -1677,6 +1730,12 @@ export default function RunsView() {
   })()
   const bestPath = pickBestPath(pathResults, bestPathIdFromSummary(detail) ?? bestPathIdFromSummary(selectedSummary))
   const runPrimary = primaryMetric(detail) ?? primaryMetric(selectedSummary) ?? bestPath?.primary ?? null
+  // Overview Metrics box: best path on multi-path runs (matches the results banner).
+  const overviewMetricsView = overviewMetrics({
+    runMetrics,
+    paths: pathResults,
+    backendBest: bestPathIdFromSummary(detail) ?? bestPathIdFromSummary(selectedSummary),
+  })
   const lanePaths = lanePathMap(pipelineShape, pathResults)
   const nodePaths = pathOfNodeMap(
     pathResults,
@@ -1766,6 +1825,35 @@ export default function RunsView() {
     return latest
   })()
 
+  /** Node(s) executing now — journal statuses first, backend current_node only as fallback. */
+  const runningNow: RunningNode[] = isLiveRunStatus(runStatus)
+    ? runningNodesOf(pipelineStackItems, {
+        currentNode: status?.current_node,
+        pathOf: (id) => {
+          if (!multiPath) return null
+          const p = nodePaths.get(id)
+          return p ? `Path ${p.letter}` : null
+        },
+      })
+    : []
+
+  const runningNowKey = runningNow.map((r) => r.id).join('|')
+  React.useEffect(() => {
+    // Only seed Focus while the run is live — on completed runs that would
+    // leave the last node selected and hide most Logs / Outputs. Seed from the
+    // node actually running (not the backend current_node, which can name the
+    // last finished step), and only when exactly one runs — parallel paths
+    // keep the whole-run view so no running step's logs are hidden.
+    if (!selected || focusSeededForRun.current === selected) return
+    if (!isLiveRunStatus(runStatus)) {
+      focusSeededForRun.current = selected
+      return
+    }
+    if (runningNowKey === '' || runningNowKey.includes('|')) return
+    setFocusNodeId(runningNowKey)
+    focusSeededForRun.current = selected
+  }, [runningNowKey, selected, runStatus])
+
   const focusLabel = focusNodeId
     ? pipelineStackItems.find((i) => focusMatchesNode(focusNodeId, i.id))?.label ||
       displayNodeLabel(focusNodeId, { withCue: true })
@@ -1819,7 +1907,14 @@ export default function RunsView() {
         ...o,
         pathId: o.pathId ?? p?.pathId,
         pathLabel: multiPath && p ? pathDisplayName(p) : o.pathLabel,
-        metrics: Object.keys(o.metrics).length || !p || isUntrained(o) ? o.metrics : p.metrics,
+        // Path metrics describe the trained model only — never an untrained
+        // (architecture-only) or converted artifact, even if the API copied them.
+        metrics:
+          o.kind !== 'trained' && o.kind !== 'unknown'
+            ? {}
+            : Object.keys(o.metrics).length || !p
+              ? o.metrics
+              : p.metrics,
       }
     }
     if (runModelRows && runModelRows.length > 0) return runModelRows.map(fill)
@@ -2376,9 +2471,13 @@ export default function RunsView() {
                 {live && status?.progress_pct != null ? (
                   <SlimProgress pct={Number(status.progress_pct)} />
                 ) : null}
-                {live && status?.current_node != null ? (
-                  <span className="text-[11px] text-ink-600">
-                    {humanNodeLabel(String(status.current_node))}
+                {live && runningNow.length > 0 ? (
+                  <span
+                    className="inline-flex items-center gap-1 text-[11px] text-ink-600"
+                    title={runningNow.map((r) => r.id).join(', ')}
+                  >
+                    <Loader2 className="h-3 w-3 animate-spin text-sky-600" aria-hidden />
+                    {runningNow.map((r) => r.label).join(' · ')}
                   </span>
                 ) : null}
                 {sourceRunId ? (
@@ -2882,6 +2981,20 @@ export default function RunsView() {
                             onChange={(e) => setRegModelName(e.target.value)}
                             placeholder="my-model"
                           />
+                          {(() => {
+                            const existing = allModelStages.get(regModelName.trim())
+                            if (!existing) return null
+                            const staging = existing.staging?.run_id
+                            const prod = existing.prod?.run_id
+                            return (
+                              <span className="mt-1 block text-[11px] text-amber-800">
+                                “{regModelName.trim()}” already exists — saving makes this run its new{' '}
+                                <b>staging</b> version
+                                {staging && staging !== selected ? ` (replaces staging from run ${shortRunId(staging)})` : ''}
+                                {prod ? `; prod stays on run ${shortRunId(prod)}` : ''}. Pick another name for a separate model.
+                              </span>
+                            )
+                          })()}
                         </label>
                         <button
                           type="button"
@@ -3006,6 +3119,8 @@ export default function RunsView() {
                 workers={runWorkerEntries}
                 progress={[...liveProgress.values()]}
                 labelFor={(id) => pipelineStackItems.find((it) => it.id === id)?.label}
+                running={runningNow}
+                steps={pipelineStackItems}
               />
             ) : null}
 
@@ -3519,7 +3634,9 @@ export default function RunsView() {
                   checkpointCount:
                     typeof debug?.checkpoint_count === 'number' ? debug.checkpoint_count : undefined,
                   errorCount: typeof debug?.error_count === 'number' ? debug.error_count : undefined,
-                  metrics: runMetrics,
+                  metrics: overviewMetricsView.metrics,
+                  metricsPathLabel: overviewMetricsView.pathLabel,
+                  otherPathMetrics: overviewMetricsView.others,
                   recentErrors: Array.isArray(debug?.recent_errors)
                     ? (debug.recent_errors as Array<Record<string, unknown>>)
                     : undefined,

@@ -16,12 +16,13 @@ import {
   laneLabel,
   type PipelineShape,
 } from './runNodes'
-import { formatMetricValue, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
+import { formatMetricValue, isRatioMetric, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
 import { pathDisplayName, scalarMetrics, type PathResult } from './runResults'
 import { EvaluatorResult, PathMetricChip } from './RunResults'
 import type { EvaluatorOutputs } from './useRunResults'
 import { failureView, linkableRunId, type FailureView } from './runRecord'
 import { FailureDetails } from './FailureDetails'
+import { humanizeErrorText } from '../../lib/errorText'
 
 function shortStatusLabel(status?: string | null): string {
   const s = String(status || '').toLowerCase()
@@ -640,6 +641,10 @@ export type OverviewExtras = {
   checkpointCount?: number
   errorCount?: number
   metrics?: Record<string, unknown> | null
+  /** "Path C (DS-CNN · 30 epochs)" when `metrics` are the best path's (multi-path runs). */
+  metricsPathLabel?: string | null
+  /** Other paths' headline metric, shown under the box for context. */
+  otherPathMetrics?: Array<{ label: string; primary: { name: string; value: number } }>
   recentErrors?: Array<Record<string, unknown>>
   showRegisterCta?: boolean
   registerLabel?: string
@@ -931,8 +936,13 @@ export function RunLineagePanel({
 
       {metrics && Object.keys(scalarMetrics(metrics)).length > 0 ? (
         <div className="overflow-hidden rounded-xl border border-ink-200">
-          <div className="border-b border-ink-100 bg-ink-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-            Metrics
+          <div className="flex flex-wrap items-baseline gap-x-2 border-b border-ink-100 bg-ink-50 px-3 py-1.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">Metrics</span>
+            {ov?.metricsPathLabel ? (
+              <span className="text-[11px] text-ink-600">
+                · best path: <span className="font-semibold text-ink-800">{ov.metricsPathLabel}</span>
+              </span>
+            ) : null}
           </div>
           <ul className="divide-y divide-ink-100">
             {Object.entries(scalarMetrics(metrics))
@@ -946,11 +956,19 @@ export function RunLineagePanel({
                     {metricLabel(k)}
                   </span>
                   <span className="shrink-0 tabular-nums text-[12px] font-semibold text-ink-800">
-                    {Number.isInteger(v) ? v.toLocaleString() : formatMetricValue(k, v)}
+                    {Number.isInteger(v) && !isRatioMetric(k, v) ? v.toLocaleString() : formatMetricValue(k, v)}
                   </span>
                 </li>
               ))}
           </ul>
+          {ov?.otherPathMetrics && ov.otherPathMetrics.length > 0 ? (
+            <div className="border-t border-ink-100 bg-ink-50/50 px-3 py-1.5 text-[11px] text-ink-500">
+              Other paths:{' '}
+              {ov.otherPathMetrics
+                .map((o) => `${o.label} ${metricLabel(o.primary.name)} ${formatMetricValue(o.primary.name, o.primary.value)}`)
+                .join(' · ')}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -983,7 +1001,7 @@ export function RunLineagePanel({
           </div>
           <ul className="mt-1 space-y-1 font-mono text-[11px] text-rose-900">
             {ov!.recentErrors!.slice(-5).map((e, i) => (
-              <li key={i}>{String(e.message || JSON.stringify(e))}</li>
+              <li key={i}>{humanizeErrorText(String(e.message || JSON.stringify(e)))}</li>
             ))}
           </ul>
         </div>
@@ -1021,7 +1039,7 @@ export function RunLineagePanel({
 
       {Array.isArray(trace?.warnings) && trace!.warnings!.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          {trace!.warnings!.join(' · ')}
+          {trace!.warnings!.map((w) => humanizeErrorText(String(w))).join(' · ')}
         </div>
       )}
 

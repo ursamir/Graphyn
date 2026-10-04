@@ -3,8 +3,11 @@
 Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Resolve user-supplied run ids (full ids or unique prefixes
                   of >= 8 characters) to the full run directory name.
-Owns:             resolve_run_id(), RunIdNotFound, RunIdAmbiguous, MIN_PREFIX.
-Public Surface:   resolve_run_id(runs_root, raw) -> str
+Owns:             resolve_run_id(), resolve_run_id_soft(), RunIdNotFound,
+                  RunIdAmbiguous, MIN_PREFIX.
+Public Surface:   resolve_run_id(runs_root, raw) -> str;
+                  resolve_run_id_soft(runs_root, raw) -> str (unknown /
+                  invalid ids pass through unchanged; ambiguity raises).
 Must NOT:         Import app.api / app.domain; write anything.
 Dependencies:     stdlib (os, re, pathlib).
 Reason To Change: Run id format or prefix policy changes.
@@ -57,3 +60,14 @@ def resolve_run_id(runs_root: str | Path, raw: str) -> str:
     if len(names) > 1:
         raise RunIdAmbiguous(rid, sorted(names))
     return names[0]
+
+
+def resolve_run_id_soft(runs_root: str | Path, raw: str) -> str:
+    """Like :func:`resolve_run_id` but returns ``raw`` (stripped) when no run
+    matches or the id is malformed — callers keep their own not-found path.
+    ``RunIdAmbiguous`` still propagates."""
+    rid = str(raw or "").strip()
+    try:
+        return resolve_run_id(runs_root, rid)
+    except (RunIdNotFound, ValueError):
+        return rid

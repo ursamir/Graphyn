@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   collapseProgressRows,
   finishedNodeIds,
+  runningNodesOf,
   formatProgressLine,
   latestProgressByNode,
   parseProgress,
@@ -57,5 +58,30 @@ describe('collapse', () => {
   it('sparkline points span the box', () => {
     expect(sparklinePoints([0, 1], 10, 4)).toBe('0.0,4.0 10.0,0.0')
     expect(sparklinePoints([1], 10, 4)).toBe('')
+  })
+})
+
+describe('runningNodesOf', () => {
+  const items = [
+    { id: 'ingest_0', label: 'Dataset Ingest', status: 'succeeded' },
+    { id: 'model_builder_0', label: 'Model Builder', status: 'succeeded' },
+    { id: 'trainer_a', label: 'Trainer', status: 'running' },
+    { id: 'trainer_c', label: 'Trainer', status: 'running' },
+    { id: 'evaluator_a', label: 'Evaluator', status: undefined },
+  ]
+  const pathOf = (id: string) => (id.endsWith('_a') ? 'Path A' : id.endsWith('_c') ? 'Path C' : null)
+  it('returns every running node with its path label', () => {
+    expect(runningNodesOf(items, { currentNode: 'model_builder_0', pathOf })).toEqual([
+      { id: 'trainer_a', label: 'Trainer · Path A' },
+      { id: 'trainer_c', label: 'Trainer · Path C' },
+    ])
+  })
+  it('ignores a stale current_node that already finished', () => {
+    const done = items.map((i) => ({ ...i, status: i.status === 'running' ? 'succeeded' : i.status }))
+    expect(runningNodesOf(done, { currentNode: 'model_builder_0' })).toEqual([])
+  })
+  it('falls back to current_node when statuses are unknown', () => {
+    expect(runningNodesOf([{ id: 'x_0', label: 'X' }], { currentNode: 'x_0' })).toEqual([{ id: 'x_0', label: 'X' }])
+    expect(runningNodesOf([], { currentNode: 'trainer_0' })[0].id).toBe('trainer_0')
   })
 })

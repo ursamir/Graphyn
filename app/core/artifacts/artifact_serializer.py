@@ -33,6 +33,7 @@ Domain / platform handlers register at startup from each entry point
 
     register_audio_serializer()
     register_dataset_serializer()
+    register_feature_array_serializer()
     register_file_tree_serializer()
 
 The registry is intentionally fail-open: if no handler is registered for a

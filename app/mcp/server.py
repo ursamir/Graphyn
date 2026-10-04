@@ -173,6 +173,8 @@ def _startup() -> None:
         register_audio_serializer()
         from app.models.dataset_artifact_serializer import register_dataset_serializer
         register_dataset_serializer()
+        from app.models.feature_array_serializer import register_feature_array_serializer
+        register_feature_array_serializer()
         from app.core.artifacts.file_tree import register_file_tree_serializer
         register_file_tree_serializer()
 

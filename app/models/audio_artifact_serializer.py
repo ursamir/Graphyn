@@ -48,6 +48,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _looks_like_audio_sample(obj: Any) -> bool:
+    """True for AudioSample-shaped objects (waveform + rate + path), not features."""
+    if isinstance(obj, dict):
+        return False
+    if hasattr(obj, "feature_type"):
+        return False
+    return all(hasattr(obj, attr) for attr in ("data", "sample_rate", "path"))
+
+
 class AudioSampleHandler:
     """ArtifactTypeHandler implementation for ``audio_samples``.
 
@@ -195,13 +204,13 @@ class AudioSampleHandler:
         except ImportError:
             pass
 
-        # Duck-type fallback: any list whose first element has .data + .sample_rate
-        if (
-            isinstance(value, list)
-            and value
-            and hasattr(value[0], "data")
-            and hasattr(value[0], "sample_rate")
-        ):
+        # Duck-type fallback (plugin-local AudioSample copies): every element
+        # must look like a waveform sample — ``.data`` + ``.sample_rate`` +
+        # ``.path``. FeatureArray also has ``.data``/``.sample_rate`` but
+        # carries ``feature_type``/``source_path`` instead of ``path``; claiming
+        # it here wrote MFCC matrices as WAV files and cache hits then handed
+        # downstream nodes AudioSample objects.
+        if isinstance(value, list) and value and all(_looks_like_audio_sample(v) for v in value):
             return "audio_samples"
 
         return None

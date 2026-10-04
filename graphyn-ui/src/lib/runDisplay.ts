@@ -26,3 +26,17 @@ export function runDisplayName(run: unknown): string {
   if (graph && !GENERIC_GRAPH_NAMES.has(graph.toLowerCase())) return humanizeTemplateName(graph)
   return id ? `Run ${shortRunId(id)}` : 'Run'
 }
+
+/**
+ * Full run id for a run opened by a (possibly shortened) id. The API resolves
+ * an 8-char prefix on `GET /runs/{id}` but most other routes (POST /models,
+ * trace, …) need the full id. Returns the detail's `run_id` (top level or
+ * `meta`) when it extends `requested`; otherwise `requested` unchanged.
+ */
+export function resolveFullRunId(requested: string, detail: unknown): string {
+  const d = rec(detail)
+  if (!d || !requested) return requested
+  const full = str(d.run_id) || str(rec(d.meta)?.run_id) || str(d.id)
+  if (!full || full === requested) return requested
+  return full.toLowerCase().startsWith(requested.toLowerCase()) ? full : requested
+}

@@ -224,6 +224,38 @@ export function pickBestPath(paths: PathResult[], backendBest?: string | null): 
   return best
 }
 
+/**
+ * Metrics for the run Overview "Metrics" box. A multi-path run's flat run
+ * `metrics` belong to whichever path wrote last (often Path A), so with ≥2
+ * scored paths the box shows the **best** path (same `pickBestPath` choice as
+ * the results banner) and labels it; `others` lists the remaining paths'
+ * primary metrics for context.
+ */
+export function overviewMetrics(input: {
+  runMetrics: Record<string, unknown> | null | undefined
+  paths: PathResult[]
+  backendBest?: string | null
+}): {
+  metrics: Record<string, unknown> | null
+  pathLabel: string | null
+  others: Array<{ label: string; primary: PrimaryMetric }>
+} {
+  const scored = input.paths.filter((p) => Object.keys(p.metrics).length > 0)
+  if (input.paths.length > 1 && scored.length > 0) {
+    const best = pickBestPath(scored, input.backendBest)
+    if (best) {
+      return {
+        metrics: best.metrics,
+        pathLabel: pathDisplayName(best),
+        others: scored
+          .filter((p) => p !== best && p.primary)
+          .map((p) => ({ label: `Path ${p.letter}`, primary: p.primary! })),
+      }
+    }
+  }
+  return { metrics: input.runMetrics ?? null, pathLabel: null, others: [] }
+}
+
 /** node id → path, from backend node_ids or the lane map (A/B…). */
 export function pathOfNodeMap(paths: PathResult[], laneOf?: Map<string, string> | null): Map<string, PathResult> {
   const m = new Map<string, PathResult>()

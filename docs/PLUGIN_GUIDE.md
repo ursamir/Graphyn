@@ -281,6 +281,17 @@ class MyNode(Node):
 
 On API startup, if `GRAPHYN_SKIP_PLUGIN_LOAD` is not set **and** (`GRAPHYN_AUTO_INSTALL_PLUGINS` is true — default when `GRAPHYN_ENV=production` — **or** no *loadable* enabled plugins remain), Graphyn installs every `PluginPackage/*/*/plugin.toml` via `PluginManager.install(upgrade=True)` then `load_enabled_plugins()`. Enabled registry rows whose `install_path` vanished (e.g. leftover `/tmp/pytest-of-*` paths) are healed against `{GRAPHYN_HOME}/plugins/installed/<name>` or pruned so they cannot leave the Builder catalog empty. Docker Compose sets `GRAPHYN_AUTO_INSTALL_PLUGINS=1` because the `GRAPHYN_HOME` volume starts empty.
 
+**Same-version code drift.** Every startup (auto-install on or off) also compares each already-installed bundled plugin with its `PluginPackage/` source (`PluginManager._sync_bundled_plugin`):
+
+| Source vs installed | Action |
+|---|---|
+| different `version` | full `install(upgrade=True)` (isolated venv removed + rebuilt) |
+| same version, same content hash | skipped (no copy, no venv work) |
+| same version, different content hash, same requirements | **code-only refresh** — tree recopied into `plugins/installed/<name>`, `__pycache__` cleared, the isolated venv is **kept**; logs `WARNING Bundled plugin '<name>' v<ver>: source code changed at the same version … reinstalling code` |
+| same version, different hash **and** different `dependencies` / `optional_dependencies` / `runtime` / `min_python` | full reinstall (venv rebuilt) |
+
+The content hash (`app.core.plugins.content_hash.plugin_tree_hash`) is a SHA-256 over sorted relative paths + file digests, excluding `__pycache__`, `*.pyc`/`*.pyo`, VCS dirs and virtualenv dirs. It is stored as `source_hash` on the `PluginRecord` at install time; records written before that field existed are compared by hashing the installed tree (then backfilled). `install_bundled_plugins(force=True)` keeps the old always-reinstall behaviour. You do **not** need to bump a plugin's version for a rebuilt image to pick up edited plugin code.
+
 ### Environment variables (plugin catalog)
 
 | Variable | Default | Role |
@@ -291,6 +302,7 @@ On API startup, if `GRAPHYN_SKIP_PLUGIN_LOAD` is not set **and** (`GRAPHYN_AUTO_
 | `GRAPHYN_PLUGIN_PACKAGE_DIR` | `<repo>/PluginPackage` | Bundled plugin sources for auto-install |
 | `GRAPHYN_AUTO_INSTALL_PLUGINS` | on when `GRAPHYN_ENV=production` | Force/skip bundled install at startup |
 | `GRAPHYN_SKIP_PLUGIN_LOAD` | unset | Set `1` only in tests — skips install+load (API catalog will be empty) |
+| `GRAPHYN_ISOLATED_DETERMINISTIC` | on | Isolated workers get `PYTHONHASHSEED=<node seed>`, `TF_DETERMINISTIC_OPS=1`, `TF_CUDNN_DETERMINISTIC=1`, `GRAPHYN_NODE_SEED`, and `random`/`np.random` seeded before `process()`. `0` disables (faster non-deterministic GPU kernels). |
 
 For a normal `uvicorn app.api.main:app` session, leave `GRAPHYN_SKIP_PLUGIN_LOAD` unset and point `GRAPHYN_HOME` at a home that contains installed plugins (or enable auto-install).
 

@@ -23,6 +23,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # Recorded in every sealed run record (environment.git_commit / image):
+      #   GRAPHYN_GIT_SHA=$(git rev-parse HEAD) docker compose build graphyn-api
+      args:
+        GRAPHYN_GIT_SHA: ${GRAPHYN_GIT_SHA:-}
+        GRAPHYN_IMAGE: ${GRAPHYN_IMAGE:-graphyn-api:local}
+        GRAPHYN_BUILD_DATE: ${GRAPHYN_BUILD_DATE:-}
     container_name: graphyn-api
     ports:
       - "8001:8001"
@@ -33,6 +39,9 @@ services:
       GRAPHYN_HOME: /data/graphyn-home
       GRAPHYN_PROJECT_DIR: /app/workspace
       GRAPHYN_PLUGINS_DIR: /app/plugins
+      # Optional image digest for run records (e.g. from `docker inspect`); the
+      # image name/tag and git commit are baked at build (BUILD_INFO.json).
+      GRAPHYN_IMAGE_DIGEST: ${GRAPHYN_IMAGE_DIGEST:-}
       # Test branch: do not restore plugins that were removed from this install.
       # The kept set is Example 06 plus deployment-packager and python-code.
       GRAPHYN_AUTO_INSTALL_PLUGINS: "0"

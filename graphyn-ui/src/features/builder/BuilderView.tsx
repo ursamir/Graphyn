@@ -3,6 +3,7 @@ import ReactFlow, {
   Background,
   Controls,
   MiniMap,
+  Panel,
   ReactFlowProvider,
   addEdge,
   useEdgesState,
@@ -15,6 +16,7 @@ import ReactFlow, {
   ConnectionLineType,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
+import { MINIMAP_MARGIN, minimapLayout } from './canvasMinimap'
 import {
   Play,
   CheckCircle2,
@@ -137,6 +139,7 @@ const defaultEdgeOptions = {
 
 const CATALOG_OPEN_KEY = 'graphyn.builder.catalogOpen'
 const INSPECTOR_OPEN_KEY = 'graphyn.builder.inspectorOpen'
+const MINIMAP_OPEN_KEY = 'graphyn.builder.minimapOpen'
 const LOG_COLLAPSED_KEY = 'graphyn.builder.logCollapsed'
 const CONNECT_TIP_DISMISSED_KEY = 'graphyn.builder.connectTipDismissed'
 /** Catalog → canvas HTML5 drag payload (node_type string). */
@@ -291,6 +294,25 @@ function BuilderInner() {
   const [logHeight, setLogHeight] = React.useState(148)
   const [catalogOpen, setCatalogOpen] = React.useState(() => readBoolPref(CATALOG_OPEN_KEY, true))
   const [inspectorOpen, setInspectorOpen] = React.useState(() => readBoolPref(INSPECTOR_OPEN_KEY, true))
+  const [minimapOpen, setMinimapOpen] = React.useState(() => readBoolPref(MINIMAP_OPEN_KEY, true))
+  /** Canvas box size → minimap size / visibility (hidden below the breakpoint). */
+  const [canvasBox, setCanvasBox] = React.useState({ w: 0, h: 0 })
+  const canvasRoRef = React.useRef<ResizeObserver | null>(null)
+  // Callback ref: (re)attaches whenever the canvas box mounts/unmounts.
+  const canvasBoxRef = React.useCallback((el: HTMLDivElement | null) => {
+    canvasRoRef.current?.disconnect()
+    canvasRoRef.current = null
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const measure = () =>
+      setCanvasBox((prev) =>
+        prev.w === el.clientWidth && prev.h === el.clientHeight ? prev : { w: el.clientWidth, h: el.clientHeight },
+      )
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    canvasRoRef.current = ro
+  }, [])
+  const minimap = minimapLayout(canvasBox.w, canvasBox.h)
   const [logCollapsed, setLogCollapsed] = React.useState(() => readBoolPref(LOG_COLLAPSED_KEY, true))
   const [connectTipDismissed, setConnectTipDismissed] = React.useState(() =>
     readBoolPref(CONNECT_TIP_DISMISSED_KEY, false),
@@ -2876,7 +2898,7 @@ function BuilderInner() {
         )}
         <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-canvas">
           <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-          <div className="absolute inset-0">
+          <div ref={canvasBoxRef} className="absolute inset-0">
           {nodes.length > 0 && edges.length === 0 && !connectTipDismissed && (
             <div className="absolute left-3 top-3 z-10 flex max-w-xs items-start gap-2 rounded-lg border border-ink-200/80 bg-white/95 px-2.5 py-1.5 text-type-meta text-ink-500 shadow-sm backdrop-blur">
               <p className="min-w-0 flex-1 leading-snug">
@@ -2955,7 +2977,41 @@ function BuilderInner() {
           >
             <Background gap={22} size={1} color="#c5d0da" />
             <Controls />
-            <MiniMap pannable zoomable />
+            {/* Minimap: anchored bottom-right (zoom Controls are bottom-left, the
+                Triggers dock bottom-left, tips/badges top), sized from the canvas,
+                hidden below the width/height breakpoint; collapsible (persisted). */}
+            {minimap.show && minimapOpen ? (
+              <MiniMap
+                pannable
+                zoomable
+                position="bottom-right"
+                style={{ width: minimap.width, height: minimap.height, margin: MINIMAP_MARGIN }}
+              />
+            ) : null}
+            {minimap.show ? (
+              <Panel
+                position="bottom-right"
+                style={{
+                  margin: MINIMAP_MARGIN,
+                  marginBottom: minimapOpen ? minimap.height + MINIMAP_MARGIN + 6 : MINIMAP_MARGIN,
+                }}
+              >
+                <button
+                  type="button"
+                  className="rounded-md border border-ink-200 bg-white/95 px-1.5 py-0.5 text-[10px] font-medium text-ink-500 shadow-sm hover:text-ink-800"
+                  aria-pressed={minimapOpen}
+                  title={minimapOpen ? 'Hide minimap' : 'Show minimap'}
+                  onClick={() => {
+                    setMinimapOpen((v) => {
+                      writeBoolPref(MINIMAP_OPEN_KEY, !v)
+                      return !v
+                    })
+                  }}
+                >
+                  {minimapOpen ? 'Hide map' : 'Map'}
+                </button>
+              </Panel>
+            ) : null}
           </ReactFlow>
           {nodes.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">

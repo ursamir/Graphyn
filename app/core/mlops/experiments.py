@@ -7,7 +7,9 @@ Owns:             list_experiments(), get_experiment(), compare_runs().
 Public Surface:   Same helpers used by the /api/v1/experiments router.
 Must NOT:         Import from app.api; require the mlflow package.
 Dependencies:     runs_dir config, run_listing.sorted_run_dirs,
-                  workspace_paths.read_metrics_json, stdlib.
+                  workspace_paths.read_metrics_json, run_summary
+                  (multi-path runs: row ``metrics`` = best path's, plus
+                  ``metrics_path`` / ``metrics_by_path``), stdlib.
 Reason To Change: Experiment board schema evolves or new metric sources appear.
 """
 from __future__ import annotations
@@ -178,6 +180,15 @@ def _run_row_from_dir(run_path: Path) -> tuple[str, dict[str, Any]] | None:
         "metrics": metrics,
         "tags": tags,
     }
+    if not (exp and _as_dict(exp.get("metrics"))):
+        # Multi-path runs: run-level metrics = best path's (results banner pick).
+        try:
+            from app.core.runs.run_summary import apply_headline_metrics, run_insights
+
+            ins = run_insights(run_id, run_path, meta)
+            row = apply_headline_metrics(row, ins.get("summary"))
+        except Exception:
+            pass
     return experiment_name, row
 
 

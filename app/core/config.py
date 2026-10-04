@@ -34,6 +34,7 @@ Reason To Change: New environment variables are added, directory layout
   GRAPHYN_PLUGIN_ALLOWED_SOURCES  Default: "" (all sources allowed; structural URL match when set)
   GRAPHYN_PLUGIN_VENVS_DIR        Default: {GRAPHYN_HOME}/plugins/venvs/
   GRAPHYN_PLUGIN_ISOLATED_TIMEOUT Default: 3600 (seconds; isolated worker subprocess)
+  GRAPHYN_ISOLATED_DETERMINISTIC  Default: true (seed-derived PYTHONHASHSEED + TF determinism env in isolated workers)
   GRAPHYN_REDIS_URL               Default: "" (use in-process store)
   GRAPHYN_HTTP_EGRESS_MODE        Default: trusted (workflow HTTP nodes; use restricted for SSRF hardening)
   GRAPHYN_HTTP_EGRESS_ALLOWLIST   Default: "" (comma-separated hosts/domains; used in restricted mode)
@@ -445,6 +446,16 @@ def plugin_source_is_allowed(source: str) -> bool:
             return False
         return True
     return any(_plugin_source_matches_allowed(normalized, entry) for entry in allowed)
+
+
+def isolated_deterministic() -> bool:
+    """Whether isolated plugin workers run with determinism env + seeding.
+
+    ``GRAPHYN_ISOLATED_DETERMINISTIC=0/false/no`` disables it (faster
+    non-deterministic GPU kernels; PYTHONHASHSEED inherited). Default on.
+    """
+    raw = os.environ.get("GRAPHYN_ISOLATED_DETERMINISTIC", "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def plugin_isolated_timeout() -> float:

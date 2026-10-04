@@ -103,6 +103,19 @@ def get_model_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]
         return handler_error("validation_failed", str(exc))
 
 
+def _full_run_id(run_id: str) -> str:
+    """Unique prefix (>= 8 chars) → full run id (the registry stores full ids).
+
+    Raises ``RunIdAmbiguous`` (a ``LookupError``) for ambiguous prefixes.
+    """
+    if not run_id:
+        return run_id
+    from app.core.config import runs_dir
+    from app.core.runs.run_resolve import resolve_run_id_soft
+
+    return resolve_run_id_soft(runs_dir(), run_id)
+
+
 def register_model_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.core.mlops.model_registry import register_model
 
@@ -110,7 +123,7 @@ def register_model_handler(arguments: dict[str, Any] | None = None) -> dict[str,
     try:
         return register_model(
             str(args.get("name") or "").strip(),
-            run_id=str(args.get("run_id") or "").strip(),
+            run_id=_full_run_id(str(args.get("run_id") or "").strip()),
             slug=str(args.get("slug") or "").strip(),
             stage=str(args.get("stage") or "staging"),
             description=args.get("description"),
@@ -119,8 +132,9 @@ def register_model_handler(arguments: dict[str, Any] | None = None) -> dict[str,
             model_path=(str(args["model_path"]).strip() or None) if args.get("model_path") else None,
             allow_untrained=bool(args.get("allow_untrained")),
         )
-    except ValueError as exc:
-        # ModelUntrained message names ``compiled_untrained`` / allow_untrained.
+    except (ValueError, LookupError) as exc:
+        # ModelUntrained message names ``compiled_untrained`` / allow_untrained;
+        # LookupError = ambiguous run id prefix.
         return handler_error("validation_failed", str(exc))
 
 
@@ -131,12 +145,12 @@ def request_model_prod_handler(arguments: dict[str, Any] | None = None) -> dict[
     try:
         return request_prod(
             str(args.get("name") or "").strip(),
-            run_id=args.get("run_id"),
+            run_id=_full_run_id(str(args["run_id"]).strip()) if args.get("run_id") else args.get("run_id"),
             actor=str(args.get("actor") or "mcp"),
         )
     except FileNotFoundError as exc:
         return handler_error("not_found", str(exc))
-    except ValueError as exc:
+    except (ValueError, LookupError) as exc:
         return handler_error("validation_failed", str(exc))
 
 

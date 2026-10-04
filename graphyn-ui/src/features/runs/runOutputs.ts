@@ -252,20 +252,62 @@ function isModelArtifactType(artifactType: string): boolean {
  * model artifact/file (or already registered one). A graph is a workflow —
  * trainers, metrics, or "checkpoint" path noise alone do not imply a model.
  */
+const PACKAGE_NODE_RE = /(deployment_packager|packager|edge_deploy|ship_package)/i
+const PACKAGE_ARTIFACT_RE = /(deployment[ _-]?package|edge[ _-]?package|ship[ _-]?package)/i
+/** Untrained Model Builder output (`compiled_<hash>.keras`). */
+const COMPILED_UNTRAINED_RE = /(^|\/)compiled_[0-9a-f]{6,}\.(keras|h5)$/i
+
+/**
+ * Ship / deploy package runs: their output is a deployment package (the
+ * optimized model inside it is a by-product), so they never offer
+ * "Register model". Detected from the graph's node types, package artifacts,
+ * or the edge-deploy graph name.
+ */
+export function isPackageRun(input: {
+  graphNodeTypes?: Array<string | null | undefined> | null
+  artifacts?: Array<{ artifact_type?: string; node_type?: string }> | null
+  graphName?: string | null
+}): boolean {
+  if ((input.graphNodeTypes ?? []).some((t) => PACKAGE_NODE_RE.test(String(t || '')))) return true
+  for (const a of input.artifacts ?? []) {
+    if (PACKAGE_ARTIFACT_RE.test(String(a.artifact_type || ''))) return true
+    if (PACKAGE_NODE_RE.test(String(a.node_type || ''))) return true
+  }
+  return /^edge[-_ ]deploy/i.test(String(input.graphName || '').trim())
+}
+
 export function runHasModelOutput(input: {
   files?: Array<{ name?: string; path?: string; kind?: string }>
   artifacts?: Array<{ artifact_type?: string; node_type?: string; node_id?: string; data_path?: string; path?: string }>
   metrics?: Record<string, unknown> | null
   nodeStats?: Array<Record<string, unknown>> | null
   registeredModels?: number
+  /** Node types of the run's graph (package-run detection). */
+  graphNodeTypes?: Array<string | null | undefined> | null
+  graphName?: string | null
+  /**
+   * Kinds from `GET /runs/{id}/models` (`trained` / `compiled_untrained` /
+   * `optimized`); null/undefined when the route is unavailable. When known,
+   * only a non-untrained model counts.
+   */
+  modelKinds?: string[] | null
 }): boolean {
   if ((input.registeredModels ?? 0) > 0) return true
+  if (isPackageRun({ graphNodeTypes: input.graphNodeTypes, artifacts: input.artifacts, graphName: input.graphName }))
+    return false
+  if (input.modelKinds && input.modelKinds.length > 0) {
+    return input.modelKinds.some((k) => String(k || '').toLowerCase() !== 'compiled_untrained')
+  }
   for (const f of input.files ?? []) {
-    if (isModelFile(f.path || f.name || '', f.kind)) return true
+    const p = f.path || f.name || ''
+    if (COMPILED_UNTRAINED_RE.test(p)) continue
+    if (isModelFile(p, f.kind)) return true
   }
   for (const a of input.artifacts ?? []) {
+    const p = String(a.data_path || a.path || '')
+    if (COMPILED_UNTRAINED_RE.test(p) || String(a.node_type || '') === 'model_builder') continue
     if (isModelArtifactType(String(a.artifact_type || ''))) return true
-    if (isModelFile(String(a.data_path || a.path || ''))) return true
+    if (isModelFile(p)) return true
   }
   return false
 }

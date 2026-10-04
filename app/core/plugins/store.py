@@ -104,6 +104,10 @@ class PluginRecord(BaseModel, frozen=True):
     enabled: bool
     installed_at: str    # ISO 8601 timestamp
     manifest: dict       # full parsed manifest as a dict
+    # SHA-256 of the source plugin tree at install time (content_hash.plugin_tree_hash).
+    # None on records written before this field existed — startup then hashes
+    # the installed tree instead. Used to reinstall same-version code changes.
+    source_hash: str | None = None
 
     def load_manifest(self):
         """Return the manifest dict validated as a ``PluginManifest`` instance.

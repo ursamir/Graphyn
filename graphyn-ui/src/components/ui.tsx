@@ -2,6 +2,7 @@ import React from 'react'
 import clsx from 'clsx'
 import { AlertTriangle, CheckCircle2, ChevronRight, Copy, Inbox, Info, X, type LucideIcon } from 'lucide-react'
 import { prettyScalar, startCase } from '../lib/format'
+import { humanizeErrorText } from '../lib/errorText'
 import { goView } from '../routes/nav'
 
 export function EmptyState({
@@ -124,7 +125,7 @@ export function LoadingBlock({ label = 'Loading…' }: { label?: string }) {
 }
 
 export function ErrorBanner({
-  message,
+  message: rawMessage,
   onRetry,
   title,
   detail,
@@ -143,6 +144,8 @@ export function ErrorBanner({
   actions?: React.ReactNode
 }) {
   const [copied, setCopied] = React.useState(false)
+  // Never show a raw JSON error body ({"code":…,"message":…}) — show its message.
+  const message = humanizeErrorText(String(rawMessage ?? ''))
   const copyText = detail || message
   return (
     <div

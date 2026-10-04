@@ -108,7 +108,7 @@ class DatasetBuilderNode(Node):
         label="Dataset Builder",
         description="Assemble FeatureArray objects into ML-ready train/val/test datasets with configurable splits.",
         category="ML",
-        version="1.0.0",
+        version="1.1.0",
         tags=["ml", "dataset", "training", "common"],
         requires_gpu=False,
         supports_cpu=True,
@@ -244,11 +244,13 @@ class DatasetBuilderNode(Node):
         split = f.metadata.get("split")
         if split in valid_splits:
             return split
-        # Infer from path: look for /train/, /val/, /test/ in the path
+        # Infer from path: the directory segment nearest the file that is
+        # train/val/test wins. (Iterating the ``valid_splits`` set made the
+        # answer depend on PYTHONHASHSEED when a path had more than one.)
         path_lower = (f.source_path or "").replace("\\", "/").lower()
-        for s in valid_splits:
-            if f"/{s}/" in path_lower:
-                return s
+        for seg in reversed(path_lower.split("/")[:-1]):
+            if seg in valid_splits:
+                return seg
         return split  # None or invalid value
 
     def _auto_split(
@@ -440,6 +442,14 @@ class DatasetBuilderNode(Node):
                 split_groups[self._infer_split(f)].append(f)
         else:
             # Auto-split using split_ratios
+            # Canonical order first: the seeded split must not depend on the
+            # order upstream nodes delivered features in.
+            order = sorted(
+                range(len(features)),
+                key=lambda i: (features[i].source_path or "", str(features[i].label), i),
+            )
+            features = [features[i] for i in order]
+            labels_arr = labels_arr[order]
             split_groups = self._auto_split(features, labels_arr, label_to_idx)
 
         # ── Build numpy arrays ────────────────────────────────────────────────

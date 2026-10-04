@@ -6,7 +6,8 @@ import { useAppStore } from '../../store/appStore'
 import { EmptyState, ErrorBanner, LoadingBlock, SegmentedTabs, StatusBadge } from '../../components/ui'
 import { MasterDetail, ViewShell } from '../../layout'
 import { paths } from '../../routes/paths'
-import { navigatePath } from '../../routes/parsePath'
+import { navigatePath, parsePathname } from '../../routes/parsePath'
+import { onPathChange } from '../../routes/nav'
 import { unwrapList } from '../../api/unwrapList'
 import { formatLocaleDateTime, formatRelativeTime, humanNodeLabel } from '../../lib/format'
 import { runDisplayName } from '../../lib/runDisplay'
@@ -23,6 +24,8 @@ import { apiErrorCode } from '../../api/errorCode'
 import {
   MODEL_STAGE_HELP,
   REQUEST_PROD_HELP,
+  disambiguatedModelTitles,
+  findModelForRoute,
   modelDisplayName,
   modelPrimaryMetricText,
   preferredStageKey,
@@ -81,6 +84,25 @@ export default function ModelsView() {
   const [projectRuns, setProjectRuns] = React.useState<ProjectRun[]>([])
   /** Models per source run (GET /runs/{id}/models) — path labels for stage cards. */
   const [stageRunModels, setStageRunModels] = React.useState<Record<string, RunModel[]>>({})
+  const [projectRunsLoaded, setProjectRunsLoaded] = React.useState(false)
+  /** `/workspaces/<W>/models/<name>` param waiting for the list to load, then selected. */
+  const [routeModel, setRouteModel] = React.useState<string | null>(() => {
+    const p = parsePathname(window.location.pathname, window.location.search)
+    return p.view === 'models' ? p.modelName ?? null : null
+  })
+  /** Selected row to scroll into view once it is rendered in the master list. */
+  const [revealModel, setRevealModel] = React.useState<string | null>(null)
+  const listRef = React.useRef<HTMLUListElement | null>(null)
+
+  // Back / forward (and in-app links) between model URLs.
+  React.useEffect(
+    () =>
+      onPathChange(() => {
+        const p = parsePathname(window.location.pathname, window.location.search)
+        if (p.view === 'models' && p.modelName) setRouteModel(p.modelName)
+      }),
+    [],
+  )
 
 
   React.useEffect(() => {
@@ -89,9 +111,11 @@ export default function ModelsView() {
 
   React.useEffect(() => {
     let cancelled = false
+    setProjectRunsLoaded(false)
     if (!activeProject) {
       setProjectRunIds(new Set())
       setProjectRuns([])
+      setProjectRunsLoaded(true)
       return
     }
     void (async () => {
@@ -102,10 +126,12 @@ export default function ModelsView() {
         if (cancelled) return
         setProjectRuns(list)
         setProjectRunIds(new Set(list.map((r) => r.run_id).filter(Boolean)))
+        setProjectRunsLoaded(true)
       } catch {
         if (!cancelled) {
           setProjectRuns([])
           setProjectRunIds(new Set())
+          setProjectRunsLoaded(true)
         }
       }
     })()
@@ -328,6 +354,36 @@ export default function ModelsView() {
 
   const filteredRows =
     activeProject && scopeMode === 'workspace' ? rows.filter(inWorkspace) : rows
+  /** List titles; colliding names ("Edge Optimizer model" ×2) get run id + date. */
+  const listTitles = disambiguatedModelTitles(filteredRows)
+
+  // Deep link /models/<name>: select that model once the registry list loads.
+  React.useEffect(() => {
+    if (!routeModel || loading) return
+    const hit = findModelForRoute(rows, routeModel)
+    setRouteModel(null)
+    if (!hit) {
+      if (rows.length > 0) pushToast(`Model "${routeModel}" is not in the registry`, 'error')
+      return
+    }
+    setSelected(hit.name)
+    setRevealModel(hit.name)
+  }, [routeModel, rows, loading, pushToast])
+
+  // The deep-linked model lives outside this workspace's runs → show All workspaces.
+  const revealHidden = Boolean(revealModel) && !filteredRows.some((r) => r.name === revealModel)
+  React.useEffect(() => {
+    if (revealHidden && projectRunsLoaded && scopeMode === 'workspace') setScopeMode('all')
+  }, [revealHidden, projectRunsLoaded, scopeMode])
+
+  // Scroll the selected row into view once it is rendered.
+  React.useEffect(() => {
+    if (!revealModel || revealHidden) return
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-model-name="${CSS.escape(revealModel)}"]`)
+    if (!el) return
+    el.scrollIntoView({ block: 'nearest' })
+    setRevealModel(null)
+  }, [revealModel, revealHidden, rows, scopeMode, loading])
 
   const openWorkspaceRuns = () => {
     if (!activeProject) return
@@ -511,9 +567,12 @@ export default function ModelsView() {
           masterClassName="!p-0 !bg-transparent"
           detailClassName="!p-0"
           master={
-          <ul className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white">
+          <ul
+            ref={listRef}
+            className="divide-y divide-ink-100 overflow-hidden rounded-lg border border-ink-200 bg-white"
+          >
             {filteredRows.map((m) => (
-              <li key={m.name}>
+              <li key={m.name} data-model-name={m.name}>
                 <button
                   type="button"
                   className={
@@ -528,7 +587,7 @@ export default function ModelsView() {
                 >
                   <Box className="h-4 w-4 shrink-0 text-ink-400" />
                   <span className="min-w-0 flex-1" title={m.name}>
-                    <span className="block truncate font-medium text-ink-900">{modelDisplayName(m)}</span>
+                    <span className="block truncate font-medium text-ink-900">{listTitles.get(m.name) ?? modelDisplayName(m)}</span>
                     {(() => {
                       const key = preferredStageKey(m.stages)
                       const metric = key ? modelPrimaryMetricText(m.stages?.[key]) : null

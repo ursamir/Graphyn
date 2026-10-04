@@ -4,9 +4,12 @@ Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Assemble a unified backtrack (Trace) payload from artifact /
                   run / node identifiers for Accountability UX.
 Owns:             assemble_trace() and related helpers.
-Public Surface:   assemble_trace(artifact_id=, run_id=, node_id=).
+Public Surface:   assemble_trace(artifact_id=, run_id=, node_id=) — run_id may
+                  be a unique prefix >= 8 chars (run_resolve; ambiguous raises
+                  RunIdAmbiguous).
 Must NOT:         Import from app.api.
-Dependencies:     ArtifactStore, ProvenanceStore, runs meta on disk.
+Dependencies:     ArtifactStore, ProvenanceStore, runs meta on disk,
+                  app.core.runs.run_resolve.
 Reason To Change: Trace payload shape evolves or new lineage sources appear.
 """
 from __future__ import annotations
@@ -135,6 +138,20 @@ def _chain_step(step: str, label: str, **extra: Any) -> dict[str, Any]:
     return row
 
 
+def _resolve_full_run_id(run_id: str) -> str:
+    """Unique prefix (>= 8 chars) → full run id; unknown ids pass through.
+
+    ``RunIdAmbiguous`` propagates (REST maps it to 409 run_id_ambiguous).
+    """
+    from app.core.config import runs_dir
+    from app.core.runs.run_resolve import RunIdNotFound, resolve_run_id
+
+    try:
+        return resolve_run_id(runs_dir(), run_id)
+    except (RunIdNotFound, ValueError, OSError):
+        return run_id
+
+
 def assemble_trace(
     *,
     artifact_id: str | None = None,
@@ -157,6 +174,8 @@ def assemble_trace(
         raise ValueError("Invalid artifact_id")
     if run_id and not _RUN_ID_RE.match(run_id):
         raise ValueError("Invalid run_id")
+    if run_id:
+        run_id = _resolve_full_run_id(run_id)
 
     from app.core.artifacts.artifact_store import ArtifactNotFoundError, ArtifactStore
     from app.core.artifacts.provenance import ProvenanceStore

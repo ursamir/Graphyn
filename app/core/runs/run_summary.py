@@ -12,8 +12,11 @@ Owns:             run_insights() (cached summary + models + display name),
                   path_labels() (config diff → "DS-CNN · 30 epochs"),
                   node_labels() (node_id → "Trainer · Path C (MobileNet · lr 0.002)"),
                   model file discovery (keras / SavedModel / tflite / onnx / pt),
-                  resolve_workspace_path(), to_workspace_rel().
+                  resolve_workspace_path(), to_workspace_rel(),
+                  headline_metrics() / apply_headline_metrics() (run-level
+                  metrics = best path's, + metrics_by_path).
 Public Surface:   run_insights, run_summary_fields, run_models, compute_paths,
+                  headline_metrics, apply_headline_metrics,
                   path_labels, node_labels, resolve_workspace_path, to_workspace_rel,
                   read_labels_txt, model_row_for_path, PRIMARY_METRICS,
                   clear_cache
@@ -963,6 +966,73 @@ def compute_regression(
     }
 
 
+def headline_metrics(summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Run-level metrics consistent with the results banner (best path).
+
+    Returns ``{metrics, path_id, path_label, primary_metric, metrics_by_path}``
+    when the run has >= 1 path with metrics: ``metrics`` are the BEST path's
+    (by the primary metric — accuracy-like higher-is-better, loss-like
+    lower-is-better; see :func:`higher_is_better`), ``metrics_by_path`` lists
+    every path ``{path_id, label, metrics, best}``. ``None`` otherwise.
+    """
+    if not isinstance(summary, dict):
+        return None
+    paths = [p for p in (summary.get("paths") or []) if isinstance(p, dict) and p.get("metrics")]
+    if not paths:
+        return None
+    best_id = summary.get("best_path_id")
+    best = next((p for p in paths if p.get("path_id") == best_id), None)
+    if best is None:
+        primary = (summary.get("primary_metric") or {}).get("name") if isinstance(summary.get("primary_metric"), dict) else None
+        name = primary or _pick_primary([p["metrics"] for p in paths])
+        prefer_high = higher_is_better(name or "")
+        scored = [p for p in paths if isinstance(p["metrics"].get(name), (int, float))] if name else []
+        if scored:
+            best = (max if prefer_high else min)(scored, key=lambda p: p["metrics"][name])
+        else:
+            best = paths[0]
+    by_path = [
+        {
+            "path_id": p.get("path_id"),
+            "label": p.get("label") or p.get("path_id"),
+            "metrics": dict(p.get("metrics") or {}),
+            "best": p is best,
+        }
+        for p in paths
+    ]
+    return {
+        "metrics": dict(best.get("metrics") or {}),
+        "path_id": best.get("path_id"),
+        "path_label": best.get("label") or best.get("path_id"),
+        "primary_metric": summary.get("primary_metric"),
+        "metrics_by_path": by_path,
+    }
+
+
+def apply_headline_metrics(row: dict[str, Any], summary: dict[str, Any] | None) -> dict[str, Any]:
+    """Overlay best-path run metrics onto a run row (multi-path runs only).
+
+    ``meta.metrics`` is finalize-time ``metrics.json`` of the FIRST node
+    folder (Path A). For runs with >1 metric path the row's ``metrics`` become
+    the best path's; the first-found dict stays available as
+    ``metrics_first_found``. Adds ``metrics_path`` ``{path_id, label}`` and
+    ``metrics_by_path``. Single-path runs are returned unchanged apart from
+    ``metrics_path`` / ``metrics_by_path``.
+    """
+    head = headline_metrics(summary)
+    if head is None:
+        return row
+    out = dict(row)
+    out["metrics_path"] = {"path_id": head["path_id"], "label": head["path_label"]}
+    out["metrics_by_path"] = head["metrics_by_path"]
+    if len(head["metrics_by_path"]) > 1:
+        existing = out.get("metrics") if isinstance(out.get("metrics"), dict) else {}
+        if existing:
+            out["metrics_first_found"] = existing
+        out["metrics"] = dict(head["metrics"])
+    return out
+
+
 def run_summary_fields(
     run_id: str,
     run_path: Path,
@@ -993,6 +1063,8 @@ def run_summary_fields(
 
 __all__ = [
     "MODEL_FILE_FORMATS",
+    "apply_headline_metrics",
+    "headline_metrics",
     "PRIMARY_METRICS",
     "architecture_label",
     "clear_cache",

@@ -5,8 +5,9 @@ Responsibility:   MLflow-shaped experiment list / detail / compare endpoints.
 Owns:             GET /experiments, GET /experiments/compare, GET /experiments/{name}.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain aggregation logic — delegate to app.core.mlops.experiments.
-Dependencies:     fastapi, app.core.mlops.experiments, app.core.runs.run_resolve
-                  (compare accepts unique run id prefixes >= 8 chars).
+Dependencies:     fastapi, app.core.mlops.experiments, app.api.run_ids
+                  (compare accepts unique run id prefixes >= 8 chars;
+                  ambiguous → 409).
 Reason To Change: Experiment board response schema changes.
 """
 from __future__ import annotations
@@ -44,18 +45,11 @@ def compare_experiments(
         raise HTTPException(status_code=400, detail="Provide at least one run_id")
     if len(ids) > 20:
         raise HTTPException(status_code=400, detail="Too many run_ids (max 20)")
-    # Unique prefixes >= 8 chars resolve to full ids (unknown ids pass through).
-    from app.core.config import runs_dir
-    from app.core.runs.run_resolve import RunIdAmbiguous, resolve_run_id
+    # Unique prefixes >= 8 chars resolve to full ids (unknown ids pass through;
+    # ambiguous prefix → 409 run_id_ambiguous).
+    from app.api.run_ids import resolve_run_id_http
 
-    resolved: list[str] = []
-    for rid in ids:
-        try:
-            resolved.append(resolve_run_id(runs_dir(), rid))
-        except RunIdAmbiguous as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
-        except (LookupError, ValueError):
-            resolved.append(rid)
+    resolved = [resolve_run_id_http(rid, field="run_ids", allow_missing=True) for rid in ids]
     return compare_runs(resolved)
 
 

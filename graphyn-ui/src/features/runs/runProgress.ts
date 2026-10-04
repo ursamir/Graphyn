@@ -199,3 +199,30 @@ export function sparklinePoints(values: number[], w: number, h: number): string 
     })
     .join(' ')
 }
+
+export type RunningNode = { id: string; label: string }
+
+/**
+ * Nodes currently executing in a live run — from the per-node statuses
+ * (journal `node_start` without `node_end`/`node_error`, else node_stats).
+ * Parallel paths can have several. The backend `current_node` is only a
+ * fallback (it can lag behind and name the last *finished* node), and is
+ * ignored once that node is known to be finished. `pathOf` adds "· Path C"
+ * when the label does not already name the path.
+ */
+export function runningNodesOf(
+  items: Array<{ id: string; label: string; status?: string }>,
+  opts: { currentNode?: unknown; pathOf?: (id: string) => string | null | undefined } = {},
+): RunningNode[] {
+  const withPath = (id: string, label: string): string => {
+    const p = opts.pathOf?.(id)
+    return p && !label.includes(p) ? `${label} · ${p}` : label
+  }
+  const running = items.filter((i) => i.status === 'running')
+  if (running.length > 0) return running.map((i) => ({ id: i.id, label: withPath(i.id, i.label) }))
+  const cur = typeof opts.currentNode === 'string' ? opts.currentNode.trim() : ''
+  if (!cur) return []
+  const hit = items.find((i) => i.id === cur)
+  if (hit && hit.status && hit.status !== 'pending') return []
+  return [{ id: cur, label: withPath(cur, hit?.label || humanNodeLabel(cur)) }]
+}
