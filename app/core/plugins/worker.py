@@ -3,7 +3,10 @@
 Bounded Context:  BC3 — Node Catalog (Plugin Ecosystem)
 Responsibility:   Subprocess entry point that loads one plugin node and runs
                   process() for isolated runtimes.
-Owns:             main() CLI for ``python -m app.core.plugins.worker``
+Owns:             main() CLI for ``python -m app.core.plugins.worker``; the
+                  structured failure file (job key ``error_path``: JSON with
+                  error_type, error_module, message, traceback) read by
+                  isolated_executor to surface the real exception.
 Public Surface:   main
 Must NOT:         Import from app.api.
 Dependencies:     stdlib, plugin loader pieces, NodeRegistry
@@ -90,18 +93,42 @@ def _run(job: dict[str, Any]) -> None:
         pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
 
 
+def _write_error_file(job: dict[str, Any] | None, exc: BaseException) -> None:
+    """Best effort: write the structured failure JSON to ``job["error_path"]``.
+
+    Must be called from inside the ``except`` block (uses format_exc). Never raises.
+    """
+    try:
+        if not isinstance(job, dict):
+            return
+        raw = job.get("error_path")
+        if not raw:
+            return
+        payload = {
+            "error_type": type(exc).__name__,
+            "error_module": type(exc).__module__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        Path(str(raw)).write_text(json.dumps(payload, default=str), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         print("usage: python -m app.core.plugins.worker <job.json>", file=sys.stderr)
         return 2
     job_path = Path(argv[0])
+    job: dict[str, Any] | None = None
     try:
         job = _load_job(job_path)
         _run(job)
         return 0
-    except Exception:
+    except Exception as exc:
         traceback.print_exc()
+        _write_error_file(job, exc)
         return 1
 
 

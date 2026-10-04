@@ -8,7 +8,7 @@
  * Pretty logs collapse repeated progress of one node into its latest line
  * (with a history for a sparkline); raw logs keep every event.
  */
-import { formatMetric } from '../../lib/metrics'
+import { formatMetric, formatMetricValue } from '../../lib/metrics'
 import { humanNodeLabel } from '../../lib/format'
 
 type Rec = Record<string, unknown>
@@ -98,8 +98,8 @@ export function formatProgressLine(p: NodeProgress, label?: string): string {
   if (p.epoch != null) bits.push(p.epochs ? `epoch ${p.epoch}/${p.epochs}` : `epoch ${p.epoch}`)
   else if (p.phase) bits.push(p.phase)
   if (p.loss != null) bits.push(`loss ${formatMetric(p.loss)}`)
-  if (p.valAccuracy != null) bits.push(`val acc ${formatMetric(p.valAccuracy)}`)
-  else if (p.accuracy != null) bits.push(`acc ${formatMetric(p.accuracy)}`)
+  if (p.valAccuracy != null) bits.push(`val acc ${formatMetricValue('val_accuracy', p.valAccuracy)}`)
+  else if (p.accuracy != null) bits.push(`acc ${formatMetricValue('accuracy', p.accuracy)}`)
   if (bits.length === 1) {
     if (p.message) return p.message
     if (p.pct != null) bits.push(`${Math.round(p.pct)}%`)
@@ -112,7 +112,7 @@ export function progressBadgeText(p: NodeProgress): string {
   const bits: string[] = []
   if (p.epoch != null) bits.push(p.epochs ? `epoch ${p.epoch}/${p.epochs}` : `epoch ${p.epoch}`)
   else if (p.pct != null) bits.push(`${Math.round(p.pct)}%`)
-  if (p.valAccuracy != null) bits.push(`val acc ${formatMetric(p.valAccuracy)}`)
+  if (p.valAccuracy != null) bits.push(`val acc ${formatMetricValue('val_accuracy', p.valAccuracy)}`)
   else if (p.loss != null) bits.push(`loss ${formatMetric(p.loss)}`)
   return bits.join(' · ')
 }

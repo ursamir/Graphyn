@@ -3,7 +3,8 @@
 Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Thin append-only audit event log for accountability mutations.
 Owns:             record_audit(), list_audit(), audit_path helpers.
-Public Surface:   record_audit(...), list_audit(limit), normalize_audit_event.
+Public Surface:   record_audit(...), list_audit(limit, offset, resource_id, run_id,
+                  action, q, with_total), normalize_audit_event.
 Must NOT:         Import from app.api or execution orchestrators.
 Dependencies:     stdlib, app.core.config.project_dir.
 Reason To Change: Audit schema evolves or storage backend changes.
@@ -145,20 +146,64 @@ def list_audit(
     limit: int = 100,
     *,
     base_dir: str | Path | None = None,
-) -> list[dict[str, Any]]:
-    """Return the most recent audit events (newest first), up to ``limit``."""
+    offset: int = 0,
+    resource_id: str | None = None,
+    run_id: str | None = None,
+    action: str | None = None,
+    q: str | None = None,
+    with_total: bool = False,
+) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], int]:
+    """Return audit events (newest first) after filters, paged by offset/limit.
+
+    Filters: ``resource_id`` (exact, or unique-prefix match ≥ 8 chars),
+    ``run_id`` (resource_type ``run`` + resource_id, or metadata
+    ``replay_of``), ``action`` (exact or ``prefix.*``), ``q`` (case-insensitive
+    substring over the serialized event). The whole log is scanned, so paging
+    reaches beyond the newest 1000 events. ``with_total`` returns
+    ``(events, total_matched)``.
+    """
     limit = max(1, min(int(limit or 100), 1000))
+    offset = max(0, int(offset or 0))
     path = audit_events_path(base_dir)
     if not path.exists():
-        return []
+        return ([], 0) if with_total else []
     try:
         text = path.read_text(encoding="utf-8")
     except Exception as exc:
         logger.warning("list_audit read failed: %s", exc)
-        return []
+        return ([], 0) if with_total else []
 
-    events: list[dict[str, Any]] = []
-    for line in text.splitlines():
+    needle = (q or "").strip().lower()
+    rid = (resource_id or "").strip()
+    run = (run_id or "").strip()
+    act = (action or "").strip()
+
+    def _match(ev: dict[str, Any], raw: str) -> bool:
+        res = str(ev.get("resource_id") or "")
+        if rid and not (res == rid or (len(rid) >= 8 and res.startswith(rid))):
+            return False
+        if run:
+            meta = ev.get("metadata") or ev.get("meta") or {}
+            linked = isinstance(meta, dict) and str(meta.get("replay_of") or "").startswith(run)
+            is_run = str(ev.get("resource_type") or "") == "run" and (
+                res == run or (len(run) >= 8 and res.startswith(run))
+            )
+            if not (is_run or linked):
+                return False
+        if act:
+            name = str(ev.get("action") or "")
+            if act.endswith(".*"):
+                if not name.startswith(act[:-1]):
+                    return False
+            elif name != act:
+                return False
+        if needle and needle not in raw.lower():
+            return False
+        return True
+
+    matched: list[dict[str, Any]] = []
+    total = 0
+    for line in reversed(text.splitlines()):
         line = line.strip()
         if not line:
             continue
@@ -166,7 +211,9 @@ def list_audit(
             obj = json.loads(line)
         except Exception:
             continue
-        if isinstance(obj, dict):
-            events.append(normalize_audit_event(obj))
-    events.reverse()
-    return events[:limit]
+        if not isinstance(obj, dict) or not _match(obj, line):
+            continue
+        total += 1
+        if total > offset and len(matched) < limit:
+            matched.append(normalize_audit_event(obj))
+    return (matched, total) if with_total else matched

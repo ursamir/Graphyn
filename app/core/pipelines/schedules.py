@@ -372,6 +372,19 @@ def _execute_pipeline(project: str, pipeline: str, env: str = "prod") -> str:
     run_mgr._write_meta_field("project", project)
     run_mgr._write_meta_field("schedule", True)
     run_mgr._write_meta_field("pipeline_env", env or "prod")
+    # Audit: declared saved-pipeline ref + scheduler identity.
+    run_mgr._write_meta_field("pipeline_name", pipeline)
+    run_mgr._write_meta_field("actor", "scheduler")
+    run_mgr._write_meta_field("trigger", "schedule")
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(actor="scheduler", action="run.start", resource_type="run",
+                     resource_id=run_mgr.run_id,
+                     meta={"mode": "schedule", "trigger": "schedule", "project": project,
+                           "pipeline": pipeline, "env": chosen})
+    except Exception:
+        pass
 
     def _run() -> None:
         try:

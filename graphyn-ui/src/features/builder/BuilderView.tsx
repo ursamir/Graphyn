@@ -116,6 +116,11 @@ import {
   type NodeProgress,
 } from '../runs/runProgress'
 import { ProgressLogLine } from '../runs/RunResults'
+import { fetchRunGraph } from '../../lib/runGraph'
+import { runTitle } from '../runs/runResults'
+import { diffGraphs, parsePipelineDrift, unscopeRunPaths } from './graphDrift'
+import { RunDriftBanner } from './RunDriftBanner'
+import { compactNodeLabel } from '../runs/runRecord'
 
 const nodeTypes = { graphyn: GraphynNode }
 /** Fit the whole graph, but never zoom out past readable text. */
@@ -1420,6 +1425,18 @@ function BuilderInner() {
     return stampProjectOnGraph(base, project, builderDataset?.version)
   }, [currentGraph, activeProject, builderDataset])
 
+  /**
+   * POST /pipelines/run{,-async} body: the `{graph, …}` wrapper (accepted by
+   * every API version) so the audit record gets `trigger: "ui"` and, when the
+   * canvas was opened from a saved pipeline, the declared pipeline + env.
+   */
+  const runRequestBody = (graph: GraphIR) =>
+    JSON.stringify({
+      graph,
+      trigger: 'ui',
+      ...(pipelinePick ? { pipeline: pipelinePick, pipeline_env: pipelineEnv } : {}),
+    })
+
   const handleRun = async () => {
     if (blockOnInvalidConfig('run')) return
     // Light pre-run path check (empty DatasetIngest / input paths)
@@ -1459,7 +1476,7 @@ function BuilderInner() {
       const graph = graphForRun()
       const res = await apiFetch('/pipelines/run', {
         method: 'POST',
-        body: JSON.stringify(graph),
+        body: runRequestBody(graph),
         signal: controller.signal,
         timeoutMs: 30 * 60 * 1000,
         headers: { 'Content-Type': 'application/json' },
@@ -1529,7 +1546,12 @@ function BuilderInner() {
               const prog = parseProgress(ev)
               if (prog) {
                 setNodeProgress((prev) => ({ ...prev, [prog.nodeId]: prog }))
-                addLog(formatProgressLine(prog, labelOfRef.current.get(prog.nodeId)), 'progress', trimmed)
+                const backendLabel = typeof ev.node_label === 'string' ? compactNodeLabel(ev.node_label) : ''
+                addLog(
+                  formatProgressLine(prog, backendLabel || labelOfRef.current.get(prog.nodeId)),
+                  'progress',
+                  trimmed,
+                )
               }
               continue
             }
@@ -1735,7 +1757,7 @@ function BuilderInner() {
       const graph = graphForRun()
       const res = await apiJson<{ run_id: string }>('/pipelines/run-async', {
         method: 'POST',
-        body: JSON.stringify(graph),
+        body: runRequestBody(graph),
       })
       setLastRunId(res.run_id)
       pushToast(`Async run started: ${res.run_id}`, 'success')
@@ -1849,10 +1871,19 @@ function BuilderInner() {
   }
 
   const saveAsProject = () => {
-    const suggested = slugifyName(graphName || templateName || 'pipeline')
-    const entered = window.prompt('Save as pipeline slug', suggested)
+    const snap = useAppStore.getState().editorRunContext
+    const base = slugifyName(graphName || templateName || 'pipeline')
+    // A run snapshot never overwrites its pipeline: suggest a new slug.
+    const suggested = snap?.snapshot ? `${base}-run-${shortRunId(snap.runId)}` : base
+    const entered = window.prompt(snap?.snapshot ? 'Save this run snapshot as a new pipeline' : 'Save as pipeline slug', suggested)
     if (entered == null) return
-    void saveToProject(entered)
+    if (snap?.snapshot && slugifyName(entered) === base) {
+      pushToast('Pick a new name — a run snapshot never overwrites the original pipeline', 'error')
+      return
+    }
+    void saveToProject(entered).then(() => {
+      if (snap?.snapshot) setEditorRunContext(null)
+    })
   }
 
 
@@ -1871,6 +1902,7 @@ function BuilderInner() {
         query ? { query } : undefined,
       )
       loadGraph(graph)
+      useAppStore.getState().setEditorRunContext(null)
       commitDocumentName(pipelineName)
       setPipelinePick(pipelineName)
       if (env) setPipelineEnv(env)
@@ -2068,6 +2100,87 @@ function BuilderInner() {
       if (timer) clearTimeout(timer)
     }
   }, [lastRunId, isRunning, reconcileRunFromServer, finishOutcome, loadGen])
+
+  // ── Run ↔ canvas drift (audit) ─────────────────────────────────────
+  // Compares the canvas with the exact graph the linked run executed
+  // (runs/<id>/graph.json). Snapshot mode = the canvas is that run's exact
+  // graph opened read-only: Save becomes "Save as new".
+  const editorRunContext = useAppStore((s) => s.editorRunContext)
+  const setEditorRunContext = useAppStore((s) => s.setEditorRunContext)
+  const snapshotMode = editorRunContext?.snapshot === true
+  const driftRunId = snapshotMode ? editorRunContext!.runId : lastRunId
+  const [driftRun, setDriftRun] = React.useState<{
+    runId: string
+    /** graph.json as recorded (run-scoped write paths). */
+    rawGraph: GraphIR | null
+    /** Same graph with run-scoped output folders removed (for loading). */
+    logicalGraph: GraphIR | null
+    title: string
+    graphName: string
+    savedChanged: { pipeline: string } | null
+  } | null>(null)
+  const [driftDismissedFor, setDriftDismissedFor] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    if (!driftRunId || isRunning) return
+    if (driftRun?.runId === driftRunId) return
+    let cancelled = false
+    const runId = driftRunId
+    void (async () => {
+      const [graph, detail] = await Promise.all([
+        fetchRunGraph(runId, null).catch(() => null),
+        apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(runId)}`, { retries: 0 }).catch(() => null),
+      ])
+      if (cancelled) return
+      const meta = (detail?.meta && typeof detail.meta === 'object' ? detail.meta : {}) as Record<string, unknown>
+      const drift = parsePipelineDrift(detail?.pipeline_drift)
+      setDriftRun({
+        runId,
+        rawGraph: graph,
+        logicalGraph: graph ? unscopeRunPaths(graph, runId) : null,
+        title: detail ? runTitle({ ...detail, run_id: runId }) : '',
+        graphName: String(meta.graph_name ?? graph?.metadata?.name ?? ''),
+        savedChanged: drift?.changed ? { pipeline: drift.pipeline } : null,
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+    // driftRun is read only to skip a refetch of the same run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driftRunId, isRunning])
+  const driftApplies = Boolean(
+    driftRun &&
+      driftRun.runId === driftRunId &&
+      driftRun.rawGraph &&
+      (snapshotMode || (driftRun.graphName && slugifyName(driftRun.graphName) === slugifyName(graphName))),
+  )
+  const driftChanges = React.useMemo(() => {
+    if (!driftApplies || !driftRun?.rawGraph) return null
+    const byType = new Map(catalog.map((c) => [c.node_type, c]))
+    const current = buildGraphFromCanvas(
+      nodes.map((n) => ({ id: n.id, position: n.position, data: n.data })),
+      edges,
+      seed,
+      graphName,
+      graphParametersRef.current,
+    )
+    return diffGraphs(driftRun.rawGraph, current, {
+      defaultsFor: (t) => defaultsFromSchema(byType.get(t)),
+      compareSeed: true,
+      runId: driftRun.runId,
+    })
+    // snapshotSig captures every document change (nodes / edges / name / seed).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driftApplies, driftRun, snapshotSig, catalog])
+
+  const openRunSnapshot = () => {
+    const g = driftRun?.logicalGraph
+    if (!g || !driftRun) return
+    if (!confirmDiscard('Opening the run’s exact graph')) return
+    loadGraph(g)
+    setEditorRunContext({ runId: driftRun.runId, snapshot: true })
+    pushToast('Opened the run’s exact graph as a read-only snapshot — Save keeps it as a new pipeline', 'info')
+  }
 
   const execBadge: ExecBadgeStatus | null = isRunning
     ? 'running'
@@ -2533,7 +2646,7 @@ function BuilderInner() {
                   : `Save as ${slugifyName(graphName || 'pipeline')} in ${activeProject}`
                 : 'Open a workspace to save'
             }
-            onClick={() => void saveToProject()}
+            onClick={() => (snapshotMode ? saveAsProject() : void saveToProject())}
             aria-label={dirty ? 'Save (unsaved changes)' : 'Save'}
           >
             <Save className="h-3.5 w-3.5" /> Save
@@ -2698,6 +2811,21 @@ function BuilderInner() {
           </div>
         </div>
 
+        {driftRun && driftApplies && (snapshotMode || driftDismissedFor !== driftRun.runId) ? (
+          <RunDriftBanner
+            runId={driftRun.runId}
+            runTitle={driftRun.title}
+            changes={driftChanges}
+            snapshot={snapshotMode}
+            savedPipelineChanged={driftRun.savedChanged}
+            labelFor={(id) => labelOfRef.current.get(id)}
+            onOpenSnapshot={openRunSnapshot}
+            onSaveAsNew={saveAsProject}
+            onExitSnapshot={() => setEditorRunContext(null)}
+            onOpenRun={() => openRun(driftRun.runId, { panel: 'lineage' })}
+            onDismiss={() => setDriftDismissedFor(driftRun.runId)}
+          />
+        ) : null}
         {actionError && (
           <div className="border-b border-rose-100 px-3 py-2">
             {(() => {

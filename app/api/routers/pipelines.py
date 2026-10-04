@@ -366,6 +366,13 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
     run_mgr = RunManager()
     run_id = run_mgr.run_id
     persist_project_fields(run_mgr, project_fields)
+    from app.api.actor import resolve_actor
+    from app.core.execution.graph_prepare import persist_run_identity
+
+    actor = resolve_actor(request)
+    trigger = str(payload.get("trigger") or "api") if isinstance(payload, dict) else "api"
+    # actor / trigger / declared pipeline ref land in meta before execution.
+    persist_run_identity(run_mgr, actor=actor, trigger=trigger, payload=payload)
     if not _is_ir_payload(payload):
         run_mgr.save_config(payload.get("yaml", ""))
 
@@ -455,9 +462,7 @@ def run_pipeline_stream(request: Request, payload: dict = Body(...)):
     if deprecation_header:
         headers["X-Deprecation-Warning"] = deprecation_header
 
-    from app.api.actor import resolve_actor
-
-    record_run_start(run_id, graph, actor=resolve_actor(request), mode="stream")
+    record_run_start(run_id, graph, actor=actor, mode="stream", trigger=trigger)
 
     return StreamingResponse(stream(), media_type="application/x-ndjson", headers=headers)
 
@@ -520,6 +525,12 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
         from app.core.execution.graph_prepare import persist_project_fields, record_run_start
 
         persist_project_fields(run_mgr, project_fields)
+        from app.api.actor import resolve_actor
+        from app.core.execution.graph_prepare import persist_run_identity
+
+        actor = resolve_actor(request)
+        trigger = str(payload.get("trigger") or "api") if isinstance(payload, dict) else "api"
+        persist_run_identity(run_mgr, actor=actor, trigger=trigger, payload=payload)
 
         # Save YAML config for backward compat if YAML was submitted
         if not _is_ir_payload(payload):
@@ -538,9 +549,7 @@ def run_pipeline_async(request: Request, payload: dict = Body(...)):
         if deprecation_header:
             headers["X-Deprecation-Warning"] = deprecation_header
 
-        from app.api.actor import resolve_actor
-
-        record_run_start(run_id, graph, actor=resolve_actor(request), mode="async")
+        record_run_start(run_id, graph, actor=actor, mode="async", trigger=trigger)
 
         body = {"run_id": run_id, "status": "pending"}
         complete_idempotent(request, status_code=200, body=body, headers=headers)

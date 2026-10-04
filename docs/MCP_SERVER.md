@@ -73,7 +73,7 @@ Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In dev
 | `cancel_run` | `run_control.py` | `get_active_run(run_id).cancel()` |
 | `list_artifacts` | `provenance.py` | `ArtifactStore.list()` |
 | `get_artifact_lineage` | `provenance.py` | `ProvenanceStore.get_lineage()` |
-| `replay_run` | `provenance.py` | `load_ir_from_file()`, `get_backend().execute()`, `RunManager` |
+| `replay_run` | `provenance.py` | `app.core.runs.run_replay.start_replay()` → `get_backend().execute()` |
 | `optimize_execution` | `optimization.py` | `PipelineGraph`, `_resolve_capability()` |
 | `install_plugin` | `plugins.py` | `PluginManager.install` + `load_enabled_plugins` |
 | `list_plugins` | `plugins.py` | `PluginManager.list_installed` |
@@ -237,11 +237,11 @@ Get the upstream lineage tree for an artifact.
 
 ### `replay_run`
 
-Re-execute a prior run using its stored `graph.json`.
+Re-execute a prior run from its stored **logical** graph (`graph.logical.json`, or `graph.json` with run scoping undone) — same seed/config, re-scoped to the new run. Shares `app/core/runs/run_replay.start_replay` with REST `POST /runs/{id}/replay`.
 
-**Arguments:** `run_id` (required).
+**Arguments:** `run_id` (required), `check_inputs`, `force`, `actor` (default `mcp`).
 
-**Returns:** `{"run_id": "...", "status": "started"}` or `{"error_type": "graph_not_found"}`
+**Returns:** `{"run_id": "...", "replay_of": "...", "status": "pending", "graph_hash": "...", "accepted": true}`, or `{"error_type": "graph_not_found" | "unknown_run_id" | "inputs_changed" (with "changes") | "replay_error"}`. The new run carries `replay_of` / `trigger: "replay"`; audit `run.replay`.
 
 ---
 

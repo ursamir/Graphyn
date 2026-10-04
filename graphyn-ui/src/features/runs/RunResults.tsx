@@ -8,7 +8,7 @@ import React from 'react'
 import clsx from 'clsx'
 import { Trophy, TrendingDown, TrendingUp } from 'lucide-react'
 import { fetchOutputBlobUrl } from '../../api/client'
-import { formatDelta, formatMetric, metricLabel } from '../../lib/metrics'
+import { formatMetricDelta, formatMetricValue, metricLabel } from '../../lib/metrics'
 import { shortRunId } from '../../lib/format'
 import {
   confusionMatrix,
@@ -36,11 +36,11 @@ export function PathMetricChip({ path, best }: { path: PathResult; best?: boolea
         best ? 'bg-emerald-50 text-emerald-900 ring-emerald-200' : 'bg-white text-ink-800 ring-ink-200',
       )}
       title={Object.entries(path.metrics)
-        .map(([k, v]) => `${metricLabel(k)} ${formatMetric(v)}`)
+        .map(([k, v]) => `${metricLabel(k)} ${formatMetricValue(k, v)}`)
         .join(' · ')}
     >
       {best ? <Trophy className="h-3 w-3 text-emerald-600" aria-label="best" /> : null}
-      {metricLabel(path.primary.name)} {formatMetric(path.primary.value)}
+      {metricLabel(path.primary.name)} {formatMetricValue(path.primary.name, path.primary.value)}
     </span>
   )
 }
@@ -56,6 +56,10 @@ export function RunResultsBanner({
   regression,
   onOpenRun,
   onFocusPath,
+  /** True only when Overview shape is fork/parallel — never invent Path chrome for linear. */
+  multiTrack = false,
+  /** Graph name or phase hint for dataset sentence (train/preprocess/…). */
+  phase = null,
 }: {
   paths: PathResult[]
   bestPathId: string | null
@@ -63,12 +67,14 @@ export function RunResultsBanner({
   regression: RegressionView | null
   onOpenRun?: (runId: string) => void
   onFocusPath?: (path: PathResult) => void
+  multiTrack?: boolean
+  phase?: string | null
 }) {
   const scored = paths.filter((p) => p.primary)
   if (scored.length === 0 && !dataset) return null
   const best = scored.find((p) => p.pathId === bestPathId) || scored[0] || null
-  const others = scored.filter((p) => p !== best)
-  const multi = paths.length > 1
+  const others = multiTrack ? scored.filter((p) => p !== best) : []
+  const multi = multiTrack && paths.length > 1
   const regressed = regression ? isRegression(regression) : false
   const improved = regression ? !regressed && Math.abs(regression.delta) > 0.005 : false
   return (
@@ -83,7 +89,7 @@ export function RunResultsBanner({
           >
             <span className="text-[12px] font-medium text-ink-600">{metricLabel(best.primary.name)}</span>
             <span className="text-[20px] font-semibold leading-none tabular-nums text-ink-950">
-              {formatMetric(best.primary.value)}
+              {formatMetricValue(best.primary.name, best.primary.value)}
             </span>
             {multi ? (
               <span className="text-[12px] text-ink-700">
@@ -104,7 +110,7 @@ export function RunResultsBanner({
             title="Show this path"
           >
             {pathDisplayName(p)}{' '}
-            <span className="font-semibold tabular-nums text-ink-800">{formatMetric(p.primary!.value)}</span>
+            <span className="font-semibold tabular-nums text-ink-800">{formatMetricValue(p.primary!.name, p.primary!.value)}</span>
           </button>
         ))}
         {regression ? (
@@ -117,8 +123,10 @@ export function RunResultsBanner({
           >
             {regressed ? <TrendingDown className="h-3 w-3" /> : improved ? <TrendingUp className="h-3 w-3" /> : null}
             {regressed || improved ? '' : '= '}
-            {formatDelta(regression.delta)}
-            {regression.previousValue != null ? ` vs best ${formatMetric(regression.previousValue)}` : ''}
+            {formatMetricDelta(regression.metricName, regression.delta)}
+            {regression.previousValue != null
+              ? ` vs best ${formatMetricValue(regression.metricName, regression.previousValue)}`
+              : ''}
             {regression.previousRunId ? (
               <>
                 {' · run '}
@@ -141,7 +149,7 @@ export function RunResultsBanner({
       </div>
       {dataset ? (
         <p className="mt-1 text-[11px] text-ink-500" title={dataset.source || undefined}>
-          {datasetSentence(dataset)}
+          {datasetSentence(dataset, phase)}
           {dataset.fallbackUsed ? (
             <span className="ml-1 rounded bg-amber-100 px-1 text-amber-900">sample data used — dataset path was empty</span>
           ) : null}
@@ -152,7 +160,7 @@ export function RunResultsBanner({
 }
 
 function pct(v: number | null): string {
-  return v == null ? '—' : formatMetric(v)
+  return v == null ? '—' : formatMetricValue('precision', v)
 }
 
 /** Confusion matrix as a tiny heat grid (rows = true label, cols = predicted). */
@@ -232,7 +240,7 @@ export function EvaluatorResult({
         </span>
         {scalars.map(([k, v]) => (
           <span key={k} className="text-[12px] text-ink-700">
-            {metricLabel(k)} <span className="font-semibold tabular-nums text-ink-950">{formatMetric(v)}</span>
+            {metricLabel(k)} <span className="font-semibold tabular-nums text-ink-950">{formatMetricValue(k, v)}</span>
           </span>
         ))}
       </div>

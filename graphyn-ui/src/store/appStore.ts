@@ -168,8 +168,16 @@ interface AppState {
   setGetCanvasGraph: (fn: (() => unknown) | null) => void
   /** Graph waiting to paint once Builder mounts (Templates → Builder handoff). */
   pendingGraph: GraphIR | null
-  loadGraphIntoBuilder: (graph: GraphIR) => void
+  /**
+   * Graph waiting for the Editor. `fromRunId` = the graph is that run's
+   * recorded graph (Editor compares later edits against it); `snapshot` =
+   * opened as the run's exact, read-only snapshot (Save becomes Save as new).
+   */
+  loadGraphIntoBuilder: (graph: GraphIR, opts?: { fromRunId?: string; snapshot?: boolean }) => void
   consumePendingGraph: () => GraphIR | null
+  /** Run the Editor's canvas was opened from (set with the pending graph). */
+  editorRunContext: { runId: string; snapshot: boolean } | null
+  setEditorRunContext: (ctx: { runId: string; snapshot: boolean } | null) => void
   /** Active dataset project(+version) linked into Editor (Projects → Open in Editor). */
   builderDataset: { project: string; version?: string } | null
   setBuilderDataset: (ctx: { project: string; version?: string } | null) => void
@@ -529,10 +537,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   getCanvasGraph: null,
   setGetCanvasGraph: (fn) => set({ getCanvasGraph: fn }),
   pendingGraph: null,
-  loadGraphIntoBuilder: (graph) => {
+  loadGraphIntoBuilder: (graph, opts) => {
     navigatePath(paths.editor(get().activeProject || 'workspace'), true)
-    set({ pendingGraph: graph, view: 'builder' })
+    set({
+      pendingGraph: graph,
+      view: 'builder',
+      editorRunContext: opts?.fromRunId ? { runId: opts.fromRunId, snapshot: Boolean(opts.snapshot) } : null,
+    })
   },
+  editorRunContext: null,
+  setEditorRunContext: (editorRunContext) => set({ editorRunContext }),
   consumePendingGraph: () => {
     const g = get().pendingGraph
     if (g) set({ pendingGraph: null })

@@ -6,6 +6,7 @@ Responsibility:   Coordinate execution of validated DAGs across all execution
 Owns:             run_pipeline_ir_async(), run_pipeline_ir() entry points.
 Public Surface:   run_pipeline_ir(graph, **kwargs) -> dict
                   run_pipeline_ir_async(graph, **kwargs) -> dict
+                  logical_graph_hash, scope_graph_to_run, capture_run_start
 Must NOT:         Understand audio domain logic, parse API requests,
                   persist artifacts directly, or import from app.domain.
 Dependencies:     BC1 (ir.models, ir.loader), BC2 (nodes.base, nodes.observers),
@@ -17,6 +18,11 @@ Dependencies:     BC1 (ir.models, ir.loader), BC2 (nodes.base, nodes.observers),
                   node_progress sink per executor (journal + NDJSON queue +
                   meta.json ``node_progress`` latest-per-node, logs.json
                   flushed ≤ every 5 s while nodes report progress).
+                  Run-start audit capture (app.core.runs.audit_record:
+                  plugin impls, environment, external inputs, pipeline ref,
+                  node labels → logger ``node_label``); node_stats carry
+                  ``cache_key`` / ``cache_source_run_id`` on cache hits;
+                  failures record real ``error_type`` / ``error_traceback``.
 Reason To Change: Runtime execution semantics evolve (new execution mode,
                   cancellation protocol, resume logic, partial execution).
 """
@@ -64,6 +70,11 @@ def _progress_sink_for(logger: Any, run: Any):
 
     def _sink(event: dict) -> None:
         try:
+            labels = getattr(logger, "node_labels", None)
+            if isinstance(labels, dict) and isinstance(event, dict) and "node_label" not in event:
+                label = labels.get(str(event.get("node_id") or ""))
+                if label:
+                    event = {**event, "node_label": label}
             logger.node_progress(event)
         except Exception:
             return
@@ -117,8 +128,11 @@ def _node_stat_record(
     *,
     status: str = "completed",
     cache_hit: bool = False,
+    cache_key: str | None = None,
+    cache_source_run_id: str | None = None,
+    node_label: str | None = None,
 ) -> dict:
-    return {
+    rec = {
         "node_id": node_id,
         "node_type": node_type,
         "node_index": node_index,
@@ -127,6 +141,79 @@ def _node_stat_record(
         "status": status,
         "cache_hit": cache_hit,
     }
+    if cache_hit:
+        rec["cache_key"] = cache_key
+        rec["cache_source_run_id"] = cache_source_run_id
+    if node_label:
+        rec["node_label"] = node_label
+    return rec
+
+
+def _error_details(exc: BaseException) -> dict[str, str]:
+    """Real exception type + traceback (isolated worker errors carry their own)."""
+    import traceback as _tb
+
+    err_type = getattr(exc, "error_type", None) or type(exc).__name__
+    tb_text = getattr(exc, "traceback_text", None)
+    if not tb_text:
+        try:
+            tb_text = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+        except Exception:
+            tb_text = ""
+    return {"error_type": str(err_type), "error_traceback": str(tb_text or "")}
+
+
+def _mark_failed(run: Any, message: str, *, exc: BaseException | None = None, **kwargs: Any) -> Any:
+    """``run.mark_failed`` with error_type/traceback; falls back for custom managers."""
+    extra = _error_details(exc) if exc is not None else {}
+    try:
+        return run.mark_failed(message, **kwargs, **extra)
+    except TypeError:
+        return run.mark_failed(message, **kwargs)
+
+
+def _cache_save(cache: Any, cache_key: str, outputs: Any, *, run_id: str, node_id: str) -> None:
+    """Save with source provenance (run_id/node_id); tolerate caches without ``source``."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    source = {"run_id": run_id, "node_id": node_id, "saved_at": _dt.now(_tz.utc).isoformat()}
+    try:
+        cache.save(cache_key, outputs, source=source)
+    except TypeError:
+        cache.save(cache_key, outputs)
+
+
+def _cache_source_run(cache: Any, cache_key: str) -> str | None:
+    try:
+        src = cache.source_of(cache_key)
+    except Exception:
+        return None
+    if isinstance(src, dict) and src.get("run_id"):
+        return str(src["run_id"])
+    return None
+
+
+def _capture_run_start(run: Any, logger: Any, logical_dump: dict, scoped_graph: Any, graph_hash: str) -> dict[str, str]:
+    """Audit facts at run start (app.core.runs.audit_record) + node labels on the logger."""
+    labels: dict[str, str] = {}
+    try:
+        from app.core.ir.loader import dump_ir
+        from app.core.runs.audit_record import capture_run_start
+
+        captured = capture_run_start(run, logical_dump, dump_ir(scoped_graph), graph_hash)
+        labels = dict(captured.get("node_labels") or {})
+    except Exception:
+        log.debug("run start audit capture failed", exc_info=True)
+    if logger is not None and labels:
+        setter = getattr(logger, "set_node_labels", None)
+        try:
+            if callable(setter):
+                setter(labels)
+            else:
+                setattr(logger, "node_labels", labels)
+        except Exception:
+            pass
+    return labels
 
 
 def _compute_node_cache_key(
@@ -454,7 +541,7 @@ async def run_pipeline_ir_async(
             if cancelled:
                 run.mark_cancelled()
             else:
-                run.mark_failed(str(exc) or type(exc).__name__)
+                _mark_failed(run, str(exc) or type(exc).__name__, exc=exc)
         except Exception:
             log.warning("failed to record terminal status for run %s",
                         getattr(run, "run_id", "?"), exc_info=True)
@@ -497,6 +584,7 @@ async def _run_pipeline_body(
     # run-scoped (materialized) configs.
     logical_hash = _logical_graph_hash(graph)
     logical_configs = {n.id: plain_jsonable(n.config) for n in graph.nodes}
+    logical_dump = dump_ir(graph)
     graph = _scope_graph_to_run(graph, run)
     try:
         run.save_graph_ir(dump_ir(graph), logical_hash=logical_hash)
@@ -516,6 +604,9 @@ async def _run_pipeline_body(
 
     graph_hash = getattr(run, "_graph_hash", "") or logical_hash
     run_id = run.run_id
+    # Audit record facts (plugin versions/code hashes, environment, external
+    # input hashes, saved-pipeline revision) + node labels for log events.
+    node_labels = _capture_run_start(run, logger, logical_dump, graph, graph_hash)
     all_node_ids = {n.id for n in graph.nodes}
     if include_nodes is not None:
         active_nodes: set[str] = set(include_nodes)
@@ -743,9 +834,9 @@ async def _run_pipeline_body(
                     try:
                         passes = evaluate_condition(condition, src_outputs)
                     except ConditionEvaluationError as exc:
-                        logger.node_error(node_type, idx, exc)
+                        logger.node_error(node_type, idx, exc, node_id=node_id)
                         run.save_logs(logger.logs)
-                        run.mark_failed(str(exc), node_stats=node_stats)
+                        _mark_failed(run, str(exc), exc=exc, node_stats=node_stats)
                         raise
                     _condition_results[(src_id, src_port, dst_port)] = passes
                     if not passes:
@@ -797,6 +888,7 @@ async def _run_pipeline_body(
             # Cache check — load() directly; None is a miss (ARCH-9: no has()).
             cache_hit = False
             cache_key: str | None = None
+            cache_source_run_id: str | None = None
             _ir_node_c = next((n for n in graph.nodes if n.id == node_id), None)
             if cache is not None and node_is_cacheable(node_type, _ir_node_c):
                 node_cfg_dict = logical_configs.get(node_id)
@@ -822,7 +914,11 @@ async def _run_pipeline_body(
                 if cached_result is not None:
                     node_outputs[node_id] = cached_result
                     cache_hit = True
-                    logger.info(f"[{idx}] {node_type} — cache hit")
+                    cache_source_run_id = _cache_source_run(cache, cache_key)
+                    logger.info(
+                        f"[{idx}] {node_type} — cache hit"
+                        + (f" (from run {cache_source_run_id})" if cache_source_run_id else "")
+                    )
 
             if not cache_hit:
                 try:
@@ -834,8 +930,10 @@ async def _run_pipeline_body(
                     logger.node_error(node_type, idx, exc, node_id=node_id)
                     run.save_logs(logger.logs)
                     if not _is_cancelled(run):
-                        run.mark_failed(
+                        _mark_failed(
+                            run,
                             str(exc),
+                            exc=exc,
                             node_stats=node_stats,
                             failed_node_id=node_id,
                             failed_node_type=node_type,
@@ -846,7 +944,7 @@ async def _run_pipeline_body(
 
                 # cache_key is only set for cacheable nodes (checked before load).
                 if cache is not None and cache_key is not None:
-                    cache.save(cache_key, outputs)
+                    _cache_save(cache, cache_key, outputs, run_id=run_id, node_id=node_id)
 
             if checkpoint:
                 write_checkpoint(
@@ -923,7 +1021,9 @@ async def _run_pipeline_body(
             )
             node_stats.append(
                 _node_stat_record(
-                    node_id, node_type, idx, node_duration, cache_hit=cache_hit
+                    node_id, node_type, idx, node_duration, cache_hit=cache_hit,
+                    cache_key=cache_key, cache_source_run_id=cache_source_run_id,
+                    node_label=node_labels.get(node_id),
                 )
             )
             _persist_node_stats(run, node_stats)
@@ -1281,3 +1381,4 @@ def run_pipeline_ir(
 # Public names. A leading underscore stays private to this module.
 logical_graph_hash = _logical_graph_hash
 scope_graph_to_run = _scope_graph_to_run
+capture_run_start = _capture_run_start

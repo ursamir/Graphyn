@@ -14,6 +14,7 @@ import {
   formatLocaleDateTime,
   formatRelativeTime,
   humanizeTemplateName,
+  humanNodeLabel,
   prettyScalar,
   shortRunId,
 } from '../../lib/format'
@@ -23,6 +24,10 @@ import { paths } from '../../routes/paths'
 import { goView, onPathChange, readSearchParams, replacePathSearch } from '../../routes/nav'
 import { fetchRunGraph } from '../../lib/runGraph'
 import { compareHasRows, enrichCompareParams } from './compareEnrich'
+import { compareNodeLabels, isRunScopedPathParam, paramKeyLabel } from '../runs/runCompare'
+import { canvasPathView } from '../builder/canvasPaths'
+import { formatMetricValue } from '../../lib/metrics'
+import type { GraphIR } from '../../types/graph'
 
 type ExperimentRun = {
   run_id: string
@@ -81,6 +86,13 @@ function fmtMetric(value: unknown): string {
     return fmtMetric(value[value.length - 1])
   }
   return prettyScalar(value)
+}
+
+/** Table cell: the console-wide metric format (ratio metrics as "75.6%"); CSV keeps raw values. */
+function fmtMetricDisplay(value: unknown, key?: string): string {
+  const v = Array.isArray(value) && value.length && typeof value[value.length - 1] === 'number' ? value[value.length - 1] : value
+  if (typeof v === 'number' && Number.isFinite(v) && key) return formatMetricValue(key, v)
+  return fmtMetric(value)
 }
 
 function valuesDiffer(a: unknown, b: unknown): boolean {
@@ -174,6 +186,10 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
   const [selectedExp, setSelectedExp] = React.useState<string | null>(null)
   const [selectedIds, setSelectedIds] = React.useState<string[]>(() => parseExperimentsLocation().slice(0, 5))
   const [compare, setCompare] = React.useState<ComparePayload | null>(null)
+  /** Each compared run's graph.json (node labels for param keys). */
+  const [compareGraphs, setCompareGraphs] = React.useState<Map<string, GraphIR | null>>(new Map())
+  /** Show `…output_path` rows that only differ by their runs/<id> folder. */
+  const [showRunPaths, setShowRunPaths] = React.useState(false)
   const [compareLoading, setCompareLoading] = React.useState(false)
   const compareRef = React.useRef<HTMLDivElement | null>(null)
   const autoComparedKey = React.useRef<string>('')
@@ -295,6 +311,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
         ),
       )
       const data = enrichCompareParams({ ...raw, runs: raw.runs || [], param_keys: raw.param_keys || [] }, graphs)
+      setCompareGraphs(graphs)
       setCompare(data)
       // Ensure the panel is visible even when the runs table is long.
       requestAnimationFrame(() => {
@@ -325,6 +342,53 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
     autoComparedKey.current = key
     void runCompare(ids)
   }, [loading, blocks, runCompare])
+
+  /** node id → "Trainer · Path C" for param keys (ids stay in the tooltip). */
+  const paramNodeLabels = React.useMemo(
+    () =>
+      compareNodeLabels(compareGraphs.values(), (g) =>
+        canvasPathView(
+          (g.nodes || []).map((n) => ({
+            id: String(n.id),
+            data: {
+              nodeType: String(n.node_type ?? ''),
+              label: typeof n.label === 'string' && n.label.trim() ? n.label : humanNodeLabel(String(n.node_type ?? n.id)),
+              config: (n.config && typeof n.config === 'object' ? n.config : {}) as Record<string, unknown>,
+            },
+          })),
+          (g.edges || []).map((e) => ({ source: String(e.src_id), target: String(e.dst_id) })),
+        ).labelOf,
+      ),
+    [compareGraphs],
+  )
+  /** Param rows that only differ by each run's own runs/<id> folder (hidden by default). */
+  const runScopedParamKeys = React.useMemo(() => {
+    if (!compare) return new Set<string>()
+    const ids = compare.runs.map((r) => r.run_id)
+    return new Set(
+      (compare.param_keys || []).filter((k) =>
+        isRunScopedPathParam(
+          k,
+          compare.runs.map((r) => r.parameters?.[k]),
+          ids,
+        ),
+      ),
+    )
+  }, [compare])
+  const visibleParamKeys = (compare?.param_keys || []).filter((k) => showRunPaths || !runScopedParamKeys.has(k))
+  const paramKeyText = (k: string) => paramKeyLabel(k, paramNodeLabels)
+  const runPathsToggle =
+    runScopedParamKeys.size > 0 ? (
+      <button
+        type="button"
+        className="normal-case tracking-normal font-normal text-accent-800 hover:underline"
+        aria-pressed={showRunPaths}
+        title="Output folders that differ only because each run writes under runs/<run id>"
+        onClick={() => setShowRunPaths((v) => !v)}
+      >
+        {showRunPaths ? 'Hide' : 'Show'} run-specific paths ({runScopedParamKeys.size})
+      </button>
+    ) : null
 
   if (!activeProject) {
     return (
@@ -502,7 +566,9 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                     horizontal bar under 100+ param rows (only Key + run 1 visible). */}
                 <CompareTable
                   title="Parameters"
-                  keys={compare.param_keys || []}
+                  keys={visibleParamKeys}
+                  keyLabel={paramKeyText}
+                  titleExtra={runPathsToggle}
                   runs={compare.runs}
                   getter={(r, k) => r.parameters?.[k]}
                   emptyLabel="No parameters recorded for these runs"
@@ -514,7 +580,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                   keys={compare.metric_keys || []}
                   runs={compare.runs}
                   getter={(r, k) => r.metrics?.[k]}
-                  format={fmtMetric}
+                  format={fmtMetricDisplay}
                   emptyLabel="No metrics recorded for these runs"
                   onOpenRun={openRun}
                 />
@@ -868,7 +934,9 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                   <div className="overflow-x-auto">
                     <CompareTable
                       title="Parameters"
-                      keys={compare.param_keys}
+                      keys={visibleParamKeys}
+                      keyLabel={paramKeyText}
+                      titleExtra={runPathsToggle}
                       runs={compare.runs}
                       getter={(r, k) => r.parameters?.[k]}
                       emptyLabel="No parameters recorded for these runs"
@@ -879,7 +947,7 @@ const ExperimentsView = React.forwardRef<ExperimentsViewHandle, { embedded?: boo
                       keys={compare.metric_keys}
                       runs={compare.runs}
                       getter={(r, k) => r.metrics?.[k]}
-                      format={fmtMetric}
+                      format={fmtMetricDisplay}
                       emptyLabel="No metrics recorded for these runs"
                       onOpenRun={openRun}
                     />
@@ -937,12 +1005,18 @@ function CompareTable({
   emptyLabel,
   onOpenRun,
   maxBodyHeight,
+  keyLabel,
+  titleExtra,
 }: {
   title: string
   keys: string[]
   runs: Array<ExperimentRun & { experiment_name?: string }>
   getter: (r: ExperimentRun, key: string) => unknown
-  format?: (v: unknown) => string
+  format?: (v: unknown, key?: string) => string
+  /** Display text for a key (raw key stays in the tooltip). */
+  keyLabel?: (key: string) => string
+  /** Extra control in the table header (e.g. run-specific paths toggle). */
+  titleExtra?: React.ReactNode
   emptyLabel?: string
   onOpenRun?: (runId: string) => void
   /** Cap body height so the horizontal scrollbar stays on-screen (param tables). */
@@ -951,15 +1025,19 @@ function CompareTable({
   const fmt = format ?? ((v: unknown) => (v == null ? '—' : prettyScalar(v)))
   if (!keys.length) {
     return (
-      <div className="px-4 py-3 text-xs text-ink-500 border-b border-ink-50 last:border-0">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3 text-xs text-ink-500 border-b border-ink-50 last:border-0">
         {emptyLabel || `No ${title.toLowerCase()} recorded for these runs`}
+        {titleExtra}
       </div>
     )
   }
   return (
     <div className="border-b border-ink-50 last:border-0">
       <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-500 bg-ink-50/40">
-        <span>{title}</span>
+        <span className="flex items-center gap-3">
+          {title}
+          {titleExtra}
+        </span>
         {runs.length > 3 ? (
           <span className="normal-case tracking-normal font-normal text-ink-400">
             {runs.length} runs · scroll if columns clip
@@ -1009,10 +1087,10 @@ function CompareTable({
                     }`}
                     title={k}
                   >
-                    {k}
+                    {keyLabel ? keyLabel(k) : k}
                   </td>
                   {vals.map((v, i) => {
-                    const text = fmt(v)
+                    const text = fmt(v, k)
                     return (
                       <td
                         key={runs[i].run_id}

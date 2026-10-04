@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareParamRows, flattenNodeConfigParams, mergeRunParams } from './runCompare'
+import { compareParamRows, flattenNodeConfigParams, isRunScopedPathParam, mergeRunParams, paramKeyLabel } from './runCompare'
 
 describe('compare params from graph.json', () => {
   const g1 = {
@@ -26,5 +26,28 @@ describe('compare params from graph.json', () => {
       'cond.x': 'exp',
       'cond.y': 1,
     })
+  })
+})
+
+
+describe('run-scoped path params', () => {
+  const ids = ['aaaaaaaa11112222333344445555666677', 'bbbbbbbb11112222333344445555666677']
+  it('hides output paths that only differ by run id', () => {
+    expect(
+      isRunScopedPathParam(
+        'trainer_0.output_path',
+        ids.map((id) => `workspace/artifacts/x/runs/${id}/trainer_0`),
+        ids,
+      ),
+    ).toBe(true)
+  })
+  it('keeps real differences', () => {
+    expect(isRunScopedPathParam('trainer_0.epochs', [50, 30], ids)).toBe(false)
+    expect(isRunScopedPathParam('ingest_0.path', ['datasets/a', 'datasets/b'], ids)).toBe(false)
+  })
+  it('labels node keys', () => {
+    const m = new Map([['trainer_24212f65', 'Trainer · Path C']])
+    expect(paramKeyLabel('trainer_24212f65.epochs', m)).toBe('Trainer · Path C · epochs')
+    expect(paramKeyLabel('graph.seed', m)).toBe('graph.seed')
   })
 })

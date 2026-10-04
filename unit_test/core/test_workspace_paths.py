@@ -304,7 +304,9 @@ class TestScopeOutputsToRun:
         out = scope_outputs_to_run(graph, "abc123")
         cfg0 = out["nodes"][0]["config"]
         cfg1 = out["nodes"][1]["config"]
-        assert cfg0["output_path"] == "workspace/artifacts/speech-commands/runs/abc123"
+        # A sink at the run root gets a node folder (audit item 4: no shared
+        # run-root files); explicit sub-paths stay for stable latest/<tail>.
+        assert cfg0["output_path"] == "workspace/artifacts/speech-commands/runs/abc123/trainer"
         assert cfg1["output_path"] == "workspace/artifacts/speech-commands/runs/abc123/tflite"
         assert cfg1["model_path"] == (
             "workspace/artifacts/speech-commands/runs/abc123/tflite/model.tflite"
@@ -411,7 +413,7 @@ class TestScopeOutputsToRun:
             "workspace/artifacts/speech-commands/dataset/speech_commands"
         )
         assert out["nodes"][1]["config"]["output_path"] == (
-            "workspace/artifacts/speech-commands/runs/abc123"
+            "workspace/artifacts/speech-commands/runs/abc123/trainer"
         )
 
 

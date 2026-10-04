@@ -13,7 +13,7 @@
  *     `node_end` counts for the dataset, and the loaded run list for the
  *     regression check.
  */
-import { formatMetric, metricLabel, pickPrimaryMetric, type PrimaryMetric } from '../../lib/metrics'
+import { metricPhraseOf, pickPrimaryMetric, type PrimaryMetric } from '../../lib/metrics'
 import { runDisplayName } from '../../lib/runDisplay'
 import { normalizeRunModels as parseRunModelRows } from '../edge/runModels'
 import { artifactSlugFromPath } from './runOutputs'
@@ -313,9 +313,33 @@ export function datasetFromRun(input: {
   return { count, source, fallbackUsed }
 }
 
-/** "Trained on 1,200 clips from speech-commands". */
-export function datasetSentence(ds: DatasetInfo, verb = 'Trained on'): string {
-  const what = ds.count != null ? `${ds.count.toLocaleString()} clip${ds.count === 1 ? '' : 's'}` : 'data'
+/**
+ * Domain-neutral dataset line. Verb/unit follow graph phase when known
+ * (train → "Trained on … clips"; preprocess → "Processed …"; else "Used … items").
+ */
+export function datasetSentence(
+  ds: DatasetInfo,
+  phaseOrVerb?: string | null,
+): string {
+  // Graph names are snake_case ("…_e2e_train_ml") — `\b` does not split on "_".
+  const phaseHint = String(phaseOrVerb || '').toLowerCase().replace(/[_\-.]+/g, ' ')
+  let verb = 'Used'
+  if (/\btrain(ing)?\b/.test(phaseHint)) verb = 'Trained on'
+  else if (/\b(preprocess(ing)?|prep)\b/.test(phaseHint)) verb = 'Processed'
+  else if (/\binfer(ence)?\b/.test(phaseHint)) verb = 'Ran on'
+  else if (/\beval(uat\w*)?\b/.test(phaseHint)) verb = 'Evaluated on'
+  else if (phaseOrVerb && !/\s/.test(phaseOrVerb) && /^(Used|Trained on|Processed|Ran on|Evaluated on)$/.test(phaseOrVerb)) {
+    verb = phaseOrVerb
+  }
+  const audioish =
+    verb === 'Trained on' ||
+    verb === 'Processed' ||
+    /clip|audio|wav|speech|sound/i.test(ds.source || '')
+  const unit = audioish ? 'clip' : 'item'
+  const what =
+    ds.count != null
+      ? `${ds.count.toLocaleString()} ${unit}${ds.count === 1 ? '' : 's'}`
+      : 'data'
   const from = ds.source ? ` from ${datasetShortName(ds.source)}` : ''
   return `${verb} ${what}${from}`
 }
@@ -371,7 +395,7 @@ export function isRegression(r: Pick<RegressionView, 'delta' | 'metricName'>, ep
 /** "Test accuracy 0.561". */
 export function metricPhrase(pm: PrimaryMetric | null): string | null {
   if (!pm) return null
-  return `${metricLabel(pm.name)} ${formatMetric(pm.value)}`
+  return metricPhraseOf(pm)
 }
 
 /**

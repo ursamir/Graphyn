@@ -518,8 +518,9 @@ export function formatRunMetric(metrics: unknown): string | null {
   const o = metrics as Record<string, unknown>
   const acc = o.accuracy ?? o.acc
   if (typeof acc === 'number' && Number.isFinite(acc)) {
+    // Same format as lib/metrics formatMetricValue ("75.6%").
     const pct = acc <= 1 ? acc * 100 : acc
-    return `accuracy ${Math.round(pct)}%`
+    return `accuracy ${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`
   }
   if (typeof acc === 'string' && acc.trim()) return `accuracy ${acc}`
   const loss = o.loss

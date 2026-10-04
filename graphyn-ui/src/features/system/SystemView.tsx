@@ -12,7 +12,18 @@ import {
   prettyScalar,
 } from '../../lib/format'
 import { useAppStore } from '../../store/appStore'
-import { goView } from '../../routes/nav'
+import { goView, guardedNavigatePath } from '../../routes/nav'
+import { paths } from '../../routes/paths'
+import {
+  auditActionLabel,
+  auditActionTone,
+  auditMatchesQuery,
+  auditTarget,
+  nextAuditLimit,
+  relatedRunId,
+  type AuditEvent,
+  type AuditTarget,
+} from './auditEvents'
 import {
   EmptyState,
   ErrorBanner,
@@ -102,16 +113,19 @@ export default function SystemView() {
   const [error, setError] = React.useState<string | null>(null)
   const [panelErrors, setPanelErrors] = React.useState<Record<string, string>>({})
   const [loading, setLoading] = React.useState(true)
-  const [auditEvents, setAuditEvents] = React.useState<
-    Array<{
-      event_id?: string
-      ts?: string
-      actor?: string
-      action?: string
-      resource_type?: string
-      resource_id?: string
-    }>
-  >([])
+  const [auditEvents, setAuditEvents] = React.useState<AuditEvent[]>([])
+  /** Events requested from GET /audit (API caps limit at 1000). */
+  const [auditLimit, setAuditLimit] = React.useState(100)
+  /** Server says older events exist (GET /audit has_more); null = old API without paging info. */
+  const [auditHasMore, setAuditHasMore] = React.useState<boolean | null>(null)
+  const auditLimitRef = React.useRef(100)
+  auditLimitRef.current = auditLimit
+  const [auditLoadingMore, setAuditLoadingMore] = React.useState(false)
+  /** Run id / resource search (client-side over the loaded events). */
+  const [auditQuery, setAuditQuery] = React.useState('')
+  const openRunInStore = useAppStore((s) => s.openRun)
+  const openProposalsInStore = useAppStore((s) => s.openProposals)
+  const activeProjectForAudit = useAppStore((s) => s.activeProject)
   const [auditError, setAuditError] = React.useState<string | null>(null)
   const [auditActorFilter, setAuditActorFilter] = React.useState('')
   const [auditResourceFilter, setAuditResourceFilter] = React.useState('')
@@ -175,7 +189,7 @@ export default function SystemView() {
         url_configured?: boolean
         resource_version?: string
       }>('/system/webhooks'),
-      apiJson<{ events?: unknown[] }>('/audit', { query: { limit: 100 } }),
+      apiJson<{ events?: unknown[]; has_more?: boolean }>('/audit', { query: { limit: auditLimitRef.current } }),
       apiJson<{
         auth_required?: boolean
         token_configured?: boolean
@@ -213,15 +227,9 @@ export default function SystemView() {
       const audit = settled[4].value
       const events = Array.isArray(audit?.events) ? audit.events : []
       setAuditEvents(
-        events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as Array<{
-          event_id?: string
-          ts?: string
-          actor?: string
-          action?: string
-          resource_type?: string
-          resource_id?: string
-        }>,
+        events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as AuditEvent[],
       )
+      setAuditHasMore(typeof audit?.has_more === 'boolean' ? audit.has_more : null)
     } else {
       setAuditError(errs.audit ?? 'Audit feed unavailable')
       setAuditEvents([])
@@ -329,12 +337,69 @@ export default function SystemView() {
     return auditEvents.filter((ev) => {
       if (actorQ && !String(ev.actor || '').toLowerCase().includes(actorQ)) return false
       if (resourceQ) {
-        const blob = `${ev.resource_type || ''} ${ev.resource_id || ''} ${ev.action || ''}`.toLowerCase()
+        const blob = `${ev.resource_type || ''} ${ev.resource_id || ''} ${ev.action || ''} ${auditActionLabel(ev.action)}`.toLowerCase()
         if (!blob.includes(resourceQ)) return false
       }
-      return true
+      return auditMatchesQuery(ev, auditQuery)
     })
-  }, [auditEvents, auditActorFilter, auditResourceFilter])
+  }, [auditEvents, auditActorFilter, auditResourceFilter, auditQuery])
+
+  /**
+   * "Load more": with offset paging (new API, `has_more` present) append the next 100 older
+   * events; on an old API fall back to re-requesting a bigger limit (newest-first, capped at 1000).
+   */
+  const loadMoreAudit = async () => {
+    setAuditLoadingMore(true)
+    try {
+      if (auditHasMore !== null) {
+        const res = await apiJson<{ events?: unknown[]; has_more?: boolean }>('/audit', {
+          query: { limit: 100, offset: auditEvents.length },
+        })
+        const more = (Array.isArray(res?.events) ? res.events : []).filter(
+          (e): e is Record<string, unknown> => !!e && typeof e === 'object',
+        ) as AuditEvent[]
+        setAuditEvents((prev) => [...prev, ...more])
+        setAuditLimit((n) => n + more.length)
+        setAuditHasMore(typeof res?.has_more === 'boolean' ? res.has_more : more.length >= 100)
+        return
+      }
+      const next = nextAuditLimit(auditLimit)
+      const res = await apiJson<{ events?: unknown[] }>('/audit', { query: { limit: next } })
+      const events = Array.isArray(res?.events) ? res.events : []
+      setAuditEvents(events.filter((e): e is Record<string, unknown> => !!e && typeof e === 'object') as AuditEvent[])
+      setAuditLimit(next)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setAuditLoadingMore(false)
+    }
+  }
+
+  const openAuditTarget = (target: AuditTarget) => {
+    if (target.kind === 'run') {
+      const project = target.project || activeProjectForAudit || ''
+      if (!project) {
+        pushToast('Open a workspace first — runs open inside a workspace', 'info')
+        return
+      }
+      openRunInStore(target.runId, { project, panel: 'lineage' })
+      return
+    }
+    if (target.kind === 'proposal') {
+      openProposalsInStore({ id: target.id })
+      return
+    }
+    if (target.kind === 'model') {
+      const ws = target.project || activeProjectForAudit
+      if (!ws) {
+        pushToast('Open a workspace first to view models', 'info')
+        return
+      }
+      guardedNavigatePath(paths.model(ws, target.name))
+      return
+    }
+    guardedNavigatePath(paths.editor(target.project, target.name))
+  }
 
   const exportAuditJson = () => {
     const blob = new Blob([JSON.stringify(filteredAuditEvents, null, 2)], {
@@ -650,9 +715,10 @@ export default function SystemView() {
         <section className="rounded-2xl border border-ink-200 bg-white p-4 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold">Recent audit events</h3>
+              <h3 className="text-sm font-semibold">Audit events</h3>
               <p className="text-xs text-ink-500">
-                Who did what on this API (last 100 events). Filters apply in the browser.
+                Who did what on this API, newest first (last {auditLimit.toLocaleString()} requested). Filters and
+                search apply to the loaded events.
                 {auditEvents.length > 0
                   ? ` Showing ${filteredAuditEvents.length} of ${auditEvents.length}.`
                   : ''}
@@ -669,6 +735,13 @@ export default function SystemView() {
           </div>
           <div className="flex flex-wrap gap-2">
             <input
+              value={auditQuery}
+              onChange={(e) => setAuditQuery(e.target.value)}
+              placeholder="Search run id / resource"
+              className="min-w-[14rem] rounded-lg border border-ink-200 px-3 py-1.5 font-mono text-sm"
+              aria-label="Search audit by run id or resource"
+            />
+            <input
               value={auditActorFilter}
               onChange={(e) => setAuditActorFilter(e.target.value)}
               placeholder="Filter actor"
@@ -678,17 +751,18 @@ export default function SystemView() {
             <input
               value={auditResourceFilter}
               onChange={(e) => setAuditResourceFilter(e.target.value)}
-              placeholder="Filter resource / action"
+              placeholder="Filter type / action"
               className="rounded-lg border border-ink-200 px-3 py-1.5 text-sm"
-              aria-label="Filter audit by resource"
+              aria-label="Filter audit by resource type or action"
             />
-            {(auditActorFilter || auditResourceFilter) && (
+            {(auditActorFilter || auditResourceFilter || auditQuery) && (
               <button
                 type="button"
                 className="btn-quiet"
                 onClick={() => {
                   setAuditActorFilter('')
                   setAuditResourceFilter('')
+                  setAuditQuery('')
                 }}
               >
                 Clear filters
@@ -699,7 +773,7 @@ export default function SystemView() {
           {!auditError && auditEvents.length === 0 ? (
             <EmptyState icon={EmptyScrollText}
               title="No audit events yet"
-              description="Accept/reject proposals or other audited mutations will appear here."
+              description="Runs, proposals, model registrations and other audited actions appear here."
               action={
                 <button type="button" className="btn-secondary" onClick={() => goNav('proposals')}>
                   Open Proposals
@@ -707,9 +781,12 @@ export default function SystemView() {
               }
             />
           ) : filteredAuditEvents.length === 0 ? (
-            <p className="py-4 text-center text-sm text-ink-500">No events match these filters.</p>
+            <p className="py-4 text-center text-sm text-ink-500">
+              No events match these filters
+              {auditLimit < 1000 && auditEvents.length >= auditLimit ? ' in the loaded events — try Load more.' : '.'}
+            </p>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-ink-100">
+            <div className="overflow-x-auto rounded-xl border border-ink-100">
               <table className="w-full text-left text-[12px]">
                 <thead className="border-b border-ink-100 bg-ink-50/80 text-[10px] uppercase tracking-wide text-ink-500">
                   <tr>
@@ -720,25 +797,92 @@ export default function SystemView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredAuditEvents.map((ev, i) => (
-                    <tr key={ev.event_id || `${ev.ts}-${i}`} className="border-b border-ink-50 last:border-0">
-                      <td className="px-2 py-1 text-ink-600 whitespace-nowrap" title={formatLocaleDateTime(ev.ts)}>
-                        {ev.ts ? formatRelativeTime(ev.ts) : '—'}
-                      </td>
-                      <td className="px-2 py-1 text-ink-800 truncate max-w-[8rem]">{ev.actor || '—'}</td>
-                      <td className="px-2 py-1">
-                        <StatusBadge status={String(ev.action || 'unknown')} />
-                      </td>
-                      <td className="px-2 py-1 font-mono text-[10px] text-ink-600 truncate max-w-[12rem]" title={`${ev.resource_type}:${ev.resource_id}`}>
-                        {ev.resource_type || '—'}
-                        {ev.resource_id ? ` · ${String(ev.resource_id).slice(0, 12)}` : ''}
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredAuditEvents.map((ev, i) => {
+                    const when = ev.timestamp || ev.ts
+                    const target = auditTarget(ev)
+                    const related = relatedRunId(ev)
+                    const tone = auditActionTone(ev.action, ev.result)
+                    return (
+                      <tr key={ev.event_id || `${when}-${i}`} className="border-b border-ink-50 align-top last:border-0">
+                        <td className="whitespace-nowrap px-2 py-1 text-ink-600" title={formatLocaleDateTime(when)}>
+                          {when ? formatRelativeTime(when) : '—'}
+                        </td>
+                        <td className="max-w-[10rem] px-2 py-1 text-ink-800">
+                          <span className="block truncate" title={ev.actor || undefined}>{ev.actor || '—'}</span>
+                          {ev.actor_kind ? <span className="block text-[10px] text-ink-400">{ev.actor_kind}</span> : null}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1">
+                          <span
+                            className={
+                              tone === 'danger'
+                                ? 'rounded-full bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-800'
+                                : tone === 'warning'
+                                  ? 'rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-900'
+                                  : tone === 'success'
+                                    ? 'rounded-full bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800'
+                                    : tone === 'info'
+                                      ? 'rounded-full bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-800'
+                                      : 'rounded-full bg-ink-100 px-1.5 py-0.5 text-[11px] font-medium text-ink-700'
+                            }
+                            title={`${ev.action || ''}${ev.result && ev.result !== 'success' ? ` · ${ev.result}` : ''}`}
+                          >
+                            {auditActionLabel(ev.action)}
+                          </span>
+                        </td>
+                        <td className="min-w-0 px-2 py-1 font-mono text-[10.5px] text-ink-600">
+                          <span className="mr-1 text-ink-400">{ev.resource_type || '—'}</span>
+                          {ev.resource_id ? (
+                            target ? (
+                              <button
+                                type="button"
+                                className="break-all text-left text-accent-800 underline-offset-2 hover:underline"
+                                title={`Open ${ev.resource_type} ${ev.resource_id}`}
+                                onClick={() => openAuditTarget(target)}
+                              >
+                                {ev.resource_id}
+                              </button>
+                            ) : (
+                              <span className="break-all">{ev.resource_id}</span>
+                            )
+                          ) : null}
+                          {related ? (
+                            <span className="block text-ink-400">
+                              run{' '}
+                              <button
+                                type="button"
+                                className="break-all text-accent-800 underline-offset-2 hover:underline"
+                                title={`Open run ${related}`}
+                                onClick={() => openAuditTarget({ kind: 'run', runId: related, project: '' })}
+                              >
+                                {related}
+                              </button>
+                            </span>
+                          ) : null}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
           )}
+          {auditHasMore === true ? (
+            <div className="flex justify-center">
+              <button type="button" className="btn-secondary" disabled={auditLoadingMore} onClick={() => void loadMoreAudit()}>
+                {auditLoadingMore ? 'Loading…' : 'Load 100 older events'}
+              </button>
+            </div>
+          ) : auditHasMore === false ? null : auditEvents.length >= auditLimit && auditLimit < 1000 ? (
+            <div className="flex justify-center">
+              <button type="button" className="btn-secondary" disabled={auditLoadingMore} onClick={() => void loadMoreAudit()}>
+                {auditLoadingMore ? 'Loading…' : `Load more (next ${Math.min(100, 1000 - auditLimit)})`}
+              </button>
+            </div>
+          ) : auditLimit >= 1000 && auditEvents.length >= 1000 ? (
+            <p className="text-center text-[11px] text-ink-400">
+              Showing the newest 1,000 events (server limit). Use Export JSON or the CLI for older history.
+            </p>
+          ) : null}
         </section>
       )}
 

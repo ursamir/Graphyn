@@ -5,6 +5,7 @@
  */
 import { formatExecutionLine, humanNodeLabel } from '../../lib/format'
 import { formatProgressLine, parseProgress } from '../runs/runProgress'
+import { compactNodeLabel } from '../runs/runRecord'
 
 export type LogEntry = { message: string; level: string; ts: string; raw?: string }
 
@@ -18,8 +19,11 @@ export function relabelLine(
   labelFor?: (nodeId: string) => string | undefined,
 ): string {
   const id = typeof ev.node_id === 'string' ? ev.node_id : ''
-  if (!id || !labelFor) return text
-  const label = labelFor(id)
+  // Backend path-aware label wins ("Trainer · Path C (MobileNet · lr 0.002)" →
+  // "Trainer · Path C" in the line; the description stays in the run record).
+  const backend = typeof ev.node_label === 'string' ? compactNodeLabel(ev.node_label.trim()) : ''
+  if (!backend && (!id || !labelFor)) return text
+  const label = backend || (id && labelFor ? labelFor(id) : undefined)
   if (!label) return text
   for (const base of [humanNodeLabel(String(ev.node_type || '')), humanNodeLabel(id)]) {
     if (base && base !== label && text.startsWith(`${base} · `) && !text.startsWith(label)) {
@@ -44,7 +48,13 @@ export function journalToLogEntries(
     if (t === 'error' && ev.already_reported === true) continue
     const prog = parseProgress(ev)
     if (prog) {
-      out.push({ message: formatProgressLine(prog, opts.labelFor?.(prog.nodeId)), level: 'progress', ts, raw })
+      const backendLabel = typeof ev.node_label === 'string' ? compactNodeLabel(ev.node_label) : ''
+      out.push({
+        message: formatProgressLine(prog, backendLabel || opts.labelFor?.(prog.nodeId)),
+        level: 'progress',
+        ts,
+        raw,
+      })
       continue
     }
     if (t === 'node_error' || t === 'error') hadError = true

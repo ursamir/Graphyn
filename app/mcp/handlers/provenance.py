@@ -11,7 +11,8 @@ Public Surface:   All three handler functions above.
 Must NOT:         Contain artifact storage logic — delegates to ArtifactStore
                   and ProvenanceStore. Must not import from app.domain.
 Dependencies:     BC5 (runtime_backend — module-level import), BC6 (artifact_store,
-                  provenance, run_journal — lazy), BC1 (ir.loader — lazy),
+                  provenance, run_replay — lazy; replay shares
+                  app.core.runs.run_replay with REST POST /runs/{id}/replay),
                   app.core.config (runs_dir — lazy), stdlib (concurrent.futures).
 Reason To Change: Provenance tool schemas change, or replay strategy changes.
 """
@@ -102,6 +103,12 @@ REPLAY_RUN_SCHEMA = {
             "type": "string",
             "description": "The original run ID to replay.",
         },
+        "check_inputs": {
+            "type": "boolean",
+            "description": "Refuse (error_type=inputs_changed) when recorded external input hashes changed.",
+        },
+        "force": {"type": "boolean", "description": "Replay even if inputs changed."},
+        "actor": {"type": "string", "description": "Actor recorded on run.replay audit (default 'mcp')."},
         "_meta": {
             "type": "object",
             "properties": {"auth_token": {"type": "string"}},
@@ -186,8 +193,6 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
     try:
         from pathlib import Path
 
-        from app.core.ir.loader import load_ir_from_file
-        from app.core.runs.run_journal import RunManager
         from app.mcp.handlers.artifacts import safe_run_dir
 
         from app.core.config import runs_dir as _runs_dir
@@ -215,39 +220,31 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
                 "message": f"graph.json not found for run '{run_id}'",
             }
 
-        graph = load_ir_from_file(str(graph_path))
-        new_run_manager = RunManager()
+        # Shared replay (app.core.runs.run_replay): logical graph re-scoped to
+        # the new run, ``replay_of`` link, run.replay audit, trigger=replay.
+        from app.core.runs.run_replay import InputsChanged, start_replay
 
-        # CRITICAL fix: attach done-callback so background exceptions mark the
-        # run as failed instead of being silently swallowed (discarded Future).
-        def _on_replay_done(fut, _rm=new_run_manager):
-            exc = fut.exception()
-            if exc:
-                log.error(
-                    "Replay execution failed for run %s: %s",
-                    _rm.run_id, exc, exc_info=exc,
-                )
-                try:
-                    _rm.mark_failed(str(exc))
-                except Exception:
-                    pass
-
-        # MEDIUM fix: wrap submit() so an executor-shutdown error orphans the
-        # RunManager with a proper failed status rather than "running" forever.
         try:
-            future = _REPLAY_EXECUTOR.submit(
-                _get_backend().execute, graph, run_manager=new_run_manager
+            result = start_replay(
+                run_dir,
+                actor=str(arguments.get("actor") or "mcp").strip()[:128] or "mcp",
+                check_inputs=bool(arguments.get("check_inputs")),
+                force=bool(arguments.get("force")),
+                submit=_REPLAY_EXECUTOR.submit,
             )
-            if future is not None and hasattr(future, "add_done_callback"):
-                future.add_done_callback(_on_replay_done)
+        except InputsChanged as exc:
+            return {
+                "error": True,
+                "error_type": "inputs_changed",
+                "message": str(exc),
+                "changes": exc.changes,
+            }
         except Exception as submit_exc:
-            new_run_manager.mark_failed(str(submit_exc))
             return {
                 "error": True,
                 "error_type": "replay_error",
                 "message": str(submit_exc),
             }
-
-        return {"run_id": new_run_manager.run_id, "status": "pending", "accepted": True}
+        return {**result, "accepted": True}
     except Exception as e:
         return {"error": True, "error_type": "replay_error", "message": str(e)}

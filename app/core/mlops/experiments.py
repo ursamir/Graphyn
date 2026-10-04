@@ -69,13 +69,14 @@ def _hydrate_metrics(meta: dict[str, Any], run_path: Path) -> dict[str, Any]:
         artifact_layout,
         artifact_slug,
         read_metrics_json,
+        read_metrics_tree,
         slug_from_artifacts_posix,
     )
 
     metrics: dict[str, Any] | None = None
     artifacts = meta.get("artifacts_dir")
     if isinstance(artifacts, str) and artifacts.strip():
-        metrics = read_metrics_json(artifact_fs_path(artifacts))
+        metrics = read_metrics_tree(artifact_fs_path(artifacts))
         if metrics is None:
             slug = slug_from_artifacts_posix(artifacts)
             run_id = str(meta.get("run_id") or run_path.name)

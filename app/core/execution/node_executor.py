@@ -57,7 +57,7 @@ def _continue_error_output(node: Node, exc: Exception) -> dict[str, Any] | None:
     return {
         str(port): {
             "ok": False,
-            "error_type": type(exc).__name__,
+            "error_type": getattr(exc, "error_type", None) or type(exc).__name__,
             "message": str(exc),
         }
     }

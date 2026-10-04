@@ -1,6 +1,6 @@
 import React from 'react'
 import clsx from 'clsx'
-import { Download, Pause, Play, RefreshCw, SlidersHorizontal, Workflow } from 'lucide-react'
+import { Archive, Download, MoreHorizontal, Pause, Play, RefreshCw, Repeat, ShieldCheck, SlidersHorizontal, Workflow } from 'lucide-react'
 import { ApiError, apiJson, apiUrl, getApiToken } from '../../api/client'
 import type { GraphIR } from '../../types/graph'
 import { emptyGraph } from '../../types/graph'
@@ -17,6 +17,7 @@ import {
 import {
   ConfirmButton,
   CollapsibleJson,
+  CopyableMono,
   EmptyState,
   ErrorBanner,
   LoadingBlock,
@@ -73,7 +74,7 @@ import {
   pipelineNodesFromRun,
 } from './runNodes'
 import { dedupeErrorRows } from '../builder/logDedupe'
-import { formatMetric, metricLabel, primaryMetric, regressionOf } from '../../lib/metrics'
+import { formatMetricDelta, formatMetricValue, metricLabel, primaryMetric, regressionOf } from '../../lib/metrics'
 import {
   bestPathIdFromSummary,
   datasetFromRun,
@@ -107,6 +108,27 @@ import {
 } from './runProgress'
 import { ProgressLogLine, RunResultsBanner } from './RunResults'
 import { useEvaluatorOutputs } from './useRunResults'
+import { ReplayPanel, RunRecordCard, VerifyChecklist } from './RunRecord'
+import {
+  cacheSourcesFromNodeStats,
+  compactNodeLabel,
+  eventNodeLabel,
+  failureView,
+  failuresByNode,
+  groupVerify,
+  isArchivedRun,
+  linkableRunId,
+  nodeLabelsFromRun,
+  normalizeVerify,
+  parseReplayConflict,
+  pickProve,
+  replayOfRun,
+  replayRunId,
+  type InputChange,
+} from './runRecord'
+import { relabelLine } from '../builder/journalLog'
+import { unscopeRunPaths } from '../builder/graphDrift'
+import { FailureDetails } from './FailureDetails'
 
 /** Run ids whose GET /runs/{id} returned 404 this session — never auto-reopened. */
 const MISSING_RUN_IDS = new Set<string>()
@@ -356,6 +378,8 @@ function extractLogTimestamp(log: Record<string, unknown>, rawMessage: string): 
 type FormattedLogRow = {
   i: number
   l: Record<string, unknown>
+  /** The journal event (a JSON `message` unwrapped) — node_id / node_type / node_label. */
+  ev: Record<string, unknown>
   line: ReturnType<typeof formatExecutionLine>
   nodeHint: string | null
   failed: boolean
@@ -407,13 +431,20 @@ function VirtualRunLogList({
       ) : (
         <div style={{ height: totalH, position: 'relative' }}>
           <div style={{ transform: `translateY(${offsetY}px)` }}>
-            {slice.map(({ i, line, nodeHint, failed, clock, progress }) => {
-              const hintLabel = nodeHint ? labelFor?.(nodeHint) || humanNodeLabel(nodeHint) : ''
+            {slice.map(({ i, ev, line, nodeHint, failed, clock, progress }) => {
+              const evLabel = eventNodeLabel(ev)
+              const hintLabel = evLabel
+                ? compactNodeLabel(evLabel)
+                : nodeHint
+                  ? labelFor?.(nodeHint) || humanNodeLabel(nodeHint)
+                  : ''
+              // "Trainer · started" → "Trainer · Path C · started" (backend node_label,
+              // else the path-aware stack label).
               const text = raw
                 ? line.raw || line.text
                 : progress
                   ? formatProgressLine(progress.latest, hintLabel || undefined)
-                  : line.text
+                  : relabelLine(line.text, ev, labelFor)
               const showHint =
                 !raw &&
                 !progress &&
@@ -689,6 +720,25 @@ export default function RunsView() {
   const [showUntrained, setShowUntrained] = React.useState(false)
   const livePollTickRef = React.useRef(0)
   const evaluatorOutputs = useEvaluatorOutputs(selected, outputFiles)
+  /** List filter: include archived runs (`GET /runs?include_archived=1`). */
+  const [showArchived, setShowArchived] = React.useState(false)
+  /** Replay exactly: confirm panel / in-flight / 409 inputs_changed diff. */
+  const [replayOpen, setReplayOpen] = React.useState(false)
+  const [replayBusy, setReplayBusy] = React.useState(false)
+  const [replayConflict, setReplayConflict] = React.useState<{ message: string; changes: InputChange[] } | null>(null)
+  /** Verify checklist for the selected run (null = not run yet). */
+  const [verifyResult, setVerifyResult] = React.useState<{
+    runId: string
+    ok: boolean | null
+    status: string
+    verifiedAt: string
+    groups: ReturnType<typeof groupVerify>
+  } | null>(null)
+  const [verifyBusy, setVerifyBusy] = React.useState(false)
+  /** Advanced "Delete permanently" typed confirmation. */
+  const [purgeOpen, setPurgeOpen] = React.useState(false)
+  const [purgeText, setPurgeText] = React.useState('')
+  const [archiveBusy, setArchiveBusy] = React.useState(false)
 
   const goBackToRuns = React.useCallback(() => {
     setFocusRunsTab('history')
@@ -746,12 +796,13 @@ export default function RunsView() {
     try {
       const query: Record<string, string | number> = { limit, offset }
       if (activeProject) query.project = activeProject
+      if (showArchived) query.include_archived = 1
       setRuns(await apiJson<RunSummary[]>('/runs', { query }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setRuns([])
     }
-  }, [offset, activeProject])
+  }, [offset, activeProject, showArchived])
 
   React.useEffect(() => {
     void load()
@@ -824,6 +875,16 @@ export default function RunsView() {
     setFocusNodeId(null)
     setRunGraph(null)
     setAskAgentOpen(false)
+    resetAuditPanels()
+  }
+
+  /** Close replay / verify / purge panels (run switch, delete). */
+  const resetAuditPanels = () => {
+    setReplayOpen(false)
+    setReplayConflict(null)
+    setVerifyResult(null)
+    setPurgeOpen(false)
+    setPurgeText('')
   }
 
   const open = async (id: string) => {
@@ -849,6 +910,7 @@ export default function RunsView() {
     setPromoteOpen(false)
     setPromoteCandidateId(null)
     setAskAgentOpen(false)
+    if (switching) resetAuditPanels()
     if (switching) setRunGraph(null)
     setNotFoundRunId(null)
     focusSeededForRun.current = null
@@ -1264,18 +1326,151 @@ export default function RunsView() {
     }
   }
 
-  const deleteRun = async () => {
-    if (!selected) return
+  /**
+   * Audit API present (record / record_status on GET /runs/{id})? On that API
+   * DELETE /runs/{id} archives; on an older container DELETE still hard-deletes,
+   * so Archive is only offered when the new contract is detected.
+   */
+  const auditApi = Boolean(detail && ('record_status' in detail || 'record' in detail))
+
+  const dropSelectionAfterRemove = async (runId: string) => {
+    if (useAppStore.getState().lastRunId === runId) setLastRunId(null)
+    clearSelection()
+    if (activeProject) window.history.replaceState(null, '', paths.runs(activeProject))
+    await load()
+  }
+
+  /** Archive (default): hidden from lists, record + files kept, audited. */
+  const archiveRun = async () => {
+    if (!selected || !auditApi) return
+    const runId = selected
+    setArchiveBusy(true)
     try {
-      await apiJson(`/runs/${selected}`, { method: 'DELETE' })
-      pushToast(`Deleted run ${selected}`, 'success')
-      MISSING_RUN_IDS.add(selected)
-      if (useAppStore.getState().lastRunId === selected) setLastRunId(null)
-      clearSelection()
-      if (activeProject) window.history.replaceState(null, '', paths.runs(activeProject))
-      await load()
+      await apiJson(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' })
+      pushToast(`Archived run ${shortRunId(runId)} — its record and files are kept`, 'success', {
+        actionLabel: 'Undo',
+        onAction: () => void restoreRun(runId),
+        ttlMs: 12000,
+      })
+      if (showArchived) {
+        await load()
+        await refetchRunDetail(runId)
+      } else {
+        await dropSelectionAfterRemove(runId)
+      }
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error')
+    } finally {
+      setArchiveBusy(false)
+    }
+  }
+
+  const restoreRun = async (runId: string) => {
+    try {
+      await apiJson(`/runs/${encodeURIComponent(runId)}/restore`, { method: 'POST' })
+      pushToast(`Restored run ${shortRunId(runId)}`, 'success')
+      await load()
+      if (selectedRef.current === runId) await refetchRunDetail(runId)
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error')
+    }
+  }
+
+  /** Hard delete — typed confirmation (full run id) in the advanced menu. */
+  const purgeRun = async () => {
+    if (!selected) return
+    const runId = selected
+    if (purgeText.trim() !== runId) return
+    setArchiveBusy(true)
+    try {
+      if (auditApi) {
+        await apiJson(`/runs/${encodeURIComponent(runId)}`, {
+          method: 'DELETE',
+          query: { purge: true },
+          headers: { 'X-Confirm-Purge': runId },
+        })
+      } else {
+        // Older API: DELETE is the (only) hard delete.
+        await apiJson(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' })
+      }
+      pushToast(`Permanently deleted run ${shortRunId(runId)}`, 'success')
+      MISSING_RUN_IDS.add(runId)
+      await dropSelectionAfterRemove(runId)
+    } catch (err) {
+      const code = apiErrorCode(err)
+      pushToast(
+        code === 'confirm_required'
+          ? 'The server needs the full run id to confirm a permanent delete'
+          : err instanceof Error
+            ? err.message
+            : String(err),
+        'error',
+      )
+    } finally {
+      setArchiveBusy(false)
+    }
+  }
+
+  /** Replay exactly: POST /runs/{id}/replay (inputs checked; 409 → diff + Replay anyway). */
+  const replayRun = async (force: boolean) => {
+    if (!selected) return
+    const runId = selected
+    setReplayBusy(true)
+    try {
+      const res = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(runId)}/replay`, {
+        method: 'POST',
+        body: JSON.stringify({ check_inputs: true, force }),
+      })
+      const newId = replayRunId(res)
+      setReplayOpen(false)
+      setReplayConflict(null)
+      pushToast(newId ? `Replay started — run ${shortRunId(newId)}` : 'Replay started', 'success')
+      await load()
+      if (newId && selectedRef.current === runId) {
+        pushNextUrlRef.current = true
+        pendingPanelRef.current = 'logs'
+        void open(newId)
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setReplayConflict(parseReplayConflict(err.body))
+      } else if (err instanceof ApiError && (err.status === 404 || err.status === 405) && !auditApi) {
+        pushToast('This server version cannot replay runs yet', 'info')
+      } else {
+        pushToast(err instanceof Error ? err.message : String(err), 'error')
+      }
+    } finally {
+      setReplayBusy(false)
+    }
+  }
+
+  /** Verify: GET /runs/{id}/verify → checklist (graph snapshot, inputs, outputs, record hash/chain). */
+  const verifyRun = async () => {
+    if (!selected) return
+    const runId = selected
+    setVerifyBusy(true)
+    try {
+      const raw = await apiJson<Record<string, unknown>>(`/runs/${encodeURIComponent(runId)}/verify`, {
+        timeoutMs: 300_000,
+        retries: 0,
+      })
+      if (selectedRef.current !== runId) return
+      const v = normalizeVerify(raw)
+      setVerifyResult({
+        runId,
+        ok: v.ok,
+        status: v.status,
+        verifiedAt: String(raw?.verified_at ?? new Date().toISOString()),
+        groups: groupVerify(v.items),
+      })
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 404 || err.status === 405) && !auditApi) {
+        pushToast('This server version cannot verify runs yet', 'info')
+      } else {
+        pushToast(err instanceof Error ? err.message : String(err), 'error')
+      }
+    } finally {
+      setVerifyBusy(false)
     }
   }
 
@@ -1306,7 +1501,16 @@ export default function RunsView() {
     const nodeHint = extractLogNodeHint(l, line.text, raw)
     const failed = line.level === 'error' || String(l.level).toUpperCase() === 'ERROR'
     const clock = extractLogTimestamp(l, raw)
-    return { i, l, line: { ...line, raw: JSON.stringify(l) }, nodeHint, failed, clock }
+    let ev: Record<string, unknown> = l
+    if (typeof l.message === 'string' && l.message.trim().startsWith('{')) {
+      try {
+        const inner = JSON.parse(l.message) as unknown
+        if (inner && typeof inner === 'object' && !Array.isArray(inner)) ev = { ...l, ...(inner as Record<string, unknown>) }
+      } catch {
+        /* plain text */
+      }
+    }
+    return { i, l, ev, line: { ...line, raw: JSON.stringify(l) }, nodeHint, failed, clock }
   })
   // Pretty: one live line per node for node_progress (latest + history), then
   // drop the pipeline-level error row that restates the preceding node_error.
@@ -1483,11 +1687,31 @@ export default function RunsView() {
     if (p && lane !== 'shared' && !nodePaths.has(id)) nodePaths.set(id, p)
   }
   const multiPath = isMultiTrackShape(pipelineShape) && pathResults.length > 1
+  /** Backend path-aware labels (meta.node_labels / record / node_stats[].node_label). */
+  const backendNodeLabels = nodeLabelsFromRun(detail, runNodeStats)
   const pipelineStackItems = disambiguateByPath(rawStackItems, (id) => {
     if (!multiPath) return null
     const p = nodePaths.get(id)
     return p ? `Path ${p.letter}` : null
-  }).map(({ id, label, status }) => ({ id, label, status }))
+  }).map(({ id, label, status }) => {
+    const b = backendNodeLabels.get(id)
+    return { id, label: b ? compactNodeLabel(b) : label, status }
+  })
+  /** node id → step label for logs / stories / registry ids (backend label first). */
+  const stepLabel = (id: string): string | undefined => {
+    const b = backendNodeLabels.get(id)
+    if (b) return compactNodeLabel(b)
+    return pipelineStackItems.find((it) => it.id === id)?.label
+  }
+  const nodeTypeLabel = (nodeType: string): string => humanNodeLabel(nodeType)
+  /** Cached steps → the run whose outputs were reused (`cache_source_run_id`). */
+  const cacheSources = cacheSourcesFromNodeStats(
+    runNodeStats,
+    (pickProve(detail) as { cache?: unknown } | null)?.cache,
+  )
+  const stepFailures = failuresByNode(logs)
+  const replayOf = replayOfRun(detail) || replayOfRun(selectedSummary)
+  const selectedArchived = isArchivedRun(detail) || isArchivedRun(selectedSummary)
   const runDataset = datasetFromRun({
     run: detail ?? selectedSummary,
     events: logs,
@@ -1657,8 +1881,11 @@ export default function RunsView() {
       // node statuses hydrate from this run's journal.
       setLastRunId(selected)
       if (stackGraph && Array.isArray(stackGraph.nodes) && stackGraph.nodes.length > 0) {
-        loadGraphIntoBuilder(stackGraph)
-        pushToast('Opened graph in Editor', 'success')
+        // Run-scoped write folders (…/runs/<id>/<node>/) are removed so a re-run
+        // never writes into this run's folder; the Editor compares against the
+        // recorded graph.json (drift banner).
+        loadGraphIntoBuilder(unscopeRunPaths(stackGraph, selected), { fromRunId: selected })
+        pushToast('Opened this run’s graph in the Editor', 'success')
         return
       }
       const graph = await fetchRunGraph(selected, graphName || null)
@@ -1666,7 +1893,7 @@ export default function RunsView() {
         pushToast(graphName ? `Graph not found for ${graphName}` : 'Graph not available for this run', 'info')
         return
       }
-      loadGraphIntoBuilder(graph)
+      loadGraphIntoBuilder(unscopeRunPaths(graph, selected), { fromRunId: selected })
       pushToast(
         graphName ? `Opened ${humanizeTemplateName(graphName)} in Editor` : 'Opened graph in Editor',
         'success',
@@ -1685,6 +1912,7 @@ export default function RunsView() {
     const minVal = minRaw === '' ? null : Number(minRaw)
     return runs.filter((r) => {
       if (activeProject && !runMatchesProject(r, activeProject)) return false
+      if (!showArchived && isArchivedRun(r)) return false
       if (statusNeedle && !statusMatchesFilter(r.status, statusNeedle)) return false
       if (q) {
         const rawName = String(r.graph_name ?? '')
@@ -1698,7 +1926,7 @@ export default function RunsView() {
       }
       return true
     })
-  }, [runs, statusFilter, nameQuery, activeProject, metricName, metricMin])
+  }, [runs, statusFilter, nameQuery, activeProject, metricName, metricMin, showArchived])
 
   const filtersActive =
     statusFilter !== 'all' || nameQuery.trim() !== '' || metricName.trim() !== ''
@@ -1804,6 +2032,19 @@ export default function RunsView() {
               onClick={() => setMoreFilters((v) => !v)}
             >
               <SlidersHorizontal className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              className={clsx('btn-quiet shrink-0 !px-1.5 !py-1', showArchived && 'text-accent-800')}
+              title={showArchived ? 'Hide archived runs' : 'Show archived runs'}
+              aria-label="Show archived"
+              aria-pressed={showArchived}
+              onClick={() => {
+                setOffset(0)
+                setShowArchived((v) => !v)
+              }}
+            >
+              <Archive className="h-3.5 w-3.5" />
             </button>
             <button
               type="button"
@@ -1961,6 +2202,11 @@ export default function RunsView() {
                     >
                       {runDisplayName(r)}
                     </div>
+                    {isArchivedRun(r) ? (
+                      <span className="shrink-0 rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-500">
+                        Archived
+                      </span>
+                    ) : null}
                     <StatusBadge status={shortStatusLabel(r.status)} />
                     {isStaleRunning(r.status, r.created_at) ? (
                       <span
@@ -1977,9 +2223,13 @@ export default function RunsView() {
                       {metric && rowReg && rowReg.delta < -0.005 ? (
                         <span
                           className="ml-1 font-semibold text-rose-700"
-                          title={`Lower than the best earlier run${rowReg.previousValue != null ? ` (${formatMetric(rowReg.previousValue)})` : ''}`}
+                          title={`Lower than the best earlier run${
+                            rowReg.previousValue != null
+                              ? ` (${formatMetricValue(primaryMetric(r)?.name || '', rowReg.previousValue)})`
+                              : ''
+                          }`}
                         >
-                          ↓{formatMetric(Math.abs(rowReg.delta))}
+                          ↓{formatMetricDelta(primaryMetric(r)?.name || '', Math.abs(rowReg.delta)).replace(/^\+/, '')}
                         </span>
                       ) : null}
                     </span>
@@ -2119,11 +2369,10 @@ export default function RunsView() {
                       (detail?.meta as { created_at?: string } | undefined)?.created_at,
                   )}
                 </span>
-                {!headerTitle.includes(shortRunId(selected || '')) ? (
-                  <span className="font-mono text-[11px] text-ink-400" title={selected || undefined}>
-                    {shortRunId(selected || '')}
-                  </span>
-                ) : null}
+                <span className="inline-flex items-center font-mono text-[11px] text-ink-400" title={`Run id ${selected}`}>
+                  {!headerTitle.includes(shortRunId(selected || '')) ? shortRunId(selected || '') : null}
+                  {selected ? <CopyableMono value={selected} title="Copy full run id" copyOnly /> : null}
+                </span>
                 {live && status?.progress_pct != null ? (
                   <SlimProgress pct={Number(status.progress_pct)} />
                 ) : null}
@@ -2145,6 +2394,31 @@ export default function RunsView() {
                     >
                       {shortRunId(sourceRunId)}
                     </button>
+                  </span>
+                ) : null}
+                {linkableRunId(replayOf) ? (
+                  <span className="text-[11px] text-ink-500">
+                    Replay of{' '}
+                    <button
+                      type="button"
+                      className="font-mono text-accent-800 underline-offset-2 hover:underline"
+                      title={`Open run ${replayOf}`}
+                      onClick={() => {
+                        pushNextUrlRef.current = true
+                        pendingPanelRef.current = 'lineage'
+                        void open(replayOf)
+                      }}
+                    >
+                      run {shortRunId(replayOf)}
+                    </button>
+                  </span>
+                ) : null}
+                {selectedArchived ? (
+                  <span
+                    className="rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-600"
+                    title="Archived runs are hidden from the list; the record and files are kept"
+                  >
+                    Archived
                   </span>
                 ) : null}
                 <div className="ml-auto flex shrink-0 flex-wrap items-center gap-0.5">
@@ -2224,23 +2498,158 @@ export default function RunsView() {
                       {promoteOpen && panel === 'lineage' ? 'Close' : 'Register model'}
                     </button>
                   ) : null}
+                  {!live && auditApi ? (
+                    <>
+                      <button
+                        type="button"
+                        className={clsx('btn-quiet !px-2 !py-1 text-[11px]', replayOpen && 'text-accent-800')}
+                        aria-expanded={replayOpen}
+                        title="Start a new run from this run’s exact graph snapshot and seed"
+                        onClick={() => {
+                          setReplayConflict(null)
+                          setReplayOpen((v) => !v)
+                        }}
+                      >
+                        <Repeat className="h-3.5 w-3.5" /> Replay exactly
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-quiet !px-2 !py-1 text-[11px]"
+                        disabled={verifyBusy}
+                        title="Re-check the record hash, chain, graph snapshot, inputs and outputs"
+                        onClick={() => void verifyRun()}
+                      >
+                        <ShieldCheck className="h-3.5 w-3.5" /> {verifyBusy ? 'Verifying…' : 'Verify'}
+                      </button>
+                    </>
+                  ) : null}
+                  {!['running', 'paused'].includes(st) && auditApi ? (
+                    selectedArchived ? (
+                      <button
+                        type="button"
+                        className="btn-quiet !px-2 !py-1 text-[11px]"
+                        title="Show this run in the list again"
+                        onClick={() => void restoreRun(selected)}
+                      >
+                        <Archive className="h-3.5 w-3.5" /> Restore
+                      </button>
+                    ) : (
+                      <ConfirmButton
+                        label="Archive"
+                        confirmLabel="Archive run? (kept, hidden)"
+                        disabled={archiveBusy}
+                        className="!px-2 !py-1 text-[11px]"
+                        onConfirm={() => void archiveRun()}
+                      />
+                    )
+                  ) : null}
                   {!['running', 'paused'].includes(st) ? (
-                    <ConfirmButton
-                      label="Delete"
-                      confirmLabel={`Delete ${selected}?`}
-                      danger
-                      className="!px-2 !py-1 text-[11px]"
-                      onConfirm={() => void deleteRun()}
-                    />
+                    <details className="relative">
+                      <summary
+                        className="btn-quiet !px-1.5 !py-1 text-[11px] cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+                        title="More actions"
+                        aria-label="More run actions"
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5" />
+                      </summary>
+                      <div className="absolute right-0 z-30 mt-1 flex w-60 flex-col gap-1 rounded-xl border border-ink-200 bg-white p-2 text-[12px] shadow-lg">
+                        <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Advanced</div>
+                        <button
+                          type="button"
+                          className="btn-quiet w-full justify-start !px-2 !py-1 text-[12px] text-rose-700"
+                          onClick={() => {
+                            setPurgeText('')
+                            setPurgeOpen(true)
+                          }}
+                        >
+                          Delete permanently…
+                        </button>
+                        <p className="px-1 text-[11px] text-ink-400">
+                          {auditApi
+                            ? 'Removes the run’s files and journal for good. Archive keeps the audit record.'
+                            : 'This server cannot archive runs — deleting removes the run for good.'}
+                        </p>
+                      </div>
+                    </details>
                   ) : null}
                 </div>
               </div>
 
-              {!live ? (
+              {replayOpen && auditApi ? (
+                <ReplayPanel
+                  graphHash={String(
+                    (pickProve(detail) as { graph_hash?: unknown } | null)?.graph_hash ??
+                      detailMeta?.graph_hash ??
+                      '',
+                  )}
+                  seed={(() => {
+                    const v =
+                      (pickProve(detail) as { seed?: unknown } | null)?.seed ??
+                      (stackGraph?.metadata as { seed?: unknown } | undefined)?.seed
+                    return typeof v === 'number' ? v : null
+                  })()}
+                  busy={replayBusy}
+                  conflict={replayConflict}
+                  onReplay={(force) => void replayRun(force)}
+                  onCancel={() => {
+                    setReplayOpen(false)
+                    setReplayConflict(null)
+                  }}
+                />
+              ) : null}
+              {verifyResult && verifyResult.runId === selected ? (
+                <VerifyChecklist
+                  groups={verifyResult.groups}
+                  ok={verifyResult.ok}
+                  status={verifyResult.status}
+                  verifiedAt={verifyResult.verifiedAt}
+                  labelFor={stepLabel}
+                  onClose={() => setVerifyResult(null)}
+                />
+              ) : null}
+              {purgeOpen ? (
+                <div
+                  role="dialog"
+                  aria-label="Delete run permanently"
+                  className="w-full space-y-2 rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-2 text-[12px] text-rose-950"
+                >
+                  <p>
+                    <span className="font-semibold">Delete permanently</span> removes this run’s journal, outputs and
+                    record. It cannot be undone{auditApi ? ' — Archive keeps everything and only hides the run' : ''}.
+                    Type the full run id to confirm:
+                  </p>
+                  <p className="select-all font-mono text-[11px] text-rose-900">{selected}</p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <input
+                      value={purgeText}
+                      onChange={(e) => setPurgeText(e.target.value)}
+                      placeholder="run id"
+                      aria-label="Type the run id to confirm"
+                      className="min-w-[16rem] flex-1 rounded-md border border-rose-200 bg-white px-2 py-1 font-mono text-[11px]"
+                    />
+                    <button
+                      type="button"
+                      className="btn-danger !px-2 !py-1 text-[11px]"
+                      disabled={archiveBusy || purgeText.trim() !== selected}
+                      onClick={() => void purgeRun()}
+                    >
+                      {archiveBusy ? 'Deleting…' : 'Delete permanently'}
+                    </button>
+                    <button type="button" className="btn-quiet !px-2 !py-1 text-[11px]" onClick={() => setPurgeOpen(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Results banner is Overview-only — Outputs/Logs stay execution-focused. */}
+              {!live && panel === 'lineage' ? (
                 <RunResultsBanner
                   paths={pathResults}
                   bestPathId={bestPath?.pathId ?? null}
+                  multiTrack={multiPath}
                   dataset={runDataset}
+                  phase={graphName}
                   regression={runRegression}
                   onOpenRun={(rid) => {
                     pushNextUrlRef.current = true
@@ -2306,12 +2715,31 @@ export default function RunsView() {
                     ) : null}
                   </div>
                   {failed && runFailure ? (
-                    <p className="w-full truncate text-[11px] text-rose-900" title={runFailure.error}>
+                    <div className="w-full min-w-0 text-[11px]">
                       {runFailure.nodeId ? (
-                        <span className="font-semibold">{humanNodeLabel(runFailure.nodeType || runFailure.nodeId)} · </span>
+                        <button
+                          type="button"
+                          className="font-semibold text-rose-950 hover:underline"
+                          title={runFailure.nodeId}
+                          onClick={() => {
+                            setFocusNodeId(runFailure.nodeId)
+                            setPanel('lineage')
+                          }}
+                        >
+                          {(runFailure.nodeLabel && compactNodeLabel(runFailure.nodeLabel)) ||
+                            stepLabel(runFailure.nodeId) ||
+                            humanNodeLabel(runFailure.nodeType || runFailure.nodeId)}
+                        </button>
                       ) : null}
-                      {runFailure.error.split('\n')[0]}
-                    </p>
+                      {(() => {
+                        const fv = failureView({
+                          error: runFailure.error,
+                          errorType: runFailure.errorType,
+                          traceback: runFailure.traceback,
+                        })
+                        return fv ? <FailureDetails failure={fv} dense /> : null
+                      })()}
+                    </div>
                   ) : null}
                   {failed && askAgentOpen ? (
                     <div
@@ -2424,7 +2852,7 @@ export default function RunsView() {
                                     ) : null}
                                     {pm && !untrained ? (
                                       <span className="ml-auto shrink-0 text-[11px] font-semibold tabular-nums text-ink-800">
-                                        {metricLabel(pm.name)} {formatMetric(pm.value)}
+                                        {metricLabel(pm.name)} {formatMetricValue(pm.name, pm.value)}
                                       </span>
                                     ) : null}
                                   </span>
@@ -2635,7 +3063,7 @@ export default function RunsView() {
                 <VirtualRunLogList
                   rows={visibleLogs}
                   raw={rawLogView}
-                  labelFor={(hint) => pipelineStackItems.find((it) => it.id === hint)?.label}
+                  labelFor={stepLabel}
                   emptyLabel={
                     focusNodeId
                       ? `No logs for ${focusLabel} — try All.`
@@ -3021,6 +3449,25 @@ export default function RunsView() {
                 })()}
               </div>
             )}
+            {panel === 'lineage' && selected && !focusNodeId ? (
+              <RunRecordCard
+                runId={selected}
+                detail={detail}
+                graphSeed={(stackGraph?.metadata as { seed?: unknown } | undefined)?.seed}
+                nodeTypeLabel={nodeTypeLabel}
+                onOpenRun={(rid) => {
+                  pushNextUrlRef.current = true
+                  pendingPanelRef.current = 'lineage'
+                  void open(rid)
+                }}
+                onViewRaw={() => {
+                  const hit = outputFiles.find((f) => f.name === 'prove.json' && f.path.includes(selected))
+                  setFocusNodeId(null)
+                  setSelectedOutputPath(hit?.path ?? `workspace/runs/${selected}/prove.json`)
+                  setPanel('artifacts')
+                }}
+              />
+            ) : null}
             {panel === 'lineage' && selected ? (
               <RunLineagePanel
                 runId={selected}
@@ -3042,8 +3489,19 @@ export default function RunsView() {
                     : null
                 }
                 labelFor={(id) =>
-                  pipelineStackItems.find((i) => focusMatchesNode(id, i.id))?.label
+                  stepLabel(id) ?? pipelineStackItems.find((i) => focusMatchesNode(id, i.id))?.label
                 }
+                cacheSources={cacheSources}
+                stepFailures={stepFailures}
+                runLabelFor={(rid) => {
+                  const row = runs?.find((r) => r.run_id === rid)
+                  return row ? runDisplayName(row) : undefined
+                }}
+                onOpenRun={(rid) => {
+                  pushNextUrlRef.current = true
+                  pendingPanelRef.current = 'lineage'
+                  void open(rid)
+                }}
                 lanePaths={lanePaths}
                 nodePaths={nodePaths}
                 bestPathId={pathResults.length > 1 ? bestPath?.pathId ?? null : null}

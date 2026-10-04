@@ -247,7 +247,10 @@ class TestDeleteRun:
         art = tmp_workspace / "artifacts" / "demo" / "runs" / run_id
         art.mkdir(parents=True)
         (art / "out.txt").write_text("x")
-        resp = api_client.delete(f"/api/v1/runs/{run_id}")
+        # DELETE now archives by default (audit item 8); hard delete is purge.
+        resp = api_client.delete(
+            f"/api/v1/runs/{run_id}?purge=true", headers={"X-Confirm-Purge": run_id}
+        )
         assert resp.status_code == 200
         assert resp.json()["deleted"] == run_id
         assert not run_dir.exists()
@@ -281,7 +284,9 @@ class TestDeleteRun:
             art.mkdir(parents=True)
             (art / "out.txt").write_text(rid)
         publish_latest("demo", "newer")
-        resp = api_client.delete("/api/v1/runs/newer")
+        resp = api_client.delete(
+            "/api/v1/runs/newer?purge=true", headers={"X-Confirm-Purge": "newer"}
+        )
         assert resp.status_code == 200
         assert latest_run_id("demo") == "older"
         assert (tmp_workspace / "runs" / "older").exists()

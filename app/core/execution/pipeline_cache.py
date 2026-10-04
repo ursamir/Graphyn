@@ -3,8 +3,8 @@
 Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Content-keyed cache for node outputs. Avoids re-executing
                   nodes whose inputs and config have not changed.
-Owns:             PipelineCache class — key derivation, load, save, clear.
-Public Surface:   PipelineCache().key(), .input_hash(), .load(), .save(), .clear()
+Owns:             PipelineCache class — key derivation, load, save (with source run/node provenance), source_of, clear.
+Public Surface:   PipelineCache().key(), .input_hash(), .load(), .save(), .source_of(), .clear()
 Must NOT:         Import app.models at module level or reference any artifact
                   type string by name (e.g. "audio_samples"). All type
                   inference is done via ArtifactSerializerRegistry.infer_type().
@@ -398,7 +398,17 @@ class PipelineCache:
             return None
         return merged or None
 
-    def save(self, cache_key: str, outputs: Any) -> None:
+    def source_of(self, cache_key: str) -> dict | None:
+        """Provenance of a cache entry: ``{run_id, node_id, saved_at}`` (None if unknown)."""
+        try:
+            with open(self._cache_dir(cache_key) / "manifest.json", "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except Exception:
+            return None
+        src = manifest.get("source") if isinstance(manifest, dict) else None
+        return dict(src) if isinstance(src, dict) else None
+
+    def save(self, cache_key: str, outputs: Any, *, source: dict | None = None) -> None:
         """Save node outputs to cache — all ports or nothing.
 
         ``outputs`` may be a dict (port → value) or a list (normalised to
@@ -487,6 +497,9 @@ class PipelineCache:
                         "port_types": port_manifest,
                         "json_ports": sorted(json_values.keys()),
                         "all_ports": sorted(outputs.keys()),
+                        # Audit: which run/node produced this entry (cache hits
+                        # record it as cache_source_run_id).
+                        "source": dict(source) if isinstance(source, dict) else None,
                     },
                     f,
                     indent=2,

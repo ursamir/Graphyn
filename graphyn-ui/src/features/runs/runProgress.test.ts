@@ -32,9 +32,9 @@ describe('parseProgress', () => {
   })
   it('formats a compact line', () => {
     expect(formatProgressLine(parseProgress(ev(3))!, 'Trainer · Path A')).toBe(
-      'Trainer · Path A · epoch 3/30 · loss 0.333 · val acc 0.530',
+      'Trainer · Path A · epoch 3/30 · loss 0.333 · val acc 53%',
     )
-    expect(progressBadgeText(parseProgress(ev(3))!)).toBe('epoch 3/30 · val acc 0.530')
+    expect(progressBadgeText(parseProgress(ev(3))!)).toBe('epoch 3/30 · val acc 53%')
     expect(formatProgressLine(parseProgress({ type: 'node_progress', node_id: 'a', message: 'warming up' })!)).toBe('warming up')
   })
 })

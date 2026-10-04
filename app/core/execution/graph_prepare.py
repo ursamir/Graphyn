@@ -10,7 +10,8 @@ Responsibility:   The single pre-execution pipeline every interface (REST,
 Owns:             prepare_graph(), rewire_for_execution(), stamp_graph_project(),
                   check_graph_executable(), GraphPrepareError,
                   PreparedGraph, persist_project_fields(), record_run_start(),
-                  graph_display_name().
+                  persist_run_identity() (meta actor / trigger / declared
+                  saved-pipeline ref), normalize_trigger(), graph_display_name().
 Public Surface:   Same symbols (used by app.api.routers.pipelines, app.core.sdk,
                   app.cli.main via SDK, app.mcp.handlers.execution).
 Must NOT:         Execute graphs; import app.api or app.domain; raise HTTP
@@ -195,8 +196,72 @@ def persist_project_fields(run_manager: Any, fields: dict[str, str]) -> None:
                 log.debug("graph_prepare: could not persist %s", key, exc_info=True)
 
 
-def record_run_start(run_id: str, graph: Any, *, actor: str, mode: str) -> None:
-    """Append the run.start audit event (never raises)."""
+_TRIGGERS = frozenset({"ui", "api", "cli", "sdk", "mcp", "schedule", "replay", "agent", "webhook"})
+
+
+def normalize_trigger(value: Any, default: str = "api") -> str:
+    text = str(value or "").strip().lower()
+    return text if text in _TRIGGERS else default
+
+
+def persist_run_identity(
+    run_manager: Any,
+    *,
+    actor: str,
+    trigger: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Write ``actor`` / ``trigger`` (+ declared saved-pipeline ref) into run meta.
+
+    The same actor string goes into meta.json, the sealed audit record and
+    every run.* platform audit event. Optional payload keys ``pipeline``,
+    ``pipeline_env`` and ``pipeline_version`` declare which saved pipeline the
+    graph came from (otherwise the audit record infers it by content hash).
+    """
+    writer = getattr(run_manager, "_write_meta_field", None)
+    if not callable(writer):
+        return
+    fields: dict[str, Any] = {
+        "actor": (actor or "unknown").strip()[:128] or "unknown",
+        "trigger": normalize_trigger(trigger),
+    }
+    body = payload if isinstance(payload, dict) else {}
+    name = body.get("pipeline") or body.get("pipeline_name")
+    if isinstance(name, str) and name.strip():
+        fields["pipeline_name"] = name.strip()[:128]
+    env = body.get("pipeline_env")
+    if isinstance(env, str) and env.strip().lower() in ("draft", "staging", "prod"):
+        fields["pipeline_env"] = env.strip().lower()
+    ver = body.get("pipeline_version")
+    if isinstance(ver, str) and ver.strip():
+        fields["pipeline_version_id"] = ver.strip()[:32]
+    for key, value in fields.items():
+        try:
+            writer(key, value)
+        except Exception:
+            log.debug("graph_prepare: could not persist %s", key, exc_info=True)
+
+
+def record_run_start(
+    run_id: str,
+    graph: Any,
+    *,
+    actor: str,
+    mode: str,
+    run_manager: Any = None,
+    trigger: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Append the run.start audit event (never raises).
+
+    When ``run_manager`` is given the actor / trigger are also persisted into
+    the run meta (see :func:`persist_run_identity`).
+    """
+    if run_manager is not None:
+        try:
+            persist_run_identity(run_manager, actor=actor, trigger=trigger or mode, payload=payload)
+        except Exception:
+            log.debug("graph_prepare: persist_run_identity failed", exc_info=True)
     try:
         from app.core.trust.audit import record_audit
 
@@ -205,7 +270,9 @@ def record_run_start(run_id: str, graph: Any, *, actor: str, mode: str) -> None:
             action="run.start",
             resource_type="run",
             resource_id=str(run_id),
-            meta={"graph_name": graph_display_name(graph), "mode": mode},
+            meta={"graph_name": graph_display_name(graph), "mode": mode,
+                  "trigger": normalize_trigger(trigger or mode),
+                  "project": getattr(getattr(graph, "metadata", None), "project", None)},
         )
     except Exception:
         log.debug("graph_prepare: run.start audit failed", exc_info=True)

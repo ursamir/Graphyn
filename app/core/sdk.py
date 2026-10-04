@@ -474,6 +474,7 @@ class Pipeline:
             graph,
             actor=str(getattr(self, "_audit_actor", "") or "sdk"),
             mode=str(getattr(self, "_audit_mode", "") or "sdk"),
+            run_manager=run_manager,
         )
 
         _logger = self._make_subscriber_logger(logger)

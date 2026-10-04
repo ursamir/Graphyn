@@ -3,10 +3,12 @@
 Bounded Context:  BC6 — Observability & Storage
 Responsibility:   Single, stable run-history lister shared by REST GET /runs,
                   MCP list_runs, CLI `runs list`, and experiment boards.
-Owns:             sorted_run_dirs(), list_runs(), RunListPage, run_sort_key().
+Owns:             sorted_run_dirs(), list_runs(), RunListPage, run_sort_key(),
+                  is_archived() / ARCHIVE_MARKER (archived runs hidden by default).
 Public Surface:   sorted_run_dirs(runs_root) -> list[Path];
                   list_runs(runs_root, limit, offset, project, status,
-                  include_unreadable) -> RunListPage.
+                  include_unreadable, include_archived) -> RunListPage;
+                  is_archived(run_dir).
 Must NOT:         Write run journal files; import app.api / app.domain;
                   sort by directory mtime (atomic meta.json renames bump it,
                   which reorders pages mid-scroll → duplicate / skipped rows).
@@ -176,6 +178,17 @@ def sorted_run_dirs(runs_root: Path | None = None, *, require_meta: bool = True)
     return [entry for _key, entry in keyed]
 
 
+ARCHIVE_MARKER = ".archived"
+
+
+def is_archived(run_dir: Path) -> bool:
+    """True when the run carries the archive marker (one stat)."""
+    try:
+        return (run_dir / ARCHIVE_MARKER).exists()
+    except OSError:
+        return False
+
+
 def _resolve_root(runs_root: Path | None) -> Path:
     if runs_root is not None:
         return Path(runs_root)
@@ -192,6 +205,7 @@ def list_runs(
     project: str | None = None,
     status: str | None = None,
     include_unreadable: bool = False,
+    include_archived: bool = False,
 ) -> RunListPage:
     """Return a stable page of runs, newest first.
 
@@ -202,6 +216,8 @@ def list_runs(
       (in-memory inference from graph.json; never writes).
     - ``status`` compares against the normalised status vocabulary.
     - ``limit=None`` (or ``<= 0``) returns every match from ``offset``.
+    - Archived runs (``runs/<id>/.archived`` marker, see run_archive) are
+      hidden unless ``include_archived``; returned rows carry ``archived``.
     """
     from app.core.runs.run_project import normalize_project_name, project_matches
     from app.core.runs.run_status import normalize_status
@@ -219,8 +235,14 @@ def list_runs(
     for index, (_key, entry) in enumerate(keyed):
         if unfiltered and cap is not None and len(page) >= cap:
             # Page full: count the rest without reading their meta.json.
-            matched += len(keyed) - index
+            if include_archived:
+                matched += len(keyed) - index
+            else:
+                matched += sum(1 for _k, e in keyed[index:] if not is_archived(e))
             break
+        archived = is_archived(entry)
+        if archived and not include_archived:
+            continue
         if entry in loaded:
             meta = loaded[entry]
         else:
@@ -247,6 +269,8 @@ def list_runs(
             current = normalize_status(str(meta.get("status") or "")) if meta.get("status") else ""
             if str(current).lower() != status_filter:
                 continue
+        if archived:
+            meta["archived"] = True
         matched += 1
         if matched <= offset:
             continue

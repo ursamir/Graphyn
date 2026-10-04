@@ -8,7 +8,7 @@ import { ArrowRight, RefreshCw } from 'lucide-react'
 import { apiJson } from '../../api/client'
 import { CopyableMono, EmptyState, ErrorBanner, LoadingBlock } from '../../components/ui'
 import { ReproPackButton } from '../../components/ReproPackButton'
-import { displayNodeLabel, focusMatchesNode, humanizeTemplateName } from '../../lib/format'
+import { displayNodeLabel, focusMatchesNode, humanizeTemplateName, shortRunId } from '../../lib/format'
 import { fetchRunGraph } from '../../lib/runGraph'
 import {
   computePipelineShape,
@@ -16,10 +16,12 @@ import {
   laneLabel,
   type PipelineShape,
 } from './runNodes'
-import { formatMetric, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
+import { formatMetricValue, metricLabel, pickPrimaryMetric } from '../../lib/metrics'
 import { pathDisplayName, scalarMetrics, type PathResult } from './runResults'
 import { EvaluatorResult, PathMetricChip } from './RunResults'
 import type { EvaluatorOutputs } from './useRunResults'
+import { failureView, linkableRunId, type FailureView } from './runRecord'
+import { FailureDetails } from './FailureDetails'
 
 function shortStatusLabel(status?: string | null): string {
   const s = String(status || '').toLowerCase()
@@ -516,10 +518,9 @@ function RunStoryMap({
   let outcomeBlock: React.ReactNode = null
   if (!multi) {
     const got = linearOutcome(stories)
-    const single = lanePaths?.get('shared')
+    // Linear = Got + spine only (no Path metric chip on the story line — headline lives in Overview banner / Metrics).
     outcomeBlock = got ? (
-      <p className="flex flex-wrap items-center gap-1.5 text-[12px] leading-relaxed text-ink-700">
-        {single?.primary ? <PathMetricChip path={single} /> : null}
+      <p className="text-[12px] leading-relaxed text-ink-700">
         <span className="text-ink-400">Got </span>
         {got}
       </p>
@@ -665,7 +666,18 @@ export function RunLineagePanel({
   nodePaths,
   bestPathId,
   evaluator,
+  cacheSources,
+  stepFailures,
+  runLabelFor,
+  onOpenRun,
 }: {
+  /** node id → run whose cached outputs this step reused (`cache_source_run_id`). */
+  cacheSources?: Map<string, string> | null
+  /** node id → real failure (error_type: message + traceback) from node_error events. */
+  stepFailures?: Map<string, FailureView> | null
+  /** Display name of another run (cache source) when it is in the loaded list. */
+  runLabelFor?: (runId: string) => string | undefined
+  onOpenRun?: (runId: string) => void
   runId: string
   runMeta?: Record<string, unknown> | null
   focusNodeId?: string | null
@@ -934,7 +946,7 @@ export function RunLineagePanel({
                     {metricLabel(k)}
                   </span>
                   <span className="shrink-0 tabular-nums text-[12px] font-semibold text-ink-800">
-                    {Number.isInteger(v) ? v.toLocaleString() : formatMetric(v)}
+                    {Number.isInteger(v) ? v.toLocaleString() : formatMetricValue(k, v)}
                   </span>
                 </li>
               ))}
@@ -1022,6 +1034,10 @@ export function RunLineagePanel({
           labelById={labelById}
           onBrowseOutputs={onBrowseOutputs}
           onClearFocus={onFocusStep ? () => onFocusStep(null) : undefined}
+          cacheSourceRunId={cacheSources?.get(focused.id) ?? null}
+          failure={stepFailures?.get(focused.id) ?? null}
+          runLabelFor={runLabelFor}
+          onOpenRun={onOpenRun}
         />
       ) : null}
 
@@ -1078,15 +1094,22 @@ export function RunLineagePanel({
                               {shortStatusLabel(s.status)}
                             </span>
                             {s.cacheHit ? (
-                              <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-800">
-                                cached
+                              <span
+                                className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-800"
+                                title={(() => {
+                                  const src = cacheSources?.get(s.id)
+                                  if (!src) return 'Reused cached outputs — source run not recorded'
+                                  return `Reused outputs of run ${runLabelFor?.(src) || src} (${src})`
+                                })()}
+                              >
+                                {cacheSources?.get(s.id) ? `cached · ${shortRunId(cacheSources.get(s.id)!)}` : 'cached'}
                               </span>
                             ) : null}
                             {(() => {
                               const pm = pickPrimaryMetric(evaluator?.metricsByNode[s.id])
                               return pm ? (
                                 <span className="rounded-md bg-white px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-ink-800 ring-1 ring-ink-200">
-                                  {metricLabel(pm.name)} {formatMetric(pm.value)}
+                                  {metricLabel(pm.name)} {formatMetricValue(pm.name, pm.value)}
                                 </span>
                               ) : null
                             })()}
@@ -1122,8 +1145,10 @@ export function RunLineagePanel({
                               </>
                             )}
                           </span>
-                          {s.error ? (
-                            <span className="mt-1 block text-[11px] text-rose-700">{s.error}</span>
+                          {s.error || stepFailures?.get(s.id) ? (
+                            <span className="mt-1 block truncate font-mono text-[11px] text-rose-700" title={stepFailures?.get(s.id)?.headline || s.error || undefined}>
+                              {stepFailures?.get(s.id)?.headline || failureView({ error: s.error })?.headline || s.error}
+                            </span>
                           ) : null}
                         </span>
                       </button>
@@ -1144,9 +1169,11 @@ export function RunLineagePanel({
           <ul className="max-h-36 space-y-1 overflow-y-auto border-t border-ink-100 px-3 py-2">
             {(trace?.lineage?.artifacts || []).slice(0, 16).map((a, i) => (
               <li key={String(a.artifact_id || i)} className="text-[11px] text-ink-600">
-                <span className="font-medium text-ink-800">
+                <span className="font-medium text-ink-800" title={a.node_id ? String(a.node_id) : undefined}>
                   {a.node_id
-                    ? displayNodeLabel(String(a.node_id), { withCue: true })
+                    ? labelById.get(String(a.node_id)) ||
+                      labelFor?.(String(a.node_id)) ||
+                      displayNodeLabel(String(a.node_id), { withCue: true })
                     : 'Output'}
                 </span>
                 {a.artifact_id ? (
@@ -1171,7 +1198,15 @@ function StepDetailCard({
   evaluatorMetrics,
   confusionImagePath,
   path,
+  cacheSourceRunId,
+  failure,
+  runLabelFor,
+  onOpenRun,
 }: {
+  cacheSourceRunId?: string | null
+  failure?: FailureView | null
+  runLabelFor?: (runId: string) => string | undefined
+  onOpenRun?: (runId: string) => void
   evaluatorMetrics?: unknown
   confusionImagePath?: string
   path?: PathResult | null
@@ -1205,6 +1240,37 @@ function StepDetailCard({
             </span>
             {story.cacheHit ? <span className="ml-1.5 text-ink-500">· used cache</span> : null}
             <span className="ml-1.5 text-ink-500">· {formatDuration(story.durationMs)}</span>
+            {story.cacheHit ? (
+              <span className="mt-0.5 block text-[11px] text-ink-500">
+                {linkableRunId(cacheSourceRunId) ? (
+                  <>
+                    from run{' '}
+                    <span className="font-medium text-ink-800" title={cacheSourceRunId!}>
+                      {runLabelFor?.(cacheSourceRunId!) || shortRunId(cacheSourceRunId!)}
+                    </span>
+                    {runLabelFor?.(cacheSourceRunId!) ? (
+                      <span className="font-mono text-ink-400"> {shortRunId(cacheSourceRunId!)}</span>
+                    ) : null}
+                    {onOpenRun ? (
+                      <>
+                        {' '}
+                        (
+                        <button
+                          type="button"
+                          className="text-accent-800 underline-offset-2 hover:underline"
+                          onClick={() => onOpenRun(cacheSourceRunId!)}
+                        >
+                          open
+                        </button>
+                        )
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  <span className="text-ink-400">source run not recorded</span>
+                )}
+              </span>
+            ) : null}
           </dd>
         </div>
         <div>
@@ -1226,10 +1292,13 @@ function StepDetailCard({
           </dd>
         </div>
       </dl>
-      {story.error ? (
-        <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-[12px] text-rose-900">
-          {story.error}
-        </p>
+      {failure || story.error ? (
+        <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5">
+          {(() => {
+            const fv = failure || failureView({ error: story.error })
+            return fv ? <FailureDetails failure={fv} /> : null
+          })()}
+        </div>
       ) : null}
       {evaluatorMetrics != null || confusionImagePath ? (
         <EvaluatorResult metrics={evaluatorMetrics} confusionImagePath={confusionImagePath} path={path} />

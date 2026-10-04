@@ -75,3 +75,63 @@ export function mergeRunParams(
 ): Record<string, unknown> {
   return { ...flattenNodeConfigParams(graph), ...(experimentParams ?? {}) }
 }
+
+/** Config fields that hold a node's write location. */
+const RUN_PATH_FIELD = /\.(output_path|output_dir|out_dir|output|save_path|artifacts_dir|checkpoint_dir|log_dir)$/i
+
+/**
+ * True when a param row only differs because each run writes under its own
+ * `runs/<run_id>` folder (e.g. `trainer_0.output_path`). Those rows always
+ * differ and are hidden behind "Show run-specific paths".
+ */
+export function isRunScopedPathParam(key: string, values: unknown[], runIds: string[]): boolean {
+  const strs = values.map((v) => (typeof v === 'string' ? v : ''))
+  const mentionsOwnRun = strs.some((s, i) => {
+    const id = runIds[i]
+    return Boolean(s && id && (s.includes(`runs/${id}`) || s.includes(id)))
+  })
+  if (mentionsOwnRun) {
+    // Every non-empty value is the same path once its own run id is masked.
+    const masked = new Set(
+      strs.filter(Boolean).map((s, i) => (runIds[i] ? s.split(runIds[i]).join('<run>') : s)),
+    )
+    if (masked.size <= 1) return true
+  }
+  if (!RUN_PATH_FIELD.test(key)) return false
+  return strs.some((s) => /(^|\/)runs\/[0-9a-f]{8,}/i.test(s))
+}
+
+/**
+ * "trainer_24212f65.epochs" → "Trainer · Path C · epochs" using node labels
+ * from the runs' graphs (ids stay in the tooltip). Keys without a known node
+ * id (graph.* / experiment params) are returned unchanged.
+ */
+export function paramKeyLabel(key: string, labelOf: ReadonlyMap<string, string>): string {
+  const dot = key.indexOf('.')
+  if (dot <= 0) return key
+  const nodeId = key.slice(0, dot)
+  const label = labelOf.get(nodeId)
+  return label ? `${label} · ${key.slice(dot + 1)}` : key
+}
+
+type LabelGraph = {
+  nodes?: Array<{ id?: unknown; node_type?: unknown; label?: unknown; config?: unknown }> | null
+  edges?: Array<{ src_id?: unknown; dst_id?: unknown }> | null
+} | null | undefined
+
+/**
+ * node id → path-aware label ("Trainer · Path C") across the compared runs'
+ * graphs; `labelsFor(graph)` is the Editor's canvasPathView-style labeller
+ * (injected so this module stays React/builder-free). First graph wins.
+ */
+export function compareNodeLabels(
+  graphs: Iterable<LabelGraph>,
+  labelsFor: (graph: NonNullable<LabelGraph>) => ReadonlyMap<string, string>,
+): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const g of graphs) {
+    if (!g || !Array.isArray(g.nodes)) continue
+    for (const [id, label] of labelsFor(g)) if (!out.has(id)) out.set(id, label)
+  }
+  return out
+}

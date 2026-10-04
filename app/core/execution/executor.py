@@ -280,6 +280,7 @@ class ParallelExecutor:
         # ── Cache check — load() directly, treat None as miss (ARCH-9 fix) ──────
         cache_hit = False
         cache_key = None
+        cache_source_run_id = None
 
         if cache is not None and node_is_cacheable(node_type, ir_nodes_map.get(node_id)):
             node_cfg_dict = {}
@@ -310,6 +311,12 @@ class ParallelExecutor:
             if cached_result is not None:
                 node_outputs[node_id] = cached_result
                 cache_hit = True
+                try:
+                    _src = cache.source_of(cache_key)
+                    if isinstance(_src, dict) and _src.get("run_id"):
+                        cache_source_run_id = str(_src["run_id"])
+                except Exception:
+                    cache_source_run_id = None
                 logger.info(f"[{idx}] {node_type} — cache hit")
 
         if not cache_hit:
@@ -338,7 +345,13 @@ class ParallelExecutor:
             # cache_key is only set for cacheable nodes (Req 1.8 — checked
             # before load so stale entries of non-cacheable nodes never hit).
             if cache is not None and cache_key is not None:
-                cache.save(cache_key, outputs)
+                from datetime import datetime as _dt, timezone as _tz
+
+                _source = {"run_id": run_id, "node_id": node_id, "saved_at": _dt.now(_tz.utc).isoformat()}
+                try:
+                    cache.save(cache_key, outputs, source=_source)
+                except TypeError:  # caches without audit provenance support
+                    cache.save(cache_key, outputs)
 
         # ── Checkpoint ────────────────────────────────────────────────────────
         if checkpoint:
@@ -438,6 +451,15 @@ class ParallelExecutor:
                 "duration_ms": round(node_duration * 1000, 2),
                 "status": "completed",
                 "cache_hit": cache_hit,
+                **(
+                    {"cache_key": cache_key, "cache_source_run_id": cache_source_run_id}
+                    if cache_hit else {}
+                ),
+                **(
+                    {"node_label": logger.node_labels[node_id]}
+                    if isinstance(getattr(logger, "node_labels", None), dict)
+                    and logger.node_labels.get(node_id) else {}
+                ),
             })
         if run_manager is not None:
             try:

@@ -232,6 +232,8 @@ All timestamps are UTC-aware ISO 8601 strings ending in `+00:00`.
 
 ---
 
+**Audit inputs (both run endpoints; body may be the wrapper `{graph, project?, trigger?, pipeline?, pipeline_env?, pipeline_version?}`):** optional body keys `trigger` (`ui|api|…`, default `api`; the console sends `ui`), `pipeline` (saved pipeline name), `pipeline_env` (`draft|staging|prod`), `pipeline_version` (`vN`). `X-Actor` sets the actor; it is written to `meta.actor` before execution and reused by the sealed record and every `run.*` audit event.
+
 ### `POST /api/v1/pipelines/run-async`
 
 Start a pipeline run in a background thread and return the `run_id` immediately.
@@ -425,7 +427,9 @@ List all pipeline runs, newest first.
 ]
 ```
 
-Every row carries `display_name`, `summary` and `regression` — see [Run results](#run-results--display_name-summary-regression). `graph_name` is unchanged (machine id).
+Query: `limit`, `offset`, `project`, `include_archived` (default `false` — archived runs are hidden; with `include_archived=1` their rows carry `archived: true`).
+
+Every list row carries `display_name` and `summary`; **`regression` is omitted on the list** (sibling scans are expensive) and is attached on `GET /runs/{id}` — see [Run results](#run-results--display_name-summary-regression). `graph_name` is unchanged (machine id).
 
 ---
 
@@ -456,6 +460,12 @@ Get a run's config YAML and log entries.
   "node_progress": {"trainer_0": {"type": "node_progress", "epoch": 3, "epochs": 30, "message": "Trainer · epoch 3/30 · loss 0.41"}}
 }
 ```
+
+**Run id resolution.** Every `/runs/{run_id}…` endpoint (detail, status, models, graph, outputs, outputs/zip, checkpoints, artifacts, provenance, promote, verify, replay, delete, restore) and `GET /experiments/compare?run_ids=` accept the full id **or a unique prefix of ≥ 8 characters**; responses always carry the full `run_id`. No match → `404 "Run not found"`; several matches → `404 "Ambiguous run id prefix '<p>' matches N runs: <id1>, …"`. Shorter prefixes only match exactly.
+
+**Audit fields** (see [Run audit record](#run-audit-record--prove-json)): `record` (the sealed `prove.json`, `null` while the run is not terminal), `record_status` (`sealed` | `pending`), `pipeline_drift` (below, `null` for ad-hoc graphs). `meta` carries `actor`, `trigger` (`ui|api|cli|sdk|mcp|schedule|replay`), `node_labels` (`{node_id: "Trainer · Path C (MobileNet · lr 0.002)"}`), `replay_of`, `pipeline_ref`, `pipeline_source`, `external_inputs`, `node_implementations`, `environment_info`, `archived*`, and for failed runs `error` (`"<ExceptionType>: <message>"`), `error_type`, `error_traceback`, `failed_node_id`. `meta.node_stats[]` rows carry `node_label` and, on cache hits, `cache_key` + `cache_source_run_id` (the run that produced the cache entry). Log events `node_start` / `node_end` / `node_error` / `node_progress` / `node_skip` carry `node_label`; `node_error` carries the real `error_type` and `traceback` (isolated plugin workers report the worker exception, not stderr noise).
+
+`pipeline_drift`: `{project, pipeline, env, run_graph_hash, current_hash, drifted, layout_only, checked_at}` — compares the run's logical `graph_hash` with the **current** saved pipeline of the same name/env (prepared like a run: path rewire + project stamp). `drifted: null` when the saved pipeline is gone; `layout_only: true` when only canvas `ui` positions differ.
 
 `display_name`, `summary`, `regression` are also merged into `meta`. `node_progress` is the latest `node_progress` event per node (live while running; `logs` also contains the `node_progress` rows).
 
@@ -499,10 +509,10 @@ Get a run's config YAML and log entries.
 
 - **Paths** are the fork branches after the last node shared by every sink (each sink's ancestry minus the shared trunk; branches that overlap are merged). A graph with one sink is one path (`path-a`, all nodes). Paths with neither metrics nor models are dropped; `paths` is `[]` for runs without results (e.g. preprocess runs).
 - **Metrics** per path merge, in topological order, the trainer history's last epoch (`final_*`), every `metrics.json` in a node's `output_path`/`output_dir`, and numeric `metrics` of the node's output artifact (`outputs_index.json` → `data.json`); evaluator values win. Only numeric scalars are kept.
-- **`primary_metric`** — first present of `test_accuracy` > `accuracy` > `val_accuracy` > `f1` (then their `final_*` forms); value of the best path. `best_path_id` is the path with the highest primary metric (or the only path).
+- **`primary_metric`** — first present of `test_accuracy` > `accuracy` > `val_accuracy` > `f1` (then their `final_*` forms); else the first finite scalar metric name (sorted). Value is from the best path. `best_path_id` prefers **higher** values unless the metric name matches loss/error/MAE/MSE/RMSE/latency/duration (then lower is better).
 - **`label`** describes what differs between parallel paths, from the model_builder/trainer configs: `architecture` (`ds_cnn` → `DS-CNN`, `simple_cnn` → `CNN-small`, …), `epochs`, `batch_size`, `learning_rate`, then any other differing scalar key — at most two facts. A single path shows architecture + epochs. Identical/empty labels fall back to `Path A`, `Path B`, ….
 - **`dataset`** comes from the ingest node's `node_end.dataset` (older runs: recomputed from its config + `output_count`).
-- **`regression`** compares the primary metric with the best **older succeeded** run of the same `graph_name` and `project` that reports the same metric; `null` when there is none.
+- **`regression`** (detail GET only; list rows omit it) compares the primary metric with the best **older succeeded** run of the same `graph_name` and `project` that reports the same metric, respecting higher/lower-is-better; `null` when there is none.
 - **`display_name`** — `metadata.title` when set; else the graph name split into family · phase · rest (`speech_commands_e2e_preprocess_down` → `Speech commands E2E · preprocess · down`). Generic names (`pipeline`) use `metadata.source_example` / `group` / `step_title`, or the bundled example whose node-type set matches, or the node composition. A `dataset_ingest` path that ends in a label folder (`datasets/input/<ds>/<label>`, `datasets/output/<p>/<v>/<split>/<label>`) appends the label (`Speech commands E2E · infer · down`).
 
 ---
@@ -718,7 +728,39 @@ Runtime control for **active** runs in this API process (same registry as MCP `p
 
 ### `DELETE /api/v1/runs/{run_id}`
 
-Delete a finished run journal and its workspace artifacts. Not allowed while status is `running` or `paused`.
+**Archives** the run by default (soft delete): writes `runs/<id>/.archived` + `meta.archived`, `archived_at`, `archived_by`; the journal, sealed record and artifacts stay. Archived runs are hidden from `GET /runs` (use `?include_archived=1`). Response `{run_id, archived: true, archived_at, archived_by}` (idempotent). Audit `run.archive`.
+
+`?purge=true` hard-deletes the journal and `artifacts/<slug>/runs/<run_id>` (retargeting `latest/`) and requires header **`X-Confirm-Purge: <full run_id>`** — otherwise `428 {detail: {code: "confirm_required", message}}`. Response: the delete payload plus `{purged: true, record_hash}`. Audit `run.purge` with `record_hash` / `graph_hash`. Both modes return `409` while the run is pending / running / paused.
+
+### `POST /api/v1/runs/{run_id}/restore`
+
+Un-archive (`{run_id, archived: false}`); audit `run.restore`.
+
+### Run audit record — `prove.json`
+
+Every terminal run (succeeded / failed / cancelled) seals an immutable `runs/<id>/prove.json` (schema `2.0`, `app/core/runs/audit_record.py`), returned as `record` by `GET /runs/{id}`:
+
+| Field | Content |
+|---|---|
+| `graph_hash` / `materialized_graph_hash` | logical graph hash (also `graph.logical.json`) / hash of the executed `graph.json`. Note `GET /runs/{id}/graph` returns the materialized graph, whose write paths contain `runs/<run_id>` — compare against saved pipelines with `pipeline_drift` (or ignore those keys) |
+| `pipeline_source`, `pipeline_version` | `saved` / `saved_modified` / `adhoc`; `{project, name, env, version, revision_hash, match: declared|content_hash|name_only, label}` (`null` for ad-hoc). Declared via run payload `pipeline` / `pipeline_env` / `pipeline_version`, else inferred by content hash against the project's draft head + published versions |
+| `node_implementation_versions` | `node_type → {plugin, version, runtime: isolated|inprocess|builtin, plugin_code_hash (sha256 over the plugin source tree, cached by stat), node_version, source, venv_libraries?}`; plus `plugin_version` / `plugin_code_hashes` per plugin |
+| `external_inputs` | every external path a node config reads: `{node_id, node_type, key, path, resolved, kind, content_hash, hash_mode: content|manifest, file_count, total_bytes, dataset: {project, version}|null}`; `dataset_versions` = those under `datasets/output/<project>/<vN>` |
+| `outputs`, `outputs_manifest_hash` | per-node output folder hashes (+ `outputs_manifest.json` per-file sidecar used for verify diffs) |
+| `cache` | `[{node_id, node_type, cache_key, source_run_id}]` for cache hits |
+| `environment` | python, OS, machine, hostname, key `libraries` (numpy, tensorflow, keras, librosa, torch, onnx, …), `container_image_digest` (`GRAPHYN_IMAGE_DIGEST`), `container_id` (/proc), `git_commit` (`GRAPHYN_GIT_SHA` or `.git`), `graphyn_version`, backend |
+| `actor`, `trigger`, `replay_of`, `node_labels`, `seed`, `status`, `error*` | identity / linkage |
+| `chain`, `previous_record_hash`, `record_hash` | per-project hash chain (`workspace/audit/chains/<project>.jsonl`, `_global` without a project); `record_hash` = sha256 of the canonical record without itself |
+
+Directory trees above `GRAPHYN_AUDIT_HASH_MAX_BYTES` (default 512 MiB) or `GRAPHYN_AUDIT_HASH_MAX_FILES` (20000) are hashed in `manifest` mode (relative paths + sizes). Legacy runs keep their 1.0 record.
+
+### `GET /api/v1/runs/{run_id}/verify`
+
+Re-hashes the graph snapshot, the logical graph, external inputs (current content), stored output folders, the outputs manifest, the record hash and its chain position. Response `{run_id, verified_at, status: pass|changed|fail|unsealed, ok, record_hash, checks: [{check, status: pass|fail|changed|missing|skipped, expected, actual, target?, node_id?, details?}]}`. `fail` = tamper / hash mismatch / broken chain; `changed` = inputs or outputs differ now (output rows list `added` / `removed` / `modified` files).
+
+### `POST /api/v1/runs/{run_id}/replay`
+
+Body `{check_inputs?: false, force?: false}`. Starts a new run from the run's **logical** graph (same seed and config, re-scoped to the new run — never writes into the old run's folders). Response `{run_id, replay_of, status: "pending", graph_hash}`. With `check_inputs`, `409 {detail: {code: "inputs_changed", message, changes: [{path, node_id, status, expected, actual}]}}` when an external input hash changed, unless `force`. The new run's meta/record carry `replay_of` and `trigger: "replay"`; audit `run.replay` (+ `run.start`). MCP `replay_run` shares the implementation (`app/core/runs/run_replay.py`) and accepts `check_inputs` / `force` / `actor`.
 
 ---
 
@@ -1336,9 +1378,13 @@ Reuses ProvenanceStore, ArtifactStore, and run `meta.json` (including `distribut
 
 Newest-first append-only audit events from `{project}/audit/events.jsonl`.
 
-**Query:** `limit` (default 100, max 1000).
+**Query:** `limit` (default 100, max 1000), `offset` (paging over **all** matching events, not just the newest 1000), `run_id` (events of a run — full id or prefix ≥ 8 — incl. `run.replay` events whose `metadata.replay_of` is that run), `resource_id` (exact or prefix ≥ 8), `action` (exact, or `run.*` prefix), `q` (case-insensitive free text over the event JSON).
+
+**Response:** `{events, limit, offset, total, has_more}`.
 
 Seed hooks: template save, async run start, worker register.
+
+Run lifecycle actions (`resource_type: "run"`, `resource_id` = the **full** run id, `actor` = the run's `meta.actor`, `metadata.project` set when the run has a project): `run.start` (REST / SDK / CLI / MCP / schedule / replay), `run.finish` / `run.fail` (`result: failure`) / `run.cancel` (sealed at the terminal transition, `metadata.record_hash`), `run.archive`, `run.restore`, `run.purge` (`record_hash`), `run.replay` (`metadata.replay_of`), plus `run.promote`.
 
 
 ## Experiments — `/api/v1/experiments`
@@ -1373,6 +1419,9 @@ List of experiment blocks:
 One experiment block (`404` if no runs under that name).
 
 ### `GET /api/v1/experiments/compare`
+
+`run_ids` entries may be unique run id prefixes (≥ 8 chars); an ambiguous prefix is a 404.
+
 
 **Query:** `run_ids` — comma-separated run ids.
 

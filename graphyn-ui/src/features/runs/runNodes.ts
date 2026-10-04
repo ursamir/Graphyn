@@ -309,7 +309,17 @@ export function laneLabel(lane: string | undefined | null): string {
   return `Path ${lane}`
 }
 
-export type RunFailure = { nodeId: string | null; nodeType: string | null; error: string }
+export type RunFailure = {
+  nodeId: string | null
+  nodeType: string | null
+  error: string
+  /** Real exception class (audit API: node_error `error_type` / meta `error_type`). */
+  errorType?: string
+  /** Worker traceback text (node_error `traceback` / meta `error_traceback`). */
+  traceback?: string
+  /** Backend path-aware step label (`node_label`). */
+  nodeLabel?: string
+}
 
 /** Parse a journal row whose `message` is itself a JSON event. */
 function eventOf(row: Record<string, unknown>): Record<string, unknown> {
@@ -358,7 +368,15 @@ export function extractRunFailure(input: {
     const ev = events[i]
     if (String(ev.type ?? ev.event ?? '') !== 'node_error') continue
     const error = errText(ev.error_message) || errText(ev.error) || errText(ev.message)
-    if (error) return { ...nodeOf(ev), error }
+    if (error) {
+      return {
+        ...nodeOf(ev),
+        error,
+        ...(str(ev.error_type) ? { errorType: str(ev.error_type) } : {}),
+        ...(str(ev.traceback) ? { traceback: str(ev.traceback) } : {}),
+        ...(str(ev.node_label) ? { nodeLabel: str(ev.node_label) } : {}),
+      }
+    }
   }
   let failedNode: { nodeId: string | null; nodeType: string | null } | null = null
   for (let i = events.length - 1; i >= 0; i--) {
@@ -373,9 +391,19 @@ export function extractRunFailure(input: {
   }
   const meta = input.detail?.meta && typeof input.detail.meta === 'object' ? (input.detail.meta as Record<string, unknown>) : null
   const direct = errText(input.detail?.error) || errText(input.status?.error) || errText(meta?.error)
-  const failedFromStatus = str(input.status?.failed_node) || str(input.status?.current_node) || null
+  const failedFromStatus =
+    str(meta?.failed_node_id) || str(input.status?.failed_node) || str(input.status?.current_node) || null
   const fallbackNode = failedNode ?? { nodeId: failedFromStatus, nodeType: null }
-  if (direct) return { ...fallbackNode, error: direct }
+  if (direct) {
+    const errorType = str(meta?.error_type) || str(input.detail?.error_type)
+    const traceback = str(meta?.error_traceback) || str(input.detail?.error_traceback)
+    return {
+      ...fallbackNode,
+      error: direct,
+      ...(errorType ? { errorType } : {}),
+      ...(traceback ? { traceback } : {}),
+    }
+  }
   const recent = Array.isArray(input.debug?.recent_errors) ? (input.debug!.recent_errors as unknown[]) : []
   for (let i = recent.length - 1; i >= 0; i--) {
     const r = recent[i]

@@ -7,13 +7,18 @@ Responsibility:   Filesystem persistence for a single pipeline run. Manages
 Owns:             RunManager class — run directory, meta.json, pause/cancel
                   threading events, artifact registration delegation.
                   Checkpoint discovery delegated to app.core.runs.checkpoint.
+                  Every terminal transition (succeeded / failed / cancelled)
+                  seals the hash-chained audit record (prove.json, via
+                  app.core.runs.audit_record) and appends run.finish /
+                  run.fail / run.cancel to the platform audit log.
 Public Surface:   RunManager (constructor, save_*, mark_*, pause, resume,
                   cancel, poll_cancelled, durable_status, register_artifact, artifacts,
                   get_provenance_summary); write_cancel_marker, CANCEL_MARKER.
                   Status writes are compare-and-set via app.core.runs.run_status.
 Must NOT:         Import from app.domain, app.api, or app.core.execution.orchestrator.
                   Must not understand pipeline execution order or node logic.
-Dependencies:     BC6 (artifact_store, provenance, checkpoint), BC1 (ir.loader),
+Dependencies:     BC6 (artifact_store, provenance, checkpoint, audit_record,
+                  trust.audit), BC1 (ir.loader),
                   app.core.config, app.core.errors (ResumeError),
                   app.core.runs.run_status (transition matrix).
 Reason To Change: Run persistence format evolves, resume state schema changes,
@@ -268,27 +273,7 @@ class RunManager:
                 self.run_id, full.get("status"),
             )
             return False
-        try:
-            from app.core.runs.prove import write_prove_capture
-
-            graph_data = None
-            graph_path = os.path.join(self.base_path, "graph.json")
-            if os.path.exists(graph_path):
-                try:
-                    with open(graph_path, encoding="utf-8") as gf:
-                        graph_data = json.load(gf)
-                except Exception:
-                    graph_data = None
-            write_prove_capture(
-                self.base_path,
-                run_id=self.run_id,
-                graph_hash=self._graph_hash or str(full.get("graph_hash") or ""),
-                meta=full,
-                graph=graph_data if isinstance(graph_data, dict) else None,
-                artifacts=list(self.artifacts),
-            )
-        except Exception:
-            log.debug("prove capture write failed for %s", self.run_id, exc_info=True)
+        self._seal_terminal("succeeded", full)
         try:
             from app.core.runs.run_notify import notify_run_terminal
 
@@ -301,6 +286,60 @@ class RunManager:
         except Exception:
             pass
         return True
+
+    def _seal_terminal(self, status: str, meta: dict) -> None:
+        """Seal prove.json (audit record v2, hash-chained) + audit run.finish/fail/cancel.
+
+        Best-effort: never raises into the lifecycle caller. Only the first
+        terminal transition seals (prove.json is first-writer-wins).
+        """
+        record = None
+        try:
+            from app.core.runs.audit_record import seal_run_record
+
+            graph_data = None
+            graph_path = os.path.join(self.base_path, "graph.json")
+            if os.path.exists(graph_path):
+                try:
+                    with open(graph_path, encoding="utf-8") as gf:
+                        graph_data = json.load(gf)
+                except Exception:
+                    graph_data = None
+            m = dict(meta)
+            if self._graph_hash and not m.get("graph_hash"):
+                m["graph_hash"] = self._graph_hash
+            record = seal_run_record(
+                self.base_path,
+                run_id=self.run_id,
+                status=status,
+                meta=m,
+                graph=graph_data if isinstance(graph_data, dict) else None,
+                artifacts=list(self.artifacts),
+            )
+        except Exception:
+            log.debug("audit record seal failed for %s", self.run_id, exc_info=True)
+        try:
+            from app.core.trust.audit import record_audit
+
+            action = {"succeeded": "run.finish", "failed": "run.fail", "cancelled": "run.cancel"}.get(status, "run.finish")
+            record_audit(
+                actor=str(meta.get("actor") or "system"),
+                action=action,
+                resource_type="run",
+                resource_id=self.run_id,
+                result="failure" if status == "failed" else "success",
+                meta={
+                    "status": status,
+                    "graph_name": meta.get("graph_name"),
+                    "project": meta.get("project"),
+                    "trigger": meta.get("trigger"),
+                    "record_hash": (record or {}).get("record_hash"),
+                    "error": meta.get("error") if status == "failed" else None,
+                    "replay_of": meta.get("replay_of"),
+                },
+            )
+        except Exception:
+            log.debug("terminal audit event failed for %s", self.run_id, exc_info=True)
 
     def save_graph_ir(self, graph_data: dict, *, logical_hash: str | None = None) -> None:
         """Write graph.json and set self._graph_hash.
@@ -333,6 +372,8 @@ class RunManager:
         node_stats: list | None = None,
         failed_node_id: str | None = None,
         failed_node_type: str | None = None,
+        error_type: str | None = None,
+        error_traceback: str | None = None,
     ) -> bool:
         """Record a failure — compare-and-set; never overwrites a terminal status.
 
@@ -365,7 +406,16 @@ class RunManager:
             })
             if stats:
                 existing["node_stats"] = stats
+            if error_type:
+                existing["error_type"] = str(error_type)
+            if error_traceback:
+                existing["error_traceback"] = str(error_traceback)[-20000:]
+            if failed_node_id:
+                existing["failed_node_id"] = failed_node_id
+                if failed_node_type:
+                    existing["failed_node_type"] = failed_node_type
             self._write_meta_unlocked(existing, meta_path, tmp)
+        self._seal_terminal("failed", existing)
         try:
             from app.core.runs.run_notify import notify_run_terminal
 
@@ -397,6 +447,7 @@ class RunManager:
             self._write_meta_unlocked(existing, meta_path, tmp)
         if already_cancelled:
             return True  # idempotent re-stamp — the cancel event already fired
+        self._seal_terminal("cancelled", existing)
         try:
             from app.core.runs.run_notify import notify_run_terminal
 

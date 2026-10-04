@@ -5,8 +5,11 @@ Responsibility:   Run an isolated plugin node's process() in a subprocess
                   using that plugin's venv Python, with pickle IPC via files.
 Owns:             run_isolated_node(), recast_plugin_types(); live parsing
                   of worker ``@@GRAPHYN_PROGRESS@@ <json>`` stderr lines
-                  forwarded as node_progress events (app.core.nodes.progress).
+                  forwarded as node_progress events (app.core.nodes.progress);
+                  IsolatedNodeError (real worker exception: worker
+                  ``error.json`` first, else noise-filtered stderr traceback).
 Public Surface:   run_isolated_node, recast_plugin_types, load_isolated_outputs,
+                  IsolatedNodeError, parse_worker_stderr,
                   hydrate_platform_models (via app.core.plugins.hydrate)
 Must NOT:         Import from app.domain or app.api.
 Dependencies:     stdlib, runtime_registry, app.core.nodes.progress (lazy)
@@ -34,6 +37,7 @@ import json
 import logging
 import os
 import pickle
+import re
 import signal
 import subprocess
 import tempfile
@@ -58,12 +62,14 @@ from app.core.plugins.runtime_registry import IsolatedPluginSpec
 
 __all__ = [
     "ISOLATED_ENVELOPE_MARK",
+    "IsolatedNodeError",
     "IsolatedResult",
     "RestrictedUnpickler",
     "coerce_node_inputs",
     "hydrate_platform_models",
     "load_isolated_outputs",
     "load_isolated_result",
+    "parse_worker_stderr",
     "recast_plugin_types",
     "run_isolated_node",
 ]
@@ -502,6 +508,217 @@ def _run_isolated_subprocess_streaming(
     return result
 
 
+# ── Worker failure reporting ─────────────────────────────────────────────────
+
+class IsolatedNodeError(RuntimeError):
+    """An isolated plugin worker exited non-zero; carries the *real* exception.
+
+    ``str(exc)`` is ``"<error_type>: <error_message>"`` (or just the type when
+    the message is empty) — never the leading TensorFlow/absl stderr noise.
+    The full worker traceback and a noise-filtered stderr tail are kept as
+    attributes for logs / UI drill-down.
+    """
+
+    def __init__(
+        self,
+        error_type: str,
+        error_message: str = "",
+        *,
+        traceback_text: str = "",
+        node_type: str = "",
+        plugin_name: str = "",
+        exit_code: int | None = None,
+        stderr_tail: str = "",
+        error_module: str = "",
+    ) -> None:
+        self.error_type = str(error_type or "WorkerError")
+        self.error_message = str(error_message or "")
+        self.traceback_text = str(traceback_text or "")
+        self.node_type = str(node_type or "")
+        self.plugin_name = str(plugin_name or "")
+        self.exit_code = exit_code
+        self.stderr_tail = str(stderr_tail or "")
+        self.error_module = str(error_module or "")
+        text = (
+            f"{self.error_type}: {self.error_message}"
+            if self.error_message
+            else self.error_type
+        )
+        super().__init__(text)
+
+    def __reduce__(self):  # keep picklable despite keyword-only attributes
+        return (
+            _rebuild_isolated_node_error,
+            (
+                self.error_type,
+                self.error_message,
+                self.traceback_text,
+                self.node_type,
+                self.plugin_name,
+                self.exit_code,
+                self.stderr_tail,
+                self.error_module,
+            ),
+        )
+
+
+def _rebuild_isolated_node_error(
+    error_type, error_message, traceback_text, node_type, plugin_name,
+    exit_code, stderr_tail, error_module,
+) -> IsolatedNodeError:
+    return IsolatedNodeError(
+        error_type,
+        error_message,
+        traceback_text=traceback_text,
+        node_type=node_type,
+        plugin_name=plugin_name,
+        exit_code=exit_code,
+        stderr_tail=stderr_tail,
+        error_module=error_module,
+    )
+
+
+# Known ML-runtime stderr noise (TensorFlow / absl / glog / CUDA plugin
+# registration). Matched per line; never applied to exception lines.
+_STDERR_NOISE = [
+    re.compile(r"^WARNING: All log messages before absl::InitializeLog\(\)"),
+    re.compile(r"^[IWEF]\d{4} "),
+    re.compile(r"oneDNN custom operations"),
+    re.compile(r"This TensorFlow binary is optimized"),
+    re.compile(r"^To enable the following instructions:"),
+    re.compile(r"(?i)\bcuda|\bcudnn|\bcufft|\bcublas|\bcupti"),
+    re.compile(r"Unable to register cu"),
+    re.compile(r"computation placer already registered"),
+    re.compile(r"tensorflow/[\w/.-]+\.cc:\d+\]"),
+    re.compile(r"\.cc:\d+\]"),
+    re.compile(r"^WARNING: All log messages"),
+]
+_TRACEBACK_HEADER = "Traceback (most recent call last):"
+# Final exception line, e.g. ``ValueError: bad`` / ``pkg.mod.MyError: x`` / ``KeyError``.
+_EXC_LINE = re.compile(r"^([A-Za-z_][\w.]*)(?::\s?(.*))?$")
+_EXC_NAME_HINT = re.compile(r"(Error|Exception|Exit|Interrupt|Warning|Failure|Fault)$")
+_STDERR_TAIL_LINES = 40
+
+
+def _looks_like_exception_line(line: str) -> bool:
+    m = _EXC_LINE.match(line.rstrip())
+    if not m:
+        return False
+    return bool(_EXC_NAME_HINT.search(m.group(1).rsplit(".", 1)[-1]))
+
+
+def _is_stderr_noise(line: str) -> bool:
+    text = line.rstrip("\r\n")
+    if not text.strip():
+        return True
+    if _looks_like_exception_line(text):
+        return False
+    return any(p.search(text) for p in _STDERR_NOISE)
+
+
+def _clean_stderr_lines(stderr: str) -> list[str]:
+    return [ln.rstrip("\r") for ln in (stderr or "").splitlines() if not _is_stderr_noise(ln)]
+
+
+def parse_worker_stderr(stderr: str) -> dict[str, str]:
+    """Extract the real failure from isolated-worker stderr.
+
+    Returns ``{"error_type", "message", "traceback"}``. Uses the LAST
+    ``Traceback (most recent call last):`` block and its final exception line
+    (``SomeError: msg``), ignoring TF/absl/glog/CUDA noise. Without a
+    traceback, the last non-noise line becomes the message with
+    ``error_type="WorkerError"``.
+    """
+    lines = _clean_stderr_lines(stderr)
+    start = None
+    for idx in range(len(lines) - 1, -1, -1):
+        if lines[idx].strip() == _TRACEBACK_HEADER:
+            start = idx
+            break
+    if start is not None:
+        block = lines[start:]
+        exc_idx = None
+        for j in range(1, len(block)):
+            line = block[j]
+            if not line or line[:1].isspace():
+                continue  # frame / source / caret lines
+            if line.startswith(("During handling", "The above exception")):
+                continue
+            exc_idx = j
+            break
+        if exc_idx is not None:
+            exc_line = block[exc_idx].strip()
+            m = _EXC_LINE.match(exc_line)
+            if m:
+                name = m.group(1).rsplit(".", 1)[-1]
+                message = (m.group(2) or "").strip()
+            else:
+                name, sep, rest = exc_line.partition(":")
+                name = name.strip() or "WorkerError"
+                message = rest.strip() if sep else ""
+            return {
+                "error_type": name,
+                "message": message,
+                "traceback": "\n".join(block[: exc_idx + 1]),
+            }
+        return {
+            "error_type": "WorkerError",
+            "message": "worker traceback without a final exception line",
+            "traceback": "\n".join(block),
+        }
+    message = lines[-1].strip() if lines else ""
+    return {"error_type": "WorkerError", "message": message, "traceback": ""}
+
+
+def _read_worker_error_file(path: Path) -> dict[str, Any] | None:
+    """Load the worker's structured ``error.json`` (None when absent/invalid)."""
+    try:
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict) or not data.get("error_type"):
+        return None
+    return data
+
+
+def _build_isolated_error(
+    result: subprocess.CompletedProcess,
+    *,
+    error_path: Path,
+    node_type: str,
+    plugin_name: str,
+) -> IsolatedNodeError:
+    stderr = result.stderr or ""
+    raw = stderr if stderr.strip() else (result.stdout or "")
+    tail = "\n".join(_clean_stderr_lines(raw)[-_STDERR_TAIL_LINES:])
+    data = _read_worker_error_file(error_path)
+    if data is not None:
+        error_type = str(data.get("error_type") or "WorkerError")
+        message = str(data.get("message") or "")
+        tb = str(data.get("traceback") or "")
+        module = str(data.get("error_module") or "")
+    else:
+        parsed = parse_worker_stderr(raw)
+        error_type = parsed["error_type"]
+        message = parsed["message"]
+        tb = parsed["traceback"]
+        module = ""
+        if not message and error_type == "WorkerError":
+            message = f"isolated worker exited with code {result.returncode}"
+    return IsolatedNodeError(
+        error_type,
+        message,
+        traceback_text=tb,
+        node_type=node_type,
+        plugin_name=plugin_name,
+        exit_code=result.returncode,
+        stderr_tail=tail,
+        error_module=module,
+    )
+
+
 def load_isolated_result(path: Path) -> IsolatedResult:
     """Load worker pickle (legacy port-dict or envelope) via RestrictedUnpickler."""
     with path.open("rb") as fh:
@@ -556,6 +773,7 @@ def run_isolated_node(
     inputs_path = work / "inputs.pkl"
     outputs_path = work / "outputs.pkl"
     job_path = work / "job.json"
+    error_path = work / "error.json"
     try:
         with inputs_path.open("wb") as fh:
             pickle.dump(
@@ -571,6 +789,9 @@ def run_isolated_node(
             "seed": seed,
             "inputs_path": str(inputs_path),
             "outputs_path": str(outputs_path),
+            # Worker writes {error_type, error_module, message, traceback} here
+            # on failure (app.core.plugins.worker) → IsolatedNodeError.
+            "error_path": str(error_path),
         }
         job_path.write_text(json.dumps(job), encoding="utf-8")
 
@@ -619,11 +840,21 @@ def run_isolated_node(
             on_progress=progress_sink,
         )
         if result.returncode != 0:
-            err = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(
-                f"Isolated plugin worker failed for '{node_type}' "
-                f"(plugin={spec.plugin_name}, exit={result.returncode}): {err}"
+            exc = _build_isolated_error(
+                result,
+                error_path=error_path,
+                node_type=node_type,
+                plugin_name=spec.plugin_name,
             )
+            log.warning(
+                "Isolated plugin worker failed for '%s' (plugin=%s, exit=%s): %s\n%s",
+                node_type,
+                spec.plugin_name,
+                result.returncode,
+                exc,
+                exc.traceback_text or exc.stderr_tail,
+            )
+            raise exc
         if not outputs_path.exists():
             raise RuntimeError(
                 f"Isolated worker for '{node_type}' produced no outputs file"
@@ -631,7 +862,7 @@ def run_isolated_node(
         return load_isolated_result(outputs_path)
     finally:
         # Best-effort cleanup
-        for p in (inputs_path, outputs_path, job_path):
+        for p in (inputs_path, outputs_path, job_path, error_path):
             try:
                 p.unlink(missing_ok=True)
             except Exception:

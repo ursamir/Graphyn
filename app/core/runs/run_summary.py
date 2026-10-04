@@ -10,10 +10,11 @@ Owns:             run_insights() (cached summary + models + display name),
                   ``display_name`` for run rows), run_models(),
                   compute_paths() (fork branches after the last shared node),
                   path_labels() (config diff → "DS-CNN · 30 epochs"),
+                  node_labels() (node_id → "Trainer · Path C (MobileNet · lr 0.002)"),
                   model file discovery (keras / SavedModel / tflite / onnx / pt),
                   resolve_workspace_path(), to_workspace_rel().
 Public Surface:   run_insights, run_summary_fields, run_models, compute_paths,
-                  path_labels, resolve_workspace_path, to_workspace_rel,
+                  path_labels, node_labels, resolve_workspace_path, to_workspace_rel,
                   read_labels_txt, model_row_for_path, PRIMARY_METRICS,
                   clear_cache
 Must NOT:         Import app.domain / app.api; write into run dirs or
@@ -40,6 +41,11 @@ from typing import Any
 
 SUMMARY_VERSION = 1
 PRIMARY_METRICS: tuple[str, ...] = ("test_accuracy", "accuracy", "val_accuracy", "f1")
+
+
+def higher_is_better(name: str) -> bool:
+    """Prefer higher values unless the metric name implies loss/error/latency."""
+    return not re.search(r"(loss|error|mae|mse|rmse|latency|duration)", str(name or ""), re.I)
 MODEL_FILE_FORMATS = {
     ".keras": "keras",
     ".h5": "keras",
@@ -431,6 +437,53 @@ def path_labels(graph: dict[str, Any], paths: list[dict[str, Any]]) -> dict[str,
     return out
 
 
+def _humanize_node_type(node_type: str) -> str:
+    text = str(node_type or "node").replace("Isolated_", "").replace("_", " ").strip()
+    return text[:1].upper() + text[1:] if text else "Node"
+
+
+def node_labels(graph: dict[str, Any]) -> dict[str, str]:
+    """Human label per node: ``"Trainer · Path C (MobileNet · lr 0.002)"``.
+
+    Nodes on a parallel branch get their path letter plus the branch's
+    config-diff label; shared nodes (and single-path graphs) get the node
+    label / humanized node type. Duplicate labels get ``(node_id)``.
+    """
+    nodes = _nodes(graph)
+    if not nodes:
+        return {}
+    try:
+        paths = compute_paths(graph)
+        labels = path_labels(graph, paths) if paths else {}
+    except Exception:
+        paths, labels = [], {}
+    path_of: dict[str, str] = {}
+    if len(paths) > 1:
+        for p in paths:
+            for nid in p["node_ids"]:
+                path_of.setdefault(nid, p["path_id"])
+    out: dict[str, str] = {}
+    for node in nodes:
+        nid = str(node.get("id"))
+        ntype = _ntype(node)
+        raw = str(node.get("label") or "").strip()
+        base = raw if raw and raw != ntype else _humanize_node_type(ntype)
+        pid = path_of.get(nid)
+        if pid:
+            letter = f"Path {pid.split('-', 1)[-1].upper()}"
+            plabel = labels.get(pid) or letter
+            out[nid] = f"{base} · {letter}" if plabel == letter else f"{base} · {letter} ({plabel})"
+        else:
+            out[nid] = base
+    counts: dict[str, int] = {}
+    for label in out.values():
+        counts[label] = counts.get(label, 0) + 1
+    for nid, label in list(out.items()):
+        if counts[label] > 1:
+            out[nid] = f"{label} ({nid})"
+    return out
+
+
 # ── metrics + models per node ─────────────────────────────────────────────────
 
 
@@ -621,7 +674,17 @@ def _pick_primary(metric_sets: list[dict[str, float]]) -> str | None:
     for name in PRIMARY_METRICS:
         if any(f"final_{name}" in m for m in metric_sets):
             return f"final_{name}"
-    return None
+    # Generic fallback: first finite scalar across paths (stable key order).
+    keys: list[str] = []
+    seen: set[str] = set()
+    for m in metric_sets:
+        for k, v in m.items():
+            if k in seen or not isinstance(v, (int, float)):
+                continue
+            seen.add(k)
+            keys.append(k)
+    keys.sort()
+    return keys[0] if keys else None
 
 
 def _compute_insights(run_id: str, run_path: Path, meta: dict[str, Any]) -> dict[str, Any]:
@@ -753,10 +816,13 @@ def _compute_insights(run_id: str, run_path: Path, meta: dict[str, Any]) -> dict
         path_rows = []
     best_path_id = None
     best_value = None
+    prefer_high = higher_is_better(primary_name or "")
     if primary_name:
         for r in path_rows:
             v = r["metrics"].get(primary_name)
-            if isinstance(v, (int, float)) and (best_value is None or v > best_value):
+            if not isinstance(v, (int, float)):
+                continue
+            if best_value is None or (prefer_high and v > best_value) or (not prefer_high and v < best_value):
                 best_value, best_path_id = v, r["path_id"]
     if best_path_id is None and len(path_rows) == 1:
         best_path_id = path_rows[0]["path_id"]
@@ -884,7 +950,8 @@ def compute_regression(
         pm = ((ins.get("summary") or {}).get("primary_metric") or {})
         if pm.get("name") != primary.get("name") or not isinstance(pm.get("value"), (int, float)):
             continue
-        if best_val is None or pm["value"] > best_val:
+        prefer_high = higher_is_better(str(primary.get("name") or ""))
+        if best_val is None or (prefer_high and pm["value"] > best_val) or (not prefer_high and pm["value"] < best_val):
             best_val, best_id = pm["value"], row["run_id"]
     if best_id is None:
         return None
@@ -896,15 +963,27 @@ def compute_regression(
     }
 
 
-def run_summary_fields(run_id: str, run_path: Path, meta: dict[str, Any]) -> dict[str, Any]:
-    """``{display_name, summary, regression}`` to merge into a run row."""
+def run_summary_fields(
+    run_id: str,
+    run_path: Path,
+    meta: dict[str, Any],
+    *,
+    include_regression: bool = True,
+) -> dict[str, Any]:
+    """``{display_name, summary, regression}`` to merge into a run row.
+
+    List endpoints should pass ``include_regression=False`` — sibling scans
+    re-enter ``run_insights`` and dominate list latency on large workspaces.
+    """
     ins = run_insights(run_id, run_path, meta)
     summary = ins.get("summary")
     primary = (summary or {}).get("primary_metric") if isinstance(summary, dict) else None
-    try:
-        regression = compute_regression(run_id, meta, primary, runs_root=run_path.parent)
-    except Exception:
-        regression = None
+    regression = None
+    if include_regression:
+        try:
+            regression = compute_regression(run_id, meta, primary, runs_root=run_path.parent)
+        except Exception:
+            regression = None
     return {
         "display_name": ins.get("display_name"),
         "summary": summary,
@@ -917,9 +996,11 @@ __all__ = [
     "PRIMARY_METRICS",
     "architecture_label",
     "clear_cache",
+    "higher_is_better",
     "compute_paths",
     "compute_regression",
     "model_row_for_path",
+    "node_labels",
     "path_labels",
     "read_labels_txt",
     "resolve_workspace_path",

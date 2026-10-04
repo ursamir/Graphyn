@@ -82,7 +82,7 @@ describe('paths', () => {
     expect(paths[0].metricsNodeId).toBe('ev_0')
     expect(pickBestPath(paths)?.letter).toBe('A')
     expect(lanePathMap(shape, paths).get('B')?.description).toBe('Simple CNN · 30 epochs')
-    expect(listRowMetric({ primary: null, paths })).toBe('Test accuracy 0.561 · 2 paths')
+    expect(listRowMetric({ primary: null, paths })).toBe('Test accuracy 56.1% · 2 paths')
   })
 
   it('reads backend summary paths', () => {
@@ -110,9 +110,11 @@ describe('paths', () => {
 })
 
 describe('dataset', () => {
-  it('uses backend summary.dataset', () => {
+  it('uses backend summary.dataset with phase-aware wording', () => {
     const ds = datasetFromRun({ run: { summary: { dataset: { source_path: 'a/b/speech', clip_count: 1201 } } } })
-    expect(ds && datasetSentence(ds)).toBe('Trained on 1,201 clips from speech')
+    expect(ds && datasetSentence(ds)).toBe('Used 1,201 clips from speech')
+    expect(ds && datasetSentence(ds, 'speech_commands_e2e_train_ml')).toBe('Trained on 1,201 clips from speech')
+    expect(ds && datasetSentence(ds, 'speech_commands_e2e_preprocess')).toBe('Processed 1,201 clips from speech')
   })
   it('falls back to ingest node_end count + configured path', () => {
     const ds = datasetFromRun({

@@ -2,7 +2,8 @@
 """
 Bounded Context:  REST API Layer
 Responsibility:   Unified Trace (backtrack) and thin audit log endpoints.
-Owns:             GET /trace, GET /audit.
+Owns:             GET /trace, GET /audit (offset / run_id / resource_id / action / q
+                  filters over the whole log; total + has_more).
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain storage logic — delegate to app.core.runs.trace / audit.
 Dependencies:     fastapi, app.core.runs.trace, app.core.trust.audit.
@@ -51,9 +52,26 @@ def get_trace_by_path(kind: str, id: str, node_id: Optional[str] = Query(None)):
     raise HTTPException(status_code=400, detail="kind must be 'artifact' or 'run'")
 
 
-@router.get("/audit", summary="List recent audit events")
-def get_audit(limit: int = Query(100, ge=1, le=1000)):
-    """Return newest-first append-only audit events (thin seed)."""
+@router.get("/audit", summary="List / search audit events")
+def get_audit(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0, description="Skip this many matching events (newest first)"),
+    run_id: str | None = Query(None, description="Events of this run (full id or prefix >= 8), incl. replays of it"),
+    resource_id: str | None = Query(None, description="Exact resource id (or prefix >= 8)"),
+    action: str | None = Query(None, description="Exact action, or 'run.*' prefix"),
+    q: str | None = Query(None, description="Case-insensitive free-text search over the event"),
+):
+    """Newest-first append-only audit events, filtered and paged over the whole log."""
     from app.core.trust.audit import list_audit
 
-    return {"events": list_audit(limit=limit), "limit": limit}
+    events, total = list_audit(
+        limit=limit, offset=offset, run_id=run_id, resource_id=resource_id,
+        action=action, q=q, with_total=True,
+    )
+    return {
+        "events": events,
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+        "has_more": offset + len(events) < total,
+    }

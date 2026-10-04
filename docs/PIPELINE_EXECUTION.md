@@ -299,7 +299,7 @@ Calls `node.process_stream(inputs)` (async generator). Default implementation wr
 
 `process()` runs inside `progress_context(node_id, node_type, sink)` (bound by `NodeExecutor.set_progress_sink`, which the orchestrator calls for every executor). A node calls `emit_node_progress({"phase": "train", "epoch": 3, "epochs": 30, "loss": 0.41, …})`; the sink turns it into a `node_progress` event (`node_id`, `node_type`, `ts`, `level`, human `message` such as `Trainer · epoch 3/30 · loss 0.41 · val_acc 0.78`, plus the payload) and hands it to `PipelineLogger.node_progress` → run journal + NDJSON queue. The orchestrator sink also mirrors the latest event per node into `meta.json` `node_progress` and flushes `logs.json` (tmp + replace) at most every 5 s. Throttle: ≤ 2 events/s per node (`final: true` / `pct >= 100` always pass). Outside a run the call is a no-op and never raises.
 
-Isolated plugin workers have no context: `run_isolated_node` captures `current_progress_sink()` in the calling thread, sets `GRAPHYN_PROGRESS_MARKER=1` for the worker, and drains the worker's stdout/stderr with reader threads; stderr lines `@@GRAPHYN_PROGRESS@@ <json>` are parsed live and forwarded (and removed from the captured stderr). Without a sink the old `communicate()` path is used unchanged.
+Events carry `node_label` (logger `node_labels`, also mirrored into `meta.node_progress`). Isolated plugin workers have no context: `run_isolated_node` captures `current_progress_sink()` in the calling thread, sets `GRAPHYN_PROGRESS_MARKER=1` for the worker, and drains the worker's stdout/stderr with reader threads; stderr lines `@@GRAPHYN_PROGRESS@@ <json>` are parsed live and forwarded (and removed from the captured stderr). Without a sink the old `communicate()` path is used unchanged.
 
 Ingest nodes: `node_end` events of `*ingest*` node types also carry `dataset: {source_path, resolved_path, source_type, clip_count, fallback_used}` (`app/core/runs/run_dataset.py`).
 
@@ -368,7 +368,7 @@ Unconnected optional ports receive `None`.
 
 ### Logical vs materialized graph
 
-Before execution the graph is **run-scoped** (`_scope_graph_to_run` → `workspace_paths.scope_outputs_to_run`: output paths are rewritten under `workspace/artifacts/<slug>/runs/<run_id>/`). Nodes that still share an identical `output_path` / `output_dir` after scoping get `/{node_id}` appended so writers never collide. Because that materialized graph embeds the run id, its hash changes on every run. Therefore:
+Before execution the graph is **run-scoped** (`_scope_graph_to_run` → `workspace_paths.scope_outputs_to_run`: output paths are rewritten under `workspace/artifacts/<slug>/runs/<run_id>/`). **No node writes at the run root:** a write sink (`output_path` / `output_dir` / `export_dir` / `dest_dir`) that scopes to `…/runs/<run_id>` (e.g. default plugin paths such as `workspace/artifacts/evaluation`) becomes `…/runs/<run_id>/<node_id>`, and other config strings pointing into it (`model_path` …) follow. Explicit sub-paths are kept (`…/runs/<id>/tflite`, so `latest/tflite/model.tflite` consumers stay valid); nodes that still share an identical sink get `/{node_id}` appended. Net effect: every writer has its own folder — parallel branches never share `model.tflite` / `labels.txt`. Run-level metrics fall back to a node folder's `metrics.json` (`read_metrics_tree`, evaluator-preferred). The logical graph is stored as `runs/<id>/graph.logical.json` (replay source). Because that materialized graph embeds the run id, its hash changes on every run. Therefore:
 
 | Key | Derived from |
 |---|---|
@@ -379,6 +379,14 @@ Before execution the graph is **run-scoped** (`_scope_graph_to_run` → `workspa
 | Node execution config | materialized (run-scoped) config |
 
 `RunManager.save_graph_ir(graph_dict, *, logical_hash=None)` writes `graph.json` (materialized) and sets `graph_hash` to `logical_hash` when given. Custom run managers without the keyword still work (falls back to the materialized hash). **Mode B:** `DistributedBackend` applies the same contract — scopes outputs to the run, saves the logical hash, derives per-node seeds with `derive_node_seed` (identical to Mode A; `NodeJob.seed` carries it) and keys the cache off the logical config.
+
+### Run audit record (`app/core/runs/audit_record.py`)
+
+- **Run start** (`orchestrator.capture_run_start`, also Mode B): writes `graph.logical.json` and meta `node_implementations` / `plugin_version` / `plugin_code_hashes` (plugin name + version from the runtime registry / installed manifest / PluginStore, sha256 of the plugin source tree cached by stat signature), `environment_info`, `external_inputs` + `dataset_versions` (content hashes of every external path node configs read; `audit_hashing.hash_path`, per-file cache keyed by (path, mtime_ns, size), `manifest` mode for huge trees), `pipeline_ref` / `pipeline_source` (declared or content-hash match against the project's saved draft / versions), `node_labels` (`run_summary.node_labels`, installed on the logger so `node_*` events carry `node_label`). Interfaces stamp `actor` / `trigger` first (`graph_prepare.persist_run_identity`).
+- **Terminal transition** (`RunManager.save_metadata` / `mark_failed` / `mark_cancelled`, first one only): `seal_run_record` writes `prove.json` (schema 2.0: + `outputs` per-node folder hashes, `outputs_manifest.json` sidecar, `cache` provenance, status / error) and appends `{seq, run_id, record_hash, prev}` to `workspace/audit/chains/<project>.jsonl` (file-locked); `record_hash` = sha256 of the canonical record (which includes `previous_record_hash`). Then audit `run.finish` / `run.fail` / `run.cancel` with the run's actor.
+- **Failures** record the real exception: `mark_failed(..., error_type=, error_traceback=)`; isolated plugin workers write a structured `error.json` (`IsolatedNodeError`: `error_type`, `error_message`, `traceback_text`; stderr fallback takes the last traceback block and filters absl/TF noise).
+- **Cache provenance:** `PipelineCache.save(key, outputs, source={run_id, node_id, saved_at})` stores the producing run in the entry manifest; a hit records `cache_key` + `cache_source_run_id` in `node_stats`.
+- `verify_run` / `GET /runs/{id}/verify`, `run_replay.start_replay` / `POST /runs/{id}/replay` and `run_archive` (`DELETE` = archive) are described in `docs/API_REFERENCE.md`.
 
 ---
 
@@ -400,8 +408,9 @@ key = cache.compute_key(
 # Load — treat None as a miss; never call has() first (TOCTOU hazard)
 cached = cache.load(key)   # returns outputs dict or None
 
-# Save
-cache.save(key, outputs)
+# Save (source = audit provenance; hits report cache_source_run_id)
+cache.save(key, outputs, source={"run_id": run_id, "node_id": node_id})
+cache.source_of(key)   # {"run_id", "node_id", "saved_at"} | None
 
 # Clear all
 stats = cache.clear()  # {"entries_deleted": N, "bytes_freed": N}
@@ -420,7 +429,8 @@ stats = cache.clear()  # {"entries_deleted": N, "bytes_freed": N}
 ```
 workspace/cache/{sha256}/
 ├── manifest.json         # commit marker, always written:
-│                         #   all_ports, json_ports, cached_ports, port_types
+│                         #   all_ports, json_ports, cached_ports, port_types,
+│                         #   source {run_id, node_id, saved_at}
 ├── outputs.json          # JSON-serializable ports (plain values / model_dump)
 └── port_{name}/          # ports with an ArtifactSerializerRegistry handler
     ├── 0.wav … N.wav
@@ -455,9 +465,13 @@ Checkpoints are accessible via `GET /api/v1/runs/{run_id}/checkpoints` and via t
 
 ```
 workspace/runs/{run_id}/
-├── meta.json           # Run metadata (status, timing, node_stats)
-├── logs.json           # NDJSON event log
-├── graph.json          # GraphIR JSON (always written)
+├── meta.json           # Run metadata (status, timing, node_stats, actor, trigger, node_labels, …)
+├── logs.json           # NDJSON event log (node events carry node_label)
+├── graph.json          # materialized (run-scoped) GraphIR JSON (always written)
+├── graph.logical.json  # logical graph (graph_hash source; replay input)
+├── prove.json          # sealed audit record (schema 2.0) — every terminal run
+├── outputs_manifest.json  # per-file output hashes (verify diffs)
+├── .archived           # present when the run is archived (DELETE default)
 ├── resume_state.json   # written when checkpoint=True
 └── checkpoints/        # Per-node checkpoints (when checkpoint=True)
     └── node_{id}/

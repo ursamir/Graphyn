@@ -34,4 +34,10 @@ describe('relabelLine', () => {
     expect(relabelLine('Trainer · started', ev, () => undefined)).toBe('Trainer · started')
     expect(relabelLine('Other text', ev, () => 'Trainer · Path B')).toBe('Other text')
   })
+  it('prefers the backend node_label (description dropped)', async () => {
+    const { relabelLine } = await import('./journalLog')
+    const ev = { node_id: 'trainer_24212f65', node_type: 'trainer', node_label: 'Trainer · Path C (MobileNet · lr 0.002)' }
+    expect(relabelLine('Trainer · started', ev, () => 'Trainer · Path B')).toBe('Trainer · Path C · started')
+    expect(relabelLine('Trainer · started', ev)).toBe('Trainer · Path C · started')
+  })
 })

@@ -156,8 +156,10 @@ def test_run_list_rows_carry_summary(api_client, ux_ws):
     row = next(r for r in rows if r["run_id"] == RUN)
     assert row["display_name"] == "Speech commands E2E · train"
     assert row["summary"]["best_path_id"] == "path-a"
+    # List skips sibling regression scans (detail GET attaches it).
+    assert row.get("regression") is None
     prev = next(r for r in rows if r["run_id"] == PREV)
-    assert prev["regression"] is None  # nothing older
+    assert prev["regression"] is None
 
 
 def test_paths_single_sink_and_fallback_labels():

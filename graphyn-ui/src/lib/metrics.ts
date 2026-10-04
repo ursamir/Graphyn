@@ -135,3 +135,31 @@ export function formatDelta(delta: number, opts: MetricFormatOptions = {}): stri
   const sign = delta > 0 ? '+' : delta < 0 ? '−' : '±'
   return `${sign}${formatMetric(Math.abs(delta), opts)}`
 }
+
+/**
+ * THE one display format for a named metric, used everywhere (Home, Runs,
+ * Models, Ship, Compare): ratio metrics (accuracy / precision / recall / F1 /
+ * AUC in 0..1) as a percentage "75.6%", everything else via formatMetric
+ * ("0.412" loss, "12" count).
+ */
+export function formatMetricValue(name: string, value: unknown): string {
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value
+  return formatMetric(n, { percent: typeof n === 'number' && isRatioMetric(name, n) })
+}
+
+/** Signed delta in the metric's own unit: ratio metrics in percentage points ("−30.6 pts"). */
+export function formatMetricDelta(name: string, delta: number): string {
+  if (!Number.isFinite(delta)) return '—'
+  if (isRatioMetric(name) && Math.abs(delta) <= 1) {
+    const pts = Math.abs(delta) * 100
+    const sign = delta > 0 ? '+' : delta < 0 ? '−' : '±'
+    return `${sign}${Number.isInteger(pts) ? pts : pts.toFixed(1)} pts`
+  }
+  return formatDelta(delta)
+}
+
+/** "Test accuracy 75.6%" — label + formatMetricValue. */
+export function metricPhraseOf(pm: PrimaryMetric | null | undefined): string | null {
+  if (!pm) return null
+  return `${metricLabel(pm.name)} ${formatMetricValue(pm.name, pm.value)}`
+}

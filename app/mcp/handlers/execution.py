@@ -164,6 +164,10 @@ def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
     run_manager = RunManager()
     run_id = run_manager.run_id
     persist_project_fields(run_manager, prepared.project_fields)
+    from app.core.execution.graph_prepare import persist_run_identity
+
+    _mcp_actor = str(arguments.get("actor") or "mcp").strip()[:128] or "mcp"
+    persist_run_identity(run_manager, actor=_mcp_actor, trigger="mcp", payload=arguments)
 
     # FIX (CRITICAL): done callback surfaces unhandled background exceptions and
     # marks the run failed so inspect_run never returns "running" indefinitely.
@@ -206,7 +210,7 @@ def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
     record_run_start(
         run_id,
         graph,
-        actor=str(arguments.get("actor") or "mcp").strip()[:128] or "mcp",
+        actor=_mcp_actor,
         mode="mcp",
     )
 

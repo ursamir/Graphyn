@@ -42,7 +42,7 @@ import { goView, guardedNavigatePath, onPathChange, readSearchParams, replacePat
 import { formatRelativeTime, shortRunId } from '../../lib/format'
 import { runDisplayName } from '../../lib/runDisplay'
 import { pickLatestResult, regressionTone } from './latestResult'
-import { formatDelta, formatMetric, isRatioMetric, metricLabel, primaryMetric } from '../../lib/metrics'
+import { formatMetric, formatMetricDelta, formatMetricValue, isRatioMetric, metricLabel, primaryMetric } from '../../lib/metrics'
 import {
   forgetRecentWorkspace,
   noteRecentWorkspace,
@@ -88,7 +88,7 @@ type RunRow = {
 function runMetricText(r: unknown): string | null {
   const pm = primaryMetric(r)
   if (!pm) return null
-  return `${metricLabel(pm.name)} ${formatMetric(pm.value, { percent: isRatioMetric(pm.name, pm.value) })}`
+  return `${metricLabel(pm.name)} ${formatMetricValue(pm.name, pm.value)}`
 }
 
 type WorkspaceSort = 'recent' | 'updated' | 'activity' | 'name'
@@ -1254,8 +1254,8 @@ export default function ProjectsView() {
       return (
         <button
           type="button"
-          className="relative z-10 flex min-w-0 items-center gap-1.5 text-left text-[12px] text-ink-600 hover:text-accent-800"
-          title={`Open run ${r.run_id}`}
+          className="relative z-10 flex w-full min-w-0 max-w-full items-center gap-1.5 overflow-hidden text-left text-[12px] text-ink-600 hover:text-accent-800"
+          title={`Open run ${r.run_id} — ${runDisplayName(r)}${runMetricText(r) ? ` · ${runMetricText(r)}` : ''}`}
           onClick={() => useAppStore.getState().openRun(r.run_id, { project: p.name })}
         >
           <span
@@ -1543,7 +1543,7 @@ export default function ProjectsView() {
                   {sorted.map((p) => (
                     <li
                       key={p.name}
-                      className="group relative flex flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm transition hover:border-accent-300 hover:shadow-soft"
+                      className="group relative flex min-w-0 flex-col rounded-2xl border border-ink-200/80 bg-white p-4 shadow-sm transition hover:border-accent-300 hover:shadow-soft"
                     >
                       <div className="flex items-start gap-2">
                         <div className="min-w-0 flex-1">
@@ -1569,7 +1569,7 @@ export default function ProjectsView() {
                         </div>
                         {cardMenuFor(p)}
                       </div>
-                      <div className="mt-3 border-t border-ink-100 pt-2.5">
+                      <div className="mt-3 min-w-0 border-t border-ink-100 pt-2.5">
                         {lastRunLine(p)}
                         <p className="mt-1 truncate text-[11px] text-ink-400" title={metaLine(p)}>
                           {metaLine(p)}
@@ -1936,7 +1936,7 @@ export default function ProjectsView() {
                         }
                       >
                         {tone === 'worse' ? 'Regression ' : tone === 'better' ? 'Improved ' : 'No change '}
-                        {formatDelta(latest.regression.delta, { percent: pct })} vs best earlier run
+                        {formatMetricDelta(latest.metric.name, latest.regression.delta)} vs best earlier run
                       </span>
                     ) : null}
                   </div>

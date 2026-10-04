@@ -5,7 +5,8 @@ Responsibility:   Rewrite pipeline output paths into workspace/artifacts/<slug>/
                   sample ingest into workspace/datasets/input/<slug>/, and keep
                   Library dataset exports under workspace/datasets/output/.
 Owns:             artifact_slug, rewire_graph_outputs, apply_output_rewire,
-                  publish_alias/publish_latest(_if_produced).
+                  publish_alias/publish_latest(_if_produced),
+                  scope_outputs_to_run (no run-root sinks: ``runs/<id>/<node_id>``).
 Public Surface:   artifact_slug, rewire_graph_outputs, apply_output_rewire,
                   publish_latest_if_produced, run_dir_has_artifacts,
                   resolve_ingest_dir, is_produced_dataset_path,
@@ -580,12 +581,102 @@ def scope_outputs_to_run(graph: Any, run_id: str) -> Any:
         data = dump_ir(graph)
 
     rewritten = _scope_value("", data, rid)
+    rewritten = _node_scoped_write_paths(rewritten, rid)
     rewritten = _ensure_unique_write_paths(rewritten)
     if is_dict:
         return rewritten
     from app.core.ir.loader import load_ir
 
     return load_ir(rewritten)
+
+
+_SINK_KEYS = ("output_path", "output_dir", "export_dir", "dest_dir")
+_RUN_ROOT_RE = re.compile(r"^(?P<root>" + re.escape(ARTIFACTS_PREFIX) + r"/[^/]+/runs/(?P<rid>[^/]+))(?:/(?P<tail>.*))?$")
+
+
+def _node_scoped_write_paths(graph: dict[str, Any], run_id: str) -> dict[str, Any]:
+    """Never let a node write at the run root: ``…/runs/<id>`` → ``…/runs/<id>/<node_id>``.
+
+    (Default plugin output paths such as ``workspace/artifacts/evaluation``
+    scope to the run root, so parallel branches dumped model.tflite /
+    labels.txt side by side.) A configured sub-path (``…/runs/<id>/tflite``)
+    is kept so ``latest/<tail>`` consumer paths stay stable; nodes sharing a
+    sub-path are suffixed with ``/<node_id>`` by _ensure_unique_write_paths,
+    so every writer ends up with its own folder. Any other
+    config string (``model_path`` …) that pointed into a moved sink is
+    remapped to the new location so in-run references stay valid.
+    """
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return graph
+    moves: dict[str, set[str]] = {}
+    # First tail segments of sinks that stay put — references into them must
+    # not follow a run-root writer that moved into its node folder.
+    kept_heads: dict[str, set[str]] = {}
+    for node in nodes:
+        cfg = node.get("config") if isinstance(node, dict) else None
+        if not isinstance(cfg, dict):
+            continue
+        for key in _SINK_KEYS:
+            raw = cfg.get(key)
+            if isinstance(raw, str):
+                m = _RUN_ROOT_RE.match(raw.replace("\\", "/").rstrip("/"))
+                if m and m.group("tail"):
+                    kept_heads.setdefault(m.group("root"), set()).add(m.group("tail").split("/", 1)[0])
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        nid = str(node.get("id") or "").strip()
+        cfg = node.get("config")
+        if not nid or not isinstance(cfg, dict):
+            continue
+        for key in _SINK_KEYS:
+            raw = cfg.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            posix = raw.replace("\\", "/").rstrip("/")
+            m = _RUN_ROOT_RE.match(posix)
+            if not m or m.group("rid") != run_id:
+                continue
+            tail = [p for p in (m.group("tail") or "").split("/") if p]
+            if tail:
+                # Explicit sub-path kept (stable ``latest/<tail>`` consumers,
+                # e.g. Example 06 inference → latest/tflite/model.tflite);
+                # shared tails are uniquified by _ensure_unique_write_paths.
+                continue
+            new = "/".join([m.group("root"), nid])
+            cfg[key] = new
+            moves.setdefault(posix, set()).add(new)
+    # Remap references into moved sinks (unambiguous moves only).
+    remap = {old: next(iter(news)) for old, news in moves.items() if len(news) == 1}
+    if not remap:
+        return graph
+    olds = sorted(remap, key=len, reverse=True)
+
+    def fix(key: str, value: Any) -> Any:
+        if isinstance(value, str):
+            if key in _SINK_KEYS:
+                return value
+            text = value.replace("\\", "/")
+            for old in olds:
+                if text == old:
+                    return remap[old]
+                if text.startswith(old + "/"):
+                    head = text[len(old) + 1:].split("/", 1)[0]
+                    if head in kept_heads.get(old, set()):
+                        continue
+                    return remap[old] + text[len(old):]
+            return value
+        if isinstance(value, dict):
+            return {k: fix(str(k), v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [fix(key, v) for v in value]
+        return value
+
+    for node in nodes:
+        if isinstance(node, dict) and isinstance(node.get("config"), dict):
+            node["config"] = fix("", node["config"])
+    return graph
 
 
 def _ensure_unique_write_paths(graph: dict[str, Any]) -> dict[str, Any]:
@@ -640,9 +731,36 @@ def read_metrics_json(directory: Path | str | None) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def read_metrics_tree(directory: Path | str | None) -> dict[str, Any] | None:
+    """``metrics.json`` at the run root, else from a per-node folder.
+
+    Run scoping puts every node in ``runs/<id>/<node_id>/``; the run-level
+    metrics are those of the (first, evaluator-preferred) node folder that
+    has a ``metrics.json`` (searched up to two levels deep).
+    """
+    if directory is None:
+        return None
+    root = Path(directory)
+    direct = read_metrics_json(root)
+    if direct is not None:
+        return direct
+    try:
+        if not root.is_dir():
+            return None
+        candidates = sorted(root.glob("*/metrics.json")) + sorted(root.glob("*/*/metrics.json"))
+    except OSError:
+        return None
+    candidates.sort(key=lambda p: (0 if "eval" in p.parent.as_posix().lower() else 1, len(p.parts), p.as_posix()))
+    for cand in candidates:
+        data = read_metrics_json(cand.parent)
+        if data is not None:
+            return data
+    return None
+
+
 def read_run_metrics(slug: str, run_id: str) -> dict[str, Any] | None:
     layout = artifact_layout(slug, run_id)
-    return read_metrics_json(artifact_fs_path(layout["run_dir"]))
+    return read_metrics_tree(artifact_fs_path(layout["run_dir"]))
 
 
 def latest_run_id(slug: str) -> str | None:

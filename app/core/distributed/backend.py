@@ -13,7 +13,7 @@ Public Surface:   DistributedBackend, run_loopback_worker_once,
 Must NOT:         Import from app.domain or app.api at module level.
 Dependencies:     runtime_backend, distributed.{registry,queue,placement,
                   models,transfer}, ir.models, planner helpers (derive_node_seed),
-                  orchestrator (logical_graph_hash, scope_graph_to_run), node_executor,
+                  orchestrator (logical_graph_hash, scope_graph_to_run, capture_run_start), node_executor,
                   registry_runtime, stdlib.
 Reason To Change: Parallel within-wave execution, cache/pause policy,
                   cancel/lease reclaim, placement pinning, or run-end blob
@@ -594,10 +594,15 @@ class DistributedBackend(RuntimeBackend):
         # Logical vs materialized graph (same contract as the local orchestrator):
         # graph_hash, per-node seeds and cache keys come from the logical
         # (pre-run-scoping) graph; execution / jobs use the run-scoped configs.
-        from app.core.execution.orchestrator import logical_graph_hash, scope_graph_to_run
+        from app.core.execution.orchestrator import (
+            capture_run_start,
+            logical_graph_hash,
+            scope_graph_to_run,
+        )
         from app.core.execution.planner import plain_jsonable, derive_node_seed
 
         logical_hash = logical_graph_hash(graph)
+        logical_dump = dump_ir(graph)
         logical_configs = {n.id: plain_jsonable(n.config or {}) for n in graph.nodes}
         graph_seed = int(getattr(getattr(graph, "metadata", None), "seed", 0) or 0)
         node_seeds = {
@@ -610,6 +615,10 @@ class DistributedBackend(RuntimeBackend):
         except TypeError:
             # Custom run managers without the logical_hash keyword.
             run.save_graph_ir(dump_ir(graph))
+        # Audit record facts + node labels (same as Mode A).
+        capture_run_start(
+            run, logger, logical_dump, graph, getattr(run, "_graph_hash", "") or logical_hash
+        )
         register_active_run(run)
 
         queue = get_job_queue()

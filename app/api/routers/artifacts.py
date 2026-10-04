@@ -183,7 +183,11 @@ def replay_artifact(artifact_id: str):
         )
 
     try:
-        graph = load_ir_from_file(str(graph_path))
+        # Logical graph (re-scoped to the new run) — replaying the materialized
+        # graph.json verbatim would write into the original run's folders.
+        from app.core.runs.run_replay import load_replay_graph
+
+        graph = load_replay_graph(graph_path.parent)
     except Exception as exc:
         raise HTTPException(
             status_code=422,
@@ -193,6 +197,12 @@ def replay_artifact(artifact_id: str):
     # Step 3: create a new RunManager (new run_id)
     new_run_mgr = RunManager()
     new_run_id = new_run_mgr.run_id
+    try:
+        new_run_mgr._write_meta_field("replay_of", original_run_id)
+        new_run_mgr._write_meta_field("trigger", "replay")
+        new_run_mgr._write_meta_field("actor", "api")
+    except Exception:
+        pass
 
     # Step 4: submit replay via Pipeline.run_with_manager() (V1.md §3.1).
     # Bounded queue: prune completed futures and reject if too many are pending

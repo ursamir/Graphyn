@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   formatDelta,
   formatMetric,
+  formatMetricDelta,
+  formatMetricValue,
+  metricPhraseOf,
   formatPrimaryMetric,
   isRatioMetric,
   metricLabel,
@@ -67,5 +70,20 @@ describe('regression', () => {
   it('formats deltas', () => {
     expect(formatDelta(0.041)).toBe('+0.041')
     expect(formatDelta(-0.02)).toBe('−0.020')
+  })
+})
+
+
+describe('one metric format', () => {
+  it('ratio metrics as percent, others as decimals', () => {
+    expect(formatMetricValue('test_accuracy', 0.756)).toBe('75.6%')
+    expect(formatMetricValue('f1', 0.5)).toBe('50%')
+    expect(formatMetricValue('val_loss', 0.4123)).toBe('0.412')
+    expect(formatMetricValue('accuracy', 87)).toBe('87')
+    expect(metricPhraseOf({ name: 'test_accuracy', value: 0.756 })).toBe('Test accuracy 75.6%')
+  })
+  it('deltas in points for ratio metrics', () => {
+    expect(formatMetricDelta('test_accuracy', -0.306)).toBe('−30.6 pts')
+    expect(formatMetricDelta('loss', 0.02)).toBe('+0.020')
   })
 })

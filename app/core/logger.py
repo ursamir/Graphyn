@@ -60,6 +60,23 @@ class PipelineLogger:
         self.logs: deque = deque(maxlen=_MAX_LOG_ENTRIES)
         self.start_time = time.time()
         self.queue = queue  # for streaming to frontend
+        # node_id → human label ("Trainer · Path C (MobileNet · lr 0.002)");
+        # set by the orchestrator, stamped as ``node_label`` on node events.
+        self.node_labels: dict[str, str] = {}
+
+    def set_node_labels(self, labels: dict | None) -> None:
+        """Install node_id → label map used to stamp ``node_label`` on node events."""
+        self.node_labels = {str(k): str(v) for k, v in (labels or {}).items() if v}
+
+    def _stamp_label(self, entry: dict) -> None:
+        labels = getattr(self, "node_labels", None)
+        if not labels or not isinstance(entry, dict):
+            return
+        nid = entry.get("node_id")
+        if nid is not None and "node_label" not in entry:
+            label = labels.get(str(nid))
+            if label:
+                entry["node_label"] = label
 
     def _timestamp(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -93,6 +110,7 @@ class PipelineLogger:
         Queue delivery is best-effort: if the queue is full or closed the
         entry is dropped rather than blocking the caller.
         """
+        self._stamp_label(entry)
         self.logs.append(entry)
         event_type = entry.get("type", "event")
         _log.debug("structured_event type=%s %s", event_type, entry)
@@ -220,6 +238,7 @@ class PipelineLogger:
         entry = dict(event)
         entry.setdefault("type", "node_progress")
         entry.setdefault("timestamp", self._timestamp())
+        self._stamp_label(entry)
         key = str(entry.get("node_id") or entry.get("node_type") or "")
         counts = getattr(self, "_progress_counts", None)
         if counts is None:
@@ -238,7 +257,22 @@ class PipelineLogger:
                 pass
 
     def node_error(self, node_type, index, error, node_id=None):
+        """Emit ``node_error`` with the real exception type / message / traceback.
+
+        Isolated plugin failures (``IsolatedNodeError``) carry the worker's
+        exception type and traceback as attributes; everything else uses the
+        host exception and its ``__traceback__``.
+        """
         _log.error("[%s] %s — FAILED: %s", index, node_type, error)
+        err_type = getattr(error, "error_type", None) or type(error).__name__
+        tb_text = getattr(error, "traceback_text", None)
+        if not tb_text and isinstance(error, BaseException) and error.__traceback__ is not None:
+            import traceback as _tb
+
+            try:
+                tb_text = "".join(_tb.format_exception(type(error), error, error.__traceback__))
+            except Exception:
+                tb_text = None
         err_event = {
             "type": "node_error",
             "node_type": node_type,
@@ -247,9 +281,15 @@ class PipelineLogger:
             # events); ``error_message`` kept for older consumers.
             "error": str(error),
             "error_message": str(error),
-            "error_type": type(error).__name__,
+            "error_type": str(err_type),
+            "level": "ERROR",
             "timestamp": self._timestamp(),
         }
+        if tb_text:
+            err_event["traceback"] = str(tb_text)[-20000:]
+        plugin = getattr(error, "plugin_name", None)
+        if plugin:
+            err_event["plugin"] = str(plugin)
         if node_id:
             err_event["node_id"] = node_id
         self._emit_structured(err_event)

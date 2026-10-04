@@ -15,13 +15,19 @@ Owns:             Route definitions for GET /runs, GET /runs/{run_id}
                   GET /runs/{run_id}/outputs (?with_meta=1, ?node_id=&limit=&offset=),
                   GET /runs/{run_id}/outputs/zip,
                   POST /runs/{run_id}/promote,
-                  DELETE /runs/{run_id},
+                  DELETE /runs/{run_id} (archive; ?purge=true + X-Confirm-Purge),
+                  POST /runs/{run_id}/restore, GET /runs/{run_id}/verify,
+                  POST /runs/{run_id}/replay; GET /runs/{run_id} adds
+                  ``record`` (sealed prove.json), ``record_status``,
+                  ``pipeline_drift``. Every {run_id} accepts a unique
+                  prefix >= 8 chars (app.core.runs.run_resolve).
                   GET /runs/{run_id}/provenance.
 Public Surface:   FastAPI router — mounted at /api/v1 in app/api/main.py
 Must NOT:         Contain run persistence logic — delegate to RunJournal,
                   ArtifactStore, and ProvenanceStore.
 Dependencies:     fastapi, app.core.runs.run_journal, app.core.runs.run_nodes,
-                  app.core.runs.run_summary,
+                  app.core.runs.run_summary, app.core.runs.audit_record,
+                  run_archive, run_replay, run_resolve, run_cleanup,
                   app.core.artifacts.artifact_store,
                   app.core.config, stdlib (json, pathlib, re).
 Reason To Change: New run history endpoint added, or response schema changes.
@@ -51,20 +57,32 @@ def _get_runs_root() -> Path:
 def _run_dir(run_id: str) -> Path:
     """Return the run directory path, raising 400/404 as appropriate.
 
-    Validates run_id is alphanumeric (hyphens allowed) and that the resolved
-    path stays within the runs root (SEC-7 fix — consistent with _safe_child()).
+    Accepts the full run id or a unique prefix of >= 8 characters
+    (``app.core.runs.run_resolve``); ambiguous prefixes are a 404 with the
+    candidate ids. Validates run_id is alphanumeric (hyphens allowed) and that
+    the resolved path stays within the runs root (SEC-7 fix — consistent with
+    _safe_child()). Callers use ``path.name`` as the canonical full id.
     """
+    from app.core.runs.run_resolve import RunIdAmbiguous, RunIdNotFound, resolve_run_id
+
     if not _RUN_ID_RE.match(run_id):
         raise HTTPException(status_code=400, detail="Invalid run_id")
     runs_root = _get_runs_root().resolve()
-    path = (runs_root / run_id).resolve()
+    try:
+        full = resolve_run_id(runs_root, run_id)
+    except RunIdAmbiguous as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RunIdNotFound:
+        raise HTTPException(status_code=404, detail="Run not found")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid run_id")
+    path = (runs_root / full).resolve()
     # Guard against path traversal — resolved path must stay inside runs root
     if not path.is_relative_to(runs_root):
         raise HTTPException(status_code=400, detail="Invalid run_id")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Run not found")
     return path
-
 
 
 def _load_meta(run_path: Path) -> dict:
@@ -85,6 +103,7 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
         artifact_layout,
         artifact_slug,
         read_metrics_json,
+        read_metrics_tree,
         slug_from_artifacts_posix,
     )
     from app.core.runs.run_project import infer_project_from_graph_file, normalize_project_name, normalize_version_tag
@@ -130,7 +149,7 @@ def _enrich_run_summary(meta: dict, run_path: Path) -> dict:
         metrics = None
         art = out.get("artifacts_dir")
         if isinstance(art, str) and art.strip():
-            metrics = read_metrics_json(artifact_fs_path(art))
+            metrics = read_metrics_tree(artifact_fs_path(art))
         if metrics is None:
             metrics = read_metrics_json(run_path)
         if metrics:
@@ -168,6 +187,9 @@ def list_runs(
         None,
         description="Hard filter: only runs whose meta.project (or inferred graph stamp) equals this name",
     ),
+    include_archived: bool = Query(
+        False, description="Include archived runs (hidden by default; rows carry archived=true)"
+    ),
 ):
     """Return a summary list of pipeline runs, newest first, with pagination.
 
@@ -180,22 +202,50 @@ def list_runs(
     ensure_store_readable()
     # Shared lister (app.core.runs.run_listing): created_at desc + run_id tiebreak,
     # per-entry error isolation — same order as MCP list_runs / CLI runs list.
-    page = _list_runs(_get_runs_root(), limit=limit, offset=offset, project=project)
-    return [_with_results(_enrich_run_summary(meta, entry), entry) for entry, meta in page.rows]
+    page = _list_runs(
+        _get_runs_root(), limit=limit, offset=offset, project=project,
+        include_archived=include_archived,
+    )
+    # No per-row regression on the list — detail GET attaches it.
+    return [
+        _with_results(_enrich_run_summary(meta, entry), entry, include_regression=False)
+        for entry, meta in page.rows
+    ]
 
 
-def _with_results(row: dict, run_path: Path) -> dict:
-    """Attach ``display_name`` / ``summary`` / ``regression`` (cached, best-effort)."""
+def _with_results(row: dict, run_path: Path, *, include_regression: bool = True) -> dict:
+    """Attach ``display_name`` / ``summary`` / ``regression`` (cached, best-effort).
+
+    List views pass ``include_regression=False`` — sibling scans are O(n) per row.
+    """
     from app.core.runs.run_summary import run_summary_fields
 
     run_id = str(row.get("run_id") or run_path.name)
     try:
-        fields = run_summary_fields(run_id, run_path, row)
+        fields = run_summary_fields(run_id, run_path, row, include_regression=include_regression)
     except Exception:
         fields = {"display_name": row.get("graph_name") or run_id, "summary": None, "regression": None}
     out = dict(row)
     out.update(fields)
     return out
+
+
+def _pipeline_drift(run_path: Path, meta: dict, record: dict | None) -> dict | None:
+    """Current saved pipeline (same name/env) vs the run's graph hash (best-effort)."""
+    try:
+        from app.core.runs.audit_record import _semantic_hash, logical_graph_for_run, pipeline_drift
+
+        ref = (record or {}).get("pipeline_version") if isinstance(record, dict) else None
+        if not isinstance(ref, dict):
+            ref = meta.get("pipeline_ref") if isinstance(meta.get("pipeline_ref"), dict) else None
+        if not ref:
+            return None
+        run_hash = str((record or {}).get("graph_hash") or meta.get("graph_hash") or "")
+        logical = logical_graph_for_run(run_path)
+        sem = _semantic_hash(logical) if isinstance(logical, dict) else None
+        return pipeline_drift(ref, run_hash, sem)
+    except Exception:
+        return None
 
 
 # ── Get run ───────────────────────────────────────────────────────────────────
@@ -207,6 +257,7 @@ def get_run(run_id: str):
 
     ensure_store_readable()
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
 
     config_yaml: str | None = None
     config_file = run_path / "config.yaml"
@@ -241,9 +292,16 @@ def get_run(run_id: str):
     except Exception:
         node_order = []
 
+    from app.core.runs.audit_record import load_record
+
+    record = load_record(run_path)
     return {
         "run_id": run_id,
         "meta": meta,
+        # Sealed audit record (prove.json); null until the run is terminal.
+        "record": record,
+        "record_status": "sealed" if record is not None else "pending",
+        "pipeline_drift": _pipeline_drift(run_path, meta, record),
         "config_yaml": config_yaml,
         "logs": normalize_log_errors(logs),
         "is_latest": is_latest,
@@ -274,6 +332,7 @@ def list_run_models(run_id: str):
     from app.core.runs.run_summary import run_insights
 
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
     meta = _enrich_run_summary(_load_meta(run_path), run_path)
     ins = run_insights(run_id, run_path, meta)
     summary = ins.get("summary") or {}
@@ -287,24 +346,142 @@ def list_run_models(run_id: str):
     }
 
 
-@router.delete("/{run_id}", summary="Delete a run and its workspace artifacts")
-def delete_run_endpoint(run_id: str):
-    """Delete the journal dir and ``artifacts/<slug>/runs/<run_id>``.
+@router.delete("/{run_id}", summary="Archive a run (default) or purge it (admin)")
+def delete_run_endpoint(
+    run_id: str,
+    request: Request,
+    purge: bool = Query(
+        False,
+        description="Hard delete (journal + artifacts). Requires header X-Confirm-Purge: <full run_id>.",
+    ),
+):
+    """Archive by default — the run is hidden from ``GET /runs`` but its
+    journal, sealed record and artifacts stay (``?include_archived=1`` shows
+    it; ``POST /runs/{id}/restore`` un-archives). Audited as ``run.archive``.
 
-    If this run is latest, retarget ``latest/`` to the next newest remaining
-    run of that slug, or remove the alias if none remain. Returns 409 when
-    the run is currently running or paused.
+    ``?purge=true`` hard-deletes the journal dir and
+    ``artifacts/<slug>/runs/<run_id>`` (retargeting ``latest/``) and needs
+    ``X-Confirm-Purge`` equal to the full run id (428 otherwise). Audited as
+    ``run.purge`` with the run's ``record_hash``. Returns 409 when the run is
+    pending / running / paused.
     """
+    from app.api.actor import resolve_actor
+
+    run_path = _run_dir(run_id)
+    run_id = run_path.name
+    actor = resolve_actor(request)
+    if not purge:
+        from app.core.runs.run_archive import RunActiveError, archive_run
+
+        try:
+            return archive_run(run_path, actor=actor)
+        except RunActiveError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    confirm = (request.headers.get("x-confirm-purge") or "").strip()
+    if confirm != run_id:
+        raise HTTPException(
+            status_code=428,
+            detail={
+                "code": "confirm_required",
+                "message": (
+                    "Purge permanently deletes the run journal and artifacts. "
+                    f"Send header X-Confirm-Purge: {run_id} to confirm."
+                ),
+            },
+        )
+    from app.core.runs.audit_record import load_record
     from app.core.runs.run_cleanup import RunInProgressError, delete_run
 
-    _run_dir(run_id)  # 400/404 + jail
+    record = load_record(run_path) or {}
+    meta = _load_meta(run_path)
     try:
         result = delete_run(run_id, require_finished=True)
     except RunInProgressError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Run not found")
-    return result
+    try:
+        from app.core.trust.audit import record_audit
+
+        record_audit(
+            actor=actor,
+            action="run.purge",
+            resource_type="run",
+            resource_id=run_id,
+            meta={
+                "record_hash": record.get("record_hash"),
+                "graph_hash": record.get("graph_hash") or meta.get("graph_hash"),
+                "graph_name": meta.get("graph_name"),
+                "project": meta.get("project"),
+                "status": meta.get("status"),
+            },
+        )
+    except Exception:
+        pass
+    out = dict(result) if isinstance(result, dict) else {"result": result}
+    out.update({"purged": True, "record_hash": record.get("record_hash")})
+    return out
+
+
+@router.post("/{run_id}/restore", summary="Un-archive a run")
+def restore_run_endpoint(run_id: str, request: Request):
+    """Remove the archive flag (audited as ``run.restore``)."""
+    from app.api.actor import resolve_actor
+    from app.core.runs.run_archive import restore_run
+
+    run_path = _run_dir(run_id)
+    return restore_run(run_path, actor=resolve_actor(request))
+
+
+# ── Audit: verify / replay ────────────────────────────────────────────────────
+
+@router.get("/{run_id}/verify", summary="Verify a run's sealed audit record")
+def verify_run_endpoint(run_id: str):
+    """Re-hash the graph snapshot, external inputs (current content), stored
+    output folders, the record hash and its position in the project chain.
+
+    ``status``: ``pass`` | ``changed`` (inputs/outputs differ now) | ``fail``
+    (tamper / hash mismatch) | ``unsealed`` (no prove.json yet). Per-check
+    rows: ``{check, status, expected, actual, target?, node_id?, details?}``.
+    """
+    from app.core.runs.audit_record import verify_run
+
+    run_path = _run_dir(run_id)
+    return verify_run(run_path, meta=_load_meta(run_path))
+
+
+@router.post("/{run_id}/replay", summary="Replay a run from its stored graph")
+def replay_run_endpoint(run_id: str, request: Request, body: dict | None = Body(None)):
+    """Start a new run from the run's logical graph snapshot (same seed/config).
+
+    Body: ``{"check_inputs": false, "force": false}``. With ``check_inputs``
+    the replay is refused (409 ``inputs_changed`` + per-input diff) when a
+    recorded external input hash changed, unless ``force``. The new run's
+    meta / record carry ``replay_of`` and ``trigger: "replay"``; audited as
+    ``run.replay``.
+    """
+    from app.api.actor import resolve_actor
+    from app.core.runs.run_replay import InputsChanged, ReplayGraphMissing, start_replay
+
+    payload = body if isinstance(body, dict) else {}
+    run_path = _run_dir(run_id)
+    try:
+        return start_replay(
+            run_path,
+            actor=resolve_actor(request),
+            check_inputs=bool(payload.get("check_inputs")),
+            force=bool(payload.get("force")),
+        )
+    except InputsChanged as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "inputs_changed", "message": str(exc), "changes": exc.changes},
+        )
+    except ReplayGraphMissing as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Replay failed: {exc}")
 
 
 # ── Run graph IR ──────────────────────────────────────────────────────────────
@@ -317,6 +494,7 @@ def get_run_graph(run_id: str):
     raw Graph IR document for Builder / Open-in-Builder deep links.
     """
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
     graph_path = run_path / "graph.json"
     if not graph_path.is_file():
         raise HTTPException(status_code=404, detail="graph.json not found for run")
@@ -338,6 +516,7 @@ def get_run_graph(run_id: str):
 def get_run_status(run_id: str):
     """Return the status of a specific run."""
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
     meta_file = run_path / "meta.json"
     if not meta_file.exists():
         return {"status": "unknown"}
@@ -385,6 +564,7 @@ def get_run_status(run_id: str):
 def list_checkpoints(run_id: str):
     """Return a list of checkpoint directory names for a run."""
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
     checkpoints_dir = run_path / "checkpoints"
     if not checkpoints_dir.exists():
         return []
@@ -399,6 +579,7 @@ def list_checkpoints(run_id: str):
 def get_checkpoint_manifest(run_id: str, node_id: str):
     """Return the manifest.json content for a specific checkpoint node."""
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
     checkpoints_dir = run_path / "checkpoints"
     if not checkpoints_dir.exists():
         raise HTTPException(status_code=404, detail="No checkpoints for this run")
@@ -471,6 +652,7 @@ def list_run_outputs(
     ``with_meta=1`` for per-node ``{shown, total}`` or ``node_id=`` to page.
     """
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
     from app.core.runs.run_outputs import (
         list_node_output_files,
         list_run_output_files_detail,
@@ -495,6 +677,7 @@ def download_run_outputs_zip(run_id: str):
     files; ``X-Graphyn-Outputs-Zip-Count`` is the number of members packed.
     """
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
     from app.core.runs.run_outputs import list_run_output_files_for_zip, pack_outputs_zip
 
     entries, list_capped = list_run_output_files_for_zip(run_id, run_path)
@@ -526,6 +709,7 @@ def promote_run(run_id: str, request: Request, body: dict | None = Body(None)):
     alias = str(payload.get("alias") or "latest").strip().lower() or "latest"
 
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
     meta = _enrich_run_summary(_load_meta(run_path), run_path)
     slug, artifacts_dir = _run_slug_and_artifacts(run_id, run_path, meta)
     if not slug:
@@ -582,7 +766,7 @@ def list_run_artifacts(run_id: str):
     from app.core.persist.store_integrity import StoreCorrupt
 
     ensure_store_readable()
-    _run_dir(run_id)  # raises 404 if run not found
+    run_id = _run_dir(run_id).name  # 404 / unique-prefix resolution
     try:
         records = ArtifactStore().list(run_id=run_id)
     except StoreCorrupt as exc:
@@ -595,7 +779,7 @@ def list_run_artifacts(run_id: str):
 @router.get("/{run_id}/provenance", summary="Get provenance summary for a run")
 def get_run_provenance(run_id: str):
     """Return a provenance summary including artifacts and provenance records for a run."""
-    _run_dir(run_id)  # raises 404 if run not found
+    run_id = _run_dir(run_id).name  # 404 / unique-prefix resolution
     from app.core.artifacts.artifact_store import ArtifactStore
     from app.core.artifacts.provenance import ProvenanceStore
     artifacts = ArtifactStore().list(run_id=run_id)
@@ -612,6 +796,7 @@ def get_run_provenance(run_id: str):
 def get_run_debug_report(run_id: str):
     """Return a compact operator-focused debug report for one run."""
     run_path = _run_dir(run_id)
+    run_id = run_path.name  # full id (prefix resolution)
 
     status = get_run_status(run_id)
     checkpoints = list_checkpoints(run_id)
