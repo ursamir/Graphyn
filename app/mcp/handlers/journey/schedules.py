@@ -14,6 +14,8 @@ from typing import Any
 
 from app.mcp.handlers.journey.common import handler_error, meta_props, require_project_dir
 
+from app.mcp.auth import resolve_mcp_actor
+
 # ── Schedules / webhooks (J3) ─────────────────────────────────────────────────
 
 LIST_SCHEDULES_DESCRIPTION = "List interval / cron schedules."
@@ -113,7 +115,6 @@ TEST_WEBHOOK_SCHEMA = {
     },
     "additionalProperties": False,
 }
-
 
 def list_schedules_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.core.pipelines.schedules import list_schedules
@@ -218,7 +219,7 @@ def put_webhooks_handler(arguments: dict[str, Any] | None = None) -> dict[str, A
 
     redacted_url = redact_webhook_url_for_api(url)
     record_audit(
-        actor=str(args.get("actor") or "mcp"),
+        actor=str(resolve_mcp_actor(args)["actor"]),
         action="webhook.set",
         resource_type="webhook",
         resource_id=redacted_url[:64] or "webhook",
@@ -242,7 +243,7 @@ def test_webhook_handler(arguments: dict[str, Any] | None = None) -> dict[str, A
 
     redacted_url = redact_webhook_url_for_api(str(url))
     record_audit(
-        actor=str(args.get("actor") or "mcp"),
+        actor=str(resolve_mcp_actor(args)["actor"]),
         action="webhook.test",
         resource_type="webhook",
         resource_id=redacted_url[:64] or "webhook",

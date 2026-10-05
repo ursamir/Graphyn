@@ -730,12 +730,16 @@ export default function App() {
       isWorkspaceKnownMissing(urlWorkspaceId))
   // Computed synchronously (not only from wsGate) so workspace views never mount
   // — and never note recents — for an id that has not been validated yet.
+  // Skip the blank gate when we are already on this workspace (Editor/Runs hops)
+  // or it sits in recents (optimistic paint while GET /projects/{id} finishes).
   const urlWorkspaceChecking =
     Boolean(urlWorkspaceId) &&
     !bootError &&
     !urlWorkspaceMissing &&
     !isWorkspaceKnownValid(urlWorkspaceId) &&
-    !(wsGate?.id === urlWorkspaceId && wsGate.status === 'unknown')
+    !(wsGate?.id === urlWorkspaceId && wsGate.status === 'unknown') &&
+    activeProject !== urlWorkspaceId &&
+    !readRecentWorkspaces().includes(urlWorkspaceId!)
 
   /** Path ↔ store sync (HTML5 History). */
   React.useEffect(() => {
@@ -1090,8 +1094,14 @@ export default function App() {
       ) : urlWorkspaceMissing && urlWorkspaceId ? (
         <WorkspaceNotFoundView workspaceId={urlWorkspaceId} fallback={wsGate?.fallback ?? null} />
       ) : urlWorkspaceChecking ? (
-        <div className="flex h-full items-center justify-center p-6 text-[13px] text-ink-500" role="status">
-          Opening workspace…
+        <div className="flex h-full flex-col items-center justify-center gap-3 p-6" role="status">
+          <div className="h-8 w-8 animate-pulse rounded-full bg-ink-200" aria-hidden />
+          <p className="text-[13px] font-medium text-ink-700">
+            Opening {urlWorkspaceId}…
+          </p>
+          <p className="max-w-sm text-center text-[12px] text-ink-500">
+            Checking that this workspace still exists on the API.
+          </p>
         </div>
       ) : (
         <ViewErrorBoundary resetKey={view} viewLabel={VIEW_LABEL[view] ?? view}>

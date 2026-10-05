@@ -165,9 +165,18 @@ def execute_pipeline_handler(arguments: dict[str, Any]) -> Any:
     run_id = run_manager.run_id
     persist_project_fields(run_manager, prepared.project_fields)
     from app.core.execution.graph_prepare import persist_run_identity
+    from app.mcp.auth import resolve_mcp_actor
 
-    _mcp_actor = str(arguments.get("actor") or "mcp").strip()[:128] or "mcp"
-    persist_run_identity(run_manager, actor=_mcp_actor, trigger="mcp", payload=arguments)
+    _ident = resolve_mcp_actor(arguments)
+    _mcp_actor = str(_ident["actor"])
+    persist_run_identity(
+        run_manager,
+        actor=_mcp_actor,
+        trigger="mcp",
+        payload=arguments,
+        actor_verified=bool(_ident.get("actor_verified")),
+        claimed_actor=_ident.get("claimed_actor"),
+    )
 
     # FIX (CRITICAL): done callback surfaces unhandled background exceptions and
     # marks the run failed so inspect_run never returns "running" indefinitely.

@@ -2,6 +2,8 @@
 """Tests for app/mcp/handlers/execution.py — Req 12."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 from app.mcp.handlers.execution import execute_pipeline_handler
@@ -103,3 +105,33 @@ class TestExecutePipeline:
         result1 = execute_pipeline_handler({"graph": graph})
         result2 = execute_pipeline_handler({"graph": graph})
         assert result1.get("run_id") != result2.get("run_id")
+
+    def test_mapped_token_wins_over_client_actor(self, monkeypatch, tmp_path):
+        """Client actor must not spoof a mapped API token identity."""
+        monkeypatch.setenv("GRAPHYN_API_TOKENS", "alice:tok-alice")
+        monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+        graph = _valid_graph()
+
+        from unittest.mock import MagicMock
+        import app.mcp.handlers.execution as _exec_mod
+
+        mock_backend = MagicMock()
+        mock_backend.execute.return_value = {}
+
+        def sync_submit(fn, *args, **kwargs):
+            pass  # do not run; identity is written before submit
+
+        with patch("app.mcp.handlers.execution._get_backend", return_value=mock_backend):
+            with patch.object(_exec_mod._PIPELINE_EXECUTOR, "submit", sync_submit):
+                result = execute_pipeline_handler({
+                    "graph": graph,
+                    "actor": "evil",
+                    "_meta": {"auth_token": "tok-alice"},
+                })
+        assert result.get("run_id")
+        from app.core.config import runs_dir
+
+        meta = json.loads((runs_dir() / result["run_id"] / "meta.json").read_text())
+        assert meta.get("actor") == "alice"
+        assert meta.get("actor_verified") is True
+        assert meta.get("claimed_actor") == "evil"

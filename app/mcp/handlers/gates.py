@@ -104,7 +104,7 @@ def list_pending_gates_handler(arguments: dict[str, Any] | None = None) -> dict[
 def decide_gate_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.core.config import mcp_human_approval_enabled
     from app.core.runs.gates import GateError, decide_gate
-    from app.core.trust.identity import identity_from_credentials
+    from app.mcp.auth import resolve_mcp_actor
 
     args = arguments or {}
     decision = str(args.get("decision") or "").strip().lower()
@@ -122,13 +122,11 @@ def decide_gate_handler(arguments: dict[str, Any] | None = None) -> dict[str, An
         run_dir = _resolve_run_dir(run_id)
     except Exception as exc:
         return handler_error("not_found", str(exc) or f"Run '{run_id}' not found")
-    token = ((args.get("_meta") or {}).get("auth_token") or "") if isinstance(args.get("_meta"), dict) else ""
-    claimed = args.get("actor") if isinstance(args.get("actor"), str) else None
-    ident = identity_from_credentials(str(token) or None, claimed)
-    if ident.get("token_mapped"):
-        actor, verified = str(ident["actor"]), True
-    else:
-        actor, verified = f"mcp:{(claimed or 'agent').strip()[:100] or 'agent'}", False
+    ident = resolve_mcp_actor(args)
+    # Gates keep the historical unmapped default label "mcp:agent".
+    actor = str(ident["actor"])
+    if not ident.get("token_mapped") and actor == "mcp":
+        actor = "mcp:agent"
     try:
         gate = decide_gate(
             run_dir,
@@ -137,7 +135,7 @@ def decide_gate_handler(arguments: dict[str, Any] | None = None) -> dict[str, An
             comment=args.get("comment") if isinstance(args.get("comment"), str) else None,
             role=args.get("role") if isinstance(args.get("role"), str) else None,
             actor=actor,
-            actor_verified=verified,
+            actor_verified=bool(ident.get("actor_verified")),
             claimed_actor=ident.get("claimed_actor"),
             source="mcp",
         )

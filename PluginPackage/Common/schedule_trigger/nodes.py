@@ -30,7 +30,12 @@ class ScheduleTriggerNode(Node):
     metadata: ClassVar[NodeMetadata] = NodeMetadata(
         node_type="schedule_trigger",
         label="Schedule Trigger",
-        description="Source node for cron/interval schedules. process() emits a tick payload for manual runs.",
+        description=(
+            "Source node that records cron/interval intent on the graph. "
+            "process() only emits a TickEvent for manual or externally scheduled runs — "
+            "it does not register an OS/cron job. Bind a Graphyn schedule, webhook, or "
+            "external timer to execute the pipeline."
+        ),
         category="Input",
         version="1.0.0",
         tags=["schedule", "trigger", "workflow", "common"],

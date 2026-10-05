@@ -1,6 +1,6 @@
 /**
  * Actor name with its identity proof: verified tick (named API token),
- * muted "(self-declared)", or muted "Unidentified". Tooltip carries how the
+ * muted "(self-declared)", or muted "Local operator". Tooltip carries how the
  * name was established and the claimed name when it differs.
  */
 import clsx from 'clsx'

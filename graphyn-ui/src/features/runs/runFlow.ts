@@ -265,7 +265,13 @@ export function splitRunErrors(input: {
   const unhandledRecent: Rec[] = []
   for (const r of recent) (isHandledErrorRow(r, input.handled) ? handledRecent : unhandledRecent).push(r)
   const total = typeof input.errorCount === 'number' && Number.isFinite(input.errorCount) ? input.errorCount : null
-  const unhandledCount = total != null ? Math.max(0, total - handledRecent.length) : unhandledRecent.length
+  // Never report fewer unhandled than the recent window shows. Subtracting only
+  // handled *recent* lines from the global errorCount can hide real failures that
+  // fell out of the recent window when the window is saturated with handled lines.
+  const unhandledCount =
+    total != null
+      ? Math.max(unhandledRecent.length, Math.max(0, total - handledRecent.length))
+      : unhandledRecent.length
   return {
     unhandledCount,
     unhandledRecent,

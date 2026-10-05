@@ -61,6 +61,7 @@ Ensure `GRAPHYN_SKIP_PLUGIN_LOAD` is **unset** (if set to `1`, `/api/v1/nodes` r
 
 - API: `venv/bin/uvicorn app.api.main:app --reload --port 8001`
 - Console: `cd graphyn-ui && npm install && npm run dev`
+  (or Docker UI-only rebuild — never recreate the API for frontend work: see [DEPLOYMENT.md](./DEPLOYMENT.md))
 - API URL: `http://localhost:8001/api/v1/`
 - UI URL: `http://localhost:5173`
 

@@ -116,12 +116,17 @@ pre-1.3 graphs dump and hash byte-identically; the loader accepts `1.0`–`1.3`.
 The error port is synthetic: `GraphIR` rejects an edge from `<node>.<on_error.port>` unless
 `mode == "route"`; `PipelineGraph` and `validate_graph_ir_result` accept it (only the
 destination port is checked, no type check). Cancellation is never routed or swallowed.
-The legacy Config `on_error_port` continuation still applies when no IR policy is set.
+Precedence at failure time: IR `on_error.mode` of `route` / `continue` wins; otherwise
+the legacy Config `on_error_port` soft-continue still applies (including when IR mode is
+`fail` or unset). Do not set both IR `route`/`continue` and Config `on_error_port` on the
+same node — validation emits `VAL-ON-ERROR-BOTH`. This is separate from the
+`error_catch` **node type**, which is a downstream handler on an error-port edge.
 
 Each retry emits `node_retry` (`attempt`, `max_attempts`, `wait_s`, `error_type`, `error`);
 these events go through the node progress sink, so they land in `logs.json`, the NDJSON
 stream and `meta.json.node_progress[<node_id>]` (latest event). **Mode A only**
-(sequential + parallel): the distributed backend / workers do not yet receive the policies.
+(sequential + parallel): the distributed backend / workers do not yet receive the policies
+(see KNOWN_ISSUES `MODEB-ON-ERROR-1`).
 
 ### Artifact refs (distributed)
 

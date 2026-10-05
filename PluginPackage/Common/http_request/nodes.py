@@ -114,11 +114,15 @@ def http_auth_headers(payload: dict) -> dict[str, str]:
 
 
 def _host_allowed(url: str, allowed_csv: str) -> bool:
+    """True when ``url``'s host is listed in the credential's ``allowed_hosts``.
+
+    An empty ``allowed_hosts`` fails closed (secret is unbound — refuse).
+    """
     allowed = [h.strip().lower().rstrip(".") for h in str(allowed_csv or "").split(",") if h.strip()]
     if not allowed:
-        return True
+        return False
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
-    return host in allowed
+    return bool(host) and host in allowed
 
 
 class HttpRequestNode(Node):
@@ -193,7 +197,14 @@ class HttpRequestNode(Node):
 
             resolved = resolve_connection(kind="http_auth", connection_id=cid, required=True)
             payload = resolved.get("payload") or {}
-            if not _host_allowed(url, payload.get("allowed_hosts") or ""):
+            hosts_csv = payload.get("allowed_hosts") or ""
+            if not str(hosts_csv).strip():
+                raise RuntimeError(
+                    f"HttpRequestNode: connection {cid!r} has empty allowed_hosts — "
+                    "set allowed_hosts on the http_auth credential to the host(s) "
+                    "this secret may call (comma-separated)."
+                )
+            if not _host_allowed(url, hosts_csv):
                 raise RuntimeError(
                     f"HttpRequestNode: connection {cid!r} is not bound to host "
                     f"{urlsplit(url).hostname!r} (allowed_hosts)."

@@ -98,7 +98,7 @@ describe('plain-words audit labels', () => {
 
   it('shows unidentified API actors muted', () => {
     expect(auditActorDisplay({ actor: 'api', actor_kind: 'system' })).toEqual({
-      label: 'Unidentified (API)',
+      label: 'Local operator (API)',
       muted: true,
       detail: 'api · system',
     })

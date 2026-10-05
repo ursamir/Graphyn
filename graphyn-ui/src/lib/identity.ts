@@ -60,7 +60,7 @@ export function isUnidentifiedActor(actor: unknown): boolean {
 export type ActorKind = 'verified' | 'self-declared' | 'unidentified' | 'unknown'
 
 export type ActorDisplay = {
-  /** Visible name ("Unidentified" for generic actors). */
+  /** Visible name ("Local operator" for generic Mode A actors). */
   name: string
   kind: ActorKind
   /** Short muted suffix ("(self-declared)") or ''. */
@@ -82,12 +82,12 @@ export function actorDisplay(input: {
   const claimed = str(input.claimedActor)
   if (isUnidentifiedActor(actor)) {
     return {
-      name: 'Unidentified',
+      name: 'Local operator',
       kind: 'unidentified',
       suffix: '',
       title: claimed
         ? `No verified identity — the caller claimed "${claimed}"`
-        : 'No name was recorded — the caller used no named token and sent no name',
+        : 'Mode A local identity — no named API token was mapped for this caller',
     }
   }
   const claimNote = claimed && claimed !== actor ? ` · claimed "${claimed}"` : ''

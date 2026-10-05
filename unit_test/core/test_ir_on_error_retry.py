@@ -144,6 +144,22 @@ def test_retry_on_timeout_retries_timeouts(rt_env):
     assert CALLS["rtfix_flaky"] == 3
 
 
+def test_route_failure_outputs_are_not_cached(rt_env):
+    """on_error=route must not write PipelineCache entries (replay would skip re-run)."""
+    seen: dict = {}
+    HOOKS["rtfix_sink"] = lambda node, inputs: seen.setdefault("inputs", []).append(inputs)
+    g = _graph(
+        {"on_error": IROnError(mode="route"), "retry": IRRetry(max_attempts=1)},
+        [("f", "error", "handler", "input")],
+    )
+    run_pipeline_ir(g, run_manager=RunManager(), use_cache=True)
+    assert CALLS["rtfix_flaky"] == 1
+    # Second run with cache on must execute flaky again (no cached error payload).
+    CALLS["rtfix_flaky"] = 0
+    run_pipeline_ir(g, run_manager=RunManager(), use_cache=True)
+    assert CALLS["rtfix_flaky"] == 1
+
+
 def test_validator_accepts_error_port_edge(rt_env):
     from app.core.execution.validation import validate_graph_ir_result
     from app.core.host.registry_runtime import get_registry

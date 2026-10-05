@@ -250,6 +250,12 @@ From [Audit runtime failures](ebaf6289-81f1-4bde-bd4a-b03a942034ff). Durable `ca
 
 ## Open — Known caveats of the 2026-09 hardening round
 
+### MODEB-ON-ERROR-1 — IR `on_error` / `retry` not applied on Mode B **remote** workers
+
+**Files:** `app/core/distributed/backend.py` (`_run_local_node`, `NodeJob`), `docs/PIPELINE_EXECUTION.md` (IR 1.3)  
+**Detail:** Control-plane **local** nodes in `DistributedBackend` now stamp IR `on_error` / `retry` and skip caching routed failures (same as Mode A). Remote workers still do not receive those policies on `NodeJob`, so a node placed on a worker may still fail the job instead of routing/continuing.  
+**Workaround:** Keep error-routing nodes on `placement: local` / Mode A, or use explicit `error_catch` / branch edges until `NodeJob` carries the policies.
+
 ### MODEB-VERSION-SKEW-1 — Mixed-version Mode B workers reject new protocol fields
 
 **Files:** `app/core/distributed/models.py` (`WorkerInfo`, `NodeJob`, `JobResult` use `extra="forbid"`)  

@@ -20,7 +20,8 @@ def gate_run(tmp_path, monkeypatch):
     ws = tmp_path / "workspace"
     ws.mkdir()
     monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(ws))
-    decision_dir = tmp_path / "decisions"
+    # Must sit inside the project jail (decision_dir escapes are refused).
+    decision_dir = ws / "artifacts" / "agents" / "hitl_approve" / "decisions"
     run = RunManager()
     run.mark_running()
     graph = {
@@ -28,7 +29,8 @@ def gate_run(tmp_path, monkeypatch):
         "metadata": {"name": "g", "seed": 0},
         "nodes": [
             {"id": "approve_ship", "node_type": "hitl_approve", "label": "Ship to prod?",
-             "config": {"gate_id": "approve_ship", "decision_dir": str(decision_dir),
+             "config": {"gate_id": "approve_ship",
+                        "decision_dir": "workspace/artifacts/agents/hitl_approve/decisions",
                         "timeout_s": 600, "reason_required": True}},
         ],
         "edges": [],
@@ -44,7 +46,7 @@ def gate_run(tmp_path, monkeypatch):
         "requested_at": datetime.now(timezone.utc).isoformat(),
         "status": "pending",
     }
-    decision_dir.mkdir()
+    decision_dir.mkdir(parents=True)
     (decision_dir / f"{run.run_id}__approve_ship.request.json").write_text(json.dumps(request))
     return SimpleNamespace(ws=ws, run=run, decision_dir=decision_dir)
 
@@ -157,3 +159,28 @@ def test_mcp_gate_tools(gate_run, monkeypatch):
     assert decision["approver"] == "mcp:bot"
     assert decision["actor_verified"] is False
     assert decision["source"] == "mcp"
+
+
+def test_decision_dir_outside_project_refused(api_client, gate_run, tmp_path, monkeypatch):
+    """Approve must not write a decision file outside the project jail."""
+    outside = tmp_path / "outside_decisions"
+    outside.mkdir()
+    rid = gate_run.run.run_id
+    graph_path = Path(gate_run.run.base_path) / "graph.json"
+    graph = json.loads(graph_path.read_text())
+    graph["nodes"][0]["config"]["decision_dir"] = str(outside)
+    graph_path.write_text(json.dumps(graph))
+    # Pending request still exists under the jailed dir from the fixture — rewrite
+    # status lookup will miss it (escaped dir), so plant a request under outside
+    # and ensure decide still refuses to write there.
+    (outside / f"{rid}__approve_ship.request.json").write_text(
+        (gate_run.decision_dir / f"{rid}__approve_ship.request.json").read_text()
+    )
+    r = api_client.post(
+        f"/api/v1/runs/{rid}/gates/approve_ship/decision",
+        json={"decision": "approve", "comment": "nope"},
+    )
+    assert r.status_code == 400
+    detail = r.json().get("detail") or {}
+    assert (detail.get("code") if isinstance(detail, dict) else "") == "invalid_decision_dir" or "decision_dir" in str(detail).lower()
+    assert not (outside / f"{rid}__approve_ship.decision.json").exists()

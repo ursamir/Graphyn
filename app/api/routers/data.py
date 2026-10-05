@@ -232,14 +232,21 @@ _INPUT_MEDIA_TYPES = {
 
 @router.get("/inputs/file", summary="Download an input dataset file")
 def download_input_file(
+    request: Request,
     path: str = Query(..., description="Path relative to datasets/input (may be nested)"),
+    download: bool = Query(
+        False,
+        description="Explicit user download: attachment disposition + audit event "
+        "(previews omit it and are not audited)",
+    ),
 ):
     """Serve an input file via path-jailed ``_safe_child``.
 
     Nested labels may use intermediate directory symlinks **within** the input
     root (resolved target must stay under the root unless
     ``GRAPHYN_DATA_ALLOW_EXTERNAL_SYMLINKS=1``). Static ``/input-files`` does
-    not follow symlinks; prefer this API for nested trees.
+    not follow symlinks; prefer this API for nested trees. Pass ``download=1``
+    for an audited attachment download (same contract as ``GET /outputs/file``).
     """
     rel = (path or "").replace("\\", "/").lstrip("/")
     parts = [p for p in rel.split("/") if p]
@@ -249,10 +256,17 @@ def download_input_file(
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     media = _INPUT_MEDIA_TYPES.get(file_path.suffix.lower(), "application/octet-stream")
+    disposition = "inline"
+    if download:
+        from app.api.download_audit import audit_file_download
+
+        disposition = "attachment"
+        audit_file_download(request, file_path, requested=rel)
     return FileResponse(
         path=str(file_path),
         media_type=media,
         filename=file_path.name,
+        content_disposition_type=disposition,
     )
 
 

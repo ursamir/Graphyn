@@ -946,7 +946,13 @@ async def _run_pipeline_body(
                 node_outputs[node_id] = outputs
 
                 # cache_key is only set for cacheable nodes (checked before load).
-                if cache is not None and cache_key is not None:
+                # Never cache on_error=route/continue (or Config soft-continue) outputs —
+                # a later hit would replay the failure branch instead of re-running.
+                if (
+                    cache is not None
+                    and cache_key is not None
+                    and not getattr(exec_, "failure_policy_applied", False)
+                ):
                     _cache_save(cache, cache_key, outputs, run_id=run_id, node_id=node_id)
 
             if checkpoint:

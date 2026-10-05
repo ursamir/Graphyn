@@ -68,19 +68,27 @@ export function ShipPackageSummary({
   manifest,
   onOpenRun,
   showHowToRun = true,
+  /** Nested under a fold — skip the outer card chrome + title row (fold owns them). */
+  embedded = false,
 }: {
   manifest: ShipManifest
   onOpenRun?: (runId: string) => void
   showHowToRun?: boolean
+  embedded?: boolean
 }) {
   const st = selftestSummary(manifest.selftest)
   const input = inputSummary(manifest.input)
   const samples = manifest.selftest.samples.filter((s) => s.file)
   return (
     <section
-      className="space-y-3 rounded-xl border border-ink-100 bg-white px-3 py-3 text-xs text-ink-700"
+      className={clsx(
+        'space-y-3 text-xs text-ink-700',
+        !embedded && 'rounded-xl border border-ink-100 bg-white px-3 py-3',
+        embedded && 'px-2 py-2',
+      )}
       data-testid="ship-package-summary"
     >
+      {!embedded ? (
       <div className="flex flex-wrap items-center gap-2">
         <FileArchive className="h-4 w-4 text-ink-400" aria-hidden />
         <span className="min-w-0 truncate font-semibold text-ink-900" title={manifest.packagePath ?? undefined}>
@@ -96,6 +104,7 @@ export function ShipPackageSummary({
           {st.label}
         </span>
       </div>
+      ) : null}
 
       {manifest.warning ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-950">
@@ -262,19 +271,62 @@ export function ShipPackageSummary({
   )
 }
 
-/** Fetch + render the sidecar for a package path (nothing when absent). */
+/**
+ * Fetch + render the sidecar for a package path (nothing when absent).
+ * `collapsible` (Overview): one-line summary folded by default so What happened /
+ * Hot spots / Run record stay reachable without scrolling past the full card.
+ */
 export function ShipPackageSummaryForPath({
   packagePath,
   refreshKey,
   onOpenRun,
   showHowToRun,
+  collapsible = false,
+  defaultOpen = false,
 }: {
   packagePath: string | null | undefined
   refreshKey?: unknown
   onOpenRun?: (runId: string) => void
   showHowToRun?: boolean
+  collapsible?: boolean
+  defaultOpen?: boolean
 }) {
   const { manifest } = useShipManifest(packagePath, refreshKey)
   if (!manifest) return null
-  return <ShipPackageSummary manifest={manifest} onOpenRun={onOpenRun} showHowToRun={showHowToRun} />
+  const body = (
+    <ShipPackageSummary
+      manifest={manifest}
+      onOpenRun={onOpenRun}
+      showHowToRun={showHowToRun}
+      embedded={collapsible}
+    />
+  )
+  if (!collapsible) return body
+  const st = selftestSummary(manifest.selftest)
+  return (
+    <details
+      className="overflow-hidden rounded-xl border border-ink-200 bg-white"
+      open={defaultOpen}
+      data-testid="ship-package-summary-fold"
+    >
+      <summary className="flex cursor-pointer select-none flex-wrap items-center gap-2 px-3 py-2 text-[13px]">
+        <FileArchive className="h-4 w-4 shrink-0 text-ink-400" aria-hidden />
+        <span className="min-w-0 truncate font-semibold text-ink-900" title={manifest.packagePath ?? undefined}>
+          {manifest.packageName}
+        </span>
+        {manifest.sizeBytes != null ? (
+          <span className="text-[11px] text-ink-500">{formatBytes(manifest.sizeBytes)}</span>
+        ) : null}
+        <span
+          className={clsx(
+            'ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold',
+            TONE[st.tone],
+          )}
+        >
+          {st.label}
+        </span>
+      </summary>
+      <div className="border-t border-ink-100 px-1 pb-1 pt-0">{body}</div>
+    </details>
+  )
 }

@@ -48,7 +48,7 @@ app/mcp/
 
 ## Authentication
 
-Token from `GRAPHYN_API_TOKEN`. Expected at `arguments._meta.auth_token`. In development, empty token = no auth. `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production|staging` forbids an empty token (fail-closed). Wrong/absent = `{"error_type": "unauthorized"}`.
+Token from `GRAPHYN_API_TOKEN` (or a `GRAPHYN_API_TOKENS` mapped token). Expected at `arguments._meta.auth_token`. In development, empty token = no auth. `GRAPHYN_AUTH_REQUIRED=1` or `GRAPHYN_ENV=production|staging` forbids an empty token (fail-closed). Wrong/absent = `{"error_type": "unauthorized"}`. Audit actors are bound via `resolve_mcp_actor`: a mapped token always wins over a client `actor` string (kept as `claimed_actor` when it differs); unmapped → `mcp:<actor or mcp>` with `actor_verified=false`.
 
 ---
 
@@ -173,9 +173,9 @@ Returns the schema for all NDJSON event types emitted during execution. No argum
 
 Execute a pipeline. Returns `run_id` within 500ms; execution proceeds asynchronously in a background thread. If the background thread raises an unhandled exception, the run is marked failed in `meta.json`.
 
-Before execution the graph goes through the same shared preparation as REST `/pipelines/run*`, the SDK and the CLI (`app/core/execution/graph_prepare.py`): workspace path rewire (`examples/**/data` → `workspace/datasets/input/<slug>/…`, outputs → `workspace/artifacts/<slug>/…`), project / version_tag stamping, inline-secret refusal, and deep validation (VAL-003 — error findings refuse the run). A `run.start` audit event is recorded (`actor` argument, default `mcp`).
+Before execution the graph goes through the same shared preparation as REST `/pipelines/run*`, the SDK and the CLI (`app/core/execution/graph_prepare.py`): workspace path rewire (`examples/**/data` → `workspace/datasets/input/<slug>/…`, outputs → `workspace/artifacts/<slug>/…`), project / version_tag stamping, inline-secret refusal, and deep validation (VAL-003 — error findings refuse the run). A `run.start` audit event is recorded with the token-bound actor (optional `actor` claim when the token is unmapped).
 
-**Arguments:** `graph` (required), `use_cache` (default `true`), `streaming` (default `false`), optional `project`, `version_tag`, `actor`.
+**Arguments:** `graph` (required), `use_cache` (default `true`), `streaming` (default `false`), optional `project`, `version_tag`, `actor` (claim only; mapped token wins).
 
 **Returns:** `{"run_id": "...", "status": "pending", "accepted": true}` (same `pending` vocabulary as REST `run-async`; `accepted` replaces the legacy `status: "started"` ack) or `{"valid": false, "errors": [...], "error": true, "error_type": "ir_validation_error"}` / `{"error_type": "inline_secret_error"}`
 

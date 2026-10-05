@@ -14,6 +14,8 @@ from typing import Any
 
 from app.mcp.handlers.journey.common import handler_error, meta_props, require_project_dir
 
+from app.mcp.auth import resolve_mcp_actor
+
 # ── Pipelines (J1) ────────────────────────────────────────────────────────────
 
 LIST_PIPELINES_DESCRIPTION = (
@@ -120,7 +122,6 @@ ROLLBACK_PIPELINE_SCHEMA = {
     "additionalProperties": False,
 }
 
-
 def list_pipelines_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.core.pipelines.pipeline_environments import enrich_pipeline_summary
     from app.core.pipelines.project_pipelines import list_pipelines
@@ -186,7 +187,7 @@ def publish_pipeline_handler(arguments: dict[str, Any] | None = None) -> dict[st
             project_name=name,
             message=args.get("message"),
             set_env=args.get("set_env"),
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
         )
     except FileNotFoundError as exc:
         return handler_error("not_found", str(exc))
@@ -207,7 +208,7 @@ def promote_pipeline_handler(arguments: dict[str, Any] | None = None) -> dict[st
             version=args.get("version"),
             from_env=args.get("from_env"),
             approve=bool(args.get("approve")),
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
         )
     except FileNotFoundError as exc:
         return handler_error("not_found", str(exc))
@@ -228,7 +229,7 @@ def rollback_pipeline_handler(arguments: dict[str, Any] | None = None) -> dict[s
             project_dir, pipeline, version, project_name=name
         )
         record_audit(
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
             action="pipeline.rollback",
             resource_type="pipeline",
             resource_id=f"{name}/{pipeline}@{version}",

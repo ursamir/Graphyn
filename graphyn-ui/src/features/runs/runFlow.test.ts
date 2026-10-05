@@ -235,4 +235,17 @@ describe('handled errors', () => {
     expect(split.unhandledCount).toBe(2)
     expect(split.unhandledRecent).toHaveLength(1)
   })
+
+  it('never under-counts unhandled below the recent window', () => {
+    const split = splitRunErrors({
+      errorCount: 2,
+      recentErrors: [
+        { level: 'ERROR', node_id: 'lookup', message: 'boom' },
+        { level: 'ERROR', node_id: 'lookup', message: 'boom again' },
+      ],
+      handled,
+    })
+    expect(split.unhandledRecent).toHaveLength(2)
+    expect(split.unhandledCount).toBe(2)
+  })
 })

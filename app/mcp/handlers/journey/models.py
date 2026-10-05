@@ -14,6 +14,8 @@ from typing import Any
 
 from app.mcp.handlers.journey.common import handler_error, meta_props, require_project_dir
 
+from app.mcp.auth import resolve_mcp_actor
+
 # ── Models (J2) ───────────────────────────────────────────────────────────────
 
 LIST_MODELS_DESCRIPTION = "List registered models (stage pointers)."
@@ -82,7 +84,6 @@ APPROVE_MODEL_PROD_SCHEMA = {
     "required": ["name"],
     "additionalProperties": False,
 }
-
 def list_models_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.core.mlops.model_registry import list_models
 
@@ -127,7 +128,7 @@ def register_model_handler(arguments: dict[str, Any] | None = None) -> dict[str,
             slug=str(args.get("slug") or "").strip(),
             stage=str(args.get("stage") or "staging"),
             description=args.get("description"),
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
             node_id=(str(args["node_id"]).strip() or None) if args.get("node_id") else None,
             model_path=(str(args["model_path"]).strip() or None) if args.get("model_path") else None,
             allow_untrained=bool(args.get("allow_untrained")),
@@ -146,7 +147,7 @@ def request_model_prod_handler(arguments: dict[str, Any] | None = None) -> dict[
         return request_prod(
             str(args.get("name") or "").strip(),
             run_id=_full_run_id(str(args["run_id"]).strip()) if args.get("run_id") else args.get("run_id"),
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
         )
     except FileNotFoundError as exc:
         return handler_error("not_found", str(exc))
@@ -161,7 +162,7 @@ def approve_model_prod_handler(arguments: dict[str, Any] | None = None) -> dict[
     try:
         return approve_prod(
             str(args.get("name") or "").strip(),
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
         )
     except FileNotFoundError as exc:
         return handler_error("not_found", str(exc))

@@ -241,7 +241,8 @@ export function overviewMetrics(input: {
   others: Array<{ label: string; primary: PrimaryMetric }>
 } {
   const scored = input.paths.filter((p) => Object.keys(p.metrics).length > 0)
-  if (input.paths.length > 1 && scored.length > 0) {
+  // Callers should pass paths only for ML multi-path runs; still require ≥2 scored paths.
+  if (input.paths.length > 1 && scored.length > 1) {
     const best = pickBestPath(scored, input.backendBest)
     if (best) {
       return {

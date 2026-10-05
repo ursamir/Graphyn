@@ -23,6 +23,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from app.mcp.auth import resolve_mcp_actor
+
 log = logging.getLogger(__name__)
 
 from app.core.execution.runtime_backend import get_backend as _get_backend  # module-level — patchable in tests
@@ -120,7 +122,6 @@ REPLAY_RUN_SCHEMA = {
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
-
 
 def list_artifacts_handler(arguments: dict[str, Any]) -> dict:
     """List artifacts with optional filters (Req 6 §1).
@@ -227,7 +228,7 @@ def replay_run_handler(arguments: dict[str, Any]) -> dict:
         try:
             result = start_replay(
                 run_dir,
-                actor=str(arguments.get("actor") or "mcp").strip()[:128] or "mcp",
+                actor=str(resolve_mcp_actor(arguments)["actor"]),
                 check_inputs=bool(arguments.get("check_inputs")),
                 force=bool(arguments.get("force")),
                 submit=_REPLAY_EXECUTOR.submit,

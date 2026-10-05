@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.mcp.auth import resolve_mcp_actor
+
 PROPOSE_GRAPH_DESCRIPTION = (
     "Propose a GraphIR change for human approval. Stores a pending proposal under "
     "the project proposals/ directory. Does not apply the graph — a human must Accept "
@@ -96,7 +98,6 @@ GET_PROPOSAL_SCHEMA = {
     "additionalProperties": False,
 }
 
-
 def propose_graph_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.core.agentic.proposals import create_proposal
 
@@ -119,7 +120,7 @@ def propose_graph_handler(arguments: dict[str, Any] | None = None) -> dict[str, 
         proposal = create_proposal(
             graph,
             summary.strip(),
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
             base_graph=args.get("base_graph") if isinstance(args.get("base_graph"), dict) else None,
             base_graph_hash=args.get("base_graph_hash")
             if isinstance(args.get("base_graph_hash"), str)
@@ -252,9 +253,9 @@ def accept_proposal_handler(arguments: dict[str, Any] | None = None) -> dict[str
             "error_type": "missing_argument",
             "message": "accept_proposal requires 'id'.",
         }
-    actor = args.get("actor") if isinstance(args.get("actor"), str) else "mcp"
+    actor = str(resolve_mcp_actor(args)["actor"])
     try:
-        data = accept_proposal(proposal_id.strip(), actor=(actor or "mcp").strip() or "mcp")
+        data = accept_proposal(proposal_id.strip(), actor=actor)
     except KeyError:
         return {
             "error": True,
@@ -281,12 +282,12 @@ def reject_proposal_handler(arguments: dict[str, Any] | None = None) -> dict[str
             "error_type": "missing_argument",
             "message": "reject_proposal requires 'id'.",
         }
-    actor = args.get("actor") if isinstance(args.get("actor"), str) else "mcp"
+    actor = str(resolve_mcp_actor(args)["actor"])
     reason = args.get("reason") if isinstance(args.get("reason"), str) else None
     try:
         data = reject_proposal(
             proposal_id.strip(),
-            actor=(actor or "mcp").strip() or "mcp",
+            actor=actor,
             reason=reason,
         )
     except KeyError:

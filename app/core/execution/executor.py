@@ -348,7 +348,12 @@ class ParallelExecutor:
             # ── Save to cache (respecting cacheable flag) ──────────────────────
             # cache_key is only set for cacheable nodes (Req 1.8 — checked
             # before load so stale entries of non-cacheable nodes never hit).
-            if cache is not None and cache_key is not None:
+            # Skip on_error route/continue outputs (same rule as sequential path).
+            if (
+                cache is not None
+                and cache_key is not None
+                and not getattr(exec_, "failure_policy_applied", False)
+            ):
                 from datetime import datetime as _dt, timezone as _tz
 
                 _source = {"run_id": run_id, "node_id": node_id, "saved_at": _dt.now(_tz.utc).isoformat()}

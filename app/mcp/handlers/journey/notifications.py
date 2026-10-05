@@ -14,6 +14,8 @@ from typing import Any
 
 from app.mcp.handlers.journey.common import handler_error, meta_props, require_project_dir
 
+from app.mcp.auth import resolve_mcp_actor
+
 LIST_NOTIFICATIONS_DESCRIPTION = (
     "List in-app notifications (newest first). Optional unread_only filter."
 )
@@ -44,7 +46,6 @@ MARK_NOTIFICATIONS_READ_SCHEMA = {
     "additionalProperties": False,
 }
 
-
 def list_notifications_handler(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.core.notify.in_app_notify import list_notifications
 
@@ -66,7 +67,7 @@ def mark_notifications_read_handler(arguments: dict[str, Any] | None = None) -> 
     result = mark_read([str(i) for i in ids], all_read=all_read)
     try:
         record_audit(
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
             action="notifications.mark_read",
             resource_type="notification",
             resource_id="all" if all_read else ",".join(str(i) for i in ids[:8]) or "none",

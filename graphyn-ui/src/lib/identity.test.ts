@@ -16,7 +16,7 @@ describe('actorDisplay', () => {
     expect(actorDisplay({ actor: 'alice', actorVerified: true })).toMatchObject({ name: 'alice', kind: 'verified', suffix: '' })
     expect(actorDisplay({ actor: 'alice', actorVerified: true, claimedActor: 'mallory' }).title).toContain('claimed "mallory"')
     expect(actorDisplay({ actor: 'bob', actorVerified: false })).toMatchObject({ kind: 'self-declared', suffix: '(self-declared)' })
-    expect(actorDisplay({ actor: 'unidentified' })).toMatchObject({ name: 'Unidentified', kind: 'unidentified' })
+    expect(actorDisplay({ actor: 'unidentified' })).toMatchObject({ name: 'Local operator', kind: 'unidentified' })
     expect(actorDisplay({ actor: '', claimedActor: 'eve' }).title).toContain('eve')
     expect(actorDisplay({ actor: 'carol' })).toMatchObject({ kind: 'unknown', suffix: '' })
   })

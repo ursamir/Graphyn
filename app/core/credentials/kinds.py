@@ -254,7 +254,7 @@ def _register_builtins() -> None:
         label="HTTP auth",
         description=(
             "Generic HTTP authentication for http_request: bearer token, basic "
-            "username/password, or a custom header. Optional allowed_hosts binds "
+            "username/password, or a custom header. allowed_hosts (CSV) binds "
             "the secret to specific hosts."
         ),
         fields=[
@@ -266,7 +266,7 @@ def _register_builtins() -> None:
             KindField("header_value", secret=True, required=False, description="Header value (scheme=header)", default=""),
             KindField(
                 "allowed_hosts", secret=False, required=False, default="",
-                description="Optional CSV of hostnames this secret may be sent to (empty = any egress-allowed host)",
+                description="CSV of hostnames this secret may be sent to (required at use — empty fails closed)",
             ),
         ],
         env_fallbacks={},

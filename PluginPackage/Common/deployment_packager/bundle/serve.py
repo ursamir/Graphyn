@@ -2,7 +2,9 @@
 """Optional tiny HTTP endpoint around run_inference.py.
 
     pip install -r requirements.txt -r requirements-serve.txt
-    uvicorn serve:app --host 0.0.0.0 --port 8080
+    # Local default: loopback only. Use --host 0.0.0.0 in containers / when
+    # you intentionally expose the port on all interfaces.
+    uvicorn serve:app --host 127.0.0.1 --port 8080
     curl -X POST --data-binary @clip.wav -H 'Content-Type: audio/wav' \
         'http://localhost:8080/predict?top_k=3'
 

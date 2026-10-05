@@ -78,8 +78,20 @@ def _atomic_write_json(path: Path, data: dict) -> None:
 
 
 def decision_paths(decision_dir: str | Path, run_id: str, gate_id: str) -> tuple[Path, Path]:
-    """Return ``(request_path, decision_path)`` for a gate in a run."""
-    base = Path(decision_dir or DEFAULT_DECISION_DIR)
+    """Return ``(request_path, decision_path)`` for a gate in a run.
+
+    ``decision_dir`` must resolve inside the project workspace (same jail as
+    ``app.core.runs.gates``). Absolute paths under ``project_dir()`` and
+    ``workspace/…`` relatives are allowed; ``..`` and escapes raise ValueError.
+    """
+    from app.core.paths.write_paths import _resolve_under_project
+
+    raw = str(decision_dir or DEFAULT_DECISION_DIR).strip() or DEFAULT_DECISION_DIR
+    if any(part == ".." for part in Path(raw).parts):
+        raise ValueError("decision_dir must not contain '..'")
+    base = _resolve_under_project(raw)
+    if base is None:
+        raise ValueError(f"decision_dir must resolve inside the project workspace: {raw!r}")
     stem = f"{_safe_key(run_id)}__{_safe_key(gate_id)}"
     return base / f"{stem}.request.json", base / f"{stem}.decision.json"
 
@@ -230,7 +242,11 @@ class HitlApproveNode(Node):
         approver_roles: list = Field(default_factory=list, title="Approver roles", description="Allowed decision roles (empty = any named approver).")
         reason_required: bool = Field(default=True, title="Reason required", description="Reject decisions that carry no reason.")
         gate_id: str = Field(default="hitl_approve", title="Gate id", description="Decision key within the run (use the graph node id).")
-        decision_dir: str = Field(default=DEFAULT_DECISION_DIR, title="Decision dir", description="Directory for request/decision files.")
+        decision_dir: str = Field(
+            default=DEFAULT_DECISION_DIR,
+            title="Decision dir",
+            description="Directory for request/decision files (must resolve inside the project workspace).",
+        )
         unattended_approve: bool = Field(
             default=False,
             title="Unattended approve",

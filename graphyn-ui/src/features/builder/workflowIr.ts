@@ -45,6 +45,30 @@ export function onErrorFromIr(raw: unknown): NodeOnError | null {
   return mode === 'route' ? { mode, port: PORT_RE.test(port) ? port : ERROR_PORT_DEFAULT } : { mode }
 }
 
+/**
+ * Canvas → IR `event_trigger`. Preserves an explicit trigger; for
+ * `schedule_trigger` derives a timer trigger from cron / interval_s so the
+ * console matches MCP `generate_graph` / `_schedule_event_trigger`.
+ */
+export function eventTriggerToIr(
+  nodeType: string,
+  eventTrigger: unknown,
+  config: Rec | null | undefined,
+): Rec | null {
+  const explicit = rec(eventTrigger)
+  if (explicit && Object.keys(explicit).length > 0) return { ...explicit }
+  if (nodeType !== 'schedule_trigger') return null
+  const cfg = rec(config) || {}
+  const interval = cfg.interval_s ?? cfg.interval ?? 0
+  return {
+    source_type: 'timer',
+    source_config: {
+      cron: typeof cfg.cron === 'string' ? cfg.cron : cfg.cron != null ? String(cfg.cron) : '',
+      interval_s: typeof interval === 'number' && Number.isFinite(interval) ? interval : Number(interval) || 0,
+    },
+  }
+}
+
 /** Node data → IR `on_error` (omitted for the default "fail"). */
 export function onErrorToIr(v: NodeOnError | null | undefined): { mode: OnErrorMode; port?: string } | null {
   if (!v || v.mode === 'fail') return null

@@ -360,6 +360,19 @@ def _cache_save(cache_key: str | None, node_type: str, outputs: Any) -> None:
     PipelineCache().save(cache_key, outputs)
 
 
+def _is_routed_error_output(outputs: Any, ir_node: Any) -> bool:
+    """True when outputs look like IR on_error=route (must not be cached)."""
+    if not isinstance(outputs, dict) or not outputs:
+        return False
+    from app.core.ir.models import routed_error_port
+
+    port = routed_error_port(ir_node)
+    if not port or port not in outputs:
+        return False
+    payload = outputs.get(port)
+    return isinstance(payload, dict) and payload.get("ok") is False
+
+
 def _run_local_node(
     *,
     node_id: str,
@@ -369,9 +382,16 @@ def _run_local_node(
     inputs: dict[str, Any],
     run_id: str,
     cancel_check: Any | None = None,
-) -> dict[str, Any]:
-    """Execute one node on the control plane via NodeExecutor."""
+    ir_node: Any = None,
+) -> tuple[dict[str, Any], bool]:
+    """Execute one node on the control plane via NodeExecutor.
+
+    Returns ``(outputs, failure_policy_applied)``. IR ``on_error`` / ``retry``
+    from ``ir_node`` are stamped onto the instance (same as Mode A planner) so
+    local distributed nodes honour route/continue and are not cached on failure.
+    """
     from app.core.execution.node_executor import NodeExecutor
+    from app.core.execution.planner import _policy_dict
     from app.core.host.registry_runtime import get_registry
     from app.core.paths.write_paths import ensure_node_write_dirs
 
@@ -382,13 +402,21 @@ def _run_local_node(
             f"Local node {node_id!r}: type {node_type!r} is not registered"
         )
     node = node_class(config=dict(config or {}), seed=seed)
+    if ir_node is not None:
+        on_err = _policy_dict(getattr(ir_node, "on_error", None))
+        retry = _policy_dict(getattr(ir_node, "retry", None))
+        if on_err is not None:
+            node._graphyn_on_error = on_err  # type: ignore[attr-defined]
+        if retry is not None:
+            node._graphyn_retry = retry  # type: ignore[attr-defined]
     ensure_node_write_dirs(node)
     executor = NodeExecutor(node, run_id=run_id)
     if cancel_check is not None:
         executor.set_cancel_check(cancel_check)
     executor.setup()
     try:
-        return executor.execute(inputs)
+        outputs = executor.execute(inputs)
+        return outputs, bool(getattr(executor, "failure_policy_applied", False))
     finally:
         try:
             executor.teardown()
@@ -703,15 +731,16 @@ class DistributedBackend(RuntimeBackend):
                         if cached is not None:
                             outputs = cached
                         else:
-                            outputs = _run_local_node(
+                            outputs, failure_policy = _run_local_node(
                                 node_id=node_id,
                                 node_type=ir_node.node_type,
                                 config=cfg,
                                 seed=node_seed,
                                 inputs=inputs,
                                 run_id=run_id,
+                                ir_node=ir_node,
                             )
-                            if use_cache:
+                            if use_cache and not failure_policy:
                                 _cache_save(cache_key, ir_node.node_type, outputs or {})
                         node_outputs[node_id] = outputs or {}
                         node_workers[node_id] = "local"
@@ -858,7 +887,8 @@ class DistributedBackend(RuntimeBackend):
                             outputs = {}
 
                     node_outputs[node_id] = outputs
-                    if use_cache:
+                    # Never cache IR on_error=route payloads (same rule as Mode A).
+                    if use_cache and not _is_routed_error_output(outputs, ir_node):
                         _cache_save(cache_key, ir_node.node_type, outputs)
                     if result.worker_id:
                         node_workers[node_id] = result.worker_id
@@ -1015,7 +1045,8 @@ def run_loopback_worker_once(
                 outputs = execute_fn(job) or {}
         else:
             jid = job.job_id
-            outputs = _run_local_node(
+            # Workers do not yet receive IR on_error/retry on NodeJob (MODEB-ON-ERROR-1).
+            outputs, _failure_policy = _run_local_node(
                 node_id=job.node_id,
                 node_type=job.node_type,
                 config=dict(job.config or {}),

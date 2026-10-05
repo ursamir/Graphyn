@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.mcp.auth import resolve_mcp_actor
 
 def _err(error_type: str, message: str) -> dict[str, Any]:
     return {"error": True, "error_type": error_type, "message": message}
@@ -209,7 +210,7 @@ def upload_dataset_file_handler(arguments: dict[str, Any] | None = None) -> dict
         from app.core.trust.audit import record_audit
 
         record_audit(
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
             action="dataset.upload",
             resource_type="dataset_input",
             resource_id=",".join(summary["labels"]) or label,

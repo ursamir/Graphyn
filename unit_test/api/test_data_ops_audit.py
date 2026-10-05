@@ -69,6 +69,19 @@ class TestGenericListing:
         resp = api_client.get(f"{API}/inputs/file", params={"path": "docs/a.csv"})
         assert resp.status_code == 200 and resp.headers["content-type"].startswith("text/csv")
 
+    def test_input_file_download_audited(self, api_client, inp, tmp_workspace):
+        (inp / "docs").mkdir()
+        (inp / "docs" / "a.csv").write_text("x,y\n")
+        # Preview (no download=) is not audited.
+        assert api_client.get(f"{API}/inputs/file", params={"path": "docs/a.csv"}).status_code == 200
+        before = [e for e in _events(tmp_workspace) if "download" in e.get("action", "")]
+        resp = api_client.get(f"{API}/inputs/file", params={"path": "docs/a.csv", "download": 1})
+        assert resp.status_code == 200
+        assert "attachment" in (resp.headers.get("content-disposition") or "").lower()
+        after = [e for e in _events(tmp_workspace) if "download" in e.get("action", "")]
+        assert len(after) == len(before) + 1
+        assert after[-1]["action"] in ("run.output_download", "model.download", "dataset.download")
+
 
 class TestUpload:
     def test_multi_file_into_new_label_with_sha256_and_audit(self, api_client, inp, tmp_workspace):

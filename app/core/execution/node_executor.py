@@ -180,6 +180,10 @@ class NodeExecutor:
         # run journal / NDJSON stream. None → progress is a no-op.
         self._progress_node_id: str = ""
         self._progress_sink: Any = None  # optional Callable[[dict], None]
+        # Set when execute() returns via IR/Config failure policy (route/continue).
+        # Orchestrator must not cache those outputs — a later hit would replay the
+        # error branch instead of re-running the node.
+        self.failure_policy_applied: bool = False
 
     def setup(self) -> None:
         """Call node.setup() once before the first execution. Subsequent calls are no-ops.
@@ -266,6 +270,7 @@ class NodeExecutor:
             retry back-off (``time.sleep()`` is used for back-off delays).
         """
         node = self._node
+        self.failure_policy_applied = False
         if self._torn_down and not self._setup_done:
             # A previous failure tore the node down; re-acquire resources
             # instead of running process() against a torn-down node.
@@ -357,9 +362,12 @@ class NodeExecutor:
     def _final_failure(self, exc: Exception, attempts: int) -> dict[str, Any]:
         """Apply the failure policy after the last attempt: route / continue / raise.
 
-        Precedence: IR ``on_error`` (any node) → legacy Config
-        ``on_error_port`` continuation → re-raise. Cancellation is never
-        routed or swallowed.
+        Precedence: IR ``on_error`` route/continue (any node) → legacy Config
+        ``on_error_port`` continuation → re-raise. IR ``mode=fail`` (or unset)
+        still allows Config continuation so graphs that only set Config keep
+        working; do not set both IR route/continue and Config ``on_error_port``
+        on the same node (validator warns). Cancellation is never routed or
+        swallowed.
         """
         node = self._node
         if not self.is_cancel_requested():
@@ -383,6 +391,7 @@ class NodeExecutor:
                     error_type=payload["error_type"],
                     error=payload["message"],
                 )
+                self.failure_policy_applied = True
                 return {port: payload}
             if mode == "continue":
                 self._emit_event(
@@ -392,11 +401,13 @@ class NodeExecutor:
                     error_type=_error_type(exc),
                     error=_short_message(exc),
                 )
+                self.failure_policy_applied = True
                 return {}
-            if mode != "fail":
-                continued = _continue_error_output(node, exc)
-                if continued is not None:
-                    return continued
+            # IR fail / unset: legacy Config on_error_port may still soft-continue.
+            continued = _continue_error_output(node, exc)
+            if continued is not None:
+                self.failure_policy_applied = True
+                return continued
         # SA-NE1 fix: only call teardown() if setup() was previously called.
         if self._setup_done:
             self.teardown()

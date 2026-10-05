@@ -207,10 +207,12 @@ export async function fetchAuthenticatedBlobUrl(staticPath: string): Promise<str
 /** Authenticated blob URL for a jailed input dataset file (caller must revoke). */
 export async function fetchInputBlobUrl(
   filePath: string,
-  init?: { signal?: AbortSignal },
+  init?: { signal?: AbortSignal; download?: boolean },
 ): Promise<string> {
   const res = await apiFetch('/data/inputs/file', {
-    query: { path: filePath },
+    // download=1 marks an explicit user download (audited server-side);
+    // previews omit it and are not audited.
+    query: init?.download ? { path: filePath, download: 1 } : { path: filePath },
     timeoutMs: 120000,
     signal: init?.signal,
   })
@@ -292,7 +294,7 @@ export async function downloadOutputFile(filePath: string, filename?: string): P
 
 /** Same as downloadOutputFile but for a jailed input dataset file. */
 export async function downloadInputFile(filePath: string, filename?: string): Promise<void> {
-  const url = await fetchInputBlobUrl(filePath)
+  const url = await fetchInputBlobUrl(filePath, { download: true })
   try {
     triggerBlobDownload(url, filePath, filename)
   } finally {

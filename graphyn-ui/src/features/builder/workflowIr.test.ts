@@ -35,6 +35,26 @@ describe('on_error / retry IR round-trip', () => {
     expect(retryToIr({ max_attempts: 2, on: ['exception', 'timeout'] })).toEqual({ max_attempts: 2, on: ['exception', 'timeout'] })
     expect(retryToIr(null)).toBeNull()
   })
+  it('buildGraphFromCanvas derives event_trigger for schedule_trigger from cron/interval', () => {
+    const g = buildGraphFromCanvas(
+      [
+        {
+          id: 'tick',
+          data: {
+            nodeType: 'schedule_trigger',
+            config: { cron: '0 2 * * *', interval_s: 0 },
+          },
+        },
+      ],
+      [],
+      1,
+      'nightly',
+    )
+    expect(g.nodes[0].event_trigger).toEqual({
+      source_type: 'timer',
+      source_config: { cron: '0 2 * * *', interval_s: 0 },
+    })
+  })
   it('buildGraphFromCanvas writes on_error/retry only when set and bumps to IR 1.3', () => {
     const node = (id: string, extra: Record<string, unknown> = {}) => ({
       id,

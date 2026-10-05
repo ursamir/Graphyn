@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.mcp.auth import resolve_mcp_actor
 
 def _err(error_type: str, message: str) -> dict[str, Any]:
     return {"error": True, "error_type": error_type, "message": message}
@@ -156,7 +157,7 @@ def create_ship_package_handler(arguments: dict[str, Any] | None = None) -> dict
             model_stage_or_version=str(args.get("model_stage_or_version") or "").strip(),
             target=target,
             env=str(args.get("env") or "draft"),
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
             notes=args.get("notes"),
             unsigned_allowed=bool(
                 args.get("unsigned_allowed")
@@ -207,7 +208,7 @@ def promote_ship_package_handler(arguments: dict[str, Any] | None = None) -> dic
             str(args.get("package_id") or "").strip(),
             to_env=str(args.get("to_env") or "").strip(),
             approve=bool(args.get("approve")),
-            actor=str(args.get("actor") or "mcp"),
+            actor=str(resolve_mcp_actor(args)["actor"]),
         )
     except FileNotFoundError as exc:
         return _err("not_found", str(exc))

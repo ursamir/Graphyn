@@ -159,9 +159,13 @@ function summarizeWrote(
     typeof inventoryTotal === 'number' && inventoryTotal > names.length
       ? inventoryTotal
       : names.length
-  // Prefer inventory total — UI listing caps audio dumps at ~32 samples.
-  if (total >= 6 && (audioish >= names.length * 0.6 || (names.length === 0 && total >= 6))) {
+  // Prefer inventory total — UI listing caps large dumps at ~32 samples.
+  // Domain-generic wording: "audio clips" only when extensions clearly dominate.
+  if (total >= 6 && names.length > 0 && audioish >= names.length * 0.6) {
     return { text: `${total.toLocaleString()} audio clips`, count: total, raw: names.slice(0, 8).join(', ') }
+  }
+  if (total >= 6 && names.length === 0) {
+    return { text: `${total.toLocaleString()} files`, count: total, raw: '' }
   }
   if (!names.length) {
     return { text: `${total.toLocaleString()} files`, count: total, raw: '' }
@@ -475,6 +479,8 @@ export function RunLineagePanel({
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [fetchedEdges, setFetchedEdges] = React.useState<GraphEdge[] | null>(null)
+  /** null = not needed / not started; true = in flight; false = settled (may be empty). */
+  const [edgesFetchPending, setEdgesFetchPending] = React.useState<boolean | null>(null)
 
   const parentEdgeKey = Array.isArray(graphEdges)
     ? normalizeEdges(graphEdges)
@@ -513,9 +519,11 @@ export function RunLineagePanel({
     const rid = runId.trim()
     if (!rid || parentEdges.length > 0) {
       setFetchedEdges(null)
+      setEdgesFetchPending(null)
       return
     }
     let cancelled = false
+    setEdgesFetchPending(true)
     void (async () => {
       const g = await fetchRunGraph(
         rid,
@@ -524,6 +532,7 @@ export function RunLineagePanel({
       if (cancelled) return
       const edges = g && Array.isArray(g.edges) ? normalizeEdges(g.edges as GraphEdge[]) : []
       setFetchedEdges(edges.length ? edges : null)
+      setEdgesFetchPending(false)
     })()
     return () => {
       cancelled = true
@@ -593,10 +602,19 @@ export function RunLineagePanel({
     [stories, effectiveEdges, flowMode],
   )
   const edgesWired = stories.some((s) => s.wired)
+  /** Only warn after the edge self-heal settles empty — never flash while loading. */
+  const showEdgesUnavailable =
+    !edgesWired && edgesFetchPending === false && parentEdges.length === 0
   const multiTrack = isMultiTrackShape(shape)
   const groups = groupStepsByLane(stories, (s) => s.id, shape, lanePaths)
+  const GATE_TYPE_RE = /hitl_approve|human_approval|approval_gate/i
   const hotSpots = [...stories]
     .filter((s) => s.durationMs != null && s.durationMs > 0)
+    .filter(
+      (s) =>
+        !GATE_TYPE_RE.test(s.nodeType || '') &&
+        !/awaiting_approval|waiting_approval/i.test(s.status || ''),
+    )
     .sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0))
     .slice(0, 5)
   const ov = overview || null
@@ -786,11 +804,11 @@ export function RunLineagePanel({
           {linearGot}
         </p>
       ) : null}
-      {!edgesWired ? (
+      {!showEdgesUnavailable ? null : (
         <p className="-mt-1 px-0.5 text-[11px] text-ink-400">
           Graph edges unavailable — showing pipeline order as the connection story.
         </p>
-      ) : null}
+      )}
 
       {showPathTable ? (
         <PathComparisonTable

@@ -489,6 +489,26 @@ def validate_graph_ir_result(graph: Any, registry: Any) -> dict:
                     )
                 )
 
+        # IR route/continue shadows Config on_error_port — warn when both are set.
+        pol = getattr(node, "on_error", None)
+        mode = str(getattr(pol, "mode", None) or "") if pol is not None else ""
+        if mode in ("route", "continue"):
+            cfg_fields = getattr(node_class, "Config", None)
+            model_fields = getattr(cfg_fields, "model_fields", None) or {}
+            if "on_error_port" in model_fields:
+                cfg_dict = dict(deep_unfreeze(node.config or {}))
+                if cfg_dict.get("on_error_port"):
+                    warnings.append(
+                        _finding(
+                            "VAL-ON-ERROR-BOTH",
+                            "warning",
+                            f"[{node.id}] IR on_error.mode={mode!r} takes precedence over "
+                            "Config on_error_port; remove one to avoid confusion",
+                            node_ids=[node.id],
+                            field="on_error",
+                        )
+                    )
+
     node_instances: dict[str, object] = {}
     seed_base = getattr(getattr(graph, "metadata", None), "seed", 0) or 0
     for node in graph.nodes:

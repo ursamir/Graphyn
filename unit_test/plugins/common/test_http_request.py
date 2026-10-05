@@ -258,9 +258,9 @@ def test_external_calls_recorded_redacted(installed_cls):
 @pytest.mark.parametrize(
     "payload,header,expected",
     [
-        ({"scheme": "bearer", "token": "tok"}, "Authorization", "Bearer tok"),
-        ({"scheme": "basic", "username": "u", "password": "p"}, "Authorization", "Basic dTpw"),
-        ({"scheme": "header", "header_name": "X-API-Key", "header_value": "v"}, "X-API-Key", "v"),
+        ({"scheme": "bearer", "token": "tok", "allowed_hosts": "example.com"}, "Authorization", "Bearer tok"),
+        ({"scheme": "basic", "username": "u", "password": "p", "allowed_hosts": "example.com"}, "Authorization", "Basic dTpw"),
+        ({"scheme": "header", "header_name": "X-API-Key", "header_value": "v", "allowed_hosts": "example.com"}, "X-API-Key", "v"),
     ],
 )
 def test_connection_id_http_auth(installed_cls, monkeypatch, payload, header, expected):
@@ -282,6 +282,18 @@ def test_connection_allowed_hosts_binding(installed_cls, monkeypatch):
     node = _node(installed_cls, connection_id="c1")
     with patch("httpx.stream") as m:
         with pytest.raises(RuntimeError, match="allowed_hosts"):
+            node.process({"input": None})
+    m.assert_not_called()
+
+
+def test_connection_empty_allowed_hosts_fails_closed(installed_cls, monkeypatch):
+    from unittest.mock import patch
+    import app.core.credentials.resolve as res
+    monkeypatch.setattr(res, "get_payload", lambda cid: (
+        "http_auth", {"scheme": "bearer", "token": "t", "allowed_hosts": ""}))
+    node = _node(installed_cls, connection_id="c1")
+    with patch("httpx.stream") as m:
+        with pytest.raises(RuntimeError, match="empty allowed_hosts"):
             node.process({"input": None})
     m.assert_not_called()
 

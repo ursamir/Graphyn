@@ -1932,7 +1932,9 @@ export default function RunsView() {
    */
   const mlMultiPath = isMlMultiPath({ shape: rawShape, paths: rawPathResults, nodeTypeOf: nodeTypeOfId })
   const pipelineShape = mlMultiPath ? rawShape : computePipelineShape(rawStackItems.map((i) => i.id), null)
-  const pathResults: PathResult[] = mlMultiPath || backendPaths.length > 0 ? rawPathResults : resultsFor(pipelineShape)
+  // Backend `summary.paths` can list workflow sinks too — only keep Path chrome / best-path
+  // metrics when this run is ML multi-path.
+  const pathResults: PathResult[] = mlMultiPath ? rawPathResults : resultsFor(pipelineShape)
   const bestPath = pickBestPath(pathResults, bestPathIdFromSummary(detail) ?? bestPathIdFromSummary(selectedSummary))
   const runPrimary = primaryMetric(detail) ?? primaryMetric(selectedSummary) ?? bestPath?.primary ?? null
   // Overview Metrics box: best path on multi-path runs (matches the results banner).
@@ -2026,7 +2028,7 @@ export default function RunsView() {
     return comparableRegression({
       runId: selected,
       graphName,
-      pathCount: backendPaths.length || (multiPath ? pathResults.length : null),
+      pathCount: mlMultiPath ? (backendPaths.length || pathResults.length || null) : null,
       createdAt:
         (selectedSummary?.created_at as string | undefined) ??
         (detailMeta?.created_at as string | undefined) ??
@@ -2294,6 +2296,22 @@ export default function RunsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, filteredRuns, selected])
 
+  // Land on Runs with no deep-link / focus → open the newest visible run once.
+  // Survives filter changes until the user explicitly clears selection (Back).
+  const didAutoSelectRef = React.useRef(false)
+  React.useEffect(() => {
+    didAutoSelectRef.current = false
+  }, [activeProject])
+  React.useEffect(() => {
+    if (didAutoSelectRef.current || selected || !filteredRuns?.length) return
+    const fromUrl = parsePathname(window.location.pathname, window.location.search)
+    if (fromUrl.view === 'runs' && fromUrl.runId) return
+    if (focusRunId) return
+    didAutoSelectRef.current = true
+    void open(filteredRuns[0].run_id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredRuns, selected, focusRunId])
+
   const toggleCompareId = React.useCallback((runId: string) => {
     setCompareIds((prev) => {
       if (prev.includes(runId)) return prev.filter((id) => id !== runId)
@@ -2538,8 +2556,15 @@ export default function RunsView() {
                   : null
               const checked = compareIds.includes(r.run_id)
               const rowVerify = lastVerifyOf(r)
+              const packageRow = isPackageRun({
+                graphName: String(r.graph_name ?? ''),
+                graphNodeTypes: Array.isArray((r as { node_types?: unknown }).node_types)
+                  ? ((r as { node_types?: unknown[] }).node_types as unknown[]).map(String)
+                  : undefined,
+              })
               return (
               <li key={r.run_id} className="flex min-w-0 items-stretch">
+                {Boolean(selected) || compareIds.length > 0 ? (
                 <label
                   className="flex w-10 shrink-0 cursor-pointer items-center justify-center self-stretch border-r border-ink-100 hover:bg-ink-50 has-[:disabled]:cursor-not-allowed"
                   title="Select for compare"
@@ -2554,6 +2579,7 @@ export default function RunsView() {
                     aria-label={`Select ${shortRunId(r.run_id)} for compare`}
                   />
                 </label>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -2574,6 +2600,11 @@ export default function RunsView() {
                     >
                       {runDisplayName(r)}
                     </div>
+                    {packageRow ? (
+                      <span className="shrink-0 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-800">
+                        Package
+                      </span>
+                    ) : null}
                     {isArchivedRun(r) ? (
                       <span className="shrink-0 rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-medium text-ink-600">
                         Archived
@@ -3158,19 +3189,6 @@ export default function RunsView() {
                     const target = p.metricsNodeId || p.nodeIds[p.nodeIds.length - 1]
                     if (target) setFocusNodeId(target)
                     setPanel('lineage')
-                  }}
-                />
-              ) : null}
-
-              {/* Ship package run: contents + sha256, how to run, self-test (packager sidecar). */}
-              {!live && panel === 'lineage' && shipPackagePath ? (
-                <ShipPackageSummaryForPath
-                  packagePath={shipPackagePath}
-                  refreshKey={selected}
-                  onOpenRun={(rid) => {
-                    pushNextUrlRef.current = true
-                    pendingPanelRef.current = 'lineage'
-                    void open(rid)
                   }}
                 />
               ) : null}
@@ -4007,6 +4025,21 @@ export default function RunsView() {
               </div>
             )}
             {panel === 'lineage' && selected ? (
+              <>
+              {/* Package card lives in the scroll pane (not the shrink-0 chrome) so
+                  Edge · deploy Overview still reaches What happened / Hot spots / Run record. */}
+              {shipPackagePath ? (
+                <ShipPackageSummaryForPath
+                  packagePath={shipPackagePath}
+                  refreshKey={selected}
+                  collapsible
+                  onOpenRun={(rid) => {
+                    pushNextUrlRef.current = true
+                    pendingPanelRef.current = 'lineage'
+                    void open(rid)
+                  }}
+                />
+              ) : null}
               <RunLineagePanel
                 runId={selected}
                 liveStatus={runStatus}
@@ -4134,6 +4167,7 @@ export default function RunsView() {
                   onJumpLogs: () => setPanel('logs'),
                 }}
               />
+              </>
             ) : null}
               </div>
             </div>

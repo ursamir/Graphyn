@@ -745,7 +745,7 @@ Point `workspace/artifacts/<slug>/<alias>` at this run’s artifact tree.
 
 ### Approval gates — `GET /api/v1/runs/{run_id}/gates`
 
-Human approval gates are `hitl_approve` nodes. The node writes a request file and polls for a decision file (`{decision_dir}/{run_id}__{gate_id}.decision.json`); these routes read and write that contract.
+Human approval gates are `hitl_approve` nodes. The node writes a request file and polls for a decision file (`{decision_dir}/{run_id}__{gate_id}.decision.json`); these routes read and write that contract. `decision_dir` must resolve inside the project workspace (API decide refuses escapes with `400 invalid_decision_dir`).
 
 **Query:** `?pending_only=true` returns only waiting gates.
 
@@ -980,7 +980,7 @@ Every file in the label:
 ```
 
 `kind` ∈ `audio | table | json | text | image | pdf | archive | other`. Preview /
-download one file with `GET /data/inputs/file?path=<path>`. **Errors:** `404`.
+download one file with `GET /data/inputs/file?path=<path>` (preview/inline). Pass `download=1` for an audited attachment download (`dataset` / file audit via `download_audit`, same contract as `GET /outputs/file?download=1`). **Errors:** `404`.
 
 ### `GET /api/v1/data/inputs/{label}/stats`
 

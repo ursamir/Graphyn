@@ -91,16 +91,23 @@ def hitl():
     return _load("hitl_approve")
 
 
-def _hitl_node(hitl, tmp_path, **cfg):
-    base = {"decision_dir": str(tmp_path), "timeout_s": 0, "poll_interval_s": 0.01}
+@pytest.fixture
+def hitl_ws(tmp_path, monkeypatch):
+    """Project jail for hitl decision_dir (must resolve under project_dir)."""
+    monkeypatch.setenv("GRAPHYN_PROJECT_DIR", str(tmp_path))
+    return tmp_path
+
+
+def _hitl_node(hitl, hitl_ws, **cfg):
+    base = {"decision_dir": str(hitl_ws), "timeout_s": 0, "poll_interval_s": 0.01}
     base.update(cfg)
     node = hitl.HitlApproveNode(config=base)
     node._run_id = "run-1"
     return node
 
 
-def test_hitl_payload_cannot_self_approve(hitl, tmp_path):
-    node = _hitl_node(hitl, tmp_path)
+def test_hitl_payload_cannot_self_approve(hitl, hitl_ws):
+    node = _hitl_node(hitl, hitl_ws)
     out = node.process({"input": {"approved": True, "action": "rm -rf"}})
     # Safety: a rejected gate must NOT emit the `approved` key at all — even
     # `approved: None` counts as produced and would run the approved branch.
@@ -110,16 +117,16 @@ def test_hitl_payload_cannot_self_approve(hitl, tmp_path):
     assert out["rejected"]["payload"] == {"approved": True, "action": "rm -rf"}
 
 
-def test_hitl_unattended_default_false_and_explicit_pass(hitl, tmp_path):
+def test_hitl_unattended_default_false_and_explicit_pass(hitl, hitl_ws):
     assert hitl.HitlApproveNode.Config().unattended_approve is False
-    node = _hitl_node(hitl, tmp_path, unattended_approve=True)
+    node = _hitl_node(hitl, hitl_ws, unattended_approve=True)
     out = node.process({"input": {"x": 1}})
     assert out == {"approved": {"x": 1}}
-    assert list(tmp_path.glob("*.unattended.json"))
+    assert list(hitl_ws.glob("*.unattended.json"))
 
 
-def _decide_async(hitl, tmp_path, decision_fn, run_id="run-1", gate="hitl_approve"):
-    req_path, dec_path = hitl.decision_paths(tmp_path, run_id, gate)
+def _decide_async(hitl, hitl_ws, decision_fn, run_id="run-1", gate="hitl_approve"):
+    req_path, dec_path = hitl.decision_paths(hitl_ws, run_id, gate)
 
     def _worker():
         for _ in range(500):
@@ -134,15 +141,15 @@ def _decide_async(hitl, tmp_path, decision_fn, run_id="run-1", gate="hitl_approv
     return t
 
 
-def test_hitl_out_of_band_approval(hitl, tmp_path):
-    node = _hitl_node(hitl, tmp_path, timeout_s=5, approver_roles=["release"])
-    t = _decide_async(hitl, tmp_path, lambda r: {
+def test_hitl_out_of_band_approval(hitl, hitl_ws):
+    node = _hitl_node(hitl, hitl_ws, timeout_s=5, approver_roles=["release"])
+    t = _decide_async(hitl, hitl_ws, lambda r: {
         "request_id": r["request_id"], "approved": True,
         "approver": "alice", "role": "release", "reason": "LGTM"})
     out = node.process({"input": {"model": "m1"}})
     t.join(1)
     assert out == {"approved": {"model": "m1"}}
-    req_path, _ = hitl.decision_paths(tmp_path, "run-1", "hitl_approve")
+    req_path, _ = hitl.decision_paths(hitl_ws, "run-1", "hitl_approve")
     rec = json.loads(req_path.read_text())
     assert rec["status"] == "approved" and rec["outcome"]["approver"] == "alice"
 
@@ -155,28 +162,36 @@ def test_hitl_out_of_band_approval(hitl, tmp_path):
         ({"approved": False, "approver": "bob", "role": "release", "reason": "no"}, "no"),
     ],
 )
-def test_hitl_invalid_or_denied_decision_rejects(hitl, tmp_path, decision, why):
-    node = _hitl_node(hitl, tmp_path, timeout_s=5, approver_roles=["release"])
-    t = _decide_async(hitl, tmp_path, lambda r: {"request_id": r["request_id"], **decision})
+def test_hitl_invalid_or_denied_decision_rejects(hitl, hitl_ws, decision, why):
+    node = _hitl_node(hitl, hitl_ws, timeout_s=5, approver_roles=["release"])
+    t = _decide_async(hitl, hitl_ws, lambda r: {"request_id": r["request_id"], **decision})
     out = node.process({"input": 1})
     t.join(1)
     _only_ports(out, "rejected")
     assert why in out["rejected"]["reason"]
 
 
-def test_hitl_stale_decision_ignored(hitl, tmp_path):
-    _, dec_path = hitl.decision_paths(tmp_path, "run-1", "hitl_approve")
+def test_hitl_stale_decision_ignored(hitl, hitl_ws):
+    _, dec_path = hitl.decision_paths(hitl_ws, "run-1", "hitl_approve")
     dec_path.parent.mkdir(parents=True, exist_ok=True)
     dec_path.write_text(json.dumps({"request_id": "old", "approved": True,
                                     "approver": "x", "reason": "stale"}))
-    out = _hitl_node(hitl, tmp_path, timeout_s=0.1).process({"input": 1})
+    out = _hitl_node(hitl, hitl_ws, timeout_s=0.1).process({"input": 1})
     _only_ports(out, "rejected")
     assert out["rejected"] is not None
 
 
-def test_hitl_stub_fails_closed(hitl, tmp_path):
-    out = _hitl_node(hitl, tmp_path, stub=True).process({"input": 1})
+def test_hitl_stub_fails_closed(hitl, hitl_ws):
+    out = _hitl_node(hitl, hitl_ws, stub=True).process({"input": 1})
     assert out == {}
+
+
+def test_hitl_decision_dir_escape_refused(hitl, hitl_ws, tmp_path):
+    outside = tmp_path.parent / "outside_hitl_decisions"
+    with pytest.raises(ValueError, match="project workspace"):
+        hitl.decision_paths(str(outside), "run-1", "g")
+    with pytest.raises(ValueError, match=r"\.\."):
+        hitl.decision_paths("workspace/../etc", "run-1", "g")
 
 
 # ── 2. guardrail_filter ───────────────────────────────────────────────────────

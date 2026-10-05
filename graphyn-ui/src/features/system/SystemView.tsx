@@ -920,7 +920,7 @@ export default function SystemView() {
                               className="block truncate text-ink-400"
                               title={`No name recorded (${who.detail}${ev.claimed_actor ? ` · claimed "${ev.claimed_actor}"` : ''}). Set your name under Access.`}
                             >
-                              Unidentified
+                              Local operator
                             </span>
                           ) : (
                             <ActorName

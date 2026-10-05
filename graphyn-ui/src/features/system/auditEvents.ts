@@ -3,7 +3,7 @@
  * to (run / model / pipeline / proposal, always with the FULL id), friendly
  * action labels + tones for the run lifecycle (run.start / finish / fail /
  * cancel / archive / restore / purge / replay) and every other audited
- * action, actor display ("Unidentified (API)"), housekeeping filter
+ * action, actor display ("Local operator (API)"), housekeeping filter
  * (notifications.*), short resource labels, and run-id search.
  * Unit-tested (auditEvents.test.ts).
  */
@@ -232,7 +232,7 @@ export function isSystemAuditEvent(ev: AuditEvent): boolean {
 const UNIDENTIFIED_ACTORS = new Set(['', 'api', 'anonymous', 'unknown', 'system'])
 
 /**
- * Who did it: a named actor, or "Unidentified (API)" (muted) when the request
+ * Who did it: a named actor, or "Local operator (API)" (muted) when the request
  * carried no actor ("api" / empty, usually with actor_kind "system").
  */
 export function auditActorDisplay(ev: AuditEvent): { label: string; muted: boolean; detail: string } {
@@ -240,7 +240,7 @@ export function auditActorDisplay(ev: AuditEvent): { label: string; muted: boole
   const kind = s(ev.actor_kind)
   if (UNIDENTIFIED_ACTORS.has(actor.toLowerCase())) {
     return {
-      label: 'Unidentified (API)',
+      label: 'Local operator (API)',
       muted: true,
       detail: [actor, kind].filter(Boolean).join(' · ') || 'no actor recorded',
     }

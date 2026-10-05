@@ -1,4 +1,11 @@
-import { irVersionFor, onErrorToIr, retryToIr, type NodeOnError, type NodeRetry } from '../features/builder/workflowIr'
+import {
+  eventTriggerToIr,
+  irVersionFor,
+  onErrorToIr,
+  retryToIr,
+  type NodeOnError,
+  type NodeRetry,
+} from '../features/builder/workflowIr'
 
 export type NodePlacement = {
   mode?: 'auto' | 'local' | 'worker' | 'pool'
@@ -150,7 +157,7 @@ export function buildGraphFromCanvas(
         config: n.data.config ?? {},
         label: n.data.label ?? null,
         capability_metadata: n.data.capabilityMetadata ?? null,
-        event_trigger: n.data.eventTrigger ?? null,
+        event_trigger: eventTriggerToIr(n.data.nodeType, n.data.eventTrigger, n.data.config ?? null),
         placement: n.data.placement ?? null,
         // IR 1.3 — only written when set, so 1.1/1.2 graphs stay byte-identical.
         ...(onError ? { on_error: onError } : {}),

@@ -9,8 +9,10 @@ Owns:             GateError, list_gates(), pending_gates(), decide_gate(),
                   awaiting_approval_overlay(), HITL_NODE_TYPE.
 Public Surface:   The functions above.
 Must NOT:         Import app.api / app.domain or plugin modules (the file
-                  contract is mirrored here, not imported).
+                  contract is mirrored here, not imported). Must not write
+                  decision files outside the project workspace jail.
 Dependencies:     stdlib (hashlib, json, os, re, time, datetime, pathlib),
+                  app.core.paths.write_paths (_resolve_under_project jail),
                   app.core.trust.audit (gate.decision event).
 Reason To Change: hitl_approve request/decision file contract changes.
 
@@ -55,8 +57,37 @@ def _safe_key(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", value or "")[:128] or "adhoc"
 
 
-def _paths(decision_dir: str, run_id: str, gate_id: str) -> tuple[Path, Path]:
-    base = Path(decision_dir or DEFAULT_DECISION_DIR)
+def _resolve_decision_dir(decision_dir: str, *, strict: bool = False) -> Path | None:
+    """Resolve ``decision_dir`` inside the project workspace (path jail).
+
+    Absolute paths and ``workspace/…`` relatives are allowed only when they
+    resolve under ``project_dir()``. ``..`` segments and escapes return None
+    (or raise GateError when ``strict``).
+    """
+    from app.core.paths.write_paths import _resolve_under_project
+
+    raw = (decision_dir or DEFAULT_DECISION_DIR).strip() or DEFAULT_DECISION_DIR
+    if any(part == ".." for part in Path(raw).parts):
+        if strict:
+            raise GateError(400, "invalid_decision_dir", "decision_dir must not contain '..'")
+        return None
+    resolved = _resolve_under_project(raw)
+    if resolved is None:
+        if strict:
+            raise GateError(
+                400,
+                "invalid_decision_dir",
+                "decision_dir must resolve inside the project workspace",
+            )
+        return None
+    return resolved
+
+
+def _paths(decision_dir: str, run_id: str, gate_id: str, *, strict: bool = False) -> tuple[Path, Path]:
+    base = _resolve_decision_dir(decision_dir, strict=strict)
+    if base is None:
+        # Unreadable outside jail — point at a non-existent default so status is not_reached.
+        base = _resolve_decision_dir(DEFAULT_DECISION_DIR) or Path(DEFAULT_DECISION_DIR)
     stem = f"{_safe_key(run_id)}__{_safe_key(gate_id)}"
     return base / f"{stem}.request.json", base / f"{stem}.decision.json"
 
@@ -210,6 +241,9 @@ def decide_gate(
     node = next((n for n in _gate_nodes(_load_graph(rd)) if n.get("id") == node_id), None)
     if node is None:
         raise GateError(404, "not_found", f"Run {run_id} has no approval gate '{node_id}'")
+    cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
+    # Jail check before status — refuse escaped decision_dir even when not pending.
+    _resolve_decision_dir(str(cfg.get("decision_dir") or DEFAULT_DECISION_DIR), strict=True)
     gate = _gate_view(node, run_id, datetime.now(timezone.utc))
     if gate["status"] != "pending":
         raise GateError(409, "gate_not_pending", f"Gate '{node_id}' is {gate['status']}, not pending")
@@ -219,8 +253,12 @@ def decide_gate(
     if roles and verdict == "approve" and (role or "") not in roles:
         raise GateError(422, "validation_failed", f"role must be one of {roles} to approve")
 
-    cfg = node.get("config") if isinstance(node.get("config"), dict) else {}
-    _, decision_path = _paths(str(cfg.get("decision_dir") or DEFAULT_DECISION_DIR), run_id, gate["gate_id"])
+    _, decision_path = _paths(
+        str(cfg.get("decision_dir") or DEFAULT_DECISION_DIR),
+        run_id,
+        gate["gate_id"],
+        strict=True,
+    )
     comment_sha = hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None
     record = {
         "request_id": gate["request_id"],

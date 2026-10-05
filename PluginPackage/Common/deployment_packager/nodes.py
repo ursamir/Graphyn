@@ -106,6 +106,7 @@ COPY requirements.txt requirements-serve.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-serve.txt
 COPY . .
 EXPOSE 8080
+# Containers must bind 0.0.0.0 so published ports work; local serve.py docs use 127.0.0.1.
 CMD ["uvicorn", "serve:app", "--host", "0.0.0.0", "--port", "8080"]
 """
 
